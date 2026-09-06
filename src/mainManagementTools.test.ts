@@ -10,6 +10,7 @@ import {
   getMainManagementToolServiceStatus,
   initializeMainManagementTools,
   resetMainManagementToolsForTests,
+  resolveMainAuthorizationSessionTarget,
   shutdownMainManagementTools,
 } from './mainManagementTools';
 import {
@@ -26,6 +27,7 @@ import {
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
 } from './toolCallControls';
+import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
 const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
@@ -34,12 +36,45 @@ function makeId(prefix: string): string {
 }
 
 async function cleanup(...sessionIds: string[]): Promise<void> {
+  setToolAuthorizationPolicyForTests(undefined);
   await shutdownMainManagementTools().catch(() => {});
   resetMainManagementToolsForTests();
   for (const sessionId of sessionIds) {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 }
+
+test('Session relation authorization keeps Worker direct unified and ToolScript parity through Main authority', async () => {
+  const sourceId = makeId('relation_worker_source');
+  const targetId = makeId('relation_worker_target');
+  const source = await sessionManager.getSession(sourceId);
+  await sessionManager.getSession(targetId);
+  const original = (archiveRecallTools as any).tool_recall;
+  (archiveRecallTools as any).tool_recall = async (_args: any, ctx: any) => `relation-recall:${ctx.sessionId}`;
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: same-agent-recall
+  match:
+    tool: { source: builtin, name: recall }
+    args: { sessionId: { session: { sameAgent: true } } }
+  action: allow
+`));
+  const ctx: any = { sessionId: sourceId, session: source, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  try {
+    const resolved = await resolveMainAuthorizationSessionTarget({ sourceSessionId: sourceId, toolName: 'recall', args: { sessionId: targetId } });
+    assert.equal(resolved.target?.id, targetId);
+    assert.equal(await recall({ sessionId: targetId, target: 'overview' }, ctx), `relation-recall:${sourceId}`);
+    assert.equal(await call_tool({ source: 'builtin', name: 'recall', args: { sessionId: targetId, target: 'overview' } }, ctx), `relation-recall:${sourceId}`);
+    const nested = await tool_run_script({ code: `def main(args):\n    return call_tool(source="builtin", name="recall", args={"sessionId":"${targetId}","target":"overview"})` }, ctx);
+    assert.equal(nested.status, 'completed');
+    assert.equal(nested.result, `relation-recall:${sourceId}`);
+  } finally {
+    (archiveRecallTools as any).tool_recall = original;
+    await cleanup(sourceId, targetId);
+  }
+});
 
 test('main management service rejects missing, stale, and non-allowlisted sources/operations', async () => {
   const sourceId = makeId('management_source');

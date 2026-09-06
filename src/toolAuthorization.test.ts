@@ -7,6 +7,7 @@ import {
   buildToolAuthorizationRequest,
   evaluateToolAuthorization,
   evaluateToolAuthorizationSync,
+  evaluateToolAuthorizationPolicy,
   installToolAuthorizationPolicyBytes,
   isToolAuthorizationPolicyUnavailable,
   loadToolAuthorizationPolicy,
@@ -17,6 +18,7 @@ import {
   setToolAuthorizationTestClockForTests,
   type ToolAuthorizationPolicy,
 } from './toolAuthorization';
+import { resolveToolAuthorizationSessionTargetRequest } from './toolAuthorizationSessionTargets';
 import { checkToolPermissionForSession, isToolVisibleForSession } from './isolatedCheck';
 import { tool_set_tool_rules } from './tools/toolAuthorizationTools';
 import { executeTools } from './llm';
@@ -24,6 +26,7 @@ import * as tools from './tools';
 import { tool_run_script } from './toolscript';
 import { canonicalPotentialPathSync } from './utils/pathResolve';
 import { getAgentDir } from './config';
+import * as sessionManager from './sessionManager';
 
 const allowPolicy = (): ToolAuthorizationPolicy => ({ version: 1, defaultAction: 'allow', rules: [] });
 
@@ -154,6 +157,15 @@ rules:
   match: { tool: node, args: { action: destroy } }
   action: deny
 `), true);
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: relation-conditional
+  match: { tool: { source: builtin, name: recall }, args: { sessionId: { session: { sameAgent: true } } } }
+  action: allow
+`));
+  assert.equal(isToolVisibleForSession(session, { source: 'builtin', tool: 'recall' }, 'master'), true);
 });
 
 test('path facts canonicalize symlink prefixes, nonexistent children, policy bases, copy legs, and sources', async () => {
@@ -212,6 +224,70 @@ rules:
   });
   assert.deepEqual(patch.paths.map(record => record.raw), ['added.txt', 'existing.txt', 'deleted.txt']);
   await fs.remove(dir);
+});
+
+
+test('session target matcher parser is strict and registered only for compatible builtin sessionId targets', () => {
+  const ok = parseToolAuthorizationPolicyBytes(`
+version: 1
+rules:
+- id: relation
+  match:
+    tool: { source: builtin, name: [create_timer, list_timers] }
+    args:
+      sessionId: { session: { self: true, sameAgent: true, relation: [parent, child] } }
+  action: allow
+`);
+  assert.equal((ok.rules[0].match.args!.sessionId as any).session.sameAgent, true);
+  for (const invalid of [
+    `{ session: {} }`, `{ session: { self: false } }`, `{ session: { relation: ancestor } }`, `{ session: { bogus: true } }`,
+  ]) assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: builtin, name: recall }, args: { sessionId: ${invalid} } }\n  action: allow\n`));
+  assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: node, name: recall }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), /exact source builtin/i);
+  assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: builtin, name: wait }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), /registered Session-target resolver/i);
+  assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: builtin, name: [recall, send_file] }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), /share one registered/i);
+});
+
+test('session target matcher composes AND within a rule and ordered rules for OR', () => {
+  const request: any = buildToolAuthorizationRequest({ session: { id: 'agent/child', agent: 'agent' } as any, tool: { source: 'builtin', name: 'send_to_session' }, args: { sessionId: 'other/parent' } });
+  request.sourceParentSessionId = 'other/parent';
+  request.sessionTargets = { sessionId: { id: 'other/parent', agent: 'other' } };
+  const relationOnly = parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: relation\n  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { relation: parent } } } }\n  action: allow\n`);
+  assert.equal(evaluateToolAuthorizationPolicy(relationOnly, request).action, 'allow');
+  const both = parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: both\n  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { sameAgent: true, relation: parent } } } }\n  action: allow\n`);
+  assert.equal(evaluateToolAuthorizationPolicy(both, request).action, 'deny');
+  const ordered = parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: same\n  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { sameAgent: true } } } }\n  action: allow\n- id: intervening\n  match: { tool: { source: builtin, name: send_to_session } }\n  action: deny\n- id: relation\n  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { relation: parent } } } }\n  action: allow\n`);
+  assert.equal(evaluateToolAuthorizationPolicy(ordered, request).rule?.id, 'intervening');
+  request.sourceParentSessionId = undefined;
+  request.sessionTargets.sessionId = { id: 'other/child', agent: 'other', parentSessionId: 'agent/child' };
+  const child = parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: child\n  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { relation: child } } } }\n  action: allow\n`);
+  assert.equal(evaluateToolAuthorizationPolicy(child, request).action, 'allow');
+  request.sessionTargets.sessionId = { id: 'agent/child', agent: 'agent', parentSessionId: 'other/parent' };
+  assert.equal(evaluateToolAuthorizationPolicy(parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: self\n  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), request).action, 'allow');
+});
+
+test('session target resolver follows tool defaults, aliases, channel branching, and missing targets', () => {
+  const original = sessionManager.getSessionCatalog;
+  const source: any = { id: 'agent/child', agent: 'agent', parentSessionId: 'other/parent' };
+  const sessions: Record<string, any> = {
+    'agent/child': source,
+    'agent/main': { id: 'agent/main', agent: 'agent' },
+    'other/parent': { id: 'other/parent', agent: 'other' },
+    alias: { id: 'agent/target', agent: 'agent', parentSessionId: 'agent/main' },
+  };
+  (sessionManager as any).getSessionCatalog = (id: string) => sessions[id];
+  try {
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'send_to_session', { sessionId: '<parent>' })?.id, 'other/parent');
+    assert.equal(resolveToolAuthorizationSessionTargetRequest({ ...source, parentSessionId: undefined }, 'send_to_session', { sessionId: '<parent>' }), undefined);
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'send_to_session', { sessionId: '<main>' })?.id, 'agent/main');
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'create_timer', {})?.id, 'agent/child');
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'recall', { target: 'overview' })?.id, 'agent/child');
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'recall', { vector_query: 'x' }), undefined);
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'recall', { vector_query: 'x', scope: 'current-session' })?.id, 'agent/child');
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'send_file', { channelTargetId: 'qq:group:x' }), undefined);
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'send_file', {})?.id, 'agent/child');
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'get_session_messages', {}), undefined);
+    assert.equal(resolveToolAuthorizationSessionTargetRequest(source, 'create_timer', { sessionId: 'missing' }), undefined);
+  } finally { (sessionManager as any).getSessionCatalog = original; }
 });
 
 test('successful policies cache for ten seconds and async stale failures retry after 100ms', async () => {

@@ -23,6 +23,8 @@ import { armWaitLivenessDiagnostic, initializeWaitLivenessDiagnostics } from './
 import { hasRemoteExecLivenessClaim } from './nodes/remoteExecLiveness';
 import { tool_set_tool_rules } from './tools/toolAuthorizationTools';
 import { checkGenericToolAuthorizationForSession } from './isolatedCheck';
+import { resolveToolAuthorizationSessionTargetRequest } from './toolAuthorizationSessionTargets';
+import type { ToolAuthorizationSessionTarget } from './toolAuthorization';
 
 export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'send_to_session',
@@ -63,13 +65,16 @@ export type ArmWaitLivenessRequest = { sourceSessionId: string; waitId: string }
 export type ArmWaitLivenessResponse = { armed: true };
 export type ValidateWaitExecIdsRequest = { sourceSessionId: string; execIds: string[] };
 export type ValidateWaitExecIdsResponse = { activeExecIds: string[] };
+export type ResolveAuthorizationSessionTargetRequest = { sourceSessionId: string; toolName: string; args: ToolArgs };
+export type ResolveAuthorizationSessionTargetResponse = { sourceParentSessionId?: string; target?: ToolAuthorizationSessionTarget };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 9, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 10, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
   validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),
   armWaitLiveness: rpcMethod<ArmWaitLivenessRequest, ArmWaitLivenessResponse>(),
   validateWaitExecIds: rpcMethod<ValidateWaitExecIdsRequest, ValidateWaitExecIdsResponse>(),
+  resolveAuthorizationSessionTarget: rpcMethod<ResolveAuthorizationSessionTargetRequest, ResolveAuthorizationSessionTargetResponse>(),
 });
 
 const allowedOperations = new Set<string>(MAIN_MANAGEMENT_TOOL_OPERATIONS);
@@ -328,6 +333,23 @@ export function createMainManagementToolServiceHandler(options: {
       const agentName = source.agent || 'main';
       const sessionIdentityIds = [source.id, ...(source.aliases || [])];
       return { activeExecIds: input.execIds.filter(execId => hasRemoteExecLivenessClaim(sessionIdentityIds, agentName, execId)) };
+    },
+    async resolveAuthorizationSessionTarget(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 3 || typeof input.sourceSessionId !== 'string'
+        || typeof input.toolName !== 'string' || !input.toolName.trim()) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'resolveAuthorizationSessionTarget requires sourceSessionId, toolName, and args.');
+      }
+      const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      const args = normalizeArgs(input.args);
+      const source = sessionManager.getSessionCatalog(sourceSessionId);
+      if (!source) throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
+      const target = resolveToolAuthorizationSessionTargetRequest(source, input.toolName.trim(), args);
+      const sourceParentSessionId = source.parentSessionId
+        ? (sessionManager.getSessionCatalog(source.parentSessionId)?.id || source.parentSessionId)
+        : undefined;
+      return { ...(sourceParentSessionId ? { sourceParentSessionId } : {}), ...(target ? { target } : {}) };
     },
   };
 }

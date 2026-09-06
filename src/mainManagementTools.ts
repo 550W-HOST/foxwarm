@@ -16,6 +16,8 @@ import {
   ArmWaitLivenessResponse,
   ValidateWaitExecIdsRequest,
   ValidateWaitExecIdsResponse,
+  ResolveAuthorizationSessionTargetRequest,
+  ResolveAuthorizationSessionTargetResponse,
   mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
@@ -125,6 +127,12 @@ export async function scheduleMainWaitTimeout(request: ScheduleWaitTimeoutReques
 
 export async function validateMainWaitSessions(request: ValidateWaitSessionsRequest): Promise<ValidateWaitSessionsResponse> {
   return await (await getClient()).call('validateWaitSessions', request);
+}
+
+export async function resolveMainAuthorizationSessionTarget(
+  request: ResolveAuthorizationSessionTargetRequest,
+): Promise<ResolveAuthorizationSessionTargetResponse> {
+  return await (await getClient()).call('resolveAuthorizationSessionTarget', request);
 }
 
 export async function armMainWaitLiveness(request: ArmWaitLivenessRequest): Promise<ArmWaitLivenessResponse> {

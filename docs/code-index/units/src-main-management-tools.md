@@ -9,7 +9,7 @@ Provides the versioned RPC boundary for a closed first set of tools whose mutabl
 
 ## Key exports
 
-- `mainManagementToolServiceDescriptor` — version 9 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, and remote-exec-validation methods.
+- `mainManagementToolServiceDescriptor` — version 10 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, remote-exec-validation, and bounded tool-authorization Session-target resolution methods.
 - `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact 21-operation allowlist: messaging, agent listing, timer CRUD, child creation, session catalog/display/message reads, archive/recall reads, agent/session creation/deletion, node bootstrap/pairing, and master-only tool-policy replacement.
 - `createMainManagementToolServiceHandler()` — validates source identity and operation, optionally fences a reverse handler to one expected worker source before any lookup/mutation, then invokes the existing authoritative raw handler. When bound with an expected generation/incarnation and the worker store, it also rejects stale worker generations retryably before any operation runs.
 - `initializeMainManagementTools()` / `shutdownMainManagementTools()` — placement-injectable local or child-reverse client lifecycle and one-way terminal graceful drain.

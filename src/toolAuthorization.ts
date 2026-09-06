@@ -24,6 +24,9 @@ export type ToolAuthorizationSource = 'builtin' | 'mcp' | 'node';
 export type ToolAuthorizationAction = 'allow' | 'deny';
 type Scalar = string | number | boolean | null;
 export type ScalarMatcher = Scalar | Scalar[] | { equals?: Scalar; oneOf?: Scalar[]; exists?: boolean };
+export type SessionTargetRelation = 'parent' | 'child';
+export type SessionTargetMatcher = { self?: true; sameAgent?: true; relation?: SessionTargetRelation | SessionTargetRelation[] };
+export type ArgumentMatcher = ScalarMatcher | { session: SessionTargetMatcher };
 export type ToolMatcher = string | string[] | {
   source?: ScalarMatcher;
   server?: ScalarMatcher;
@@ -39,7 +42,7 @@ export interface ToolAuthorizationRuleMatch {
   session?: ScalarMatcher;
   tool?: ToolMatcher;
   targetNode?: ScalarMatcher;
-  args?: Record<string, ScalarMatcher>;
+  args?: Record<string, ArgumentMatcher>;
   path?: PathMatcher;
 }
 export interface ToolAuthorizationRule {
@@ -72,6 +75,13 @@ export interface ToolAuthorizationRequest {
   targetNode: string;
   args: Record<string, any>;
   paths: ToolAuthorizationPathRecord[];
+  sourceParentSessionId?: string;
+  sessionTargets?: Record<string, ToolAuthorizationSessionTarget | undefined>;
+}
+export interface ToolAuthorizationSessionTarget {
+  id: string;
+  agent: string;
+  parentSessionId?: string;
 }
 export interface ToolAuthorizationEvaluation {
   action: ToolAuthorizationAction;
@@ -150,6 +160,49 @@ function normalizeScalarMatcher(value: unknown, label: string): ScalarMatcher {
     result.exists = value.exists;
   }
   return result;
+}
+function normalizeArgumentMatcher(value: unknown, label: string): ArgumentMatcher {
+  if (!isPlainRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'session')) {
+    return normalizeScalarMatcher(value, label);
+  }
+  assertExactFields(value, ['session'], label);
+  if (!isPlainRecord(value.session)) throw new Error(`${label}.session must be an object.`);
+  assertExactFields(value.session, ['self', 'sameAgent', 'relation'], `${label}.session`);
+  if (!Object.keys(value.session).length) throw new Error(`${label}.session must not be empty.`);
+  const result: SessionTargetMatcher = {};
+  for (const key of ['self', 'sameAgent'] as const) {
+    if (value.session[key] !== undefined) {
+      if (value.session[key] !== true) throw new Error(`${label}.session.${key} must be true when present.`);
+      result[key] = true;
+    }
+  }
+  if (value.session.relation !== undefined) {
+    const raw = Array.isArray(value.session.relation) ? value.session.relation : [value.session.relation];
+    if (raw.length < 1 || raw.length > 2 || raw.some(item => item !== 'parent' && item !== 'child')) {
+      throw new Error(`${label}.session.relation must be parent, child, or a non-empty list of those values.`);
+    }
+    if (new Set(raw).size !== raw.length) throw new Error(`${label}.session.relation must not contain duplicates.`);
+    result.relation = Array.isArray(value.session.relation) ? raw as SessionTargetRelation[] : raw[0] as SessionTargetRelation;
+  }
+  return { session: result };
+}
+
+const SESSION_TARGET_RESOLVER_FAMILIES: Record<string, string> = {
+  send_to_session: 'send-to-session', send_file: 'send-file',
+  create_timer: 'timer', list_timers: 'timer', update_timer: 'timer', delete_timer: 'timer',
+  recall: 'recall', get_archived_messages: 'archive', get_archived_blocks: 'archive',
+  get_session_messages: 'required-session',
+};
+function exactToolNamesForSessionMatcher(tool: ToolMatcher | undefined, label: string): string[] {
+  if (!tool || typeof tool === 'string') throw new Error(`${label} requires an exact builtin tool selector.`);
+  if (Array.isArray(tool)) throw new Error(`${label} requires an exact builtin source selector.`);
+  if (tool.server !== undefined || tool.source !== 'builtin') throw new Error(`${label} requires exact source builtin.`);
+  const name = tool.name;
+  const names = typeof name === 'string' ? [name] : Array.isArray(name) && name.every(item => typeof item === 'string') ? name as string[] : [];
+  if (!names.length) throw new Error(`${label} requires an exact tool name or name list.`);
+  const families = new Set(names.map(item => SESSION_TARGET_RESOLVER_FAMILIES[item]));
+  if (families.has(undefined as any) || families.size !== 1) throw new Error(`${label} tool names must share one registered Session-target resolver.`);
+  return names;
 }
 function normalizeToolMatcher(value: unknown, label: string): ToolMatcher {
   if (typeof value === 'string') return boundedString(value, label);
@@ -246,7 +299,14 @@ export function parseToolAuthorizationPolicyBytes(bytes: Buffer | string): ToolA
           if (!key || key.split('.').some(part => !part || ['__proto__', 'prototype', 'constructor'].includes(part))) {
             throw new Error(`${label}.match.args contains an unsafe dotted path.`);
           }
-          match.args[key] = normalizeScalarMatcher(matcher, `${label}.match.args.${key}`);
+          match.args[key] = normalizeArgumentMatcher(matcher, `${label}.match.args.${key}`);
+        }
+        const sessionEntries = Object.entries(match.args).filter(([, matcher]) => isPlainRecord(matcher) && 'session' in matcher);
+        if (sessionEntries.length) {
+          if (sessionEntries.length !== 1 || sessionEntries[0][0] !== 'sessionId') {
+            throw new Error(`${label}.match.args Session-target matcher is supported only for sessionId.`);
+          }
+          exactToolNamesForSessionMatcher(match.tool, `${label}.match.args.sessionId.session`);
         }
       }
       if (rawRule.match.path !== undefined) match.path = normalizePathMatcher(rawRule.match.path, `${label}.match.path`);
@@ -336,8 +396,26 @@ function getValueByPath(input: Record<string, any>, dottedPath: string): unknown
   }
   return current;
 }
-function matchesArgs(matchers: Record<string, ScalarMatcher> | undefined, args: Record<string, any>): boolean {
-  return !matchers || Object.entries(matchers).every(([key, matcher]) => matchesScalar(matcher, getValueByPath(args, key)));
+function matchesSessionTarget(matcher: SessionTargetMatcher, source: ToolAuthorizationRequest, target: ToolAuthorizationSessionTarget | undefined): boolean {
+  if (!target) return false;
+  if (matcher.self && target.id !== source.session) return false;
+  if (matcher.sameAgent && target.agent !== source.agent) return false;
+  if (matcher.relation) {
+    const relations = Array.isArray(matcher.relation) ? matcher.relation : [matcher.relation];
+    const matched = relations.some(relation => relation === 'parent'
+      ? target.id === source.sourceParentSessionId
+      : target.parentSessionId === source.session);
+    if (!matched) return false;
+  }
+  return true;
+}
+function matchesArgs(matchers: Record<string, ArgumentMatcher> | undefined, request: ToolAuthorizationRequest): boolean {
+  return !matchers || Object.entries(matchers).every(([key, matcher]) => {
+    if (isPlainRecord(matcher) && 'session' in matcher) {
+      return matchesSessionTarget((matcher as { session: SessionTargetMatcher }).session, request, request.sessionTargets?.[key]);
+    }
+    return matchesScalar(matcher as ScalarMatcher, getValueByPath(request.args, key));
+  });
 }
 function expandPathVariables(value: string, agentName: string): string {
   return value.replace(/\$\{agent\.dir\}/g, getAgentDir(agentName))
@@ -372,7 +450,7 @@ function matchesRule(rule: ToolAuthorizationRule, request: ToolAuthorizationRequ
     && matchesScalar(rule.match.session, request.session)
     && matchesTool(rule.match.tool, request.tool)
     && matchesScalar(rule.match.targetNode, request.targetNode)
-    && matchesArgs(rule.match.args, request.args)
+    && matchesArgs(rule.match.args, request)
     && matchesPath(rule.match.path, request);
 }
 function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest): boolean {
@@ -382,10 +460,14 @@ function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthoriza
     && matchesScalar(rule.match.targetNode, request.targetNode);
 }
 export async function evaluateToolAuthorization(request: ToolAuthorizationRequest): Promise<ToolAuthorizationEvaluation> {
-  return evaluatePolicy(await loadToolAuthorizationPolicy(), request);
+  return evaluateToolAuthorizationPolicy(await loadToolAuthorizationPolicy(), request);
 }
 export function evaluateToolAuthorizationSync(request: ToolAuthorizationRequest): ToolAuthorizationEvaluation {
-  return evaluatePolicy(loadToolAuthorizationPolicySync(), request);
+  return evaluateToolAuthorizationPolicy(loadToolAuthorizationPolicySync(), request);
+}
+export function toolAuthorizationNeedsSessionTarget(policy: ToolAuthorizationPolicy, request: ToolAuthorizationRequest): boolean {
+  return policy.rules.some(rule => rule.enabled && matchesRuleIdentity(rule, request)
+    && !!rule.match.args && Object.values(rule.match.args).some(matcher => isPlainRecord(matcher) && 'session' in matcher));
 }
 export function isToolAuthorizationPotentiallyVisibleSync(request: ToolAuthorizationRequest): boolean {
   const policy = loadToolAuthorizationPolicySync();
@@ -398,7 +480,7 @@ export function isToolAuthorizationPotentiallyVisibleSync(request: ToolAuthoriza
   }
   return policy.defaultAction === 'allow';
 }
-function evaluatePolicy(policy: ToolAuthorizationPolicy, request: ToolAuthorizationRequest): ToolAuthorizationEvaluation {
+export function evaluateToolAuthorizationPolicy(policy: ToolAuthorizationPolicy, request: ToolAuthorizationRequest): ToolAuthorizationEvaluation {
   for (const rule of policy.rules) {
     if (!rule.enabled || !matchesRule(rule, request)) continue;
     return { action: rule.action, matched: true, rule };

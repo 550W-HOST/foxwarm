@@ -294,7 +294,7 @@ function buildAgentMainSessionId(agentName: string): string {
   return agentName === 'main' ? 'main' : `${agentName}/main`;
 }
 
-function resolveSpecialSessionTargetId(targetSessionId: string, sourceSession?: Session, fromSessionId?: string): string {
+export function resolveSpecialSessionTargetId(targetSessionId: string, sourceSession?: Session, fromSessionId?: string): string {
   if (targetSessionId === '<main>') {
     if (!sourceSession) {
       throw new Error('Cannot resolve `<main>` without current session context.');

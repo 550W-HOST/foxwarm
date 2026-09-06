@@ -16,9 +16,12 @@ import * as agentMetadata from './session/agentMetadata';
 import type { Session } from './types';
 import {
   buildToolAuthorizationRequest,
-  evaluateToolAuthorization,
+  evaluateToolAuthorizationPolicy,
   isToolAuthorizationPotentiallyVisibleSync,
+  loadToolAuthorizationPolicy,
+  toolAuthorizationNeedsSessionTarget,
 } from './toolAuthorization';
+import { populateToolAuthorizationSessionTargets, supportsToolAuthorizationSessionTarget } from './toolAuthorizationSessionTargets';
 
 const ISOLATED_ALWAYS_UNAVAILABLE_BUILTINS = new Set([
   'create_agent', 'list_agents', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
@@ -52,7 +55,7 @@ export async function checkToolPermissionForSession(
   toolArgs?: Record<string, any>,
   refreshMetadata = false,
 ): Promise<void> {
-  await checkGenericToolAuthorizationForSession(session, rawIdentity, executionNode, toolArgs);
+  await checkGenericToolAuthorizationForSession(session, rawIdentity, executionNode, toolArgs, refreshMetadata);
   if (refreshMetadata && agentMetadata.isSessionEffectivelyIsolated(session)) {
     await agentMetadata.refreshAgentMetadata(session.agent || 'main');
   }
@@ -105,18 +108,32 @@ export async function checkGenericToolAuthorizationForSession(
   rawIdentity: ResolvedToolPermissionIdentity,
   executionNode?: string,
   toolArgs?: Record<string, any>,
+  useMainSessionTargetAuthority = false,
 ): Promise<void> {
   const genericIdentity = rawIdentity.source === 'node'
     ? { source: 'node' as const, name: rawIdentity.tool }
     : rawIdentity.source === 'mcp'
       ? { source: 'mcp' as const, server: rawIdentity.server || 'default', name: rawIdentity.tool }
       : { source: 'builtin' as const, name: rawIdentity.tool };
-  const genericDecision = await evaluateToolAuthorization(buildToolAuthorizationRequest({
+  const request = buildToolAuthorizationRequest({
     session,
     tool: genericIdentity,
     targetNode: rawIdentity.source === 'node' ? (rawIdentity.node || executionNode || 'master') : (executionNode || 'master'),
     args: toolArgs,
-  }));
+  });
+  const policy = await loadToolAuthorizationPolicy();
+  if (supportsToolAuthorizationSessionTarget(genericIdentity.name)
+    && toolAuthorizationNeedsSessionTarget(policy, request)) {
+    if (useMainSessionTargetAuthority) {
+      const { resolveMainAuthorizationSessionTarget } = await import('./mainManagementTools');
+      const resolved = await resolveMainAuthorizationSessionTarget({ sourceSessionId: session.id, toolName: genericIdentity.name, args: toolArgs || {} });
+      request.sourceParentSessionId = resolved.sourceParentSessionId;
+      request.sessionTargets = { sessionId: resolved.target };
+    } else {
+      populateToolAuthorizationSessionTargets(request, session);
+    }
+  }
+  const genericDecision = evaluateToolAuthorizationPolicy(policy, request);
   if (genericDecision.action === 'deny') {
     throw new Error(genericDecision.rule?.reason || `Tool authorization rule denies ${genericIdentity.source} capability \`${genericIdentity.name}\`.`);
   }

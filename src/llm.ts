@@ -1554,7 +1554,8 @@ async function prepareToolCall(
                     : resolved.source === 'mcp'
                         ? { source: 'mcp' as const, server: resolved.server, tool: resolved.name }
                         : { source: 'builtin' as const, tool: resolved.name };
-                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args);
+                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args,
+                    toolContext.sessionPlacement === 'session-worker');
             }
         } catch (error) { placementError = error; }
     }
