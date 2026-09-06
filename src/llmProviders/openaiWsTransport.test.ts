@@ -365,7 +365,7 @@ test('close after response.completed but before assistant append invalidates the
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
 });
 
-test('completed idle chains actively expire and close after ten minutes without another request', async () => {
+test('completed idle chains actively expire and close after one minute without another request', async () => {
   const timers = new FakeIdleTimers();
   let socket!: FakeSocket;
   setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, socketFactory: () => {
@@ -376,7 +376,7 @@ test('completed idle chains actively expire and close after ten minutes without 
   assert.equal(timers.entries.length, 0);
   pending.finalize([]);
   assert.equal(timers.entries.length, 1);
-  assert.equal(timers.entries[0].delayMs, 10 * 60 * 1000);
+  assert.equal(timers.entries[0].delayMs, 60 * 1000);
   assert.equal(timers.entries[0].unrefs, 1);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   timers.entries[0].callback();
