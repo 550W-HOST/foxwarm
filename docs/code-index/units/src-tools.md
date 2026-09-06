@@ -32,6 +32,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `peekPendingWriteRefContent` | Retrieves pending write content after validating its session/agent scope without consuming it |
 | `expandHomePath` | Expands `~` prefix to OS home directory |
 | `resolveAgentPath` | Re-export from `src/utils/pathResolve.ts`; resolves relative/absolute/home paths against session cwd or the agent directory |
+| `canonicalPotentialPathSync` | Canonicalizes an existing path or the nearest existing ancestor of a prospective path for authorization-time containment checks |
 | `resolveAgentMemoryPath` | Resolves paths within agent memory directory |
 | `readResolvedPath` | Master wrapper around shared `readFileToolPath`; reads file/directory/image and treats start/end line 0 as omitted |
 | `writeResolvedPath` | Master wrapper around shared `writeFileToolPath`; writes content with overwrite and parent-directory checks |

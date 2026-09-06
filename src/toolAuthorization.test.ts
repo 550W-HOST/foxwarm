@@ -17,11 +17,13 @@ import {
   setToolAuthorizationTestClockForTests,
   type ToolAuthorizationPolicy,
 } from './toolAuthorization';
-import { checkToolPermissionForSession } from './isolatedCheck';
+import { checkToolPermissionForSession, isToolVisibleForSession } from './isolatedCheck';
 import { tool_set_tool_rules } from './tools/toolAuthorizationTools';
 import { executeTools } from './llm';
 import * as tools from './tools';
 import { tool_run_script } from './toolscript';
+import { canonicalPotentialPathSync } from './utils/pathResolve';
+import { getAgentDir } from './config';
 
 const allowPolicy = (): ToolAuthorizationPolicy => ({ version: 1, defaultAction: 'allow', rules: [] });
 
@@ -94,6 +96,122 @@ rules:
     session: { id: 'demo/main', agent: 'demo' }, tool: { source: 'node', name: 'read' }, targetNode: 'remote', args: { filePath: '/same/text' },
   }));
   assert.equal(remote.action, 'deny');
+});
+
+
+test('visibility preserves ordered definite decisions and keeps conditional possible allows discoverable', () => {
+  const session: any = { id: 'plain/main', agent: 'plain', currentNode: 'master' };
+  const visible = (policy: string) => {
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(policy));
+    return isToolVisibleForSession(session, { source: 'builtin', tool: 'node' }, 'master');
+  };
+  assert.equal(visible(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-inspect
+  match: { tool: { source: builtin, name: node }, args: { action: inspect } }
+  action: allow
+`), true);
+  assert.equal(visible(`
+version: 1
+defaultAction: deny
+rules:
+- id: deny-destroy
+  match: { tool: node, args: { action: destroy } }
+  action: deny
+- id: allow-inspect
+  match: { tool: node, args: { action: inspect } }
+  action: allow
+`), true);
+  assert.equal(visible(`
+version: 1
+defaultAction: deny
+rules:
+- id: deny-destroy
+  match: { tool: node, args: { action: destroy } }
+  action: deny
+`), false);
+  assert.equal(visible(`
+version: 1
+defaultAction: allow
+rules:
+- id: deny-node
+  match: { tool: { source: builtin, name: node } }
+  action: deny
+- id: allow-inspect
+  match: { tool: node, args: { action: inspect } }
+  action: allow
+`), false);
+  assert.equal(visible(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-node
+  match: { tool: node }
+  action: allow
+- id: deny-destroy
+  match: { tool: node, args: { action: destroy } }
+  action: deny
+`), true);
+});
+
+test('path facts canonicalize symlink prefixes, nonexistent children, policy bases, copy legs, and sources', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-auth-canonical-'));
+  const allowed = path.join(dir, 'allowed');
+  const outside = path.join(dir, 'outside');
+  await fs.ensureDir(allowed); await fs.ensureDir(outside);
+  await fs.writeFile(path.join(outside, 'existing.txt'), 'outside');
+  await fs.symlink(outside, path.join(allowed, 'link'), 'dir');
+  const session: any = { id: 'plain/main', agent: 'plain', currentNode: 'master', cwd: allowed };
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-contained-node-files
+  match: { tool: { source: node, name: [read, write] }, path: { arg: filePath, allWithin: "${allowed}" } }
+  action: allow
+`));
+  await assert.rejects(() => tools.callTool('read', { filePath: 'link/existing.txt' }, { sessionId: session.id, session } as any), /denies node capability/i);
+  await assert.rejects(() => tools.callTool('write', { filePath: 'link/new/child.txt', content: 'blocked', createDirs: true }, { sessionId: session.id, session } as any), /denies node capability/i);
+  assert.equal(await fs.pathExists(path.join(outside, 'new', 'child.txt')), false);
+  const danglingTarget = path.join(outside, 'dangling-created.txt');
+  await fs.symlink(danglingTarget, path.join(allowed, 'dangling.txt'));
+  await assert.rejects(() => tools.callTool('write', { filePath: 'dangling.txt', content: 'blocked' }, { sessionId: session.id, session } as any), /denies node capability/i);
+  assert.equal(await fs.pathExists(danglingTarget), false);
+
+  const baseLink = path.join(dir, 'base-link'); await fs.symlink(outside, baseLink, 'dir');
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-canonical-base
+  match: { tool: read, path: { allWithin: "${baseLink}" } }
+  action: allow
+`));
+  assert.equal((await evaluateToolAuthorization(buildToolAuthorizationRequest({
+    session, tool: { source: 'node', name: 'read' }, targetNode: 'master', args: { filePath: path.join(outside, 'existing.txt') },
+  }))).action, 'allow');
+
+  const copy = buildToolAuthorizationRequest({
+    session: { ...session, cwd: outside }, tool: { source: 'builtin', name: 'copy_between_nodes' }, targetNode: 'master',
+    args: { sourceNode: 'master', sourcePath: 'source.txt', targetNode: 'master', targetPath: 'nested/target.txt' },
+  });
+  assert.equal(copy.paths[0].resolved, canonicalPotentialPathSync(path.join(getAgentDir('plain'), 'source.txt')));
+  assert.equal(copy.paths[1].resolved, canonicalPotentialPathSync(path.join(getAgentDir('plain'), 'nested/target.txt')));
+  const mcpRead = buildToolAuthorizationRequest({ session, tool: { source: 'mcp', server: 'files', name: 'read' }, targetNode: 'master', args: { filePath: 'link/existing.txt' } });
+  assert.deepEqual(mcpRead.paths, []);
+  const patch = buildToolAuthorizationRequest({
+    session, tool: { source: 'node', name: 'apply_patch' }, targetNode: 'master', args: { input: [
+      '*** Begin Patch',
+      '*** Add File: added.txt', '+added',
+      '*** Update File: existing.txt', '@@', '-outside', '+updated',
+      '*** Delete File: deleted.txt',
+      '*** End Patch',
+    ].join('\n') },
+  });
+  assert.deepEqual(patch.paths.map(record => record.raw), ['added.txt', 'existing.txt', 'deleted.txt']);
+  await fs.remove(dir);
 });
 
 test('successful policies cache for ten seconds and async stale failures retry after 100ms', async () => {
@@ -201,6 +319,25 @@ rules:
   action: deny
 `));
   await assert.rejects(() => tool_set_tool_rules({ filePath: candidate }, { sessionId: session.id, session } as any), /denies node capability/i);
+
+  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-auth-setter-outside-'));
+  const outsideCandidate = path.join(outsideDir, 'candidate.yaml');
+  const candidateLink = path.join(dir, 'candidate-link.yaml');
+  await fs.writeFile(outsideCandidate, 'version: 1\ndefaultAction: allow\nrules: []\n');
+  await fs.symlink(outsideCandidate, candidateLink);
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-setter
+  match: { tool: { source: builtin, name: set_tool_rules } }
+  action: allow
+- id: allow-contained-read
+  match: { tool: { source: node, name: read }, path: { allWithin: "${dir}" } }
+  action: allow
+`));
+  await assert.rejects(() => tool_set_tool_rules({ filePath: candidateLink }, { sessionId: session.id, session } as any), /denies node capability/i);
+  await fs.remove(outsideDir);
   await fs.remove(dir);
 });
 

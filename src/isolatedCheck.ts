@@ -17,7 +17,7 @@ import type { Session } from './types';
 import {
   buildToolAuthorizationRequest,
   evaluateToolAuthorization,
-  evaluateToolAuthorizationSync,
+  isToolAuthorizationPotentiallyVisibleSync,
 } from './toolAuthorization';
 
 const ISOLATED_ALWAYS_UNAVAILABLE_BUILTINS = new Set([
@@ -133,12 +133,12 @@ export function isToolVisibleForSession(
     : rawIdentity.source === 'mcp'
       ? { source: 'mcp' as const, server: rawIdentity.server || 'default', name: rawIdentity.tool }
       : { source: 'builtin' as const, name: rawIdentity.tool };
-  const genericDecision = evaluateToolAuthorizationSync(buildToolAuthorizationRequest({
+  const genericVisible = isToolAuthorizationPotentiallyVisibleSync(buildToolAuthorizationRequest({
     session,
     tool: genericIdentity,
     targetNode: rawIdentity.source === 'node' ? (rawIdentity.node || executionNode) : executionNode,
   }));
-  if (genericDecision.action === 'deny') return false;
+  if (!genericVisible) return false;
   if (!agentMetadata.isSessionEffectivelyIsolated(session)) return true;
   const agentName = session.agent || 'main';
   const boundNode = agentMetadata.getAgentIsolationNode(agentName) || session.currentNode || 'master';

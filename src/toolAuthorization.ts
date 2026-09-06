@@ -4,8 +4,10 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { getAgentDir, getAgentMemoryDir, STATE_DIR, WORKSPACE_DIR } from './config';
 import type { Session } from './types';
-import { resolveAgentPath } from './utils/pathResolve';
+import { canonicalPotentialPathSync, resolveAgentPath } from './utils/pathResolve';
 import { RpcError } from './rpc';
+import { resolveNodeTransferPath } from './nodeFileTransfer';
+import { parseApplyPatchInput } from './applyPatch';
 
 export const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
 export const TOOL_AUTH_POLICY_UNAVAILABLE = 'TOOL_AUTH_POLICY_UNAVAILABLE';
@@ -343,7 +345,7 @@ function expandPathVariables(value: string, agentName: string): string {
     .replace(/\$\{workspace\}/g, WORKSPACE_DIR);
 }
 function normalizeBasePath(value: string, agentName: string): string {
-  return path.normalize(path.resolve(expandPathVariables(value, agentName)));
+  return canonicalPotentialPathSync(expandPathVariables(value, agentName));
 }
 function isWithinPath(candidate: string | undefined, base: string): boolean {
   if (!candidate) return false;
@@ -373,11 +375,28 @@ function matchesRule(rule: ToolAuthorizationRule, request: ToolAuthorizationRequ
     && matchesArgs(rule.match.args, request.args)
     && matchesPath(rule.match.path, request);
 }
+function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest): boolean {
+  return matchesScalar(rule.match.agent, request.agent)
+    && matchesScalar(rule.match.session, request.session)
+    && matchesTool(rule.match.tool, request.tool)
+    && matchesScalar(rule.match.targetNode, request.targetNode);
+}
 export async function evaluateToolAuthorization(request: ToolAuthorizationRequest): Promise<ToolAuthorizationEvaluation> {
   return evaluatePolicy(await loadToolAuthorizationPolicy(), request);
 }
 export function evaluateToolAuthorizationSync(request: ToolAuthorizationRequest): ToolAuthorizationEvaluation {
   return evaluatePolicy(loadToolAuthorizationPolicySync(), request);
+}
+export function isToolAuthorizationPotentiallyVisibleSync(request: ToolAuthorizationRequest): boolean {
+  const policy = loadToolAuthorizationPolicySync();
+  for (const rule of policy.rules) {
+    if (!rule.enabled || !matchesRuleIdentity(rule, request)) continue;
+    const conditional = rule.match.path !== undefined
+      || (rule.match.args !== undefined && Object.keys(rule.match.args).length > 0);
+    if (!conditional) return rule.action === 'allow';
+    if (rule.action === 'allow') return true;
+  }
+  return policy.defaultAction === 'allow';
 }
 function evaluatePolicy(policy: ToolAuthorizationPolicy, request: ToolAuthorizationRequest): ToolAuthorizationEvaluation {
   for (const rule of policy.rules) {
@@ -387,14 +406,16 @@ function evaluatePolicy(policy: ToolAuthorizationPolicy, request: ToolAuthorizat
   return { action: policy.defaultAction, matched: false };
 }
 
-const FILE_PATH_TOOLS = new Set(['read', 'write', 'edit', 'send_file', 'image_write_to_file', 'set_tool_rules']);
+const NODE_FILE_PATH_TOOLS = new Set(['read', 'write', 'edit']);
+const BUILTIN_FILE_PATH_TOOLS = new Set(['send_file', 'image_write_to_file', 'set_tool_rules']);
 const MEMORY_PATH_TOOLS = new Set(['read_memory', 'write_memory', 'edit_memory', 'delete_memory']);
 function resolveMemoryPath(raw: string, agentName: string): string {
   const normalized = raw.trim().replace(/^[\\/]+/, '').replace(/^memory[\\/]+/, '');
   return path.resolve(getAgentMemoryDir(agentName), normalized);
 }
 function addPath(records: ToolAuthorizationPathRecord[], options: {
-  arg: string; raw: unknown; targetNode: string; agentName: string; session?: Pick<Session, 'cwd'> | null; memory?: boolean;
+  arg: string; raw: unknown; targetNode: string; agentName: string; session?: Pick<Session, 'cwd'> | null;
+  memory?: boolean; resolveMasterPath?: (raw: string) => string;
 }): void {
   if (typeof options.raw !== 'string' || !options.raw.trim()) return;
   const raw = options.raw.trim();
@@ -403,18 +424,15 @@ function addPath(records: ToolAuthorizationPathRecord[], options: {
     raw,
     targetNode: options.targetNode,
     ...(options.targetNode === 'master' ? {
-      resolved: options.memory ? resolveMemoryPath(raw, options.agentName) : resolveAgentPath(raw, options.agentName, options.session?.cwd),
+      resolved: canonicalPotentialPathSync(options.resolveMasterPath
+        ? options.resolveMasterPath(raw)
+        : options.memory ? resolveMemoryPath(raw, options.agentName) : resolveAgentPath(raw, options.agentName, options.session?.cwd)),
     } : {}),
   });
 }
 function extractPatchPaths(input: unknown): string[] {
   if (typeof input !== 'string') return [];
-  const paths: string[] = [];
-  for (const line of input.split(/\r?\n/)) {
-    const match = line.match(/^\*\*\*\s+(?:Add|Update|Delete) File:\s+(.+)\s*$/);
-    if (match?.[1]) paths.push(match[1].trim());
-  }
-  return paths;
+  return parseApplyPatchInput(input).map(operation => operation.filePath);
 }
 export function buildToolAuthorizationRequest(options: {
   session?: Pick<Session, 'id' | 'agent' | 'cwd'> | null;
@@ -428,14 +446,25 @@ export function buildToolAuthorizationRequest(options: {
   const targetNode = options.targetNode || 'master';
   const args = options.args || {};
   const paths: ToolAuthorizationPathRecord[] = [];
-  if (FILE_PATH_TOOLS.has(options.tool.name)) addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode, agentName, session: options.session });
-  if (MEMORY_PATH_TOOLS.has(options.tool.name)) addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode: 'master', agentName, session: options.session, memory: true });
-  if (options.tool.name === 'exec') addPath(paths, { arg: 'cwd', raw: args.cwd, targetNode, agentName, session: options.session });
-  if (options.tool.name === 'copy_between_nodes') {
-    addPath(paths, { arg: 'sourcePath', raw: args.sourcePath, targetNode: typeof args.sourceNode === 'string' ? args.sourceNode : targetNode, agentName, session: options.session });
-    addPath(paths, { arg: 'targetPath', raw: args.targetPath, targetNode: typeof args.targetNode === 'string' ? args.targetNode : targetNode, agentName, session: options.session });
+  if (options.tool.source === 'node' && NODE_FILE_PATH_TOOLS.has(options.tool.name)) {
+    addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode, agentName, session: options.session });
   }
-  if (options.tool.name === 'apply_patch' || options.tool.name === 'apply_patch_memory') {
+  if (options.tool.source === 'builtin' && BUILTIN_FILE_PATH_TOOLS.has(options.tool.name)) {
+    addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode, agentName, session: options.session });
+  }
+  if (options.tool.source === 'builtin' && MEMORY_PATH_TOOLS.has(options.tool.name)) {
+    addPath(paths, { arg: 'filePath', raw: args.filePath, targetNode: 'master', agentName, session: options.session, memory: true });
+  }
+  if (options.tool.source === 'node' && options.tool.name === 'exec') {
+    addPath(paths, { arg: 'cwd', raw: args.cwd, targetNode, agentName, session: options.session });
+  }
+  if (options.tool.source === 'builtin' && options.tool.name === 'copy_between_nodes') {
+    const transferResolver = (raw: string) => resolveNodeTransferPath(raw, agentName, false);
+    addPath(paths, { arg: 'sourcePath', raw: args.sourcePath, targetNode: typeof args.sourceNode === 'string' ? args.sourceNode : targetNode, agentName, resolveMasterPath: transferResolver });
+    addPath(paths, { arg: 'targetPath', raw: args.targetPath, targetNode: typeof args.targetNode === 'string' ? args.targetNode : targetNode, agentName, resolveMasterPath: transferResolver });
+  }
+  if ((options.tool.source === 'node' && options.tool.name === 'apply_patch')
+    || (options.tool.source === 'builtin' && options.tool.name === 'apply_patch_memory')) {
     for (const patchPath of extractPatchPaths(args.input)) addPath(paths, {
       arg: 'input', raw: patchPath, targetNode: options.tool.name === 'apply_patch_memory' ? 'master' : targetNode,
       agentName, session: options.session, memory: options.tool.name === 'apply_patch_memory',
