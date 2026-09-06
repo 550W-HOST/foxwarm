@@ -232,7 +232,12 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         }
         phase = 'finished';
         closeLeased();
-        stream.destroy(makeAbortError());
+        // The shared collector observes this same AbortSignal and owns the
+        // AbortError rejection. Destroying with an error here races its abort
+        // cleanup: the collector can remove the stream error listener before
+        // PassThrough emits the queued error, turning an ordinary Stop/Run
+        // cancellation into an uncaught process exception.
+        stream.destroy();
     };
     const onClose = (code: number, reason: Buffer) => {
         if (phase === 'finished') return;

@@ -1,6 +1,8 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import WebSocket from 'ws';
 import {
   clearOpenAIWsCompletedChains,
@@ -334,6 +336,47 @@ test('idle socket close removes its completed chain immediately', async () => {
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   socket.terminate();
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+});
+
+test('aborting an active WS request rejects normally without an uncaught PassThrough error', async () => {
+  const modulePath = path.join(__dirname, 'openaiWsTransport.js');
+  const script = `
+    const { EventEmitter } = require('events');
+    const WebSocket = require('ws');
+    const transport = require(${JSON.stringify(modulePath)});
+    class FakeSocket extends EventEmitter {
+      constructor() { super(); this.readyState = WebSocket.CONNECTING; this._socket = { ref() {}, unref() {} }; process.nextTick(() => { this.readyState = WebSocket.OPEN; this.emit('open'); }); }
+      send() {}
+      close() { this.terminate(); }
+      terminate() { if (this.readyState === WebSocket.CLOSED) return; this.readyState = WebSocket.CLOSED; this.emit('close', 1006, Buffer.alloc(0)); }
+    }
+    process.once('uncaughtException', error => { console.error('UNCAUGHT:' + error.stack); process.exit(7); });
+    transport.setOpenAIWsTransportTestHooks({ socketFactory: () => new FakeSocket() });
+    const controller = new AbortController();
+    const pending = transport.requestOpenAIResponsesWs({
+      url: 'https://example.test/v1/responses', headers: {}, concreteIdentity: 'leaf/model',
+      data: { model: 'm', input: [], store: false }, placement: 'local', signal: controller.signal, timeoutMs: 1000,
+    });
+    setImmediate(() => controller.abort());
+    pending.then(
+      () => process.exit(8),
+      error => setImmediate(() => {
+        transport.clearOpenAIWsCompletedChains();
+        if (error && error.name === 'AbortError') process.exit(0);
+        console.error('WRONG_REJECTION:' + (error && error.stack || error));
+        process.exit(9);
+      }),
+    );
+  `;
+  const result = await new Promise<{ code: number | null; stderr: string }>(resolve => {
+    const child = spawn(process.execPath, ['-e', script], { cwd: path.dirname(__dirname) });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('exit', code => resolve({ code, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /UNCAUGHT:/);
 });
 
 test('active and pending-append sockets stay referenced, idle sockets unref, and reuse refs again', async () => {
