@@ -44,7 +44,7 @@ export type ChannelProgressClock = {
 function sanitizeToolName(value: unknown): string {
   const cleaned = String(value || 'tool')
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
-    .replace(/[\r\n\t`*_~|<>]/g, '')
+    .replace(/[\r\n\t`*~|<>]/g, '')
     .trim()
     .slice(0, MAX_TOOL_NAME_LENGTH);
   return cleaned || 'tool';
