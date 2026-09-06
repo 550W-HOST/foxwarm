@@ -35,6 +35,19 @@ class MemoryStorage {
 test('built-in themes validate and canonical serialization is stable', () => {
   assert.ok(theme.BUILTIN_THEMES.includes(theme.DEFAULT_THEME))
   assert.ok(theme.BUILTIN_THEMES.includes(theme.THEME_550A))
+  assert.ok(theme.BUILTIN_THEMES.includes(theme.THEME_550A_MONO))
+  assert.equal(theme.BUILTIN_THEMES.length, 6)
+  assert.deepEqual(
+    theme.BUILTIN_THEMES.map(item => [item.id, item.name]),
+    [
+      ['foxwarm.default', 'Default'],
+      ['foxwarm.550a', '550A'],
+      ['foxwarm.550a-mono', '550A Mono'],
+      ['foxwarm.paper', 'Paper'],
+      ['foxwarm.seaglass', 'Sea Glass'],
+      ['foxwarm.vector', 'Vector'],
+    ],
+  )
   assert.equal(new Set(theme.BUILTIN_THEMES.map(item => item.id)).size, theme.BUILTIN_THEMES.length)
   for (const builtin of theme.BUILTIN_THEMES) {
     const serialized = theme.serializeThemeManifest(builtin)
@@ -45,6 +58,29 @@ test('built-in themes validate and canonical serialization is stable', () => {
     assert.deepEqual(parsed.value.variants.dark.colors, builtin.variants.dark.colors)
     assert.ok(Array.isArray(parsed.warnings))
   }
+})
+
+test('550A keeps its colored console grammar while 550A Mono preserves the machine-console palette', () => {
+  for (const mode of ['light', 'dark']) {
+    const colored = theme.THEME_550A.variants[mode]
+    const mono = theme.THEME_550A_MONO.variants[mode]
+    assert.equal(colored.componentTreatment, 'console')
+    assert.equal(mono.componentTreatment, 'console')
+    assert.notEqual(colored.colors.tool, colored.colors.systemAccent)
+    assert.notEqual(colored.colors.toolSurface, colored.colors.systemSurface)
+  }
+
+  assert.equal(theme.THEME_550A.variants.light.colors.tool, '#3a7a3a')
+  assert.equal(theme.THEME_550A.variants.light.colors.systemAccent, '#3a6a9a')
+  assert.equal(theme.THEME_550A.variants.dark.colors.tool, '#55aa55')
+  assert.equal(theme.THEME_550A.variants.dark.colors.systemAccent, '#77aabb')
+  assert.equal(theme.THEME_550A.variants.light.typography.uiFontFamily, theme.THEME_550A.variants.light.typography.codeFontFamily)
+
+  assert.equal(theme.THEME_550A_MONO.variants.light.colors.canvas, '#dcdfde')
+  assert.equal(theme.THEME_550A_MONO.variants.light.colors.tool, '#4d5652')
+  assert.equal(theme.THEME_550A_MONO.variants.dark.colors.canvas, '#121414')
+  assert.equal(theme.THEME_550A_MONO.variants.dark.colors.tool, '#b7bfbb')
+  assert.equal(theme.THEME_550A_MONO.variants.dark.displayEffect.kind, 'crt')
 })
 
 test('schema V2 gives tools one coherent family while Default preserves its historical colors', async () => {
@@ -175,6 +211,15 @@ test('legacy selection migrates to a versioned theme family selection', () => {
   })
 })
 
+test('current selections retain both stable 550A family IDs', () => {
+  for (const themeId of ['foxwarm.550a', 'foxwarm.550a-mono']) {
+    const storage = new MemoryStorage()
+    storage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'dark' }))
+    assert.deepEqual(theme.readThemeSelection(storage), { version: 2, themeId, colorMode: 'dark' })
+    assert.equal(theme.readThemeRegistry(storage).themes.some(item => item.id === themeId), true)
+  }
+})
+
 test('V2 selection is insulated from rewrites by an older live WebUI bundle', () => {
   const storage = new MemoryStorage()
   storage.setItem('foxwarm_theme_selection_v1', JSON.stringify({ version: 1, themeId: 'foxwarm.new-built-in', colorMode: 'dark' }))
@@ -217,22 +262,24 @@ test('custom themes install, conflict, export, replace, and delete atomically', 
   assert.equal(theme.readThemeRegistry(storage).customThemes.length, 0)
 })
 
-test('custom themes cannot claim built-in namespace and exported 550A clone resolves equally', () => {
+test('custom themes cannot claim built-in namespace and exported console clones resolve equally', () => {
   const storage = new MemoryStorage()
   const reserved = structuredClone(theme.THEME_550A)
   const rejected = theme.installThemeFromJson(storage, theme.serializeThemeManifest(reserved))
   assert.equal(rejected.ok, false)
   assert.match(rejected.errors.join('\n'), /reserved/)
 
-  const clone = structuredClone(theme.THEME_550A)
-  clone.id = 'example.reimported-550a'
-  clone.name = 'Reimported 550A'
-  assert.equal(theme.installThemeFromJson(storage, theme.serializeThemeManifest(clone)).ok, true)
-  const installed = theme.readThemeRegistry(storage).customThemes[0]
-  assert.deepEqual(
-    theme.themeVariantCssVariables(installed.variants.dark),
-    theme.themeVariantCssVariables(theme.THEME_550A.variants.dark),
-  )
+  for (const [index, builtin] of [theme.THEME_550A, theme.THEME_550A_MONO].entries()) {
+    const clone = structuredClone(builtin)
+    clone.id = `example.reimported-550a-${index}`
+    clone.name = `Reimported ${builtin.name}`
+    assert.equal(theme.installThemeFromJson(storage, theme.serializeThemeManifest(clone)).ok, true)
+    const installed = theme.readThemeRegistry(storage).customThemes[index]
+    assert.deepEqual(
+      theme.themeVariantCssVariables(installed.variants.dark),
+      theme.themeVariantCssVariables(builtin.variants.dark),
+    )
+  }
 })
 
 test('terminal, Monaco, and Mermaid adapters consume the same resolved manifest variant', () => {
