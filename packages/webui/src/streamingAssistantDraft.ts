@@ -12,6 +12,45 @@ export type StreamingAssistantDraft = {
   incompletePrefix?: boolean
 }
 
+export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | null): Message | null {
+  if (!draft) return null
+
+  const parts: Message['parts'] = []
+  if (draft.incompletePrefix) {
+    parts.push({ system: 'Live stream joined after generation began; earlier content is unavailable.' })
+  }
+  if (draft.reasoning.trim()) {
+    parts.push({ thinking: draft.reasoning })
+  }
+  if (draft.text) {
+    parts.push({ text: draft.text })
+  }
+  for (const toolCall of draft.toolCalls) {
+    parts.push({
+      functionCall: {
+        id: toolCall.id || `stream-${draft.streamId}-${toolCall.index}`,
+        name: toolCall.name || 'tool call',
+        args: toolCall.displayArgs ?? parseStreamingToolArguments(toolCall.arguments),
+      },
+    })
+  }
+
+  if (parts.length === 0) return null
+  return {
+    role: 'model',
+    parts,
+    __meta: {
+      synthetic: 'streamingAssistantDraft',
+      temporary: true,
+      streaming: true,
+      streamId: draft.streamId,
+      iteration: draft.iteration,
+      ...(draft.llmRequestId ? { llmRequestId: draft.llmRequestId } : {}),
+      timestamp: Number.MAX_SAFE_INTEGER,
+    },
+  }
+}
+
 export const normalizeStreamingToolCalls = (toolCalls: ModelStreamToolCall[] | undefined): ModelStreamToolCall[] => {
   if (!Array.isArray(toolCalls)) return []
   return toolCalls.map((toolCall, fallbackIndex) => ({

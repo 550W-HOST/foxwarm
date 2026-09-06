@@ -14,9 +14,9 @@ type MathPlaceholder = {
 }
 
 export type MarkdownRenderSegment =
-  | { kind: 'html'; html: string }
-  | { kind: 'latex'; raw: string; source: string; html: string }
-  | { kind: 'mermaid'; raw: string; source: string }
+  | { kind: 'html'; tokenIndex: number; html: string }
+  | { kind: 'latex'; tokenIndex: number; raw: string; source: string; html: string }
+  | { kind: 'mermaid'; tokenIndex: number; raw: string; source: string }
 
 type MathRenderContext = {
   markerPrefix: string
@@ -274,41 +274,45 @@ export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitiz
 
 export const renderMarkdown = (text: string): string => renderMarkdownWithSanitizer(text)
 
+export const renderMarkdownSegmentsWithSanitizer = (
+  text: string,
+  sanitizer: HtmlSanitizer = sanitizeHtml,
+): Array<Extract<MarkdownRenderSegment, { kind: 'html' }>> => (
+  markdown.lexer(text).flatMap((token, tokenIndex) => {
+    const html = renderMarkdownTokens([token], sanitizer)
+    return html ? [{ kind: 'html' as const, tokenIndex, html }] : []
+  })
+)
+
+export const renderMarkdownSegments = (text: string): Array<Extract<MarkdownRenderSegment, { kind: 'html' }>> => (
+  renderMarkdownSegmentsWithSanitizer(text)
+)
+
 export const renderAssistantMarkdownSegmentsWithSanitizer = (
   text: string,
   sanitizer: HtmlSanitizer = sanitizeHtml,
 ): MarkdownRenderSegment[] => {
   const segments: MarkdownRenderSegment[] = []
-  let ordinaryTokens: Token[] = []
 
-  const flushOrdinaryTokens = () => {
-    if (ordinaryTokens.length === 0) return
-    const html = renderMarkdownTokens(ordinaryTokens, sanitizer)
-    if (html) segments.push({ kind: 'html', html })
-    ordinaryTokens = []
-  }
-
-  for (const token of markdown.lexer(text)) {
+  for (const [tokenIndex, token] of markdown.lexer(text).entries()) {
     if (token.type === 'code' && token.lang?.trim().toLowerCase() === 'mermaid') {
-      flushOrdinaryTokens()
-      segments.push({ kind: 'mermaid', raw: token.raw, source: token.text })
+      segments.push({ kind: 'mermaid', tokenIndex, raw: token.raw, source: token.text })
       continue
     }
     if (token.type === 'displayMathBlock') {
       const mathToken = token as MathToken
-      flushOrdinaryTokens()
       segments.push({
         kind: 'latex',
+        tokenIndex,
         raw: token.raw,
         source: mathToken.text,
         html: renderKatexHtml(mathToken.text, true),
       })
       continue
     }
-    ordinaryTokens.push(token)
+    const html = renderMarkdownTokens([token], sanitizer)
+    if (html) segments.push({ kind: 'html', tokenIndex, html })
   }
-
-  flushOrdinaryTokens()
   return segments
 }
 

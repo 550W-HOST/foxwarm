@@ -458,6 +458,14 @@ input, textarea, select {
     word-break: break-word;
   }
 
+  .foxwarm-markdown > .foxwarm-markdown-segment:first-child > :first-child {
+    margin-top: 0;
+  }
+
+  .foxwarm-markdown > .foxwarm-markdown-segment:last-child > :last-child {
+    margin-bottom: 0;
+  }
+
   .foxwarm-markdown :where(h1):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     font-size: 1.5em;
     line-height: 1.2;

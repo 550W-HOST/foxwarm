@@ -9,7 +9,7 @@ import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
-import { applyModelStreamEvent, applyModelStreamSnapshot, parseStreamingToolArguments, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
+import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
@@ -181,44 +181,6 @@ type SessionListRecord = {
   childEffortAllowed?: string[]
   childModelEffortDefault?: string | null
   isolated?: boolean
-}
-
-const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): Message | null => {
-  if (!draft) return null
-
-  const parts: MessagePart[] = []
-  if (draft.incompletePrefix) {
-    parts.push({ system: 'Live stream joined after generation began; earlier content is unavailable.' })
-  }
-  if (draft.reasoning.trim()) {
-    parts.push({ thinking: draft.reasoning })
-  }
-  if (draft.text) {
-    parts.push({ text: draft.text })
-  }
-  for (const toolCall of draft.toolCalls) {
-    parts.push({
-      functionCall: {
-        id: toolCall.id || `stream-${draft.streamId}-${toolCall.index}`,
-        name: toolCall.name || 'tool call',
-        args: toolCall.displayArgs ?? parseStreamingToolArguments(toolCall.arguments),
-      },
-    })
-  }
-
-  if (parts.length === 0) return null
-  return {
-    role: 'model',
-    parts,
-    __meta: {
-      synthetic: 'streamingAssistantDraft',
-      temporary: true,
-      streaming: true,
-      streamId: draft.streamId,
-      iteration: draft.iteration,
-      timestamp: Number.MAX_SAFE_INTEGER,
-    },
-  }
 }
 
 const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {

@@ -25,6 +25,7 @@ import {
 } from './chatShared'
 import ImageParts from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
@@ -346,24 +347,21 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
   const segments = useMemo(() => renderAssistantMarkdownSegments(text), [text])
-  if (segments.length === 1 && segments[0].kind === 'html') {
-    return <div className={`min-w-0 max-w-full ${className}`} dangerouslySetInnerHTML={{ __html: segments[0].html }} onClick={handleMarkdownLinkClick} />
-  }
   return (
     <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
-      {segments.map((segment, index) => {
+      {segments.map((segment) => {
         if (segment.kind === 'html') {
-          return <div key={`html-${index}`} dangerouslySetInnerHTML={{ __html: segment.html }} />
+          return <MarkdownHtmlSegment key={`markdown-token-${segment.tokenIndex}`} html={segment.html} />
         }
         if (segment.kind === 'latex') {
           return (
-            <SpecialBlock key={`latex-${index}`} kind="latex" label="LaTeX" raw={segment.raw}>
+            <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="latex" label="LaTeX" raw={segment.raw}>
               <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
             </SpecialBlock>
           )
         }
         return (
-          <SpecialBlock key={`mermaid-${index}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
+          <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
             <MermaidDiagram source={segment.source} />
           </SpecialBlock>
         )

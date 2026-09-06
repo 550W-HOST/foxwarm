@@ -61,11 +61,14 @@ const hasStableMetaValue = (value: unknown): boolean => (
 export function getMessageStableKey(message: Message, fallbackIndex: number): string {
   const meta = message.__meta || {}
   const contextBlockId = meta.contextBlock?.id
-  if (hasStableMetaValue(meta.synthetic)) return `synthetic-${String(meta.synthetic)}`
-  if (hasStableMetaValue(meta.clientMessageId)) return `client-${String(meta.clientMessageId)}`
   if (hasStableMetaValue(contextBlockId)) {
     return `ctx-block-${String(meta.contextBlock?.sourceSessionId || 'local')}-${String(contextBlockId)}`
   }
+  // A live model draft and its one canonical provider message share this ID,
+  // so the final commit can reuse the mounted timeline row.
+  if (message.role === 'model' && hasStableMetaValue(meta.llmRequestId)) return `llm-request-${String(meta.llmRequestId)}`
+  if (hasStableMetaValue(meta.synthetic)) return `synthetic-${String(meta.synthetic)}`
+  if (hasStableMetaValue(meta.clientMessageId)) return `client-${String(meta.clientMessageId)}`
   if (hasStableMetaValue(meta.seq)) {
     return `seq-${String(meta.contextArchiveItem?.sourceSessionId || 'local')}-${String(meta.seq)}`
   }

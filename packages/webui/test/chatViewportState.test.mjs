@@ -21,6 +21,8 @@ test('chat viewport state uses stable persisted message identities', async () =>
   const idMessage = { role: 'model', parts: [], __meta: { id: 'message-id', timestamp: 1001 } }
   const timestampMessage = { role: 'tool', parts: [], __meta: { timestamp: 1002 } }
   const temporaryMessage = { role: 'model', parts: [], __meta: { synthetic: 'streamingAssistantDraft', temporary: true, timestamp: Number.MAX_SAFE_INTEGER } }
+  const streamingModelMessage = { role: 'model', parts: [], __meta: { synthetic: 'streamingAssistantDraft', llmRequestId: 'request-1', temporary: true } }
+  const committedModelMessage = { role: 'model', parts: [], __meta: { seq: 43, llmRequestId: 'request-1', timestamp: 1003 } }
 
   assert.equal(getMessageStableKey(seqMessage, 7), 'seq-local-42')
   assert.equal(getMessageViewportAnchorKey(seqMessage), 'seq-local-42')
@@ -28,6 +30,9 @@ test('chat viewport state uses stable persisted message identities', async () =>
   assert.equal(getMessageViewportAnchorKey(timestampMessage), 'ts-1002')
   assert.equal(getMessageViewportAnchorKey(temporaryMessage), null)
   assert.equal(getContextScrollbarAnchorKey(temporaryMessage), null)
+  assert.equal(getMessageStableKey(streamingModelMessage, 8), 'llm-request-request-1')
+  assert.equal(getMessageStableKey(committedModelMessage, 9), 'llm-request-request-1')
+  assert.equal(getMessageStableKey({ role: 'model', parts: [], __meta: { llmRequestId: 'request-1', contextBlock: { id: 5, level: 1, sourceKind: 'message' } } }, 10), 'ctx-block-local-5')
   assert.equal(getContextScrollbarAnchorKey({ role: 'tool', parts: [], __meta: { synthetic: 'persistentMemorySnapshot' } }), 'persistent-memory-snapshot', 'snapshot gets a ContextScrollbar-only anchor without becoming a persisted viewport anchor')
   assert.equal(getMessageStableKey({ role: 'user', parts: [] }, 7), 'idx-7')
 })
