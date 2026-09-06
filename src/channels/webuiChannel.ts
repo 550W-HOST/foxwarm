@@ -2088,24 +2088,114 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            const historyRangeKeys = ['tail', 'prefixLength', 'afterSeq', 'historyVersion'];
+            const hasHistoryRangeQuery = Object.keys(req.query).some(key => historyRangeKeys.includes(key));
+            const unknownQuery = hasHistoryRangeQuery
+              ? Object.keys(req.query).find(key => !historyRangeKeys.includes(key))
+              : undefined;
+            if (unknownQuery) return res.status(400).json({
+              error: `Unknown history query parameter with range mode: ${unknownQuery}.`,
+              code: 'HISTORY_RANGE_INVALID',
+            });
+            const scalarQuery = (name: string): string | undefined => {
+              const value = req.query[name];
+              if (value === undefined) return undefined;
+              if (typeof value !== 'string') {
+                const error = new Error(`${name} must be a single non-negative integer.`);
+                (error as any).statusCode = 400;
+                (error as any).code = 'HISTORY_RANGE_INVALID';
+                throw error;
+              }
+              return value;
+            };
+            const parseNonNegativeInteger = (name: string): number | undefined => {
+              const raw = scalarQuery(name);
+              if (raw === undefined) return undefined;
+              if (!/^(0|[1-9]\d*)$/.test(raw)) {
+                const error = new Error(`${name} must be a non-negative integer.`);
+                (error as any).statusCode = 400;
+                (error as any).code = 'HISTORY_RANGE_INVALID';
+                throw error;
+              }
+              const value = Number(raw);
+              if (!Number.isSafeInteger(value)) {
+                const error = new Error(`${name} is out of range.`);
+                (error as any).statusCode = 400;
+                (error as any).code = 'HISTORY_RANGE_INVALID';
+                throw error;
+              }
+              return value;
+            };
+            const tail = parseNonNegativeInteger('tail');
+            const prefixLength = parseNonNegativeInteger('prefixLength');
+            const afterSeq = parseNonNegativeInteger('afterSeq');
+            const expectedHistoryVersion = parseNonNegativeInteger('historyVersion');
+            const selectedModes = Number(tail !== undefined) + Number(prefixLength !== undefined) + Number(afterSeq !== undefined);
+            if (selectedModes > 1
+              || ((prefixLength !== undefined || afterSeq !== undefined) && expectedHistoryVersion === undefined)
+              || (tail !== undefined && expectedHistoryVersion !== undefined)
+              || (selectedModes === 0 && expectedHistoryVersion !== undefined)
+              || (tail !== undefined && (tail < 1 || tail > 500))) {
+              return res.status(400).json({
+                error: 'Use exactly one valid history range mode: tail, prefixLength with historyVersion, or afterSeq with historyVersion.',
+                code: 'HISTORY_RANGE_INVALID',
+              });
+            }
             const snapshot = await sessionRuntime.getHistory(sessionId);
             if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
+            const historyVersion = snapshot.session.historyVersion;
+            if (expectedHistoryVersion !== undefined && expectedHistoryVersion !== historyVersion) {
+              return res.status(409).json({
+                error: 'History changed while the requested range was loading.',
+                code: 'SESSION_HISTORY_BOUNDARY_STALE',
+                retryable: true,
+                historyVersion,
+              });
+            }
+            let selectedMessages = snapshot.messages;
+            let responsePrefixLength = 0;
+            let historyComplete = true;
+            if (tail !== undefined) {
+              responsePrefixLength = Math.max(0, snapshot.messages.length - tail);
+              selectedMessages = snapshot.messages.slice(responsePrefixLength);
+              historyComplete = responsePrefixLength === 0;
+            } else if (prefixLength !== undefined) {
+              if (prefixLength > snapshot.messages.length) {
+                return res.status(409).json({
+                  error: 'History changed while the requested range was loading.',
+                  code: 'SESSION_HISTORY_BOUNDARY_STALE',
+                  retryable: true,
+                  historyVersion,
+                });
+              }
+              selectedMessages = snapshot.messages.slice(0, prefixLength);
+            } else if (afterSeq !== undefined) {
+              selectedMessages = snapshot.messages.filter(message => {
+                const seq = message.__meta?.seq;
+                return Number.isSafeInteger(seq) && (seq || 0) > afterSeq;
+              });
+            }
             const queuedMessages = buildQueuedPreviewMessages(snapshot.queue);
-            const webUiHistory = await materializeWebUiMessages(snapshot.messages);
+            const webUiHistory = await materializeWebUiMessages(selectedMessages);
             res.json({
               session: buildWebUiSessionState(snapshot.session),
               messages: webUiHistory.messages,
               persistentMemorySnapshot: snapshot.persistentMemorySnapshot,
               queuedMessages,
               queueLength: snapshot.session.queueLength,
+              latestSeq: snapshot.latestSeq,
+              historyVersion,
+              prefixLength: responsePrefixLength,
+              historyComplete,
               queuedPreviewLimit: MAX_QUEUED_PREVIEW_ITEMS,
               queuedPreviewOmittedCount: Math.max(0, snapshot.session.queueLength - queuedMessages.length),
             });
           } catch (e: any) {
-            logger.error({ err: e }, 'Failed to get history');
-            res.status(500).json({ error: e.message });
+            const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : 500;
+            if (statusCode >= 500) logger.error({ err: e }, 'Failed to get history');
+            res.status(statusCode).json({ error: e.message, code: e?.code });
           }
         },
       });

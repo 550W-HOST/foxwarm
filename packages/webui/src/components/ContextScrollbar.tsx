@@ -19,6 +19,7 @@ type ContextScrollbarProps = {
   messages: Message[]
   persistentMemorySnapshot?: Message | null
   contextLimit: number | null | undefined
+  historyComplete?: boolean
   containerId: string
   containerRef: RefObject<HTMLDivElement>
   timelineRef: RefObject<HTMLDivElement>
@@ -63,7 +64,7 @@ const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLEle
  * Desktop context overview.  It deliberately reads the native scroll geometry
  * and asks Chat to perform scrolling; it never becomes a scroll container.
  */
-const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMemorySnapshot, contextLimit, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
+const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMemorySnapshot, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
   const rawSegments = useMemo(() => buildContextScrollbarSegments(messages, persistentMemorySnapshot), [messages, persistentMemorySnapshot])
   const [verticalScale, setVerticalScale] = useState<ContextScrollbarVerticalScale>(() => {
     const value = window.localStorage.getItem(VERTICAL_SCALE_STORAGE_KEY)
@@ -118,12 +119,12 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     const container = containerRef.current
     if (!container) return
     container.dataset.showSystemScrollbar = String(settings.showScrollbar)
-    container.dataset.showContextMinimap = String(settings.showMinimap)
+    container.dataset.showContextMinimap = String(settings.showMinimap && historyComplete)
     return () => {
       delete container.dataset.showSystemScrollbar
       delete container.dataset.showContextMinimap
     }
-  }, [containerRef, settings.showMinimap, settings.showScrollbar])
+  }, [containerRef, historyComplete, settings.showMinimap, settings.showScrollbar])
 
   const updateViewportRange = useCallback(() => {
     const container = containerRef.current
@@ -322,7 +323,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
   const viewportTop = viewportRange?.top ?? 0
   const viewportBottom = viewportRange?.bottom ?? viewportTop
 
-  if (!settings.showMinimap) return null
+  if (!settings.showMinimap || !historyComplete) return null
 
   return (
     <div className="foxwarm-context-scrollbar-shell" data-context-scrollbar-dragging={isDragging || undefined} aria-label="Context overview" onContextMenu={(event) => { event.preventDefault(); setScaleMenu({ x: event.clientX, y: event.clientY }) }}>
