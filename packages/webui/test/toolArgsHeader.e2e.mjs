@@ -19,11 +19,16 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import { InterleavedToolGroup, ToolCallsBlock } from ${JSON.stringify(toolEntry)}
-    import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
+    import { BUILTIN_THEMES, initializeThemeRuntime, setThemeSelection } from './src/theme/index'
 
     initializeThemeRuntime()
+    window.fixtureThemeCases = BUILTIN_THEMES.flatMap(theme => ['light', 'dark'].map(colorMode => ({
+      themeId: theme.id,
+      colorMode,
+      headerTreatment: theme.variants[colorMode].composition.header,
+    })))
     window.setFixtureTheme = (style, dark) => setThemeSelection({
-      themeId: style === '550a' ? 'foxwarm.550a' : 'foxwarm.default',
+      themeId: style.startsWith('foxwarm.') ? style : style === '550a' ? 'foxwarm.550a' : 'foxwarm.default',
       colorMode: dark ? 'dark' : 'light',
     })
 
@@ -116,6 +121,9 @@ async function readVisualState(id) {
       argsInsideHeader: !!args && header.contains(args),
       headerLeftDelta: Math.abs(headerRect.left - cardRect.left),
       headerRightDelta: Math.abs(headerRect.right - cardRect.right),
+      headerLeftOffset: headerRect.left - cardRect.left,
+      headerRightGap: cardRect.right - headerRect.right,
+      cardPaddingRight: getComputedStyle(card).paddingRight,
       actionsWithinHeader: actionsRect.top >= headerRect.top - 1 && actionsRect.bottom <= headerRect.bottom + 1,
       argsBottomDelta: argsRect ? Math.abs(headerRect.bottom - argsRect.bottom) : null,
       resultStartsAfterHeader: resultRect ? resultRect.top >= headerRect.bottom - 1 : null,
@@ -265,6 +273,22 @@ test('dark and mobile 550A retain header continuity and bounded call/result cont
     assertCollapsed(await readVisualState('exec'))
     await page.click('#exec .foxwarm-tool-tag')
     assertExpanded(await readVisualState('exec'))
+  }
+})
+
+test('every built-in applies its declared full-width or inset tool-header geometry when collapsed and expanded', async () => {
+  const cases = await page.evaluate(() => window.fixtureThemeCases)
+  assert.equal(cases.length, 12)
+  for (const { themeId, colorMode, headerTreatment } of cases) {
+    await mountFixture({ width: 900, height: 800, style: themeId, dark: colorMode === 'dark' })
+    const collapsed = await readVisualState('exec')
+    const expectedInset = ['banded', 'tab'].includes(headerTreatment) ? 0 : Number.parseFloat(collapsed.cardPaddingRight)
+    assert.ok(Math.abs(collapsed.headerLeftOffset - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} collapsed left offset ${collapsed.headerLeftOffset}px`)
+    assert.ok(Math.abs(collapsed.headerRightGap - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} collapsed right gap ${collapsed.headerRightGap}px`)
+    await page.click('#exec .foxwarm-tool-header-toggle')
+    const expanded = await readVisualState('exec')
+    assert.ok(Math.abs(expanded.headerLeftOffset - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} expanded left offset ${expanded.headerLeftOffset}px`)
+    assert.ok(Math.abs(expanded.headerRightGap - expectedInset) <= 1, `${themeId} ${colorMode} ${headerTreatment} expanded right gap ${expanded.headerRightGap}px`)
   }
 })
 
