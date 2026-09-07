@@ -390,14 +390,24 @@ const shouldRenderUserLine = (line: string, showUserMessageMetadata: boolean): b
   showUserMessageMetadata || !isLightweightSystemTextLine(line) || isUserAttachmentMetadataLine(line)
 )
 
-const renderUserPreLines = (text: string, showUserMessageMetadata: boolean, renderLine: (line: string, lineIndex: number) => ReactNode): ReactNode => {
+const renderUserPreLines = (text: string, showUserMessageMetadata: boolean, metadataLineHeight: string, renderLine: (line: string, lineIndex: number) => ReactNode): ReactNode => {
   const visibleLines = text.split('\n')
     .map((line, lineIndex) => ({ line, lineIndex }))
     .filter(({ line }) => shouldRenderUserLine(line, showUserMessageMetadata))
   return visibleLines.map(({ line, lineIndex }, visibleIndex) => (
-    <span key={lineIndex}>
+    <span key={lineIndex} className="foxwarm-user-rendered-line">
       {renderLine(line, lineIndex)}
-      {visibleIndex < visibleLines.length - 1 ? '\n' : null}
+      {visibleIndex < visibleLines.length - 1 && (
+        <span
+          className="foxwarm-user-rendered-line-break"
+          style={isSystemLikeText(line)
+            ? { fontSize: '70%', lineHeight: metadataLineHeight, opacity: 0.7 }
+            : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+          }
+        >
+          {'\n'}
+        </span>
+      )}
     </span>
   ))
 }
@@ -406,23 +416,38 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUs
   return (
     <pre
       className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-user-text' : 'text-fw-text-muted'}`}
-      style={{ lineHeight: '1.3em' }}
+      style={{ lineHeight: isUser ? 0 : '1.3em' }}
     >
-      {renderUserPreLines(systemText, !isUser || showUserMessageMetadata, (line, lineIdx) => {
-        const isMetaLine = isSystemLikeText(line)
-        return (
-          <span
-            key={lineIdx}
-            className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
-            style={isMetaLine
-              ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-              : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
-            }
-          >
-            {renderSystemTextWithSessionLinks(line)}
-          </span>
-        )
-      })}
+      {isUser
+        ? renderUserPreLines(systemText, showUserMessageMetadata, '1.1em', (line) => {
+            const isMetaLine = isSystemLikeText(line)
+            return (
+              <span
+                className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
+                style={isMetaLine
+                  ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                  : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                }
+              >
+                {renderSystemTextWithSessionLinks(line)}
+              </span>
+            )
+          })
+        : systemText.split('\n').map((line, lineIdx) => {
+            const isMetaLine = isSystemLikeText(line)
+            return (
+              <span
+                key={lineIdx}
+                className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
+                style={isMetaLine
+                  ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                  : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                }
+              >
+                {renderSystemTextWithSessionLinks(line)}
+              </span>
+            )
+          })}
     </pre>
   )
 })
@@ -435,16 +460,15 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMe
   return (
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: '1.5em' }}>
-          {renderUserPreLines(text, showUserMessageMetadata, (line, lineIdx) => {
+        <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: 0 }}>
+          {renderUserPreLines(text, showUserMessageMetadata, '1em', (line) => {
             const isPrefix = isSystemLikeText(line)
             return (
               <span
-                key={lineIdx}
                 className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
                 style={isPrefix
                   ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
-                  : undefined
+                  : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
                 }
               >
                 {line}

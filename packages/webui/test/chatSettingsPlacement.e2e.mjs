@@ -25,7 +25,7 @@ async function buildFixtureBundle() {
     const directText = '<foxwarm-message type="channel">\\nuser first\\n\\nuser second\\n</foxwarm-message>\\n<foxwarm-metadata kind="group-message" mentioned="true" />\\n<foxwarm-file name="notes.txt" mime="text/plain" />\\n<foxwarm-image name="photo.png" />'
     const messages = [
       { role: 'user', parts: [{ text: directText }], __meta: { seq: 1 } },
-      { role: 'user', parts: [{ system: '<foxwarm-message type="channel">\\nwrapped first\\n\\nwrapped second\\n</foxwarm-message>' }], __meta: { seq: 2 } },
+      { role: 'user', parts: [{ system: '<foxwarm-message type="channel">\\n<foxwarm-metadata kind="wrapped" />\\nwrapped first\\n\\nwrapped second\\n</foxwarm-message>' }], __meta: { seq: 2 } },
       { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-09-06 08:00:00 +0000" />' }, { text: '\\noptimistic first\\n\\n\\noptimistic second\\n' }], __meta: { clientMessageId: 'optimistic-1' } },
       { role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nold system body\\n</foxwarm-system>' }], __meta: { seq: 3 } },
       { role: 'model', parts: [{ text: 'assistant selection sentinel' }], __meta: { seq: 4 } },
@@ -150,8 +150,42 @@ test('direct, wrapped, and optimistic user text preserves authored blank lines w
   assert.ok(evidence.optimistic.height >= evidence.optimistic.lineHeight * 3.8)
 })
 
+test('visible XML metadata keeps compact line spacing while authored blank lines keep full body spacing', async () => {
+  await mountFixture()
+  await page.evaluate(() => localStorage.setItem('foxwarm_show_user_message_metadata_v1', 'true'))
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.chatSettingsFixture?.showUserMessageMetadata)
+  const geometry = await page.evaluate(() => {
+    const pre = [...document.querySelectorAll('pre')].find(candidate => candidate.textContent?.includes('user first'))
+    if (!(pre instanceof HTMLElement)) throw new Error('Direct user pre not found')
+    const textSpans = [...pre.querySelectorAll('span')]
+    const findTextSpan = text => textSpans.find(span => span.childNodes.length === 1 && span.textContent === text)
+    const first = findTextSpan('user first')?.getBoundingClientRect()
+    const second = findTextSpan('user second')?.getBoundingClientRect()
+    const metadata = [...pre.querySelectorAll('.foxwarm-lightweight-metadata-line')]
+      .map(span => ({ text: span.textContent || '', top: span.getBoundingClientRect().top, height: span.getBoundingClientRect().height }))
+      .filter(item => item.text.includes('</foxwarm-message>') || item.text.includes('<foxwarm-metadata') || item.text.includes('<foxwarm-file') || item.text.includes('<foxwarm-image'))
+    const wrappedPre = [...document.querySelectorAll('pre')].find(candidate => candidate.textContent?.includes('wrapped first'))
+    const wrappedMetadata = [...(wrappedPre?.querySelectorAll('.foxwarm-lightweight-metadata-line') || [])]
+      .slice(0, 2)
+      .map(span => ({ top: span.getBoundingClientRect().top, height: span.getBoundingClientRect().height }))
+    const firstSpan = findTextSpan('user first')
+    return { firstTop: first?.top, secondTop: second?.top, bodyLineHeight: Number.parseFloat(getComputedStyle(firstSpan).lineHeight), metadata, wrappedMetadata }
+  })
+  assert.equal(geometry.metadata.length, 4)
+  const metadataDeltas = geometry.metadata.slice(1).map((item, index) => item.top - geometry.metadata[index].top)
+  assert.ok(metadataDeltas.every(delta => delta > 0 && delta < geometry.bodyLineHeight * 0.8), JSON.stringify({ metadataDeltas, geometry }))
+  assert.ok(geometry.secondTop - geometry.firstTop >= geometry.bodyLineHeight * 1.8, JSON.stringify(geometry))
+  assert.ok(geometry.metadata.every(item => item.height < geometry.bodyLineHeight * 0.8), JSON.stringify(geometry))
+  assert.equal(geometry.wrappedMetadata.length, 2)
+  assert.ok(geometry.wrappedMetadata[1].top - geometry.wrappedMetadata[0].top < geometry.bodyLineHeight * 0.8, JSON.stringify(geometry))
+})
+
 test('session menu owns Input and Chat settings and persists the metadata toggle', async () => {
   await mountFixture()
+  await page.evaluate(() => localStorage.setItem('foxwarm_show_user_message_metadata_v1', 'false'))
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => window.chatSettingsFixture?.showUserMessageMetadata === false)
   await openMenu()
   const menuText = await page.$eval('[data-session-ui-settings-menu]', menu => menu.textContent || '')
   for (const label of ['Input', 'Chat', 'Group tools', 'Show usage badges', 'Show minimap', 'Show user message metadata', 'debug info']) {
