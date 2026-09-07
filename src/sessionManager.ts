@@ -954,6 +954,12 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
       queue: [],
       meta: { lastMessageTime: Date.now() }
     };
+    if (mustHydratePersistedLifetime) {
+      const catalog = !SESSION_WORKER_PROCESS && sessionCatalogStore.exists()
+        ? sessionCatalogStore.get(realId)
+        : null;
+      markSessionCatalogStub(session, typeof catalog?.queueLength === 'number' ? catalog.queueLength : 0);
+    }
     sessions.set(realId, session);
   }
 
@@ -963,28 +969,29 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   if (!isNew && (isSessionCatalogStub(session) || mustHydratePersistedLifetime || needsAuthoritativeStateUpgrade)) {
     // Try to load history and persistentMemorySnapshot from file
     const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
-    if (await fs.pathExists(historyFile)) {
-      try {
-        const historyData = await readSessionHistorySnapshot(realId);
-        if (!historyData) {
-          throw new Error('Session history file disappeared during read');
-        }
-        const retryPendingUpgrade = needsAuthoritativeStateUpgrade;
-        // displayName is Main-owned presentation metadata: preserve the Main
-        // value (including an explicit clear) across authoritative rehydration.
-        needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData, { preserveCatalogFields: true }).upgradedLegacy || retryPendingUpgrade;
-        clearSessionCatalogStub(session);
-        delete (session as any).managedPendingCount;
-        if (needsAuthoritativeStateUpgrade) pendingAuthoritativeStateUpgrades.add(realId);
-        if (historyData.indexingState) {
-          // Check if indexing was interrupted
-          await resumeIndexingIfNeeded(sessionId, session);
-        }
-        logger.debug({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
-      } catch (e) {
-        logger.error({ err: e, sessionId }, 'Failed to load session history');
-        throw e;
+    try {
+      if (!await fs.pathExists(historyFile)) {
+        throw new RpcError('SESSION_WORKER_STATE_MISSING', `Authoritative session state ${realId}.json is missing.`);
       }
+      const historyData = await readSessionHistorySnapshot(realId);
+      if (!historyData) {
+        throw new RpcError('SESSION_WORKER_STATE_MISSING', `Authoritative session state ${realId}.json disappeared during read.`);
+      }
+      const retryPendingUpgrade = needsAuthoritativeStateUpgrade;
+      // displayName is Main-owned presentation metadata: preserve the Main
+      // value (including an explicit clear) across authoritative rehydration.
+      needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData, { preserveCatalogFields: true }).upgradedLegacy || retryPendingUpgrade;
+      clearSessionCatalogStub(session);
+      delete (session as any).managedPendingCount;
+      if (needsAuthoritativeStateUpgrade) pendingAuthoritativeStateUpgrades.add(realId);
+      if (historyData.indexingState) {
+        // Check if indexing was interrupted
+        await resumeIndexingIfNeeded(sessionId, session);
+      }
+      logger.debug({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
+    } catch (e) {
+      logger.error({ err: e, sessionId }, 'Failed to load session history');
+      throw e;
     }
   }
 

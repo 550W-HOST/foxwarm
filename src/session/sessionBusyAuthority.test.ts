@@ -189,6 +189,34 @@ test('empty authority hydrates explicit placeholders, reconstructed lifetimes, a
       const reconstructed = await sm.getSession(id);
       const reconstructedLoadedAuthority = reconstructed.cwd;
 
+      const validBeforeParseFailure = await fs.readJson(authorityPath);
+      await fs.writeFile(authorityPath, '{not-json', 'utf8');
+      sm.getAllSessions().delete(id);
+      let parseFailure;
+      try { await sm.getSession(id); }
+      catch (error) { parseFailure = error.message; }
+      validBeforeParseFailure.cwd = '/parse-retry';
+      validBeforeParseFailure.persistentMemorySnapshot = 'parse-retry-snapshot';
+      await fs.writeJson(authorityPath, validBeforeParseFailure);
+      const parsedRetry = await sm.getSession(id);
+      parsedRetry.cwd = '/parse-retry-saved';
+      await sm.saveSession(parsedRetry);
+      const afterParsedRetrySave = await fs.readJson(authorityPath);
+
+      const validBeforeMissingFailure = await fs.readJson(authorityPath);
+      await fs.remove(authorityPath);
+      sm.getAllSessions().delete(id);
+      let missingFailureCode;
+      try { await sm.getSession(id); }
+      catch (error) { missingFailureCode = error.code; }
+      validBeforeMissingFailure.cwd = '/missing-retry';
+      validBeforeMissingFailure.persistentMemorySnapshot = 'missing-retry-snapshot';
+      await fs.writeJson(authorityPath, validBeforeMissingFailure);
+      const missingRetry = await sm.getSession(id);
+      missingRetry.cwd = '/missing-retry-saved';
+      await sm.saveSession(missingRetry);
+      const afterMissingRetrySave = await fs.readJson(authorityPath);
+
       const legacyAuthority = await fs.readJson(authorityPath);
       delete legacyAuthority.sessionStateVersion;
       legacyAuthority.cwd = '/legacy-first';
@@ -212,6 +240,18 @@ test('empty authority hydrates explicit placeholders, reconstructed lifetimes, a
         markedAfterFirstLoad,
         loadedEmptyWasStable,
         reconstructedLoadedAuthority,
+        parseFailure,
+        parsedRetry: {
+          cwd: parsedRetry.cwd,
+          persistentMemorySnapshot: parsedRetry.persistentMemorySnapshot,
+          savedCwd: afterParsedRetrySave.cwd,
+        },
+        missingFailureCode,
+        missingRetry: {
+          cwd: missingRetry.cwd,
+          persistentMemorySnapshot: missingRetry.persistentMemorySnapshot,
+          savedCwd: afterMissingRetrySave.cwd,
+        },
         upgradeFailure,
         retriedCwd: retried.cwd,
         retriedStillMarked: isSessionCatalogStub(retried),
@@ -221,11 +261,24 @@ test('empty authority hydrates explicit placeholders, reconstructed lifetimes, a
       });
     `));
 
+    assert.match(result.parseFailure, /JSON|Unexpected token/i);
+    delete result.parseFailure;
     assert.deepEqual(result, {
       markedBeforeFirstLoad: true,
       markedAfterFirstLoad: false,
       loadedEmptyWasStable: true,
       reconstructedLoadedAuthority: '/stale-authority',
+      parsedRetry: {
+        cwd: '/parse-retry-saved',
+        persistentMemorySnapshot: 'parse-retry-snapshot',
+        savedCwd: '/parse-retry-saved',
+      },
+      missingFailureCode: 'SESSION_WORKER_STATE_MISSING',
+      missingRetry: {
+        cwd: '/missing-retry-saved',
+        persistentMemorySnapshot: 'missing-retry-snapshot',
+        savedCwd: '/missing-retry-saved',
+      },
       upgradeFailure: 'injected legacy upgrade write failure',
       retriedCwd: '/legacy-retry',
       retriedStillMarked: false,
