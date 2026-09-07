@@ -5,10 +5,12 @@ import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabiliti
 import * as tools from '../tools';
 import { definitions } from './definitions';
 import {
+  builtinNodeArgumentSelectsPlacement,
   BUILTIN_TOOL_PLACEMENTS,
   NODE_ENVIRONMENT_BUILTIN_NAMES,
   resolveBuiltinToolPlacement,
 } from './placement';
+import { resolveDirectTool } from './resolvedTools';
 
 const EXPECTED_NODE_ENVIRONMENT_TOOLS = [
   'apply_patch',
@@ -76,6 +78,41 @@ test('placement resolution routes only node-environment tools to currentNode', (
     owner: 'dispatcher/container',
     executionNode: 'master',
   });
+});
+
+test('only file source/target node arguments select builtin placement', async () => {
+  const rootNodeSchemas = definitions
+    .filter(definition => Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node'))
+    .map(definition => definition.name)
+    .sort();
+  assert.deepEqual(rootNodeSchemas, ['create_child_session', 'image_write_to_file', 'send_file']);
+  assert.equal(builtinNodeArgumentSelectsPlacement('image_write_to_file'), true);
+  assert.equal(builtinNodeArgumentSelectsPlacement('send_file'), true);
+  assert.equal(builtinNodeArgumentSelectsPlacement('create_child_session'), false);
+
+  const session = { id: 'placement-parent', agent: 'main', currentNode: 'parent-node' };
+  const child = await resolveDirectTool('create_child_session', {
+    suffix: 'child', node: 'child-node', confirmation: 'test-only resolver input',
+  }, { sessionId: session.id, session });
+  assert.equal(child.executionNode, 'master');
+  assert.equal(child.permissionNode, 'master');
+  assert.equal(child.targetNode, undefined);
+  assert.equal(child.args.node, 'child-node');
+
+  for (const name of ['image_write_to_file', 'send_file']) {
+    const resolved = await resolveDirectTool(name, { node: 'file-node' }, { sessionId: session.id, session });
+    assert.equal(resolved.executionNode, 'master');
+    assert.equal(resolved.permissionNode, 'file-node');
+    assert.equal(resolved.targetNode, 'file-node');
+    assert.equal(Object.prototype.hasOwnProperty.call(resolved.args, 'node'), false);
+
+    for (const currentAlias of ['current', '   ']) {
+      const currentResolved = await resolveDirectTool(name, { node: currentAlias }, { sessionId: session.id, session });
+      assert.equal(currentResolved.permissionNode, 'parent-node');
+      assert.equal(currentResolved.targetNode, 'parent-node');
+      assert.equal(Object.prototype.hasOwnProperty.call(currentResolved.args, 'node'), false);
+    }
+  }
 });
 
 test('delete_file is absent from runtime exports and unified builtin discovery', async () => {

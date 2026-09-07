@@ -257,6 +257,75 @@ test('direct, unified, and ToolScript creation calls reject removed and unknown 
   }
 });
 
+test('child node remains a semantic argument through direct unified ToolScript and Worker management paths', async () => {
+  const sourceId = makeId('management_child_node');
+  const source = await sessionManager.getSession(sourceId);
+  const inheritedId = `${sourceId}_inherited-node`;
+  const unifiedId = `${sourceId}_unified-node`;
+  const scriptId = `${sourceId}_script-node`;
+  const workerId = `${sourceId}_worker-node`;
+  source.currentNode = 'dedicated-node';
+  await sessionManager.saveSession(sourceId);
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-toolscript
+  match: { session: ${sourceId}, tool: { source: builtin, name: run_script } }
+  action: allow
+- id: allow-child-current-node
+  match:
+    session: ${sourceId}
+    tool: { source: builtin, name: create_child_session }
+    args: { node: { exists: false } }
+  action: allow
+- id: allow-child-dedicated-node
+  match:
+    session: ${sourceId}
+    tool: { source: builtin, name: create_child_session }
+    args: { node: dedicated-node }
+  action: allow
+- id: deny-source
+  match: { session: ${sourceId} }
+  action: deny
+  reason: child node semantic test deny
+`));
+  const ctx: any = { sessionId: sourceId, session: source };
+  try {
+    await assert.rejects(
+      () => create_child_session({
+        suffix: 'denied-master', node: 'master', confirmation: TEST_HANDOFF_CONFIRMATION,
+      }, ctx),
+      /child node semantic test deny/,
+    );
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_denied-master`), false);
+
+    await create_child_session({ suffix: 'inherited-node', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    assert.equal((await sessionManager.getSession(inheritedId)).currentNode, 'dedicated-node');
+
+    source.currentNode = 'master';
+    await sessionManager.saveSession(sourceId);
+    await call_tool({
+      source: 'builtin', name: 'create_child_session',
+      args: { suffix: 'unified-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION },
+    }, ctx);
+    assert.equal((await sessionManager.getSession(unifiedId)).currentNode, 'dedicated-node');
+
+    const script = await tool_run_script({
+      code: `def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={"suffix":"script-node","node":"dedicated-node","confirmation":${JSON.stringify(TEST_HANDOFF_CONFIRMATION)}})`,
+    }, ctx);
+    assert.equal(script.status, 'completed');
+    assert.equal((await sessionManager.getSession(scriptId)).currentNode, 'dedicated-node');
+
+    await create_child_session({
+      suffix: 'worker-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION,
+    }, { ...ctx, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} });
+    assert.equal((await sessionManager.getSession(workerId)).currentNode, 'dedicated-node');
+  } finally {
+    await cleanup(sourceId, inheritedId, unifiedId, scriptId, workerId, `${sourceId}_denied-master`);
+  }
+});
+
 test('list_agents uses the service and preserves isolated-session rejection', async () => {
   const sourceId = makeId('management_agents');
   const agentName = makeId('isolated_agent');
