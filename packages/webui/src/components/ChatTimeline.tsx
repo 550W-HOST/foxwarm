@@ -45,6 +45,8 @@ import {
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
+import PastedTextBlock from './PastedTextBlock'
+import { parsePastedTextSegments } from '../pastedText'
 import {
   deriveRequestTimings,
   formatCompactDuration,
@@ -377,7 +379,11 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
   if (message.role === 'model') return false
   return (
     message.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
-    message.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
+    message.parts.some(part => !!part.text && (
+      message.role === 'user'
+        ? parsePastedTextSegments(part.text).some(segment => segment.kind === 'text' && segment.text.split('\n').some(isHeavySystemTextLine))
+        : part.text.split('\n').some(isHeavySystemTextLine)
+    ))
   )
 }
 
@@ -453,7 +459,12 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUs
 })
 
 const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMessageMetadata }: { text: string; showUserMessageMetadata: boolean }) {
-  const isSystemMessage = isCollapsibleSystemText(text)
+  const segments = useMemo(() => parsePastedTextSegments(text), [text])
+  const visibleClassificationText = useMemo(
+    () => segments.filter(segment => segment.kind === 'text').map(segment => segment.text).join(''),
+    [segments],
+  )
+  const isSystemMessage = isCollapsibleSystemText(visibleClassificationText)
   const [expanded, setExpanded] = useState(false)
   const shouldCollapse = isSystemMessage && !expanded
 
@@ -461,20 +472,26 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMe
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
         <pre className="foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: 0 }}>
-          {renderUserPreLines(text, showUserMessageMetadata, '1em', (line) => {
-            const isPrefix = isSystemLikeText(line)
-            return (
-              <span
-                className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
-                style={isPrefix
-                  ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
-                  : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
-                }
-              >
-                {line}
+          {segments.map((segment, segmentIndex) => segment.kind === 'pasted-text'
+            ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} />
+            : (
+              <span key={`text-${segmentIndex}`}>
+                {renderUserPreLines(segment.text, showUserMessageMetadata, '1em', (line) => {
+                  const isPrefix = isSystemLikeText(line)
+                  return (
+                    <span
+                      className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
+                      style={isPrefix
+                        ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
+                        : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                      }
+                    >
+                      {line}
+                    </span>
+                  )
+                })}
               </span>
-            )
-          })}
+            ))}
         </pre>
       </div>
       {isSystemMessage && (
