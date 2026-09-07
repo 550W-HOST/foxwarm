@@ -145,6 +145,28 @@ test('exact wait tool activity is presentation-silent while mixed tools still re
   assert.deepEqual(sent, []);
 });
 
+test('tool progress preserves underscores and keeps underscored names distinct', () => {
+  const fake = fakeClock();
+  const coordinator = new ChannelProgressCoordinator(fake.clock);
+  const sent: string[] = [];
+  const one = target('one', 30_000, sent);
+  coordinator.report('turn', [one], {
+    type: 'tool-calls-start',
+    calls: [
+      { id: 'patch-1', name: 'apply_patch_memory' },
+      { id: 'patch-2', name: 'apply_patch_memory' },
+      { id: 'patch-collapsed', name: 'applypatchmemory' },
+      { id: 'read-1', name: 'read_memory' },
+      { id: 'read-collapsed', name: 'readmemory' },
+    ],
+  });
+
+  assert.equal(
+    coordinator.decorate('turn', { channelInstanceId: 'one', conversationId: 'room' }, 'answer'),
+    'Tools: apply_patch_memory ×2 · applypatchmemory ×1 · read_memory ×1 · readmemory ×1\n\nanswer',
+  );
+});
+
 test('wait after previously consumed activity creates no later terminal progress', async () => {
   const fake = fakeClock();
   const coordinator = new ChannelProgressCoordinator(fake.clock);

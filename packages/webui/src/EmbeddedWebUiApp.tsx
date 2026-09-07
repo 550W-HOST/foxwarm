@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow } from 'lucide-react'
 import Chat from './components/Chat'
@@ -12,54 +12,12 @@ import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActive
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useTheme } from './theme/useTheme'
+import { useChatPreferences } from './chatPreferences'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 
-const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
-const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
-const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
-
-type SendKeyMode = 'modEnter' | 'enter'
 type WebUiSettings = { instanceName: string; tabIcon: string }
-
-type EmbeddedPreferences = {
-  sendKeyMode: SendKeyMode
-  setSendKeyMode: (mode: SendKeyMode) => void
-  groupTools: boolean
-  setGroupTools: (enabled: boolean) => void
-  showUsageBadge: boolean
-  setShowUsageBadge: (enabled: boolean) => void
-}
-
-const readPreferences = () => ({
-  sendKeyMode: (localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY) === 'enter' ? 'enter' : 'modEnter') as SendKeyMode,
-  groupTools: localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true',
-  showUsageBadge: localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false',
-})
-
-function useEmbeddedPreferences(): EmbeddedPreferences {
-  const initial = useMemo(readPreferences, [])
-  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(initial.sendKeyMode)
-  const [groupTools, setGroupTools] = useState(initial.groupTools)
-  const [showUsageBadge, setShowUsageBadge] = useState(initial.showUsageBadge)
-  useEffect(() => { localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, sendKeyMode) }, [sendKeyMode])
-  useEffect(() => { localStorage.setItem(GROUP_TOOLS_STORAGE_KEY, groupTools ? 'true' : 'false') }, [groupTools])
-  useEffect(() => { localStorage.setItem(SHOW_USAGE_BADGE_STORAGE_KEY, showUsageBadge ? 'true' : 'false') }, [showUsageBadge])
-
-  useEffect(() => {
-    const sync = () => {
-      const next = readPreferences()
-      setSendKeyMode(next.sendKeyMode)
-      setGroupTools(next.groupTools)
-      setShowUsageBadge(next.showUsageBadge)
-    }
-    window.addEventListener('storage', sync)
-    return () => window.removeEventListener('storage', sync)
-  }, [])
-
-  return { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge }
-}
 
 function normalizeSettings(value: unknown): WebUiSettings {
   const raw = value && typeof value === 'object' ? value as Partial<WebUiSettings> : {}
@@ -71,9 +29,7 @@ function normalizeSettings(value: unknown): WebUiSettings {
 
 export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'sidebar' }> }) {
   useTheme()
-  const preferences = useEmbeddedPreferences()
   const [agents, setAgents] = useState<AgentSummary[]>([])
-  const [settings, setSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [activeTarget, setActiveTarget] = useState<FoxwarmActiveTarget | null>(null)
   const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([])
   const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
@@ -102,13 +58,6 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     setAgents(Array.isArray(data.agents) ? data.agents : [])
   }, [])
 
-  const fetchSettings = useCallback(async () => {
-    const response = await fetch(`${API_BASE_PATH}/webui/settings`)
-    if (!response.ok) return
-    const data = await response.json()
-    setSettings(normalizeSettings(data.settings))
-  }, [])
-
   const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
   const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds } = useSessionIdleNotifications(sessions, {
     visibleSessionIds,
@@ -116,9 +65,8 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
   })
 
   useEffect(() => {
-    void fetchSettings()
     void fetchAgents()
-  }, [fetchSettings, fetchAgents])
+  }, [fetchAgents])
 
   useEffect(() => {
     const handleHostMessage = (event: MessageEvent) => {
@@ -172,15 +120,6 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     openSession(data.sessionId)
   }
 
-  const saveSettings = async (next: WebUiSettings) => {
-    const response = await fetch(`${API_BASE_PATH}/webui/settings`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
-    })
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(data.error || 'Failed to save WebUI settings')
-    setSettings(normalizeSettings(data.settings))
-  }
-
   const currentRecord = sessions.find(item => item.id === currentSession || item.aliases?.includes(currentSession))
   const agentsActive = activeTarget?.kind === 'agents'
   return (
@@ -191,11 +130,6 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
             <h1 className="flex min-w-0 items-center gap-2 truncate text-lg font-bold text-fw-text-strong"><Bot className="h-4 w-4 shrink-0" /> Foxwarm</h1>
             <div className="flex items-stretch gap-1">
               <GlobalUiSettingsMenu
-                sendKeyMode={preferences.sendKeyMode} onSendKeyModeChange={preferences.setSendKeyMode}
-                groupTools={preferences.groupTools} onGroupToolsChange={preferences.setGroupTools}
-                showUsageBadge={preferences.showUsageBadge} onShowUsageBadgeChange={preferences.setShowUsageBadge}
-                instanceName={settings.instanceName} onInstanceNameChange={(instanceName) => saveSettings({ ...settings, instanceName })}
-                tabIcon={settings.tabIcon} onTabIconChange={(tabIcon) => saveSettings({ ...settings, tabIcon })}
                 menuAlign="end"
                 onOpenSetup={openSetup}
                 setupActive={activeTarget?.kind === 'setup'}
@@ -238,7 +172,6 @@ function EmbeddedLeafFallback({ label }: { label: string }) {
 
 export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'agents' }> }) {
   useTheme()
-  useEmbeddedPreferences()
   const openSession = (sessionId: string) => {
     postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-session', sessionId, title: sessionId })
   }
@@ -253,8 +186,33 @@ export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedT
 
 export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'setup' }> }) {
   useTheme()
-  useEmbeddedPreferences()
+  const [settings, setSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
+  const fetchSettings = useCallback(async () => {
+    const response = await fetch(`${API_BASE_PATH}/webui/settings`)
+    if (!response.ok) return
+    const data = await response.json()
+    setSettings(normalizeSettings(data.settings))
+  }, [])
+  useEffect(() => { void fetchSettings() }, [fetchSettings])
+  const saveInstanceName = async (instanceName: string) => {
+    const response = await fetch(`${API_BASE_PATH}/webui/settings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instanceName }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Failed to save WebUI settings')
+    const normalized = normalizeSettings(data.settings)
+    setSettings(current => ({ ...current, instanceName: normalized.instanceName }))
+  }
+  const saveTabIcon = async (tabIcon: string) => {
+    const response = await fetch(`${API_BASE_PATH}/webui/settings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabIcon }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Failed to save WebUI settings')
+    const normalized = normalizeSettings(data.settings)
+    setSettings(current => ({ ...current, tabIcon: normalized.tabIcon }))
+  }
   useEffect(() => {
     const handleHostMessage = (event: MessageEvent) => {
       if (event.source !== window.parent) return
@@ -269,7 +227,12 @@ export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTa
   return (
     <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-surface-sunken dark:bg-fw-canvas-edge">
       <Suspense fallback={<EmbeddedLeafFallback label="Setup" />}>
-        <SetupView focusModelsRequest={focusModelsRequest} />
+        <SetupView
+          focusModelsRequest={focusModelsRequest}
+          webUiSettings={settings}
+          onInstanceNameChange={saveInstanceName}
+          onTabIconChange={saveTabIcon}
+        />
       </Suspense>
     </div>
   )
@@ -277,7 +240,7 @@ export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTa
 
 export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'chat' }> }) {
   useTheme()
-  const preferences = useEmbeddedPreferences()
+  const preferences = useChatPreferences()
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -299,6 +262,11 @@ export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTar
         sendKeyMode={preferences.sendKeyMode}
         groupTools={preferences.groupTools}
         showUsageBadge={preferences.showUsageBadge}
+        showUserMessageMetadata={preferences.showUserMessageMetadata}
+        onSendKeyModeChange={preferences.setSendKeyMode}
+        onGroupToolsChange={preferences.setGroupTools}
+        onShowUsageBadgeChange={preferences.setShowUsageBadge}
+        onShowUserMessageMetadataChange={preferences.setShowUserMessageMetadata}
         onOpenModelSettings={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-setup', focus: 'models' })}
         onOpenCodeCommit={(commit) => postFoxwarmEmbedHostMessage(target.nonce, {
           type: 'open-commit', nodeId: commit.nodeId, path: commit.path, commitId: commit.commitId,

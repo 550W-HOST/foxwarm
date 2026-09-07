@@ -24,6 +24,7 @@ await esbuild.build({
 
 const {
   renderAssistantMarkdownSegmentsWithSanitizer,
+  renderMarkdownSegmentsWithSanitizer,
   renderMarkdownWithSanitizer,
 } = await import(pathToFileURL(bundledRendererPath).href)
 const identitySanitizer = (html) => html
@@ -186,6 +187,45 @@ test('GFM tables retain semantic table markup for the scrollable Markdown style'
   assert.match(html, /<td>b<\/td>/)
 })
 
+test('ordinary Markdown segments preserve stable top-level token positions', () => {
+  const initial = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph.', identitySanitizer)
+  const extendedTail = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph grows.', identitySanitizer)
+  const appendedBlock = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph grows.\n\nThird paragraph.', identitySanitizer)
+
+  assert.deepEqual(initial.map(segment => segment.tokenIndex), [0, 2])
+  assert.deepEqual(extendedTail.map(segment => segment.tokenIndex), [0, 2])
+  assert.deepEqual(appendedBlock.map(segment => segment.tokenIndex), [0, 2, 4])
+  assert.equal(initial[0].html, extendedTail[0].html)
+  assert.equal(extendedTail[0].html, appendedBlock[0].html)
+  assert.notEqual(initial[1].html, extendedTail[1].html)
+})
+
+test('segmented rendering retains complete Markdown semantics', () => {
+  const sources = [
+    '[ref]: https://example.com\n\nUse [link][ref].',
+    'Use [link][ref].\n\n[ref]: https://example.com',
+    '- one\n- two\n\nafter',
+    '> quote one\n>\n> quote two\n\nafter',
+    '```js\nconst value = 1\n```\n\nInline \\(x\\).',
+    '| left | right |\n| --- | --- |\n| a | b |',
+  ]
+
+  for (const source of sources) {
+    const segmented = renderMarkdownSegmentsWithSanitizer(source, identitySanitizer).map(segment => segment.html).join('')
+    assert.equal(segmented, renderMarkdownWithSanitizer(source, identitySanitizer), source)
+  }
+})
+
+test('later reference definitions update the affected earlier token without shifting its identity', () => {
+  const unresolved = renderMarkdownSegmentsWithSanitizer('Use [link][ref].', identitySanitizer)
+  const resolved = renderMarkdownSegmentsWithSanitizer('Use [link][ref].\n\n[ref]: https://example.com', identitySanitizer)
+
+  assert.equal(unresolved[0].tokenIndex, 0)
+  assert.equal(resolved[0].tokenIndex, 0)
+  assert.doesNotMatch(unresolved[0].html, /<a /)
+  assert.match(resolved[0].html, /<a [^>]*href="https:\/\/example.com"[^>]*>link<\/a>/)
+})
+
 test('assistant Mermaid fences become special blocks with exact raw source', () => {
   const source = 'Before\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nAfter'
   const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
@@ -238,9 +278,10 @@ test('only top-level multiline display math becomes a special block', () => {
   const source = 'Embedded \\[a=b\\] compatibility and inline \\(c=d\\).\n\n\\[E=mc^2\\]'
   const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
 
-  assert.deepEqual(segments.map(segment => segment.kind), ['html'])
-  assert.match(segments[0].html, /katex-display/)
-  assert.match(segments[0].html, /class="katex"/)
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'html'])
+  const html = segments.map(segment => segment.html).join('')
+  assert.match(html, /katex-display/)
+  assert.match(html, /class="katex"/)
 })
 
 test('special-block extraction stays behind the ordinary Markdown sanitizer', () => {
@@ -253,7 +294,7 @@ test('special-block extraction stays behind the ordinary Markdown sanitizer', ()
       .replace(/href="javascript:[^"]*"/gi, '')
   })
 
-  assert.equal(sanitizerInputs.length, 2)
+  assert.equal(sanitizerInputs.length, 3)
   assert.doesNotMatch(sanitizerInputs.join(''), /<pre><code class="language-mermaid"/)
   assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html'])
   const ordinaryHtml = segments.filter(segment => segment.kind === 'html').map(segment => segment.html).join('')

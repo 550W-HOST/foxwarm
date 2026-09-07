@@ -20,9 +20,9 @@ import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWin
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
+import { useChatPreferences } from './chatPreferences'
 
 type AppView = 'session' | 'agents' | 'setup'
-type SendKeyMode = 'modEnter' | 'enter'
 
 type RouteState = { view: 'tab'; tabId: string | null }
 
@@ -64,9 +64,6 @@ const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
-const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
-const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
-const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
@@ -443,12 +440,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(() => {
-    const saved = localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)
-    return saved === 'enter' || saved === 'modEnter' ? saved : 'modEnter'
-  })
-  const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
-  const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
+  const { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
@@ -558,26 +550,28 @@ function App() {
     const res = await fetch(`${API_BASE_PATH}/webui/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instanceName: name, tabIcon: webUiSettings.tabIcon }),
+      body: JSON.stringify({ instanceName: name }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       throw new Error(data?.error || 'Failed to save instance name')
     }
-    setWebUiSettings(normalizeWebUiSettingsPayload(data?.settings))
+    const normalized = normalizeWebUiSettingsPayload(data?.settings)
+    setWebUiSettings(current => ({ ...current, instanceName: normalized.instanceName }))
   }
 
   const saveWebUiTabIcon = async (tabIcon: string) => {
     const res = await fetch(`${API_BASE_PATH}/webui/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instanceName: webUiSettings.instanceName, tabIcon }),
+      body: JSON.stringify({ tabIcon }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       throw new Error(data?.error || 'Failed to save tab icon')
     }
-    setWebUiSettings(normalizeWebUiSettingsPayload(data?.settings))
+    const normalized = normalizeWebUiSettingsPayload(data?.settings)
+    setWebUiSettings(current => ({ ...current, tabIcon: normalized.tabIcon }))
   }
 
   useEffect(() => {
@@ -587,18 +581,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? 'true' : 'false')
   }, [sidebarCollapsed])
-
-  useEffect(() => {
-    localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, sendKeyMode)
-  }, [sendKeyMode])
-
-  useEffect(() => {
-    localStorage.setItem(GROUP_TOOLS_STORAGE_KEY, groupTools ? 'true' : 'false')
-  }, [groupTools])
-
-  useEffect(() => {
-    localStorage.setItem(SHOW_USAGE_BADGE_STORAGE_KEY, showUsageBadge ? 'true' : 'false')
-  }, [showUsageBadge])
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -1454,6 +1436,11 @@ function App() {
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
+          showUserMessageMetadata={showUserMessageMetadata}
+          onSendKeyModeChange={setSendKeyMode}
+          onGroupToolsChange={setGroupTools}
+          onShowUsageBadgeChange={setShowUsageBadge}
+          onShowUserMessageMetadataChange={setShowUserMessageMetadata}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
@@ -1487,6 +1474,9 @@ function App() {
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
             focusModelsRequest={focusModelsRequest}
+            webUiSettings={webUiSettings}
+            onInstanceNameChange={saveWebUiInstanceName}
+            onTabIconChange={saveWebUiTabIcon}
           />
         </Suspense>
       )
@@ -1800,16 +1790,6 @@ function App() {
           currentSession={currentContextSessionId}
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
-          sendKeyMode={sendKeyMode}
-          onSendKeyModeChange={setSendKeyMode}
-          groupTools={groupTools}
-          onGroupToolsChange={setGroupTools}
-          showUsageBadge={showUsageBadge}
-          onShowUsageBadgeChange={setShowUsageBadge}
-          instanceName={webUiSettings.instanceName}
-          onInstanceNameChange={saveWebUiInstanceName}
-          tabIcon={webUiSettings.tabIcon}
-          onTabIconChange={saveWebUiTabIcon}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={openAgentsView}
@@ -1857,16 +1837,6 @@ function App() {
             currentSession={currentContextSessionId}
             currentView={currentView}
             currentSessionRecord={currentContextSessionRecord}
-            sendKeyMode={sendKeyMode}
-            onSendKeyModeChange={setSendKeyMode}
-            groupTools={groupTools}
-            onGroupToolsChange={setGroupTools}
-            showUsageBadge={showUsageBadge}
-            onShowUsageBadgeChange={setShowUsageBadge}
-            instanceName={webUiSettings.instanceName}
-            onInstanceNameChange={saveWebUiInstanceName}
-            tabIcon={webUiSettings.tabIcon}
-            onTabIconChange={saveWebUiTabIcon}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={openAgentsView}

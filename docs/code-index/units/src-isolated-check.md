@@ -5,7 +5,7 @@ Secondary files: src/isolatedCheck.test.ts
 
 ## Purpose
 
-Enforces the current isolation boundary for tool execution, master-side paths, cross-node copies, archive reads, channel sends, file sends, timers, and operations that are unavailable to isolated sessions.
+Applies the generic ordered tool policy for every Session, then enforces the current isolation boundary for tool execution, master-side paths, cross-node copies, archive reads, channel sends, file sends, timers, and operations that are unavailable to isolated sessions.
 
 ## Key exports
 
@@ -45,11 +45,12 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 - `sessionManager` for ID-based session loading and channel attachment; passed-Session checks read isolation metadata directly from `session/agentMetadata`.
 - `config` for agent directory resolution.
 - `permissions` for persisted exact-rule lookup and default isolated fallback evaluation.
+- `toolAuthorization` for generic async execution and synchronous visibility evaluation before isolation compatibility checks.
 - `utils/pathResolve` for home-path expansion.
 
 ## Behavior
 
-- Non-isolated sessions return early from isolation-only checks.
+- Generic policy applies to isolated and non-isolated Sessions. Non-isolated Sessions return early only after that generic decision.
 - `checkToolPermission` consumes the canonical resolved source. Exact denies override defaults; exact allows still pass hard master-exec, unavailable-builtin, copy, timer, path, relation, Node-service, and MCP-service boundaries.
 - Rules belong only to `session.agent`; `agent.inherit` is not consulted. Rules are inert when that exact agent is non-isolated.
 - Session workers install a normalized Main-provided exact-agent metadata snapshot at startup. Only an isolated installed snapshot refreshes from disk before tool execution/search; missing/read-failed refreshes preserve it and malformed refreshed rules reject the operation. Rule-only updates remain live without per-call reads for non-isolated workers or an isolation I/O bypass; isolation-node changes remain fenced.

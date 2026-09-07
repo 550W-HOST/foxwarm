@@ -15,16 +15,6 @@ interface SidebarProps {
   currentSession: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
-  sendKeyMode: 'modEnter' | 'enter'
-  onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
-  groupTools: boolean
-  onGroupToolsChange: (enabled: boolean) => void
-  showUsageBadge: boolean
-  onShowUsageBadgeChange: (enabled: boolean) => void
-  instanceName: string
-  onInstanceNameChange: (name: string) => Promise<void> | void
-  tabIcon: string
-  onTabIconChange: (tabIcon: string) => Promise<void> | void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
@@ -57,16 +47,6 @@ export default function Sidebar({
   currentSession,
   currentView,
   currentSessionRecord,
-  sendKeyMode,
-  onSendKeyModeChange,
-  groupTools,
-  onGroupToolsChange,
-  showUsageBadge,
-  onShowUsageBadgeChange,
-  instanceName,
-  onInstanceNameChange,
-  tabIcon,
-  onTabIconChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
@@ -113,16 +93,6 @@ export default function Sidebar({
               {isPeek ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
             <GlobalUiSettingsMenu
-              sendKeyMode={sendKeyMode}
-              onSendKeyModeChange={onSendKeyModeChange}
-              groupTools={groupTools}
-              onGroupToolsChange={onGroupToolsChange}
-              showUsageBadge={showUsageBadge}
-              onShowUsageBadgeChange={onShowUsageBadgeChange}
-              instanceName={instanceName}
-              onInstanceNameChange={onInstanceNameChange}
-              tabIcon={tabIcon}
-              onTabIconChange={onTabIconChange}
               menuAlign="end"
               onOpenSetup={onSelectSetup}
               setupActive={currentView === 'setup'}

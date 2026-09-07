@@ -20,6 +20,7 @@
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
     "test:timeline-overflow-boundary-e2e": "node --test test/timelineOverflowBoundary.e2e.mjs",
     "test:message-width-e2e": "node --test test/messageWidth.e2e.mjs",
+    "test:message-card-padding-e2e": "node --test test/messageCardPadding.e2e.mjs",
     "test:system-message-cards-e2e": "node --test test/systemMessageCards.e2e.mjs",
     "test:tool-collapsed-overflow-e2e": "node --test test/toolCollapsedOverflow.e2e.mjs",
     "test:tool-args-header-e2e": "node --test test/toolArgsHeader.e2e.mjs",
@@ -29,6 +30,7 @@
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
     "test:lazy-timeline-restore-e2e": "node --test test/lazyTimelineRestore.e2e.mjs",
     "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
+    "test:stream-markdown-selection-e2e": "node --test test/streamMarkdownSelection.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
     "test:bounded-session-list": "node --test test/boundedSessionList.test.mjs test/boundedSessionReplay.test.mjs",
     "test:realtime": "node --test test/realtimeTransport.test.mjs test/boundedSessionList.test.mjs",
@@ -36,6 +38,7 @@
     "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
     "test:session-header-e2e": "node --test test/sessionHeader.e2e.mjs",
     "test:settings-menu-e2e": "node --test test/settingsMenuPosition.e2e.mjs",
+    "test:chat-settings-placement-e2e": "node --test test/chatSettingsPlacement.e2e.mjs",
     "test:context-menu-e2e": "node --test test/contextMenu.e2e.mjs",
     "preview": "vite preview"
   },

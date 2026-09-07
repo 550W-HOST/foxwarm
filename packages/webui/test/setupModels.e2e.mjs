@@ -26,6 +26,9 @@ let savedConfigRequest
 let configSaveError = null
 const requestPaths = []
 const modelUpdateRequests = []
+let webUiSettings = { instanceName: 'Fixture Foxwarm', tabIcon: '🧪' }
+let webUiSettingsError = null
+const webUiSettingsRequests = []
 
 const statusPayload = {
   oobe: false,
@@ -265,8 +268,26 @@ async function attachRequestMocks(targetPage, options = {}) {
       void respondJson(request, { terminals: [] })
       return
     }
+    if (url.pathname.endsWith('/api/webui/settings') && request.method() === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      webUiSettingsRequests.push(body)
+      if (webUiSettingsError) void respondJson(request, { error: webUiSettingsError }, 400)
+      else {
+        webUiSettings = {
+          instanceName: Object.prototype.hasOwnProperty.call(body, 'instanceName') ? body.instanceName || '' : webUiSettings.instanceName,
+          tabIcon: Object.prototype.hasOwnProperty.call(body, 'tabIcon') ? body.tabIcon || '' : webUiSettings.tabIcon,
+        }
+        const responseSettings = { ...webUiSettings }
+        if (options.heldWebUiSettingsSaves && options.heldWebUiSettingsSaves.length < 2) {
+          options.heldWebUiSettingsSaves.push({ request, body, responseSettings })
+        } else {
+          void respondJson(request, { settings: responseSettings })
+        }
+      }
+      return
+    }
     if (url.pathname.endsWith('/api/webui/settings')) {
-      void respondJson(request, {})
+      void respondJson(request, { settings: webUiSettings })
       return
     }
     void respondJson(request, {})
@@ -427,20 +448,22 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
     status: element.querySelector('[data-setup-tab-status]')?.getAttribute('data-setup-tab-status') || null,
   })))
   assert.deepEqual(tabs, [
-    { tab: 'models', selected: 'true', status: 'complete' },
+    { tab: 'appearance', selected: 'true', status: null },
+    { tab: 'models', selected: 'false', status: 'complete' },
     { tab: 'config', selected: 'false', status: null },
-    { tab: 'appearance', selected: 'false', status: null },
   ])
   assert.deepEqual(await page.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
     'inmemory://foxwarm/setup/foxwarm-models.yaml',
     'inmemory://foxwarm/setup/foxwarm-config.yaml',
   ])
-  assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), false)
+  assert.equal(await page.$eval('[data-setup-section="appearance"]', (panel) => panel.hidden), false)
+  assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
   assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.hidden), true)
-  assert.equal(await page.$eval('[data-setup-section="appearance"]', (panel) => panel.hidden), true)
 
-  await page.focus('[data-setup-tab="models"]')
+  await page.focus('[data-setup-tab="appearance"]')
   await page.keyboard.press('ArrowRight')
+  await page.waitForSelector('[data-setup-tab="models"][aria-selected="true"]')
+  await page.click('[data-setup-tab="config"]')
   await page.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
   await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
   assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
@@ -488,9 +511,92 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
 
   await page.focus('[data-setup-tab="appearance"]')
   await page.keyboard.press('Home')
-  await page.waitForSelector('[data-setup-tab="models"][aria-selected="true"]')
+  await page.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+  await page.click('[data-setup-tab="models"]')
   await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
   assert.ok(requestPaths.includes('/preview/api/setup/status'))
+})
+
+test('Appearance owns browser name and tab icon editing with save, cancel, and server errors', async () => {
+  await page.click('[data-setup-tab="appearance"]')
+  await page.waitForSelector('[data-webui-branding-settings]')
+  const brandingText = await page.$eval('[data-webui-branding-settings]', section => section.textContent || '')
+  assert.equal(brandingText.includes('Rename instance'), true)
+  assert.equal(brandingText.includes('Change tab icon'), true)
+  assert.equal(await page.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
+  assert.equal(await page.$eval('#webui-tab-icon', input => input.value), '🧪')
+
+  await page.click('#webui-instance-name', { clickCount: 3 })
+  await page.type('#webui-instance-name', 'Unsaved name')
+  await page.$eval('[data-webui-branding-settings] form:first-of-type', form => [...form.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Cancel')?.click())
+  assert.equal(await page.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
+
+  await page.click('#webui-instance-name', { clickCount: 3 })
+  await page.type('#webui-instance-name', 'Renamed fixture')
+  await page.click('button::-p-text(Save name)')
+  await page.waitForFunction(() => document.querySelector('#webui-instance-name')?.value === 'Renamed fixture')
+  assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture' })
+
+  webUiSettingsError = 'Tab icon is too long'
+  await page.click('#webui-tab-icon', { clickCount: 3 })
+  await page.type('#webui-tab-icon', 'icon that is too long')
+  await page.click('button::-p-text(Save icon)')
+  await page.waitForFunction(() => document.querySelector('[data-webui-branding-settings] [role="alert"]')?.textContent?.includes('Tab icon is too long'))
+  assert.equal(await page.$eval('#webui-tab-icon', input => input.value), 'icon that is too long')
+  webUiSettingsError = null
+})
+
+test('overlapping browser name and icon saves keep both server and UI fields across reversed responses', async () => {
+  const heldWebUiSettingsSaves = []
+  const racePage = await browser.newPage()
+  webUiSettings = { instanceName: 'Before name', tabIcon: '🔵' }
+  await attachRequestMocks(racePage, { heldWebUiSettingsSaves })
+  try {
+    await racePage.goto(`${baseUrl}/branding-race/#setup`, { waitUntil: 'networkidle2' })
+    await racePage.waitForSelector('[data-webui-branding-settings]')
+    await racePage.$eval('#webui-instance-name', (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, 'After name')
+    await racePage.click('button::-p-text(Save name)')
+    await racePage.$eval('#webui-tab-icon', (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, '🟢')
+    await racePage.click('button::-p-text(Save icon)')
+    const deadline = Date.now() + 10_000
+    while (heldWebUiSettingsSaves.length < 2 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    assert.equal(heldWebUiSettingsSaves.length, 2)
+    assert.deepEqual(heldWebUiSettingsSaves.map(entry => entry.body), [{ instanceName: 'After name' }, { tabIcon: '🟢' }])
+    assert.deepEqual(webUiSettings, { instanceName: 'After name', tabIcon: '🟢' })
+
+    await respondJson(heldWebUiSettingsSaves[1].request, { settings: heldWebUiSettingsSaves[1].responseSettings })
+    await respondJson(heldWebUiSettingsSaves[0].request, { settings: heldWebUiSettingsSaves[0].responseSettings })
+    await racePage.waitForFunction(() => (
+      document.querySelector('#webui-instance-name')?.value === 'After name'
+      && document.querySelector('#webui-tab-icon')?.value === '🟢'
+      && [...document.querySelectorAll('[data-webui-branding-settings] button')].some(button => button.textContent?.trim() === 'Save name')
+      && [...document.querySelectorAll('[data-webui-branding-settings] button')].some(button => button.textContent?.trim() === 'Save icon')
+    ))
+
+    webUiSettingsError = 'Rejected icon'
+    await racePage.$eval('#webui-tab-icon', (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, 'bad icon')
+    await racePage.click('button::-p-text(Save icon)')
+    await racePage.waitForSelector('[data-webui-branding-settings] [role="alert"]')
+    assert.equal(await racePage.$eval('#webui-instance-name', input => input.value), 'After name')
+    assert.equal(webUiSettings.instanceName, 'After name')
+  } finally {
+    webUiSettingsError = null
+    await racePage.close()
+  }
 })
 
 test('Config tab status reflects enabled channel health and ignores disabled channels', async () => {
@@ -724,6 +830,7 @@ test('local and schema completions replace the current punctuated YAML scalar', 
   try {
     await completionPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await completionPage.bringToFront()
+    await completionPage.click('[data-setup-tab="models"]')
     const modelEditor = `[data-monaco-model-uri="${modelsUri}"]`
     await completionPage.waitForFunction((selector) => {
       const editor = document.querySelector(selector)
@@ -804,6 +911,7 @@ test('production worker provides real schema markers and current-document comple
   await attachRequestMocks(productionPage)
   try {
     await productionPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await productionPage.click('[data-setup-tab="models"]')
     const modelEditor = '[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'
     await productionPage.waitForFunction((selector) => {
       const editor = document.querySelector(selector)
@@ -887,6 +995,7 @@ test('editing while a models save is held preserves the newer document and suppr
   try {
     await racePage.goto(`${baseUrl}/save-race/#setup`, { waitUntil: 'networkidle2' })
     await racePage.bringToFront()
+    await racePage.click('[data-setup-tab="models"]')
     await racePage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
     await racePage.click('button::-p-text(Save models)')
     const deadline = Date.now() + 10_000
@@ -924,6 +1033,7 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
     await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
+    await degradedPage.click('[data-setup-tab="models"]')
     const forcedSetupClose = await degradedPage.waitForSelector('[data-tab-id="system:setup"] button[title="Close tab"]')
     await forcedSetupClose.click()
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -1187,6 +1297,39 @@ test('embedded model filter selects one result and keeps the accessible Setup br
       const iframe = document.getElementById('embedded-setup')
       iframe?.contentWindow?.postMessage({ channel: 'foxwarm-webui-host', version: 1, nonce: bridgeNonce, type: 'focus-models' }, '*')
     }, { nonce })
+    await setupFrame.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
+    await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
+  } finally {
+    await embeddedBrowser.close()
+  }
+})
+
+test('embedded Setup defaults to Appearance and explicit host focus activates Models', async () => {
+  const embeddedBrowser = await puppeteer.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  })
+  const hostPage = await embeddedBrowser.newPage()
+  await hostPage.setBypassServiceWorker(true)
+  await attachRequestMocks(hostPage)
+  const nonce = 'abcdef0123456789abcdef0123456789'
+  try {
+    await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
+    await hostPage.evaluate(({ src }) => {
+      document.body.replaceChildren()
+      const iframe = document.createElement('iframe')
+      iframe.id = 'embedded-setup-focus'
+      iframe.src = src
+      iframe.style.cssText = 'border:0;width:100vw;height:100vh'
+      document.body.appendChild(iframe)
+    }, { src: `${baseUrl}/preview/?foxwarmEmbed=setup&foxwarmEmbedNonce=${nonce}` })
+    const setupFrame = await hostPage.waitForFrame(frame => frame.url().includes('foxwarmEmbed=setup'))
+    await setupFrame.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]', { timeout: 15_000 })
+    await hostPage.evaluate(({ bridgeNonce }) => {
+      const iframe = document.getElementById('embedded-setup-focus')
+      iframe?.contentWindow?.postMessage({ channel: 'foxwarm-webui-host', version: 1, nonce: bridgeNonce, type: 'focus-models' }, '*')
+    }, { bridgeNonce: nonce })
     await setupFrame.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
   } finally {

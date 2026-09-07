@@ -31,6 +31,8 @@ export {
   renderAssistantMarkdownSegments,
   renderAssistantMarkdownSegmentsWithSanitizer,
   renderMarkdown,
+  renderMarkdownSegments,
+  renderMarkdownSegmentsWithSanitizer,
   renderMarkdownWithSanitizer,
   type MarkdownRenderSegment,
 } from './markdownRenderer'

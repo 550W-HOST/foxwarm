@@ -20,12 +20,25 @@ async function runChild(dataDir: string, script: string): Promise<any> {
   return JSON.parse(resultLine.slice('RESULT_JSON '.length));
 }
 
-function childModulePaths(): { sessionManager: string; sessionHistory: string; catalogStore: string; config: string } {
+function childModulePaths(): {
+  sessionManager: string;
+  sessionHistory: string;
+  catalogStore: string;
+  config: string;
+  sessionRuntime: string;
+  sessionRuntimeState: string;
+  sessionTurnRunner: string;
+  metadataStore: string;
+} {
   return {
     sessionManager: path.join(__dirname, '..', 'sessionManager.js'),
     sessionHistory: path.join(__dirname, 'history.js'),
     catalogStore: path.join(__dirname, 'catalogStore.js'),
     config: path.join(__dirname, '..', 'config.js'),
+    sessionRuntime: path.join(__dirname, '..', 'sessionRuntime.js'),
+    sessionRuntimeState: path.join(__dirname, '..', 'sessionRuntimeState.js'),
+    sessionTurnRunner: path.join(__dirname, '..', 'sessionTurnRunner.js'),
+    metadataStore: path.join(__dirname, 'metadataStore.js'),
   };
 }
 
@@ -42,6 +55,238 @@ function finishChildScript(body: string): string {
     })();
   `;
 }
+
+test('empty-history hydration identity prevents runtime reads from rolling back an in-flight busy claim', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-empty-history-hydration-race-'));
+  const modules = childModulePaths();
+
+  try {
+    const result = await runChild(dataDir, finishChildScript(`
+      const fs = require('fs-extra');
+      const sm = require(${JSON.stringify(modules.sessionManager)});
+      const runtime = require(${JSON.stringify(modules.sessionRuntime)});
+      const { getSessionHistoryStore } = require(${JSON.stringify(modules.metadataStore)});
+      const { SessionTurnRunner, LocalSessionTurnHost } = require(${JSON.stringify(modules.sessionTurnRunner)});
+      const config = require(${JSON.stringify(modules.config)});
+      await sm.loadSessions();
+
+      const id = 'empty_history_busy_claim';
+      const session = await sm.getSession(id);
+      Object.assign(session, {
+        agent: 'main', history: [], nextMessageSeq: 1, nextBlockId: 1,
+        persistentMemorySnapshot: 'snapshot',
+        stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+        busy: false, busyStartedAt: undefined, stopping: false,
+        queue: [{ type: 'user', parts: [{ text: 'must run' }] }],
+        meta: { lastMessageTime: Date.now() }, currentNode: 'remote-fixture',
+      });
+      await sm.saveSession(id);
+
+      const authorityPath = config.SESSIONS_DIR + '/' + id + '.json';
+      const store = getSessionHistoryStore(id);
+      let intercepted = 0;
+      let during;
+      store.hooks = {
+        beforeRename: async ({ data }) => {
+          if (intercepted || data.busy !== true) return;
+          intercepted += 1;
+          store.hooks = undefined;
+          const dto = await runtime.getSession(id);
+          const live = sm.getAllSessions().get(id);
+          const authority = await fs.readJson(authorityPath);
+          during = {
+            dtoBusy: dto.busy,
+            liveBusy: live.busy,
+            liveQueueLength: live.queue.length,
+            authorityBusy: authority.busy,
+          };
+        },
+      };
+
+      const host = new LocalSessionTurnHost();
+      let chatCalls = 0;
+      Object.defineProperty(host, 'chat', {
+        value: async (_parts, owner) => {
+          chatCalls += 1;
+          await host.appendSessionMessage(owner, { role: 'model', parts: [{ text: 'done' }] });
+          return { text: 'done' };
+        },
+      });
+      await new SessionTurnRunner(host).processSessionQueue(id);
+      await new Promise(resolve => setTimeout(resolve, 25));
+
+      const live = sm.getAllSessions().get(id);
+      const authority = await fs.readJson(authorityPath);
+      process.stdout.write('RESULT_JSON ' + JSON.stringify({
+        intercepted,
+        during,
+        chatCalls,
+        live: { busy: live.busy, queueLength: live.queue.length, historyLength: live.history.length },
+        authority: { busy: authority.busy, queueLength: authority.queue.length, historyLength: authority.history.length },
+      }) + '\\n', () => {
+        process.removeAllListeners('exit');
+        process.exit(0);
+      });
+    `));
+
+    assert.equal(result.intercepted, 1);
+    assert.deepEqual(result.during, {
+      dtoBusy: true,
+      liveBusy: true,
+      liveQueueLength: 1,
+      authorityBusy: false,
+    });
+    assert.equal(result.chatCalls, 1);
+    assert.deepEqual(result.live, { busy: false, queueLength: 0, historyLength: 2 });
+    assert.deepEqual(result.authority, { busy: false, queueLength: 0, historyLength: 2 });
+  } finally {
+    await fs.remove(dataDir).catch(() => {});
+  }
+});
+
+test('empty authority hydrates explicit placeholders, reconstructed lifetimes, and pending legacy retries only', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-empty-history-hydration-state-'));
+  const modules = childModulePaths();
+  const id = 'empty_history_hydration_state';
+
+  try {
+    await runChild(dataDir, finishChildScript(`
+      const sm = require(${JSON.stringify(modules.sessionManager)});
+      await sm.loadSessions();
+      const session = await sm.getSession(${JSON.stringify(id)});
+      Object.assign(session, {
+        agent: 'main', history: [], persistentMemorySnapshot: 'snapshot', cwd: '/initial-authority',
+        stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+        busy: false, queue: [], meta: { lastMessageTime: Date.now() }, currentNode: 'master',
+      });
+      await sm.saveSession(session);
+      process.stdout.write('RESULT_JSON {}\\n', () => {
+        process.removeAllListeners('exit');
+        process.exit(0);
+      });
+    `));
+
+    const result = await runChild(dataDir, finishChildScript(`
+      const fs = require('fs-extra');
+      const sm = require(${JSON.stringify(modules.sessionManager)});
+      const { isSessionCatalogStub } = require(${JSON.stringify(modules.sessionRuntimeState)});
+      const config = require(${JSON.stringify(modules.config)});
+      await sm.loadSessions();
+      const id = ${JSON.stringify(id)};
+      const authorityPath = config.SESSIONS_DIR + '/' + id + '.json';
+      const initialStub = sm.getAllSessions().get(id);
+      const markedBeforeFirstLoad = isSessionCatalogStub(initialStub);
+      const first = await sm.getSession(id);
+      const markedAfterFirstLoad = isSessionCatalogStub(first);
+
+      const staleAuthority = await fs.readJson(authorityPath);
+      staleAuthority.cwd = '/stale-authority';
+      await fs.writeJson(authorityPath, staleAuthority);
+      const second = await sm.getSession(id);
+      const loadedEmptyWasStable = second === first && second.cwd === '/initial-authority';
+
+      sm.getAllSessions().delete(id);
+      const reconstructed = await sm.getSession(id);
+      const reconstructedLoadedAuthority = reconstructed.cwd;
+
+      const validBeforeParseFailure = await fs.readJson(authorityPath);
+      await fs.writeFile(authorityPath, '{not-json', 'utf8');
+      sm.getAllSessions().delete(id);
+      let parseFailure;
+      try { await sm.getSession(id); }
+      catch (error) { parseFailure = error.message; }
+      validBeforeParseFailure.cwd = '/parse-retry';
+      validBeforeParseFailure.persistentMemorySnapshot = 'parse-retry-snapshot';
+      await fs.writeJson(authorityPath, validBeforeParseFailure);
+      const parsedRetry = await sm.getSession(id);
+      parsedRetry.cwd = '/parse-retry-saved';
+      await sm.saveSession(parsedRetry);
+      const afterParsedRetrySave = await fs.readJson(authorityPath);
+
+      const validBeforeMissingFailure = await fs.readJson(authorityPath);
+      await fs.remove(authorityPath);
+      sm.getAllSessions().delete(id);
+      let missingFailureCode;
+      try { await sm.getSession(id); }
+      catch (error) { missingFailureCode = error.code; }
+      validBeforeMissingFailure.cwd = '/missing-retry';
+      validBeforeMissingFailure.persistentMemorySnapshot = 'missing-retry-snapshot';
+      await fs.writeJson(authorityPath, validBeforeMissingFailure);
+      const missingRetry = await sm.getSession(id);
+      missingRetry.cwd = '/missing-retry-saved';
+      await sm.saveSession(missingRetry);
+      const afterMissingRetrySave = await fs.readJson(authorityPath);
+
+      const legacyAuthority = await fs.readJson(authorityPath);
+      delete legacyAuthority.sessionStateVersion;
+      legacyAuthority.cwd = '/legacy-first';
+      await fs.writeJson(authorityPath, legacyAuthority);
+      sm.getAllSessions().delete(id);
+      let upgradeFailure;
+      sm.setSessionPersistenceFaultInjectorForTests(phase => {
+        if (phase === 'history') throw new Error('injected legacy upgrade write failure');
+      });
+      try { await sm.getSession(id); }
+      catch (error) { upgradeFailure = error.message; }
+
+      const retriedAuthority = await fs.readJson(authorityPath);
+      retriedAuthority.cwd = '/legacy-retry';
+      await fs.writeJson(authorityPath, retriedAuthority);
+      sm.setSessionPersistenceFaultInjectorForTests(null);
+      const retried = await sm.getSession(id);
+
+      process.stdout.write('RESULT_JSON ' + JSON.stringify({
+        markedBeforeFirstLoad,
+        markedAfterFirstLoad,
+        loadedEmptyWasStable,
+        reconstructedLoadedAuthority,
+        parseFailure,
+        parsedRetry: {
+          cwd: parsedRetry.cwd,
+          persistentMemorySnapshot: parsedRetry.persistentMemorySnapshot,
+          savedCwd: afterParsedRetrySave.cwd,
+        },
+        missingFailureCode,
+        missingRetry: {
+          cwd: missingRetry.cwd,
+          persistentMemorySnapshot: missingRetry.persistentMemorySnapshot,
+          savedCwd: afterMissingRetrySave.cwd,
+        },
+        upgradeFailure,
+        retriedCwd: retried.cwd,
+        retriedStillMarked: isSessionCatalogStub(retried),
+      }) + '\\n', () => {
+        process.removeAllListeners('exit');
+        process.exit(0);
+      });
+    `));
+
+    assert.match(result.parseFailure, /JSON|Unexpected token/i);
+    delete result.parseFailure;
+    assert.deepEqual(result, {
+      markedBeforeFirstLoad: true,
+      markedAfterFirstLoad: false,
+      loadedEmptyWasStable: true,
+      reconstructedLoadedAuthority: '/stale-authority',
+      parsedRetry: {
+        cwd: '/parse-retry-saved',
+        persistentMemorySnapshot: 'parse-retry-snapshot',
+        savedCwd: '/parse-retry-saved',
+      },
+      missingFailureCode: 'SESSION_WORKER_STATE_MISSING',
+      missingRetry: {
+        cwd: '/missing-retry-saved',
+        persistentMemorySnapshot: 'missing-retry-snapshot',
+        savedCwd: '/missing-retry-saved',
+      },
+      upgradeFailure: 'injected legacy upgrade write failure',
+      retriedCwd: '/legacy-retry',
+      retriedStillMarked: false,
+    });
+  } finally {
+    await fs.remove(dataDir).catch(() => {});
+  }
+});
 
 test('standalone compact durably releases authoritative busy state across success, failure, cancellation, queueing, and restart hydration', async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-busy-authority-'));

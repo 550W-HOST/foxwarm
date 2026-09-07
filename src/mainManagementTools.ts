@@ -16,6 +16,8 @@ import {
   ArmWaitLivenessResponse,
   ValidateWaitExecIdsRequest,
   ValidateWaitExecIdsResponse,
+  ResolveAuthorizationSessionTargetRequest,
+  ResolveAuthorizationSessionTargetResponse,
   mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
@@ -127,6 +129,12 @@ export async function validateMainWaitSessions(request: ValidateWaitSessionsRequ
   return await (await getClient()).call('validateWaitSessions', request);
 }
 
+export async function resolveMainAuthorizationSessionTarget(
+  request: ResolveAuthorizationSessionTargetRequest,
+): Promise<ResolveAuthorizationSessionTargetResponse> {
+  return await (await getClient()).call('resolveAuthorizationSessionTarget', request);
+}
+
 export async function armMainWaitLiveness(request: ArmWaitLivenessRequest): Promise<ArmWaitLivenessResponse> {
   return await (await getClient()).call('armWaitLiveness', request);
 }
@@ -157,6 +165,7 @@ export const tool_delete_session = (args: ToolArgs, ctx?: ToolContext) => execut
 export const tool_node_bootstrap_info = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_bootstrap_info', args, ctx);
 export const tool_node_pair_list = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_pair_list', args, ctx);
 export const tool_node_pair_approve = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('node_pair_approve', args, ctx);
+export const tool_set_tool_rules = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('set_tool_rules', args, ctx);
 
 export function getMainManagementToolServiceStatus(): { placement: 'local' | 'child-reverse'; ready: boolean } {
   return { placement, ready: !!client };

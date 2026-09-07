@@ -9,6 +9,8 @@ export interface ToolPlacementMetadata {
   owner: ToolPlacementOwner;
   defaultAction?: string;
   actionOwners?: Readonly<Record<string, ToolPlacementOwner>>;
+  /** Root `node` selects where this tool's own file effect/source lives. */
+  nodeArgumentRole?: 'placement';
 }
 
 export interface ResolvedBuiltinToolPlacement {
@@ -30,13 +32,13 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   apply_patch_memory: { owner: 'session-owner' },
   copy_between_nodes: { owner: 'main-management' },
   image_crop: { owner: 'session-owner' },
-  image_write_to_file: { owner: 'dispatcher/container' },
+  image_write_to_file: { owner: 'dispatcher/container', nodeArgumentRole: 'placement' },
   exec: { owner: 'node-environment' },
   create_child_session: { owner: 'dispatcher/container' },
   send_to_session: { owner: 'main-management' },
   wait: { owner: 'dispatcher/container' },
   send_to_channel: { owner: 'main-management' },
-  send_file: { owner: 'dispatcher/container' },
+  send_file: { owner: 'dispatcher/container', nodeArgumentRole: 'placement' },
   session: {
     owner: 'dispatcher/container',
     defaultAction: 'status',
@@ -97,6 +99,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   create_session: { owner: 'main-management' },
   set_agent_inherit: { owner: 'main-management' },
   set_agent_isolated: { owner: 'main-management' },
+  set_tool_rules: { owner: 'main-management' },
   move_session: { owner: 'main-management' },
 } as const satisfies Readonly<Record<string, ToolPlacementMetadata>>;
 
@@ -132,4 +135,9 @@ export function resolveBuiltinToolPlacement(
     owner,
     executionNode: owner === 'node-environment' ? currentNode : 'master',
   };
+}
+
+export function builtinNodeArgumentSelectsPlacement(name: string): boolean {
+  const metadata = BUILTIN_TOOL_PLACEMENTS[name as RegisteredBuiltinToolName] as ToolPlacementMetadata | undefined;
+  return metadata?.nodeArgumentRole === 'placement';
 }

@@ -6,10 +6,11 @@ Theme packages and the active selection are stored in the current browser. They 
 
 ## Built-ins
 
-Foxwarm ships five immutable built-ins. The registry stays intentionally small so each option has a distinct visual grammar rather than being a palette-only variation:
+Foxwarm ships six immutable built-ins. The registry stays intentionally small so each option has a distinct visual grammar rather than being a palette-only variation:
 
 - `foxwarm.default` — the standard Foxwarm appearance.
-- `foxwarm.550a` — a restrained machine-console theme inspired by the 550-series computer design language: gray-white modular housings, dark instrumentation, rectilinear panel seams, and one focused red sensor beacon rather than broad red decoration.
+- `foxwarm.550a` — a dense monospace console with a red accent, green tool activity, blue system information, amber warnings, violet special content, and a subtle grid.
+- `foxwarm.550a-mono` — 550A Mono: restrained machine-console instrumentation with pale industrial housings, graphite equipment bays, rectilinear panel seams, and a single red sensor beacon.
 - `foxwarm.paper` — a warm outlined parchment/editorial theme with serif reading text.
 - `foxwarm.seaglass` — a structured teal workspace with moderate-radius outlined panels, banded headers, right-side disclosure, and a dotted depth field.
 - `foxwarm.vector` — Vector: a modern technical workbench with restrained geometry, integrated headers, right disclosure, cyan operations, and magenta system signals.
@@ -67,7 +68,7 @@ Validation also reports warnings for important low-contrast text/surface pairs. 
 
 The selected variant is applied before React renders. Auto mode follows the operating-system color preference and updates live. Other tabs/windows on the same origin converge through browser storage events.
 
-Semantic theme tokens style the WebUI and are adapted to xterm.js, Monaco, and Mermaid. Components do not branch on a built-in theme ID. `componentTreatment` is a bounded layout/component grammar; it is not an arbitrary CSS injection surface. Consequently, an exported and reimported console theme follows the same rendering path as the 550A built-in.
+Semantic theme tokens style the WebUI and are adapted to xterm.js, Monaco, and Mermaid. Components do not branch on a built-in theme ID. `componentTreatment` is a bounded layout/component grammar; it is not an arbitrary CSS injection surface. Consequently, an exported and reimported console theme follows the same rendering path as the 550A and 550A Mono built-ins.
 
 ## Troubleshooting
 

@@ -669,7 +669,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
-      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100`}>
+      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100`}>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>

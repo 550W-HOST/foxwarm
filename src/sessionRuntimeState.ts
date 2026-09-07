@@ -79,6 +79,10 @@ export function clearSessionCatalogStub(session: Session): void {
   catalogStubQueueLengths.delete(session);
 }
 
+export function isSessionCatalogStub(session: Session): boolean {
+  return catalogStubQueueLengths.has(session);
+}
+
 export function getEffectiveSessionQueueLength(session: Session): number {
   const catalogCount = catalogStubQueueLengths.get(session);
   return catalogCount === undefined ? (Array.isArray(session.queue) ? session.queue.length : 0) : catalogCount;

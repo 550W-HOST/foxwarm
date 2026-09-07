@@ -535,6 +535,14 @@ input, textarea, select {
     word-break: break-word;
   }
 
+  .foxwarm-markdown > .foxwarm-markdown-segment:first-child > :first-child {
+    margin-top: 0;
+  }
+
+  .foxwarm-markdown > .foxwarm-markdown-segment:last-child > :last-child {
+    margin-bottom: 0;
+  }
+
   .foxwarm-markdown :where(h1):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
     font-size: 1.5em;
     line-height: 1.2;
@@ -1390,6 +1398,10 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble .f
   line-height: var(--foxwarm-console-line-message) !important;
 }
 
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble .foxwarm-user-line-layout {
+  line-height: 0 !important;
+}
+
 html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble button {
   color: var(--foxwarm-console-accent) !important;
 }
@@ -1556,6 +1568,23 @@ html[data-foxwarm-theme-density] :is(.foxwarm-tool-card, [data-model-thread-card
   padding-left: var(--foxwarm-card-inset-px) !important;
   padding-right: var(--foxwarm-card-inset-px) !important;
   border-radius: var(--foxwarm-card-radius-px);
+}
+
+/* Banded and tab headers paint to the card boundary while preserving the
+ * manifest-defined inset for their content. Integrated and plate headers are
+ * intentionally transparent/inset and keep their separate recipe below. */
+html[data-foxwarm-theme-density]:is([data-foxwarm-header-treatment="banded"], [data-foxwarm-header-treatment="tab"]) .foxwarm-tool-card .foxwarm-tool-header {
+  margin-left: calc(-1 * var(--foxwarm-card-inset-px));
+  margin-right: calc(-1 * var(--foxwarm-card-inset-px));
+  padding-left: var(--foxwarm-card-inset-px);
+  padding-right: var(--foxwarm-card-inset-px);
+}
+
+html[data-foxwarm-theme-density]:is([data-foxwarm-header-treatment="integrated"], [data-foxwarm-header-treatment="plate"]) .foxwarm-tool-card .foxwarm-tool-header {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 
 /* The collapse rail remains a full-height hit target, but its visible stroke

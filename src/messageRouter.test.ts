@@ -932,7 +932,7 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
       maxRetries: 5,
       delayMs: 2000,
       kind: 'request-error',
-      reason: `socket hang up ${'detail '.repeat(20)}`,
+      reason: `socket hang up\n${'detail '.repeat(20)}`,
     });
     await notify({
       attempt: 2,
@@ -958,7 +958,7 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
       maxRetries: 5,
       delayMs: 5000,
       kind: 'http-error',
-      status: '502 Bad Gateway',
+      status: '502 Bad\nGateway',
       reason: 'upstream bad gateway',
     });
     await notify({
@@ -975,15 +975,18 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
     assert.equal(session.history[0].__meta?.updateExisting, true);
     assert.equal(session.history[0].__meta?.retry?.final, true);
     const noticeText = session.history[0].parts[0].text || '';
-    assert.match(noticeText, /^⚠️ \[LLM retry\]\nAttempt 1\/5 failed:/);
+    assert.match(noticeText, /^⚠️ LLM Error: Attempt 1\/5 failed: socket hang up detail/);
+    assert.equal(noticeText.split('\n').length, 5);
+    assert.doesNotMatch(noticeText.split('\n')[0], /\s{2,}/);
     assert.match(noticeText, /\nAttempt 2\/5 failed: 500 Internal Server Error: upstream bad gateway\. Retry in 5 seconds/);
     assert.match(noticeText, /\nAttempt 3\/5 failed: \(same error\)\. Retry in 5 seconds/);
     assert.match(noticeText, /\nAttempt 4\/5 failed: 502 Bad Gateway: upstream bad gateway\. Retry in 5 seconds/);
     assert.match(noticeText, /\nAttempt 5\/5 failed: final upstream timeout\. No more retries\./);
     assert.equal(broadcasts.length, 2);
     assert.deepEqual(broadcasts[0].options.excludePlatforms, ['webui']);
-    assert.match(broadcasts[0].text, /^⚠️ \[LLM retry\]\nAttempt 1\/5 failed:/);
-    assert.match(broadcasts[0].text, /\nRetry in 2 seconds\.\.\./);
+    assert.match(broadcasts[0].text, /^⚠️ LLM Error: Attempt 1\/5 failed:/);
+    assert.match(broadcasts[0].text, /\. Retry in 2 seconds\.\.\.$/);
+    assert.doesNotMatch(broadcasts[0].text, /\n/);
     assert.match(broadcasts[1].text, /No more retries/);
     assert.equal(session.history[0].__meta?.retry?.reason, 'final upstream timeout');
     assert.equal(session.history[0].__meta?.retry?.status, undefined);
@@ -1090,6 +1093,8 @@ test('MessageRouter LLM retry notifier sends active WeWork intermediates only to
     assert.equal(all[0].options.weworkStreamId, 'stream-a');
     assert.equal(all[1].options.weworkStreamId, 'stream-b');
     assert.deepEqual(all.map(event => event.options.excludePlatforms), [['webui'], ['webui']]);
+    assert.equal(all.every(event => event.text.startsWith('⚠️ LLM Error: Attempt ')), true);
+    assert.equal(all.every(event => !event.text.includes('\n')), true);
   } finally {
     host.appendSessionMessage = originalAppend;
     host.saveSession = originalSave;

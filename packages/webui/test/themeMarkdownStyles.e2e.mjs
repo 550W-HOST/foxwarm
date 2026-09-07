@@ -78,12 +78,21 @@ const contrastRatio = (foreground, background) => {
 }
 
 async function applyTheme({ style = 'default', dark = false }) {
-  const manifest = style === '550a' ? themeSystem.THEME_550A : themeSystem.DEFAULT_THEME
-  const variables = themeSystem.themeVariantCssVariables(manifest.variants[dark ? 'dark' : 'light'])
+  const manifest = style === '550a'
+    ? themeSystem.THEME_550A
+    : style === '550a-mono'
+      ? themeSystem.THEME_550A_MONO
+      : themeSystem.DEFAULT_THEME
+  const variant = manifest.variants[dark ? 'dark' : 'light']
+  const variables = themeSystem.themeVariantCssVariables(variant)
+  if (variant.componentTreatment === 'console') {
+    variables['--foxwarm-console-text-bright'] = variant.colors.textStrong
+    variables['--foxwarm-console-input'] = variant.colors.input
+  }
   await page.evaluate(({ style, dark, variables }) => {
     for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, value)
     document.documentElement.classList.toggle('dark', dark)
-    if (style === '550a') {
+    if (style === '550a' || style === '550a-mono') {
       document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
     } else {
       document.documentElement.removeAttribute('data-foxwarm-component-treatment')
@@ -191,6 +200,32 @@ test('550A dark pairs fenced-code foreground and background across Markdown surf
 
   assert.equal(styles.assistant.pre.color, 'rgb(243, 244, 246)')
   assert.equal(styles.assistant.pre.backgroundColor, 'rgb(10, 10, 10)')
+})
+
+test('550A Mono retains the redesigned light and dark Markdown code pairings', async () => {
+  await applyTheme({ style: '550a-mono', dark: false })
+  const light = await readComputedStyles()
+  assert.equal(light.theme.textBright, '#191e1c')
+  assert.equal(light.theme.input, '#e5e8e6')
+  for (const sample of [light.message, light.processing, light.contextBlock]) {
+    assertReadable550aBlock(sample, light.theme.textBright, light.theme.input)
+  }
+  assert.deepEqual(
+    [light.assistant.pre.color, light.assistant.pre.backgroundColor],
+    ['rgb(23, 33, 30)', 'rgb(229, 232, 230)'],
+  )
+
+  await applyTheme({ style: '550a-mono', dark: true })
+  const dark = await readComputedStyles()
+  assert.equal(dark.theme.textBright, '#e3e7e5')
+  assert.equal(dark.theme.input, '#141716')
+  for (const sample of [dark.message, dark.processing, dark.contextBlock]) {
+    assertReadable550aBlock(sample, dark.theme.textBright, dark.theme.input)
+  }
+  assert.deepEqual(
+    [dark.assistant.pre.color, dark.assistant.pre.backgroundColor],
+    ['rgb(219, 226, 222)', 'rgb(20, 23, 22)'],
+  )
 })
 
 test('default light and dark retain their Typography and assistant code-block rules', async () => {

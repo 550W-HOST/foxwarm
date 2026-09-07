@@ -4,7 +4,7 @@ import { executeNodeTool } from '../nodeExecution';
 import { nodesManager } from '../nodes/manager';
 import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
-import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
+import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import type { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
 
 export type ResolvedTool = {
@@ -105,16 +105,17 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
   }
   const definition = activeRuntime().definitions.find(item => item.name === name);
   if (!definition) throw new Error(`Unknown builtin tool: ${name}`);
-  const supportsNode = Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node');
-  if (!supportsNode && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
+  const acceptsNode = Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node');
+  const nodeSelectsPlacement = builtinNodeArgumentSelectsPlacement(name);
+  if (!acceptsNode && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
     throw new Error(`Builtin tool \`${name}\` does not support node selection. Use call_tool with source=\`node\` for node capabilities.`);
   }
-  const targetNode = supportsNode ? normalizeNodeId(rawArgs.node, current) : current;
-  const args = { ...rawArgs }; if (supportsNode) delete args.node;
+  const targetNode = nodeSelectsPlacement ? normalizeNodeId(rawArgs.node, current) : current;
+  const args = { ...rawArgs }; if (nodeSelectsPlacement) delete args.node;
   const placement = resolveBuiltinToolPlacement(name, args, targetNode);
-  const permissionNode = name === 'send_file' || name === 'image_write_to_file' ? targetNode : placement.executionNode;
+  const permissionNode = nodeSelectsPlacement ? targetNode : placement.executionNode;
   return validatePlacement({ invocationName, source: 'builtin', name, args, executionNode: placement.executionNode,
-    permissionNode, ...(supportsNode ? { targetNode } : {}) }, ctx);
+    permissionNode, ...(nodeSelectsPlacement ? { targetNode } : {}) }, ctx);
 }
 
 export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invocationName = 'call_tool'): Promise<ResolvedTool> {

@@ -2,6 +2,7 @@ import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from '.
 import * as sessionManager from './sessionManager';
 import { executeSendFileMain } from './toolsSessionAgent/interSession';
 import { requireNodeExecutionAccess } from './nodeExecutionService';
+import { checkGenericToolAuthorizationForSession } from './isolatedCheck';
 
 export type FileDeliveryRequest = {
   sourceSessionId: string;
@@ -66,6 +67,7 @@ export function createFileDeliveryServiceHandler(options: { expectedSourceSessio
       };
       if (runtimeNodeId !== 'master') await requireNodeExecutionAccess(sourceSessionId, runtimeNodeId);
       const exactSource = { ...source, currentNode, ...(cwd !== undefined ? { cwd } : { cwd: undefined }) };
+      await checkGenericToolAuthorizationForSession(exactSource, { source: 'builtin', tool: 'send_file' }, runtimeNodeId, intent);
       let result: any;
       try { result = await executeSendFileMain(intent, { sessionId: sourceSessionId, session: exactSource, runtimeNodeId } as any); }
       catch (error: any) {

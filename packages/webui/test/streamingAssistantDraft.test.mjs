@@ -4,7 +4,21 @@ import { build } from 'esbuild'
 
 const sourcePath = new URL('../src/streamingAssistantDraft.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { applyModelStreamEvent, applyModelStreamSnapshot, parseStreamingToolArguments, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+const { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+
+test('synthetic assistant messages retain the canonical request identity for render reconciliation', () => {
+  const message = buildStreamingAssistantMessage({
+    streamId: 'stream-1',
+    iteration: 2,
+    llmRequestId: 'request-1',
+    reasoning: '',
+    text: 'streamed answer',
+    toolCalls: [],
+  })
+
+  assert.equal(message.__meta.llmRequestId, 'request-1')
+  assert.equal(message.__meta.synthetic, 'streamingAssistantDraft')
+})
 
 test('version 2 stream events accumulate text and partial tool arguments', () => {
   let draft = applyModelStreamEvent(null, { type: 'model-stream-reset', streamId: 's', iteration: 1 })

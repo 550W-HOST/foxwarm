@@ -41,9 +41,14 @@ function formatRetryDelay(delayMs: number): string {
   return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
 
+function formatRetryReason(event: llm.LlmRetryEvent): string {
+  const status = `${event.status || ''}`.replace(/\s+/g, ' ').trim();
+  const reason = `${event.reason || ''}`.replace(/\s+/g, ' ').trim();
+  return status ? `${status}: ${reason}`.trim() : reason;
+}
+
 function formatRetryStatus(event: llm.LlmRetryEvent, initial: boolean): string {
-  const statusPrefix = event.status ? `${event.status}: ` : '';
-  const reason = `${statusPrefix}${event.reason}`.trim();
+  const reason = formatRetryReason(event);
   const retryText = event.final
     ? 'No more retries.'
     : `Retry in ${formatRetryDelay(event.delayMs || 0)}...`;
@@ -51,22 +56,21 @@ function formatRetryStatus(event: llm.LlmRetryEvent, initial: boolean): string {
     ? `Attempt ${event.attempt}/${event.maxRetries} failed: ${reason}. ${retryText}`
     : `Attempt ${event.attempt}/${event.maxRetries} failed. ${retryText}`;
   if (initial) {
-    return `⚠️ [LLM retry]\n${attemptText}`;
+    return `⚠️ LLM Error: ${attemptText}`;
   }
 
   return `\n${attemptText}`;
 }
 
 function formatRetryChannelSnippet(event: llm.LlmRetryEvent): string {
-  const statusPrefix = event.status ? `${event.status}: ` : '';
-  const reason = `${statusPrefix}${event.reason}`.trim();
+  const reason = formatRetryReason(event);
   const retryText = event.final
     ? 'No more retries.'
     : `Retry in ${formatRetryDelay(event.delayMs || 0)}...`;
   const failureText = reason
     ? `Attempt ${event.attempt}/${event.maxRetries} failed: ${reason}.`
     : `Attempt ${event.attempt}/${event.maxRetries} failed.`;
-  return `⚠️ [LLM retry]\n${failureText}\n${retryText}`;
+  return `⚠️ LLM Error: ${failureText} ${retryText}`;
 }
 
 type RetryErrorDescriptor = Pick<llm.LlmRetryEvent, 'status' | 'reason'>;
@@ -1245,6 +1249,13 @@ export class SessionTurnRunner {
           type: 'tool-calls-finish',
           results: this.getToolResultProgress(toolResultMsg),
         }, session, turnId, turnSource);
+
+        const fatalToolError = (toolResultMsg as any).__toolLoopControl?.fatalError;
+        if (fatalToolError && typeof fatalToolError.code === 'string' && typeof fatalToolError.message === 'string') {
+          const error = new Error(fatalToolError.message) as Error & { code?: string };
+          error.code = fatalToolError.code;
+          throw error;
+        }
 
         const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {

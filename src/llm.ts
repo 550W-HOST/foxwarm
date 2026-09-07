@@ -13,7 +13,7 @@ import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPU
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkPathAccess } from './isolatedCheck';
+import { checkGenericToolAuthorizationForSession, checkPathAccess } from './isolatedCheck';
 import type { ResolvedTool } from './tools/resolvedTools';
 import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
@@ -35,6 +35,7 @@ import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages
 import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
 import { deduplicateProviderRequestImages } from './providerImageDedup';
 import { guardToolOutputForModel } from './toolOutputGuard';
+import { isToolAuthorizationPolicyUnavailable, TOOL_AUTH_POLICY_UNAVAILABLE } from './toolAuthorization';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import {
@@ -1479,6 +1480,7 @@ type ExecutedToolCall = PreparedToolCall & {
     successfulWaitAfterSendTarget?: string;
     successfulFinishAfterSend: boolean;
     deferredExecCwdSync?: { nextCwd: string };
+    fatalCurrentTurn?: { code: string; message: string };
 };
 
 function normalizeExecutedToolResult(rawResult: any): any {
@@ -1545,7 +1547,16 @@ async function prepareToolCall(
     if (presetResult === undefined) {
         try {
             if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
-            else resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
+            else {
+                resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
+                const permissionIdentity = resolved.source === 'node'
+                    ? { source: 'node' as const, node: resolved.executionNode, tool: resolved.name }
+                    : resolved.source === 'mcp'
+                        ? { source: 'mcp' as const, server: resolved.server, tool: resolved.name }
+                        : { source: 'builtin' as const, tool: resolved.name };
+                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args,
+                    toolContext.sessionPlacement === 'session-worker');
+            }
         } catch (error) { placementError = error; }
     }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
@@ -1637,6 +1648,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let successfulWaitAfterSendTarget: string | undefined;
     let successfulFinishAfterSend = false;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
+    let fatalCurrentTurn: { code: string; message: string } | undefined;
 
     try {
         if (prepared.placementError) throw prepared.placementError;
@@ -1689,6 +1701,9 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         imageParts = normalizedImages.imageParts;
         result = normalizedImages.result;
     } catch (error: any) {
+        if (isToolAuthorizationPolicyUnavailable(error)) {
+            fatalCurrentTurn = { code: TOOL_AUTH_POLICY_UNAVAILABLE, message: error?.message || 'Tool authorization policy is unavailable.' };
+        }
         result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
             ...(error?.retryable === true ? { retryable: true } : {}) };
         imageParts = [];
@@ -1705,6 +1720,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         successfulWaitAfterSendTarget,
         successfulFinishAfterSend,
         deferredExecCwdSync,
+        fatalCurrentTurn,
     };
 }
 
@@ -1737,13 +1753,16 @@ function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedTo
         stopCurrentTurn: false,
         waitForReply: false,
         successfulFinishAfterSend: false,
+        ...(isToolAuthorizationPolicyUnavailable(error) ? {
+            fatalCurrentTurn: { code: TOOL_AUTH_POLICY_UNAVAILABLE, message: error?.message || 'Tool authorization policy is unavailable.' },
+        } : {}),
     };
 }
 
-function buildSkippedToolCall(prepared: PreparedToolCall): ExecutedToolCall {
+function buildSkippedToolCall(prepared: PreparedToolCall, message = 'Tool call was not started because the session was stopped.'): ExecutedToolCall {
     return {
         ...prepared,
-        result: { error: 'Tool call was not started because the session was stopped.' },
+        result: { error: message },
         imageParts: [],
         stopCurrentTurn: false,
         waitForReply: false,
@@ -1816,6 +1835,7 @@ export async function executeTools(
     const plannedCalls = planToolCalls(functionCalls);
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
+    let fatalCurrentTurn = false;
 
     while (cursor < plannedCalls.length) {
         if (session?.stopping) {
@@ -1832,8 +1852,20 @@ export async function executeTools(
         if (plannedCalls[cursor].call.name !== 'exec') {
             const planned = plannedCalls[cursor];
             const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, true, planned.presetResult);
-            executions.push(await runPreparedToolCall(prepared, toolContext));
+            const execution = await runPreparedToolCall(prepared, toolContext);
+            executions.push(execution);
             cursor++;
+            if (execution.fatalCurrentTurn) {
+                fatalCurrentTurn = true;
+                for (; cursor < plannedCalls.length; cursor++) {
+                    const skipped = plannedCalls[cursor];
+                    const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session, undefined, false, skipped.presetResult);
+                    executions.push(skipped.presetResult !== undefined
+                        ? await runPreparedToolCall(skippedPrepared, toolContext)
+                        : buildSkippedToolCall(skippedPrepared, 'Tool call was not started because tool authorization policy was unavailable.'));
+                }
+                break;
+            }
             continue;
         }
 
@@ -1861,6 +1893,17 @@ export async function executeTools(
         for (let index = 0; index < preparedSegment.length; index++) {
             executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index]), toolContext));
         }
+        if (executions.slice(-preparedSegment.length).some(execution => execution.fatalCurrentTurn)) {
+            fatalCurrentTurn = true;
+            for (; cursor < plannedCalls.length; cursor++) {
+                const skipped = plannedCalls[cursor];
+                const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session, undefined, false, skipped.presetResult);
+                executions.push(skipped.presetResult !== undefined
+                    ? await runPreparedToolCall(skippedPrepared, toolContext)
+                    : buildSkippedToolCall(skippedPrepared, 'Tool call was not started because tool authorization policy was unavailable.'));
+            }
+            break;
+        }
     }
 
     const parts: MessagePart[] = [];
@@ -1871,6 +1914,7 @@ export async function executeTools(
     const successfulSendToSessionTargets: string[] = [];
     const successfulWaitAfterSendTargets: string[] = [];
     let successfulFinishAfterSend = false;
+    let fatalError: { code: string; message: string } | undefined;
 
     for (const execution of executions) {
         let result = execution.result;
@@ -1907,6 +1951,7 @@ export async function executeTools(
             successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
         }
         successfulFinishAfterSend = successfulFinishAfterSend || execution.successfulFinishAfterSend;
+        fatalError = fatalError || execution.fatalCurrentTurn;
     }
 
     if (stopCurrentTurn && batchHasError) {
@@ -1920,7 +1965,9 @@ export async function executeTools(
     }
 
     const toolMessage: Message = { role: 'tool', parts };
-    if ((stopCurrentTurn && !batchHasError) || successfulFinishAfterSend) {
+    if (fatalCurrentTurn && fatalError) {
+        (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true, fatalError };
+    } else if ((stopCurrentTurn && !batchHasError) || successfulFinishAfterSend) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');

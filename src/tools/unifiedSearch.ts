@@ -9,6 +9,7 @@ import { isToolVisibleForSession } from '../isolatedCheck';
 import * as sessionManager from '../sessionManager';
 import * as agentMetadata from '../session/agentMetadata';
 import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
+import { isToolAuthorizationPolicyUnavailable } from '../toolAuthorization';
 
 const SEARCH_TOOLS_DEFAULT_LIMIT = 5;
 const SEARCH_TOOLS_SCHEMA_DETAIL_LIMIT = 10;
@@ -445,6 +446,7 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
         try {
             tools = await mcpExternal.listMcpTools(ctx.sessionId, serverName);
         } catch (e: any) {
+            if (isToolAuthorizationPolicyUnavailable(e)) throw e;
             warnings?.push(`MCP server ${serverName}: ${e?.message || String(e)}`);
             continue;
         }
@@ -529,6 +531,7 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         try {
             collected.push(...await collectMcpUnifiedSearchResults(query, includeSchema, server, ctx, warnings));
         } catch (e: any) {
+            if (isToolAuthorizationPolicyUnavailable(e)) throw e;
             warnings.push(e?.message || String(e));
         }
     }
@@ -537,6 +540,7 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         try {
             collected.push(...await collectNodeUnifiedSearchResults(query, includeSchema, nodeId, ctx));
         } catch (e: any) {
+            if (isToolAuthorizationPolicyUnavailable(e)) throw e;
             warnings.push(e?.message || String(e));
         }
     }

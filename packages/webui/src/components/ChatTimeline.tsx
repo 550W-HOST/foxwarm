@@ -9,8 +9,10 @@ import {
   getSystemMessagePreviewDescriptor,
   isCollapsibleSystemText,
   isHeavySystemTextLine,
+  isLightweightSystemTextLine,
   isLightweightStructuredSystem,
   isSystemLikeText,
+  parseFoxwarmMetadataLine,
   renderAssistantMarkdownSegments,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
@@ -25,6 +27,7 @@ import {
 } from './chatShared'
 import ImageParts from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
@@ -42,6 +45,8 @@ import {
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
+import PastedTextBlock from './PastedTextBlock'
+import { parsePastedTextSegments } from '../pastedText'
 import {
   deriveRequestTimings,
   formatCompactDuration,
@@ -57,6 +62,7 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  showUserMessageMetadata?: boolean
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
@@ -346,24 +352,21 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
   const segments = useMemo(() => renderAssistantMarkdownSegments(text), [text])
-  if (segments.length === 1 && segments[0].kind === 'html') {
-    return <div className={`min-w-0 max-w-full ${className}`} dangerouslySetInnerHTML={{ __html: segments[0].html }} onClick={handleMarkdownLinkClick} />
-  }
   return (
     <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
-      {segments.map((segment, index) => {
+      {segments.map((segment) => {
         if (segment.kind === 'html') {
-          return <div key={`html-${index}`} dangerouslySetInnerHTML={{ __html: segment.html }} />
+          return <MarkdownHtmlSegment key={`markdown-token-${segment.tokenIndex}`} html={segment.html} />
         }
         if (segment.kind === 'latex') {
           return (
-            <SpecialBlock key={`latex-${index}`} kind="latex" label="LaTeX" raw={segment.raw}>
+            <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="latex" label="LaTeX" raw={segment.raw}>
               <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
             </SpecialBlock>
           )
         }
         return (
-          <SpecialBlock key={`mermaid-${index}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
+          <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
             <MermaidDiagram source={segment.source} />
           </SpecialBlock>
         )
@@ -376,59 +379,119 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
   if (message.role === 'model') return false
   return (
     message.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
-    message.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
+    message.parts.some(part => !!part.text && (
+      message.role === 'user'
+        ? parsePastedTextSegments(part.text).some(segment => segment.kind === 'text' && segment.text.split('\n').some(isHeavySystemTextLine))
+        : part.text.split('\n').some(isHeavySystemTextLine)
+    ))
   )
 }
 
-const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
+const isUserAttachmentMetadataLine = (line: string): boolean => {
+  const tag = parseFoxwarmMetadataLine(line)
+  return tag?.tagName === 'foxwarm-image' || tag?.tagName === 'foxwarm-file'
+}
+
+const shouldRenderUserLine = (line: string, showUserMessageMetadata: boolean): boolean => (
+  showUserMessageMetadata || !isLightweightSystemTextLine(line) || isUserAttachmentMetadataLine(line)
+)
+
+const renderUserPreLines = (text: string, showUserMessageMetadata: boolean, metadataLineHeight: string, renderLine: (line: string, lineIndex: number) => ReactNode): ReactNode => {
+  const visibleLines = text.split('\n')
+    .map((line, lineIndex) => ({ line, lineIndex }))
+    .filter(({ line }) => shouldRenderUserLine(line, showUserMessageMetadata))
+  return visibleLines.map(({ line, lineIndex }, visibleIndex) => (
+    <span key={lineIndex} className="foxwarm-user-rendered-line">
+      {renderLine(line, lineIndex)}
+      {visibleIndex < visibleLines.length - 1 && (
+        <span
+          className="foxwarm-user-rendered-line-break"
+          style={isSystemLikeText(line)
+            ? { fontSize: '70%', lineHeight: metadataLineHeight, opacity: 0.7 }
+            : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+          }
+        >
+          {'\n'}
+        </span>
+      )}
+    </span>
+  ))
+}
+
+const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUserMessageMetadata = true }: { systemText: string; isUser: boolean; showUserMessageMetadata?: boolean }) {
   return (
     <pre
-      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-user-text' : 'text-fw-text-muted'}`}
-      style={{ lineHeight: '1.3em' }}
+      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'foxwarm-user-line-layout text-fw-user-text' : 'text-fw-text-muted'}`}
+      style={{ lineHeight: isUser ? 0 : '1.3em' }}
     >
-      {systemText.split('\n').map((line, lineIdx) => {
-        const isMetaLine = isSystemLikeText(line)
-        return (
-          <span
-            key={lineIdx}
-            className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
-            style={isMetaLine
-              ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-              : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
-            }
-          >
-            {renderSystemTextWithSessionLinks(line)}
-          </span>
-        )
-      })}
+      {isUser
+        ? renderUserPreLines(systemText, showUserMessageMetadata, '1.1em', (line) => {
+            const isMetaLine = isSystemLikeText(line)
+            return (
+              <span
+                className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
+                style={isMetaLine
+                  ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                  : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                }
+              >
+                {renderSystemTextWithSessionLinks(line)}
+              </span>
+            )
+          })
+        : systemText.split('\n').map((line, lineIdx) => {
+            const isMetaLine = isSystemLikeText(line)
+            return (
+              <span
+                key={lineIdx}
+                className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
+                style={isMetaLine
+                  ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                  : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                }
+              >
+                {renderSystemTextWithSessionLinks(line)}
+              </span>
+            )
+          })}
     </pre>
   )
 })
 
-const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: string }) {
-  const isSystemMessage = isCollapsibleSystemText(text)
+const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMessageMetadata }: { text: string; showUserMessageMetadata: boolean }) {
+  const segments = useMemo(() => parsePastedTextSegments(text), [text])
+  const visibleClassificationText = useMemo(
+    () => segments.filter(segment => segment.kind === 'text').map(segment => segment.text).join(''),
+    [segments],
+  )
+  const isSystemMessage = isCollapsibleSystemText(visibleClassificationText)
   const [expanded, setExpanded] = useState(false)
   const shouldCollapse = isSystemMessage && !expanded
 
   return (
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: '1.5em' }}>
-          {text.split('\n').map((line, lineIdx) => {
-            const isPrefix = isSystemLikeText(line)
-            return (
-              <span
-                key={lineIdx}
-                className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
-                style={isPrefix
-                  ? { display: 'block', fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
-                  : { display: 'block' }
-                }
-              >
-                {line}
+        <pre className="foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: 0 }}>
+          {segments.map((segment, segmentIndex) => segment.kind === 'pasted-text'
+            ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} />
+            : (
+              <span key={`text-${segmentIndex}`}>
+                {renderUserPreLines(segment.text, showUserMessageMetadata, '1em', (line) => {
+                  const isPrefix = isSystemLikeText(line)
+                  return (
+                    <span
+                      className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
+                      style={isPrefix
+                        ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
+                        : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                      }
+                    >
+                      {line}
+                    </span>
+                  )
+                })}
               </span>
-            )
-          })}
+            ))}
         </pre>
       </div>
       {isSystemMessage && (
@@ -610,10 +673,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
     }
   }, [text])
 
-  const paddingClass = viewMode === 'rendered' ? 'px-2' : 'px-2 py-2'
-
   return (
-    <div className={`foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border ${paddingClass} rounded-lg cursor-text relative group`}>
+    <div className="foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group">
       <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
@@ -664,6 +725,7 @@ interface MessageRowProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  showUserMessageMetadata: boolean
   groupKey: string
   summaryTagItems: ToolTagItem[]
   groupUsage: NormalizedTokenUsage | null
@@ -689,6 +751,7 @@ const MessageRow = memo(function MessageRow({
   isMobile,
   groupTools,
   showUsageBadge,
+  showUserMessageMetadata,
   groupKey,
   summaryTagItems,
   groupUsage,
@@ -754,7 +817,7 @@ const MessageRow = memo(function MessageRow({
       <div
         className={`min-w-0 ${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-4 py-2 rounded-lg'
+            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
             : ''
         }`}
       >
@@ -765,8 +828,8 @@ const MessageRow = memo(function MessageRow({
             {textLikeParts.map((part, partIdx) => (
               <div key={`user-part-${partIdx}`}>
                 {part.system
-                  ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} />
-                  : <CollapsibleUserText text={part.text || ''} />}
+                  ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
+                  : <CollapsibleUserText text={part.text || ''} showUserMessageMetadata={showUserMessageMetadata} />}
               </div>
             ))}
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
@@ -815,6 +878,7 @@ const MessageRow = memo(function MessageRow({
   prev.isMobile === next.isMobile &&
   prev.groupTools === next.groupTools &&
   prev.showUsageBadge === next.showUsageBadge &&
+  (prev.msg.role !== 'user' || isHeavySystemLikeMessage(prev.msg) || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.groupKey === next.groupKey &&
   prev.summaryTagItems === next.summaryTagItems &&
   prev.groupUsage === next.groupUsage &&
@@ -827,10 +891,10 @@ const MessageRow = memo(function MessageRow({
   prev.nestedDepth === next.nestedDepth &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.onOpenCodeCommit === next.onOpenCodeCommit &&
-  prev.renderNestedMessages === next.renderNestedMessages
+  (!getContextBlockMetaFromMessage(prev.msg) || prev.renderNestedMessages === next.renderNestedMessages)
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const requestTimingByIndex = useMemo(() => deriveRequestTimings(messages), [messages])
 
@@ -842,11 +906,12 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       isMobile={isMobile}
       groupTools={groupTools}
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
+      showUserMessageMetadata={showUserMessageMetadata}
       onOpenCodeFile={onOpenCodeFile}
       onOpenCodeCommit={onOpenCodeCommit}
       nestedDepth={nextNestedDepth}
     />
-  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge])
+  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -1049,6 +1114,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             isMobile={isMobile}
             groupTools={groupTools}
             showUsageBadge={showUsageBadge}
+            showUserMessageMetadata={showUserMessageMetadata}
             groupKey={groupKey}
             summaryTagItems={toolGroupMeta.summaryTagItemsByIndex[idx]}
             groupUsage={toolGroupMeta.groupUsageByIndex[idx]}

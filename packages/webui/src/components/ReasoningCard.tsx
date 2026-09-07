@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { getCollapsedReasoningPreview, handleMarkdownLinkClick, renderMarkdown } from './chatShared'
+import { getCollapsedReasoningPreview, handleMarkdownLinkClick, renderMarkdownSegments } from './chatShared'
+import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import ModelThreadCard, { modelThreadBodyClasses } from './ModelThreadCard'
 
 type ReasoningTone = 'message' | 'processing'
@@ -58,7 +59,7 @@ const ReasoningCard = memo(function ReasoningCard({
   }, [debounceMs, thinking])
 
   const collapsedPreview = useMemo(() => getReasoningPreview(displayThinking), [displayThinking])
-  const html = useMemo(() => renderMarkdown(displayThinking), [displayThinking])
+  const markdownSegments = useMemo(() => renderMarkdownSegments(displayThinking), [displayThinking])
 
   if (!thinking.trim()) return null
 
@@ -73,9 +74,12 @@ const ReasoningCard = memo(function ReasoningCard({
     >
       <div
         className={`foxwarm-markdown foxwarm-reasoning-body prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${modelThreadBodyClasses[tone]}`}
-        dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleMarkdownLinkClick}
-      />
+      >
+        {markdownSegments.map(segment => (
+          <MarkdownHtmlSegment key={`markdown-token-${segment.tokenIndex}`} html={segment.html} />
+        ))}
+      </div>
     </ModelThreadCard>
   )
 })

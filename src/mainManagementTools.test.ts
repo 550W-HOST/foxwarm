@@ -10,6 +10,7 @@ import {
   getMainManagementToolServiceStatus,
   initializeMainManagementTools,
   resetMainManagementToolsForTests,
+  resolveMainAuthorizationSessionTarget,
   shutdownMainManagementTools,
 } from './mainManagementTools';
 import {
@@ -26,6 +27,7 @@ import {
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
 } from './toolCallControls';
+import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
 const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
@@ -34,12 +36,45 @@ function makeId(prefix: string): string {
 }
 
 async function cleanup(...sessionIds: string[]): Promise<void> {
+  setToolAuthorizationPolicyForTests(undefined);
   await shutdownMainManagementTools().catch(() => {});
   resetMainManagementToolsForTests();
   for (const sessionId of sessionIds) {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 }
+
+test('Session relation authorization keeps Worker direct unified and ToolScript parity through Main authority', async () => {
+  const sourceId = makeId('relation_worker_source');
+  const targetId = makeId('relation_worker_target');
+  const source = await sessionManager.getSession(sourceId);
+  await sessionManager.getSession(targetId);
+  const original = (archiveRecallTools as any).tool_recall;
+  (archiveRecallTools as any).tool_recall = async (_args: any, ctx: any) => `relation-recall:${ctx.sessionId}`;
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: same-agent-recall
+  match:
+    tool: { source: builtin, name: recall }
+    args: { sessionId: { session: { sameAgent: true } } }
+  action: allow
+`));
+  const ctx: any = { sessionId: sourceId, session: source, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  try {
+    const resolved = await resolveMainAuthorizationSessionTarget({ sourceSessionId: sourceId, toolName: 'recall', args: { sessionId: targetId } });
+    assert.equal(resolved.target?.id, targetId);
+    assert.equal(await recall({ sessionId: targetId, target: 'overview' }, ctx), `relation-recall:${sourceId}`);
+    assert.equal(await call_tool({ source: 'builtin', name: 'recall', args: { sessionId: targetId, target: 'overview' } }, ctx), `relation-recall:${sourceId}`);
+    const nested = await tool_run_script({ code: `def main(args):\n    return call_tool(source="builtin", name="recall", args={"sessionId":"${targetId}","target":"overview"})` }, ctx);
+    assert.equal(nested.status, 'completed');
+    assert.equal(nested.result, `relation-recall:${sourceId}`);
+  } finally {
+    (archiveRecallTools as any).tool_recall = original;
+    await cleanup(sourceId, targetId);
+  }
+});
 
 test('main management service rejects missing, stale, and non-allowlisted sources/operations', async () => {
   const sourceId = makeId('management_source');
@@ -219,6 +254,75 @@ test('direct, unified, and ToolScript creation calls reject removed and unknown 
     assert.equal(sessionManager.getAllSessions().has('unknown-script-session'), false);
   } finally {
     await cleanup(sourceId, 'old-script', directSessionName, unifiedSessionName, 'unknown-script-session');
+  }
+});
+
+test('child node remains a semantic argument through direct unified ToolScript and Worker management paths', async () => {
+  const sourceId = makeId('management_child_node');
+  const source = await sessionManager.getSession(sourceId);
+  const inheritedId = `${sourceId}_inherited-node`;
+  const unifiedId = `${sourceId}_unified-node`;
+  const scriptId = `${sourceId}_script-node`;
+  const workerId = `${sourceId}_worker-node`;
+  source.currentNode = 'dedicated-node';
+  await sessionManager.saveSession(sourceId);
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: allow-toolscript
+  match: { session: ${sourceId}, tool: { source: builtin, name: run_script } }
+  action: allow
+- id: allow-child-current-node
+  match:
+    session: ${sourceId}
+    tool: { source: builtin, name: create_child_session }
+    args: { node: { exists: false } }
+  action: allow
+- id: allow-child-dedicated-node
+  match:
+    session: ${sourceId}
+    tool: { source: builtin, name: create_child_session }
+    args: { node: dedicated-node }
+  action: allow
+- id: deny-source
+  match: { session: ${sourceId} }
+  action: deny
+  reason: child node semantic test deny
+`));
+  const ctx: any = { sessionId: sourceId, session: source };
+  try {
+    await assert.rejects(
+      () => create_child_session({
+        suffix: 'denied-master', node: 'master', confirmation: TEST_HANDOFF_CONFIRMATION,
+      }, ctx),
+      /child node semantic test deny/,
+    );
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_denied-master`), false);
+
+    await create_child_session({ suffix: 'inherited-node', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    assert.equal((await sessionManager.getSession(inheritedId)).currentNode, 'dedicated-node');
+
+    source.currentNode = 'master';
+    await sessionManager.saveSession(sourceId);
+    await call_tool({
+      source: 'builtin', name: 'create_child_session',
+      args: { suffix: 'unified-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION },
+    }, ctx);
+    assert.equal((await sessionManager.getSession(unifiedId)).currentNode, 'dedicated-node');
+
+    const script = await tool_run_script({
+      code: `def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={"suffix":"script-node","node":"dedicated-node","confirmation":${JSON.stringify(TEST_HANDOFF_CONFIRMATION)}})`,
+    }, ctx);
+    assert.equal(script.status, 'completed');
+    assert.equal((await sessionManager.getSession(scriptId)).currentNode, 'dedicated-node');
+
+    await create_child_session({
+      suffix: 'worker-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION,
+    }, { ...ctx, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} });
+    assert.equal((await sessionManager.getSession(workerId)).currentNode, 'dedicated-node');
+  } finally {
+    await cleanup(sourceId, inheritedId, unifiedId, scriptId, workerId, `${sourceId}_denied-master`);
   }
 });
 

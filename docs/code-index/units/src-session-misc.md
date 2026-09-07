@@ -41,6 +41,7 @@ Provides session archiving (persisting messages with canonical image references)
 | `getCanonicalChildSessionIds(sessions, parentSessionId)` | relations.ts | Returns alias-normalized direct child IDs without traversing deeper relations |
 | `collectSessionDescendants(sessions, rootSessionId)` | relations.ts | Returns canonical descendants/direct children/deepest-first order and rejects corrupt cycles |
 | `resolveSessionParentId(deps, childSessionId, parentSessionId)` | relations.ts | Resolves aliases and validates existence/self/cycle constraints without mutating the relation |
+| `resolveSpecialSessionTargetId(targetSessionId, sourceSession, fromSessionId)` | relations.ts | Canonically resolves the handler-level `<main>` and `<parent>` aliases; shared by messaging and tool authorization target resolution |
 | `setSessionParent(deps, childSessionId, parentSessionId)` | ~40 | Sets or clears a session's parent relationship |
 | `updateChildSessionParentIds(deps, oldParentId, newParentId)` | ~82 | Re-parents all children from old to new parent |
 | `isDirectSessionLink(a, b)` | ~100 | Checks if two sessions are the same or direct parent/child |
