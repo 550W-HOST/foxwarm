@@ -14,6 +14,9 @@ const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-composer-paste-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
 const assetsDirectory = path.join(webuiRoot, 'dist/assets')
+const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
+const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
+const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 let server
 let fixtureUrl
 
@@ -25,11 +28,14 @@ await writeFile(entryPath, `
   const noop = async () => {}
   function Fixture() {
     const [sessionId, setSessionId] = useState('fixture/main')
+    const [loading, setLoading] = useState(false)
     const [, redraw] = useState(0)
+    window.fixtureCurrentSession = sessionId
     window.fixtureSetSession = setSessionId
+    window.fixtureSetLoading = setLoading
     window.fixtureRedraw = () => redraw(value => value + 1)
     const props = {
-      sessionId, sessionMissing: false, loading: false, asrAvailable: false,
+      sessionId, sessionMissing: false, loading, asrAvailable: false,
       modelOptions: [], currentModelKey: 'model/current', sessionModel: 'model/current', defaultModelKey: 'model/current',
       childModelDefault: 'model/current', effectiveChildModelKey: 'model/current', effectiveEffort: 'medium', effectiveChildEffort: 'medium',
       onChangeModel: noop, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
@@ -51,9 +57,12 @@ await writeFile(entryPath, `
   window.fixtureEditor = () => document.querySelector('[role="textbox"][aria-label="Message"]')
   window.fixtureSelectText = (start, end) => {
     const editor = window.fixtureEditor()
+    editor.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    editor.focus()
+    editor.normalize()
     const node = [...editor.childNodes].find(child => child.nodeType === Node.TEXT_NODE)
     const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end)
-    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); editor.focus()
+    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
   }
   window.fixturePaste = text => {
     const data = new DataTransfer(); data.setData('text/plain', text); data.setData('text/html', '<b>different html</b>')
@@ -61,19 +70,26 @@ await writeFile(entryPath, `
     window.fixtureEditor().dispatchEvent(event)
   }
   window.fixtureCaretAtRootOffset = offset => {
-    const editor = window.fixtureEditor(); const range = document.createRange(); range.setStart(editor, offset); range.collapse(true)
-    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); editor.focus()
+    const editor = window.fixtureEditor(); editor.focus(); const range = document.createRange(); range.setStart(editor, offset); range.collapse(true)
+    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
   }
   window.fixtureSelectAll = () => {
-    const editor = window.fixtureEditor(); const range = document.createRange(); range.selectNodeContents(editor)
-    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); editor.focus()
+    const editor = window.fixtureEditor(); editor.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); editor.focus(); const range = document.createRange(); range.selectNodeContents(editor)
+    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+  }
+  window.fixtureSelectAcrossChip = (start, end, backward = false) => {
+    const editor = window.fixtureEditor(); editor.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); editor.focus(); editor.normalize(); const range = document.createRange()
+    range.setStart(editor.firstChild, start); range.setEnd(editor.lastChild, end)
+    const selection = getSelection(); selection.removeAllRanges()
+    if (backward) selection.setBaseAndExtent(editor.lastChild, end, editor.firstChild, start)
+    else selection.addRange(range)
   }
 `)
 
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: 'preact/compat', 'react-dom': 'preact/compat', 'react-dom/client': 'preact/compat/client', 'react/jsx-runtime': 'preact/jsx-runtime' },
+    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
   const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))
@@ -177,6 +193,97 @@ for (const spec of browsers) {
   }))
 }
 
+for (const spec of browsers) {
+test(`${spec.name} restores caret and selected ranges through custom undo and redo`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.evaluate(() => window.fixtureSetSession('fixture/history-selection'))
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/history-selection')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
+  await page.type(editor, 'ac')
+  await page.evaluate(() => window.fixtureSelectText(1, 1))
+  await page.keyboard.type('b')
+  assert.equal(await page.$eval(editor, node => node.textContent), 'abc')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.$eval(editor, node => node.textContent), 'ac')
+  await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+  assert.equal(await page.$eval(editor, node => node.textContent), 'abc')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  await page.keyboard.type('X')
+  assert.equal(await page.$eval(editor, node => node.textContent), 'aXc')
+
+  await page.evaluate(() => window.fixtureSetSession('fixture/history-range'))
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/history-range')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
+  await page.type(editor, 'left right')
+  await page.evaluate(() => { window.fixtureSelectText(4, 5); window.fixturePaste('p'.repeat(2000)) })
+  const segmented = await page.evaluate(() => window.fixtureDraft)
+  await page.evaluate(() => window.fixtureSelectAcrossChip(2, 3, true))
+  await page.keyboard.type('Z')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'leZht')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), segmented)
+  await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'leZht')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  await page.keyboard.type('Q')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'leQht')
+}))
+}
+
+test('Chromium blocks custom and native draft mutations throughout disabled transitions', async () => withBrowser(browsers[0], async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.evaluate(() => window.fixtureSetSession('fixture/disabled'))
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/disabled')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
+  await page.type(editor, 'start end')
+  await page.evaluate(() => { window.fixtureSelectText(5, 6); window.fixturePaste('d'.repeat(2000)) })
+  const expected = await page.evaluate(() => window.fixtureDraft)
+  await page.click('.foxwarm-composer-pasted-text-chip')
+  await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'stale modal edit'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+  await page.evaluate(() => {
+    window.fixtureStaleSave = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save')
+    window.fixtureStaleRestore = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Restore to text')
+    window.fixtureSetLoading(true)
+  })
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'false'
+    && document.querySelector('.foxwarm-composer-pasted-text-chip')?.getAttribute('aria-disabled') === 'true'
+    && !document.querySelector('textarea[aria-label="Full pasted text"]'))
+  assert.deepEqual(await page.$eval('.foxwarm-composer-pasted-text-chip', node => ({ tabIndex: node.tabIndex, disabled: node.getAttribute('aria-disabled') })), { tabIndex: -1, disabled: 'true' })
+  await page.evaluate(() => { window.fixtureStaleSave.click(); window.fixtureStaleRestore.click() })
+  assert.equal(await page.evaluate(() => window.fixtureDraft), expected)
+
+  await page.evaluate(() => {
+    window.fixtureSelectAll()
+    window.fixturePaste('x'.repeat(2000))
+    const data = new DataTransfer()
+    const cut = new Event('cut', { bubbles: true, cancelable: true })
+    Object.defineProperty(cut, 'clipboardData', { value: data })
+    window.fixtureEditor().dispatchEvent(cut)
+    window.fixtureEditor().textContent = 'forced native mutation'
+    window.fixtureEditor().dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'forced native mutation' }))
+  })
+  assert.equal(await page.evaluate(() => window.fixtureDraft), expected)
+  assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 1)
+  await page.click('.foxwarm-composer-pasted-text-chip')
+  assert.equal(await page.$('textarea[aria-label="Full pasted text"]'), null)
+
+  await page.evaluate(() => {
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['audio'], 'busy.wav', { type: 'audio/wav' }))
+    const input = document.querySelector('#audio-upload')
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await page.waitForFunction(previous => window.fixtureDraft === `${previous}\n\ntranscript`, {}, expected)
+  await page.evaluate(() => window.fixtureSetLoading(false))
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true'
+    && document.querySelector('.foxwarm-composer-pasted-text-chip')?.getAttribute('aria-disabled') === 'false')
+  assert.deepEqual(await page.$eval('.foxwarm-composer-pasted-text-chip', node => ({ tabIndex: node.tabIndex, disabled: node.getAttribute('aria-disabled') })), { tabIndex: 0, disabled: 'false' })
+}))
+
 test('Chromium preserves storage, send, copy, selection, composition, slash, and mobile contracts', async () => withBrowser(browsers[0], async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
   await page.type(editor, 'session A')
@@ -195,7 +302,9 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
     input.dispatchEvent(new Event('change', { bubbles: true }))
   })
   await page.evaluate(() => window.fixtureSetSession('fixture/other'))
-  await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'session B')
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/other')
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(await page.$eval(editor, node => node.textContent), 'session B')
   await page.evaluate(() => window.fixtureReleaseTranscription())
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments.some(segment => segment.type === 'text' && segment.text.includes('transcript')))
   assert.equal(await page.$eval(editor, node => node.textContent), 'session B')
@@ -207,8 +316,10 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.evaluate(() => window.fixtureSelectAll())
   await page.keyboard.down('Control'); await page.keyboard.press('c'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), exact)
+  await page.evaluate(() => window.fixtureSelectAll())
   await page.keyboard.down('Control'); await page.keyboard.press('x'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+  await page.focus(editor)
   await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), exact)
 
@@ -256,6 +367,8 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
       return window.fixtureRealSetItem.call(this, key, value)
     }
   })
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/quota')
+  await new Promise(resolve => setTimeout(resolve, 50))
   await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
   await page.type(editor, 'unsaved but visible')
   await page.waitForFunction(() => document.body.textContent.includes('Draft could not be saved in this browser'))

@@ -33,7 +33,9 @@ interface InlineComposerEditorProps {
 
 type HistoryGroup = { kind: string; at: number } | null
 
-type DraftSnapshot = { draft: ComposerDraft; size: number }
+type SelectionOffsets = { anchor: number; focus: number }
+type EditorState = { draft: ComposerDraft; selection: SelectionOffsets | null }
+type DraftSnapshot = EditorState & { size: number }
 
 function getDraftByteSize(draft: ComposerDraft): number {
   return new TextEncoder().encode(serializeComposerDraft(draft)).byteLength
@@ -62,12 +64,15 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   onCommandKeyDown,
 }, forwardedRef) {
   const editorRef = useRef<HTMLDivElement | null>(null)
+  const disabledRef = useRef(disabled)
+  disabledRef.current = disabled
+  const authoritativeDraftRef = useRef(value)
   const blockMapRef = useRef(new Map<string, ComposerPastedTextSegment>())
   const undoRef = useRef<DraftSnapshot[]>([])
   const redoRef = useRef<DraftSnapshot[]>([])
   const historyGroupRef = useRef<HistoryGroup>(null)
-  const beforeInputRef = useRef<ComposerDraft | null>(null)
-  const compositionBaseRef = useRef<ComposerDraft | null>(null)
+  const beforeInputRef = useRef<EditorState | null>(null)
+  const compositionBaseRef = useRef<EditorState | null>(null)
   const composingRef = useRef(false)
   const lastEmittedRef = useRef('')
   const lastDraftIdRef = useRef('')
@@ -106,6 +111,100 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     return editorRef.current ? readDraftFromNode(editorRef.current) : makeComposerDraft([])
   }, [readDraftFromNode])
 
+  const getNodeUnits = useCallback((node: Node): number => {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue?.length || 0
+    if (isChip(node) || (node instanceof HTMLElement && node.tagName === 'BR')) return 1
+    return [...node.childNodes].reduce((sum, child) => sum + getNodeUnits(child), 0)
+  }, [])
+
+  const getPointOffset = useCallback((target: Node | null, targetOffset: number): number | null => {
+    const editor = editorRef.current
+    if (!editor || !target || (target !== editor && !editor.contains(target))) return null
+    let traversed = 0
+    let result: number | null = null
+    const visit = (node: Node) => {
+      if (result !== null) return
+      if (node === target) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          result = traversed + Math.min(targetOffset, node.nodeValue?.length || 0)
+        } else {
+          const children = [...node.childNodes]
+          result = traversed + children.slice(0, Math.min(targetOffset, children.length)).reduce((sum, child) => sum + getNodeUnits(child), 0)
+        }
+        return
+      }
+      if (node.nodeType === Node.TEXT_NODE || isChip(node) || (node instanceof HTMLElement && node.tagName === 'BR')) {
+        traversed += getNodeUnits(node)
+        return
+      }
+      for (const child of node.childNodes) visit(child)
+    }
+    visit(editor)
+    return result
+  }, [getNodeUnits])
+
+  const getSelectionOffsets = useCallback((): SelectionOffsets | null => {
+    const selection = window.getSelection()
+    if (!selection) return null
+    const anchor = getPointOffset(selection.anchorNode, selection.anchorOffset)
+    const focus = getPointOffset(selection.focusNode, selection.focusOffset)
+    return anchor === null || focus === null ? null : { anchor, focus }
+  }, [getPointOffset])
+
+  const getPointAtOffset = useCallback((requestedOffset: number): { node: Node; offset: number } | null => {
+    const editor = editorRef.current
+    if (!editor) return null
+    let remaining = Math.max(0, Math.min(requestedOffset, getNodeUnits(editor)))
+    const locate = (parent: Node): { node: Node; offset: number } => {
+      const children = [...parent.childNodes]
+      for (let index = 0; index < children.length; index += 1) {
+        const child = children[index]
+        if (child.nodeType === Node.TEXT_NODE) {
+          const length = child.nodeValue?.length || 0
+          if (remaining <= length) return { node: child, offset: remaining }
+          remaining -= length
+          continue
+        }
+        if (isChip(child) || (child instanceof HTMLElement && child.tagName === 'BR')) {
+          if (remaining === 0) return { node: parent, offset: index }
+          remaining -= 1
+          if (remaining === 0) return { node: parent, offset: index + 1 }
+          continue
+        }
+        const units = getNodeUnits(child)
+        if (remaining <= units) return locate(child)
+        remaining -= units
+      }
+      return { node: parent, offset: children.length }
+    }
+    return locate(editor)
+  }, [getNodeUnits])
+
+  const restoreSelection = useCallback((offsets: SelectionOffsets | null) => {
+    const editor = editorRef.current
+    if (!editor || !offsets) return false
+    const anchor = getPointAtOffset(offsets.anchor)
+    const focus = getPointAtOffset(offsets.focus)
+    const selection = window.getSelection()
+    if (!anchor || !focus || !selection) return false
+    editor.focus()
+    try {
+      selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset)
+    } catch {
+      const range = document.createRange()
+      range.setStart(anchor.node, anchor.offset)
+      range.setEnd(focus.node, focus.offset)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    return true
+  }, [getPointAtOffset])
+
+  const captureEditorState = useCallback((): EditorState => ({
+    draft: readDraft(),
+    selection: getSelectionOffsets(),
+  }), [getSelectionOffsets, readDraft])
+
   const updateEmptyState = useCallback(() => {
     const editor = editorRef.current
     if (!editor) return
@@ -114,6 +213,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
 
   const emitDraft = useCallback(() => {
     const next = readDraft()
+    authoritativeDraftRef.current = next
     lastEmittedRef.current = serializeComposerDraft(next)
     updateEmptyState()
     onChange(next)
@@ -124,8 +224,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const chip = document.createElement('span')
     chip.className = 'foxwarm-composer-pasted-text-chip foxwarm-pasted-text-block mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-1.5 rounded-md border border-fw-accent-border/60 bg-fw-accent-surface px-2 py-0.5 align-middle text-left text-xs leading-5 text-fw-accent shadow-sm hover:bg-fw-accent-surface-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring dark:bg-fw-accent-surface-strong/25 dark:hover:bg-fw-accent-surface-strong/40'
     chip.contentEditable = 'false'
-    chip.tabIndex = 0
+    chip.tabIndex = disabled ? -1 : 0
     chip.setAttribute('role', 'button')
+    chip.setAttribute('aria-disabled', String(disabled))
     chip.dataset.composerPastedTextId = segment.id
     const icon = document.createElement('span')
     icon.className = 'shrink-0'
@@ -140,7 +241,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     chip.append(icon, preview, count)
     chip.setAttribute('aria-label', `Edit pasted text, ${countPastedTextCharacters(segment.text)} characters`)
     return chip
-  }, [])
+  }, [disabled])
 
   const renderDraft = useCallback((draft: ComposerDraft) => {
     const editor = editorRef.current
@@ -157,13 +258,13 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const placeCaret = useCallback((container: Node, offset: number) => {
     const editor = editorRef.current
     if (!editor) return
+    editor.focus()
     const range = document.createRange()
     range.setStart(container, offset)
     range.collapse(true)
     const selection = window.getSelection()
     selection?.removeAllRanges()
     selection?.addRange(range)
-    editor.focus()
   }, [])
 
   const focusEnd = useCallback(() => {
@@ -180,48 +281,50 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     }
   }, [])
 
-  const recordHistory = useCallback((base: ComposerDraft, kind: string, coalesce = false) => {
+  const recordHistory = useCallback((base: EditorState, kind: string, coalesce = false) => {
     const current = readDraft()
-    if (sameDraft(base, current)) return
+    if (sameDraft(base.draft, current)) return
     const now = Date.now()
     const previousGroup = historyGroupRef.current
     if (!(coalesce && previousGroup?.kind === kind && now - previousGroup.at <= TYPING_COALESCE_MS)) {
-      undoRef.current.push({ draft: cloneDraft(base), size: getDraftByteSize(base) })
+      undoRef.current.push({ draft: cloneDraft(base.draft), selection: base.selection, size: getDraftByteSize(base.draft) })
       trimHistory()
     }
     historyGroupRef.current = { kind, at: now }
     redoRef.current = []
   }, [readDraft, trimHistory])
 
-  const applyHistoryDraft = useCallback((draft: ComposerDraft) => {
-    renderDraft(draft)
-    lastEmittedRef.current = serializeComposerDraft(draft)
-    onChange(cloneDraft(draft))
-    focusEnd()
-  }, [focusEnd, onChange, renderDraft])
+  const applyHistoryDraft = useCallback((snapshot: DraftSnapshot) => {
+    renderDraft(snapshot.draft)
+    authoritativeDraftRef.current = snapshot.draft
+    lastEmittedRef.current = serializeComposerDraft(snapshot.draft)
+    onChange(cloneDraft(snapshot.draft))
+    if (!restoreSelection(snapshot.selection)) focusEnd()
+  }, [focusEnd, onChange, renderDraft, restoreSelection])
 
   const undo = useCallback(() => {
     const previous = undoRef.current.pop()
     if (!previous) return
-    const current = readDraft()
-    redoRef.current.push({ draft: cloneDraft(current), size: getDraftByteSize(current) })
+    const current = captureEditorState()
+    redoRef.current.push({ draft: cloneDraft(current.draft), selection: current.selection, size: getDraftByteSize(current.draft) })
     trimHistory()
     historyGroupRef.current = null
-    applyHistoryDraft(previous.draft)
-  }, [applyHistoryDraft, readDraft, trimHistory])
+    applyHistoryDraft(previous)
+  }, [applyHistoryDraft, captureEditorState, trimHistory])
 
   const redo = useCallback(() => {
     const next = redoRef.current.pop()
     if (!next) return
-    const current = readDraft()
-    undoRef.current.push({ draft: cloneDraft(current), size: getDraftByteSize(current) })
+    const current = captureEditorState()
+    undoRef.current.push({ draft: cloneDraft(current.draft), selection: current.selection, size: getDraftByteSize(current.draft) })
     trimHistory()
     historyGroupRef.current = null
-    applyHistoryDraft(next.draft)
-  }, [applyHistoryDraft, readDraft, trimHistory])
+    applyHistoryDraft(next)
+  }, [applyHistoryDraft, captureEditorState, trimHistory])
 
   const replaceDraft = useCallback((nextDraft: ComposerDraft, shouldFocusEnd = false) => {
     renderDraft(nextDraft)
+    authoritativeDraftRef.current = nextDraft
     undoRef.current = []
     redoRef.current = []
     historyGroupRef.current = null
@@ -249,11 +352,13 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [placeCaret])
 
   const mutate = useCallback((kind: string, action: () => void) => {
-    const base = readDraft()
+    if (disabledRef.current) return false
+    const base = captureEditorState()
     action()
     recordHistory(base, kind)
     emitDraft()
-  }, [emitDraft, readDraft, recordHistory])
+    return true
+  }, [captureEditorState, emitDraft, recordHistory])
 
   const insertPastedText = useCallback((text: string) => {
     const editor = editorRef.current
@@ -308,6 +413,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const draftChanged = lastDraftIdRef.current !== draftId
     if (draftChanged || serialized !== lastEmittedRef.current) {
       renderDraft(value)
+      authoritativeDraftRef.current = value
       undoRef.current = []
       redoRef.current = []
       historyGroupRef.current = null
@@ -316,6 +422,24 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       setActiveBlockId(null)
     }
   }, [draftId, renderDraft, value])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.contentEditable = String(!disabled)
+    editor.setAttribute('aria-disabled', String(disabled))
+    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id]')) {
+      chip.tabIndex = disabled ? -1 : 0
+      chip.setAttribute('aria-disabled', String(disabled))
+    }
+    if (disabled) {
+      setActiveBlockId(null)
+      activeChipRef.current = null
+      beforeInputRef.current = null
+      compositionBaseRef.current = null
+      composingRef.current = false
+    }
+  }, [disabled])
 
   const activeBlock = activeBlockId ? blockMapRef.current.get(activeBlockId) || null : null
   const closeModal = useCallback(() => {
@@ -337,6 +461,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         data-placeholder={placeholder}
         className="foxwarm-chat-composer-textarea foxwarm-inline-composer-editor min-h-[60px] max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-fw-text-strong outline-none focus:ring-0 dark:text-fw-text-strong"
         onBeforeInput={(event) => {
+          if (disabled) { event.preventDefault(); return }
           const nativeEvent = event.nativeEvent as InputEvent
           if (nativeEvent.inputType === 'historyUndo') { event.preventDefault(); undo(); return }
           if (nativeEvent.inputType === 'historyRedo') { event.preventDefault(); redo(); return }
@@ -345,9 +470,15 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
             mutate('line-break', () => insertTextAtSelection('\n'))
             return
           }
-          beforeInputRef.current = readDraft()
+          beforeInputRef.current = captureEditorState()
         }}
         onInput={(event) => {
+          if (disabled) {
+            event.preventDefault()
+            renderDraft(authoritativeDraftRef.current)
+            beforeInputRef.current = null
+            return
+          }
           const nativeEvent = event.nativeEvent as InputEvent
           if (!composingRef.current && beforeInputRef.current) {
             const coalesce = nativeEvent.inputType === 'insertText' || nativeEvent.inputType.startsWith('deleteContent')
@@ -357,10 +488,12 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           emitDraft()
         }}
         onCompositionStart={() => {
+          if (disabled) return
           composingRef.current = true
-          compositionBaseRef.current = readDraft()
+          compositionBaseRef.current = captureEditorState()
         }}
         onCompositionEnd={() => {
+          if (disabled) return
           composingRef.current = false
           if (compositionBaseRef.current) recordHistory(compositionBaseRef.current, 'composition')
           compositionBaseRef.current = null
@@ -368,6 +501,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           emitDraft()
         }}
         onPaste={(event) => {
+          if (disabled) { event.preventDefault(); return }
           const fileItems = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file')
           const imageFiles = fileItems.map(item => item.getAsFile()).filter((file): file is File => !!file && file.type.startsWith('image/'))
           if (imageFiles.length > 0) {
@@ -391,6 +525,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           event.clipboardData.setData('text/plain', serializeSelection(selection.getRangeAt(0)))
         }}
         onCut={(event) => {
+          if (disabled) { event.preventDefault(); return }
           const selection = window.getSelection()
           if (!selection?.rangeCount || selection.isCollapsed) return
           event.preventDefault()
@@ -399,6 +534,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         }}
         onKeyDown={(event) => {
           const nativeEvent = event.nativeEvent
+          if (disabled) {
+            if ((event.ctrlKey || event.metaKey) && ['x', 'v', 'z', 'y'].includes(event.key.toLowerCase())) event.preventDefault()
+            if (['Enter', 'Backspace', 'Delete'].includes(event.key)) event.preventDefault()
+            return
+          }
           if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
             historyGroupRef.current = null
           }
@@ -424,40 +564,44 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         }}
         onClick={(event) => {
           historyGroupRef.current = null
+          if (disabled) return
           const chip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id]') : null
           if (!chip) return
           activeChipRef.current = chip
           setActiveBlockId(chip.dataset.composerPastedTextId || null)
         }}
+        onPointerDown={() => {
+          historyGroupRef.current = null
+        }}
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
         }}
       />
-      {activeBlock && (
+      {!disabled && activeBlock && (
         <PastedTextModal
           text={activeBlock.text}
           onClose={closeModal}
           onSave={(text) => {
             const chip = activeChipRef.current
             if (!chip) return
-            mutate('edit-block', () => {
+            if (!mutate('edit-block', () => {
               const updated = { ...activeBlock, text }
               blockMapRef.current.set(updated.id, updated)
               chip.querySelector<HTMLElement>('.foxwarm-composer-pasted-text-preview')!.textContent = getPastedTextPreview(text)
               chip.querySelector<HTMLElement>('.foxwarm-composer-pasted-text-count')!.textContent = countPastedTextCharacters(text).toLocaleString()
               chip.setAttribute('aria-label', `Edit pasted text, ${countPastedTextCharacters(text)} characters`)
-            })
+            })) return
             closeModal()
           }}
           onRestoreToText={(text) => {
             const chip = activeChipRef.current
             if (!chip) return
-            mutate('restore-block', () => {
+            if (!mutate('restore-block', () => {
               const textNode = document.createTextNode(text)
               chip.replaceWith(textNode)
               blockMapRef.current.delete(activeBlock.id)
               placeCaret(textNode, textNode.data.length)
-            })
+            })) return
             closeModal()
           }}
         />
