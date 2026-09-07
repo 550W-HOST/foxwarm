@@ -44,6 +44,7 @@ import {
   clearActiveSessionRuntimeState,
   formatSessionRuntimeStateSummary,
   getEffectiveSessionQueueLength,
+  isSessionCatalogStub,
   markSessionCatalogStub,
   setActiveSessionRuntimeState,
   setSessionRuntimeStateUpdateCallback,
@@ -931,6 +932,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   
   let session = sessions.get(realId);
   let isNew = false;
+  let mustHydratePersistedLifetime = false;
   let needsAuthoritativeStateUpgrade = pendingAuthoritativeStateUpgrades.has(realId);
   if (!session) {
     const reservation = await getSessionIdReservation(realId);
@@ -941,6 +943,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     // A persisted live record may be hydrated here even though it already has
     // archive rows. Only the absence of live persistence starts a new lifetime.
     isNew = reservation === null;
+    mustHydratePersistedLifetime = reservation === 'live';
     session = {
       id: realId,
       history: [],
@@ -954,8 +957,10 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     sessions.set(realId, session);
   }
 
-  // Session exists in memory, check if history needs to be loaded
-  if (!isNew && (session.history.length === 0 || needsAuthoritativeStateUpgrade)) {
+  // Only catalog placeholders, newly reconstructed persisted lifetimes, and
+  // interrupted legacy upgrades require authority hydration. Empty history is
+  // valid hydrated state and must not turn ordinary reads into semantic reloads.
+  if (!isNew && (isSessionCatalogStub(session) || mustHydratePersistedLifetime || needsAuthoritativeStateUpgrade)) {
     // Try to load history and persistentMemorySnapshot from file
     const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
     if (await fs.pathExists(historyFile)) {

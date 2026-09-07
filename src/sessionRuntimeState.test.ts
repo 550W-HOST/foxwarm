@@ -7,6 +7,7 @@ import {
   clearActiveSessionRuntimeState,
   formatSessionRuntimeStateSummary,
   getEffectiveSessionQueueLength,
+  isSessionCatalogStub,
   markSessionCatalogStub,
   setActiveSessionRuntimeState,
 } from './sessionRuntimeState';
@@ -35,13 +36,16 @@ test('buildSessionRuntimeState derives idle by default', () => {
 
 test('catalog stub queue count is effective until exact authority hydration wins', () => {
   const session = makeSession({ queue: [{ type: 'background', parts: [{ text: 'actual' }] }] } as Partial<Session>);
+  assert.equal(isSessionCatalogStub(session), false);
   markSessionCatalogStub(session, 3);
+  assert.equal(isSessionCatalogStub(session), true);
   assert.equal(getEffectiveSessionQueueLength(session), 3);
   const stubState = buildSessionRuntimeState(session);
   assert.equal(stubState.queueLength, 3);
   assert.equal(stubState.state, 'idle');
   assert.equal(stubState.busy, false);
   clearSessionCatalogStub(session);
+  assert.equal(isSessionCatalogStub(session), false);
   assert.equal(getEffectiveSessionQueueLength(session), 1);
   const hydratedState = buildSessionRuntimeState(session);
   assert.equal(hydratedState.queueLength, 1);
