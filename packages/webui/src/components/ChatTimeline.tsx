@@ -415,7 +415,7 @@ const renderUserPreLines = (text: string, showUserMessageMetadata: boolean, meta
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUserMessageMetadata = true }: { systemText: string; isUser: boolean; showUserMessageMetadata?: boolean }) {
   return (
     <pre
-      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-user-text' : 'text-fw-text-muted'}`}
+      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'foxwarm-user-line-layout text-fw-user-text' : 'text-fw-text-muted'}`}
       style={{ lineHeight: isUser ? 0 : '1.3em' }}
     >
       {isUser
@@ -460,7 +460,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMe
   return (
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: 0 }}>
+        <pre className="foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: 0 }}>
           {renderUserPreLines(text, showUserMessageMetadata, '1em', (line) => {
             const isPrefix = isSystemLikeText(line)
             return (

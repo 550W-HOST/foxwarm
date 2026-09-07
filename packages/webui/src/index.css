@@ -1398,6 +1398,10 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble .f
   line-height: var(--foxwarm-console-line-message) !important;
 }
 
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble .foxwarm-user-line-layout {
+  line-height: 0 !important;
+}
+
 html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble button {
   color: var(--foxwarm-console-accent) !important;
 }

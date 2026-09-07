@@ -22,9 +22,14 @@ async function buildFixtureBundle() {
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
     import { useChatPreferences } from ${JSON.stringify(new URL('../src/chatPreferences.ts', import.meta.url).pathname)}
 
-    const directText = '<foxwarm-message type="channel">\\nuser first\\n\\nuser second\\n</foxwarm-message>\\n<foxwarm-metadata kind="group-message" mentioned="true" />\\n<foxwarm-file name="notes.txt" mime="text/plain" />\\n<foxwarm-image name="photo.png" />'
     const messages = [
-      { role: 'user', parts: [{ text: directText }], __meta: { seq: 1 } },
+      { role: 'user', parts: [
+        { system: '<foxwarm-message type="channel" channelType="fixture">' },
+        { text: 'user first\\n\\nuser second' },
+        { system: '<foxwarm-image name="photo.png" node="master" />' },
+        { system: '</foxwarm-message>' },
+        { inlineDataUnavailable: { mimeType: 'image/png' } },
+      ], __meta: { seq: 1 } },
       { role: 'user', parts: [{ system: '<foxwarm-message type="channel">\\n<foxwarm-metadata kind="wrapped" />\\nwrapped first\\n\\nwrapped second\\n</foxwarm-message>' }], __meta: { seq: 2 } },
       { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-09-06 08:00:00 +0000" />' }, { text: '\\noptimistic first\\n\\n\\noptimistic second\\n' }], __meta: { clientMessageId: 'optimistic-1' } },
       { role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nold system body\\n</foxwarm-system>' }], __meta: { seq: 3 } },
@@ -118,8 +123,8 @@ test('user metadata defaults hidden while bodies, attachment tags, and old syste
   assert.equal(text.includes('<foxwarm-metadata'), false)
   assert.equal(text.includes('user first'), true)
   assert.equal(text.includes('optimistic first'), true)
-  assert.equal(text.includes('<foxwarm-file name="notes.txt"'), true)
   assert.equal(text.includes('<foxwarm-image name="photo.png"'), true)
+  assert.equal(text.includes('Image unavailable'), true)
   assert.equal(await page.$$eval('[data-system-message-card]', cards => cards.length), 1)
   assert.equal((await page.$eval('[data-system-message-card]', card => card.textContent || '')).includes('wait-timeout'), true)
 })
@@ -141,7 +146,7 @@ test('direct, wrapped, and optimistic user text preserves authored blank lines w
     selection.addRange(range)
     return { direct: snapshot(direct), wrapped: snapshot(wrapped), optimistic: snapshot(optimistic), selected: selection.toString() }
   })
-  assert.equal(evidence.direct.text, 'user first\n\nuser second\n<foxwarm-file name="notes.txt" mime="text/plain" />\n<foxwarm-image name="photo.png" />')
+  assert.equal(evidence.direct.text, 'user first\n\nuser second')
   assert.equal(evidence.wrapped.text, 'wrapped first\n\nwrapped second')
   assert.equal(evidence.optimistic.text, '\noptimistic first\n\n\noptimistic second\n')
   assert.equal(evidence.selected, evidence.optimistic.text.slice(0, -1))
@@ -155,30 +160,43 @@ test('visible XML metadata keeps compact line spacing while authored blank lines
   await page.evaluate(() => localStorage.setItem('foxwarm_show_user_message_metadata_v1', 'true'))
   await page.reload({ waitUntil: 'load' })
   await page.waitForFunction(() => !!window.chatSettingsFixture?.showUserMessageMetadata)
-  const geometry = await page.evaluate(() => {
-    const pre = [...document.querySelectorAll('pre')].find(candidate => candidate.textContent?.includes('user first'))
-    if (!(pre instanceof HTMLElement)) throw new Error('Direct user pre not found')
-    const textSpans = [...pre.querySelectorAll('span')]
-    const findTextSpan = text => textSpans.find(span => span.childNodes.length === 1 && span.textContent === text)
-    const first = findTextSpan('user first')?.getBoundingClientRect()
-    const second = findTextSpan('user second')?.getBoundingClientRect()
-    const metadata = [...pre.querySelectorAll('.foxwarm-lightweight-metadata-line')]
-      .map(span => ({ text: span.textContent || '', top: span.getBoundingClientRect().top, height: span.getBoundingClientRect().height }))
-      .filter(item => item.text.includes('</foxwarm-message>') || item.text.includes('<foxwarm-metadata') || item.text.includes('<foxwarm-file') || item.text.includes('<foxwarm-image'))
-    const wrappedPre = [...document.querySelectorAll('pre')].find(candidate => candidate.textContent?.includes('wrapped first'))
-    const wrappedMetadata = [...(wrappedPre?.querySelectorAll('.foxwarm-lightweight-metadata-line') || [])]
-      .slice(0, 2)
-      .map(span => ({ top: span.getBoundingClientRect().top, height: span.getBoundingClientRect().height }))
-    const firstSpan = findTextSpan('user first')
-    return { firstTop: first?.top, secondTop: second?.top, bodyLineHeight: Number.parseFloat(getComputedStyle(firstSpan).lineHeight), metadata, wrappedMetadata }
+  const geometries = await page.evaluate(() => {
+    document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+    const measure = () => {
+      const pre = [...document.querySelectorAll('pre')].find(candidate => candidate.textContent?.includes('user first'))
+      if (!(pre instanceof HTMLElement)) throw new Error('Direct user pre not found')
+      const bubble = pre.closest('.foxwarm-user-message-bubble')
+      if (!(bubble instanceof HTMLElement)) throw new Error('Direct user bubble not found')
+      const textSpans = [...pre.querySelectorAll('span')]
+      const findTextSpan = text => textSpans.find(span => span.childNodes.length === 1 && span.textContent === text)
+      const firstSpan = findTextSpan('user first')
+      const first = firstSpan?.getBoundingClientRect()
+      const second = findTextSpan('user second')?.getBoundingClientRect()
+      const metadata = [...bubble.querySelectorAll('.foxwarm-lightweight-metadata-line')]
+        .map(span => ({ text: span.textContent || '', top: span.getBoundingClientRect().top, height: span.getBoundingClientRect().height }))
+        .filter(item => item.text.includes('<foxwarm-message') || item.text.includes('<foxwarm-image') || item.text.includes('</foxwarm-message>'))
+      const wrappedPre = [...document.querySelectorAll('pre')].find(candidate => candidate.textContent?.includes('wrapped first'))
+      const wrappedMetadata = [...(wrappedPre?.querySelectorAll('.foxwarm-lightweight-metadata-line') || [])]
+        .slice(0, 2)
+        .map(span => ({ top: span.getBoundingClientRect().top, height: span.getBoundingClientRect().height }))
+      return { firstTop: first?.top, secondTop: second?.top, bodyLineHeight: Number.parseFloat(getComputedStyle(firstSpan).lineHeight), metadata, wrappedMetadata }
+    }
+    document.documentElement.classList.remove('dark')
+    const light = measure()
+    document.documentElement.classList.add('dark')
+    const dark = measure()
+    return { light, dark }
   })
-  assert.equal(geometry.metadata.length, 4)
-  const metadataDeltas = geometry.metadata.slice(1).map((item, index) => item.top - geometry.metadata[index].top)
-  assert.ok(metadataDeltas.every(delta => delta > 0 && delta < geometry.bodyLineHeight * 0.8), JSON.stringify({ metadataDeltas, geometry }))
-  assert.ok(geometry.secondTop - geometry.firstTop >= geometry.bodyLineHeight * 1.8, JSON.stringify(geometry))
-  assert.ok(geometry.metadata.every(item => item.height < geometry.bodyLineHeight * 0.8), JSON.stringify(geometry))
-  assert.equal(geometry.wrappedMetadata.length, 2)
-  assert.ok(geometry.wrappedMetadata[1].top - geometry.wrappedMetadata[0].top < geometry.bodyLineHeight * 0.8, JSON.stringify(geometry))
+  for (const geometry of [geometries.light, geometries.dark]) {
+    assert.equal(geometry.metadata.length, 3)
+    assert.ok(geometry.firstTop - geometry.metadata[0].top > 0 && geometry.firstTop - geometry.metadata[0].top < geometry.bodyLineHeight * 0.8, JSON.stringify(geometry))
+    assert.ok(geometry.metadata[2].top - geometry.metadata[1].top > 0 && geometry.metadata[2].top - geometry.metadata[1].top < geometry.bodyLineHeight * 0.8, JSON.stringify(geometry))
+    assert.ok(geometry.metadata[1].top - geometry.secondTop > 0 && geometry.metadata[1].top - geometry.secondTop < geometry.bodyLineHeight * 1.1, JSON.stringify(geometry))
+    assert.ok(geometry.secondTop - geometry.firstTop >= geometry.bodyLineHeight * 1.8, JSON.stringify(geometry))
+    assert.ok(geometry.metadata.every(item => item.height < geometry.bodyLineHeight * 0.8), JSON.stringify(geometry))
+    assert.equal(geometry.wrappedMetadata.length, 2)
+    assert.ok(geometry.wrappedMetadata[1].top - geometry.wrappedMetadata[0].top < geometry.bodyLineHeight * 0.8, JSON.stringify(geometry))
+  }
 })
 
 test('session menu owns Input and Chat settings and persists the metadata toggle', async () => {
