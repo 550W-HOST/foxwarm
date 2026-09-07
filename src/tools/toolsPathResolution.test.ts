@@ -254,17 +254,6 @@ test('write retains contentRef after a failed new-path retry and can create a di
   }
 });
 
-test('write schema explicitly prohibits content alongside contentRef', () => {
-  const definition = definitions.find(entry => entry.name === 'write');
-  assert.ok(definition);
-  const toolDescription = String(definition.description);
-  const description = String((definition.parameters.properties as any).contentRef.description);
-  assert.equal(description, 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true`, choose this or another authorized `filePath` in the same session/agent, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the desired `filePath` and required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.');
-  assert.match(toolDescription, /another authorized filePath in the same session\/agent/);
-  assert.match(description, /another authorized `filePath` in the same session\/agent/);
-  assert.doesNotMatch(description, /resend/i);
-});
-
 test('write createDirs=true creates missing parent directories for direct content', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-createdirs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);

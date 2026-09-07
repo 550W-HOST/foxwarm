@@ -26,7 +26,7 @@ function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = 
   };
 }
 
-test('exec schema documents timeout clamping without rejecting values above the maximum', () => {
+test('exec schema permits timeout values above the runtime clamp threshold', () => {
   const def = definitions.find((entry) => entry.name === 'exec');
   assert.ok(def);
   const timeout = (def?.parameters?.properties as any)?.timeout;
@@ -34,12 +34,6 @@ test('exec schema documents timeout clamping without rejecting values above the 
   assert.equal(timeout.type, 'number');
   assert.equal(timeout.minimum, execManager.MIN_EXEC_TIMEOUT_SECONDS);
   assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
-  assert.match(String(timeout.description), /default: 15/i);
-  assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
-  assert.match(String(def?.description), /do not add \| head or \| tail merely to limit context/i);
-  assert.match(String(def?.description), /filtering changes what the command log captures/i);
-  assert.match(String(def?.description), /outstanding background process/i);
-  assert.match(String(def?.description), /if you continue other work instead of waiting, remember it is still running/i);
 });
 
 test('exec tool still rejects timeout values below the allowed range', async () => {

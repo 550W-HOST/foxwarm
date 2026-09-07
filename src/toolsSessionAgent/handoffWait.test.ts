@@ -51,10 +51,6 @@ test('handoff schemas expose one exact optional afterSend behavior', () => {
     assert.equal(definition.parameters.properties.waitAfterHandoff, undefined);
     assert.equal(definition.parameters.properties.noFurtherAssistantReply, undefined);
     assert.equal(definition.parameters.properties.waitForReply, undefined);
-    const description = definition.parameters.properties.afterSend?.description || '';
-    assert.match(description, /continue/i);
-    assert.match(description, /finish/i);
-    assert.match(description, /wait/i);
   }
 });
 

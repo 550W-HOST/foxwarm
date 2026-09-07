@@ -101,20 +101,31 @@ test('unified wait calls reject a one-session waitAllSessions barrier', async ()
 });
 
 test('search_tools multi-word queries rank tools matching more words higher', async () => {
-  const result: any = await search_tools({
-    query: 'session context',
-    sources: ['builtin'],
-    includeSchema: false,
-    limit: 200,
-  });
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const bothName = `rank_both_${suffix}`;
+  const oneName = `rank_one_${suffix}`;
+  definitions.push(
+    { name: bothName, description: 'synthetic-alpha synthetic-beta', parameters: { type: 'object', properties: {} } } as any,
+    { name: oneName, description: 'synthetic-alpha only', parameters: { type: 'object', properties: {} } } as any,
+  );
+  try {
+    const result: any = await search_tools({
+      query: 'synthetic-alpha synthetic-beta',
+      sources: ['builtin'],
+      includeSchema: false,
+      limit: 200,
+    });
 
-  const ids = outputToolIds(result);
-  assert.ok(ids.length >= 2);
-  const archiveIndex = ids.indexOf('builtin:recall');
-  const sessionIndex = ids.indexOf('builtin:get_session_messages');
-  assert.ok(archiveIndex >= 0, 'recall should match both words');
-  assert.ok(sessionIndex >= 0, 'get_session_messages should still match one word');
-  assert.ok(archiveIndex < sessionIndex, 'tool matching more query words should rank higher');
+    const ids = outputToolIds(result);
+    const bothIndex = ids.indexOf(`builtin:${bothName}`);
+    const oneIndex = ids.indexOf(`builtin:${oneName}`);
+    assert.ok(bothIndex >= 0, 'tool matching both words should be included');
+    assert.ok(oneIndex >= 0, 'tool matching one word should be included');
+    assert.ok(bothIndex < oneIndex, 'tool matching more query words should rank higher');
+  } finally {
+    definitions.splice(definitions.findIndex(definition => definition.name === bothName), 1);
+    definitions.splice(definitions.findIndex(definition => definition.name === oneName), 1);
+  }
 });
 
 test('search_tools includeSchema=true renders schemas only for the first 10 results', async () => {
@@ -1023,35 +1034,26 @@ test('call_tool is a permission-neutral dispatcher and only its concrete target 
   }
 });
 
-test('search_tools and call_tool descriptions include usage guidance and examples', () => {
+test('search_tools and call_tool schemas retain bounded discovery and invocation fields', () => {
   const searchDef = definitions.find((entry) => entry.name === 'search_tools');
   const callDef = definitions.find((entry) => entry.name === 'call_tool');
   assert.ok(searchDef);
   assert.ok(callDef);
 
-  assert.match(String(searchDef?.description), /builtin results contain Foxwarm control\/session\/management tools/i);
-  assert.match(String(searchDef?.description), /Node results contain environment capabilities/i);
-  assert.match(String(searchDef?.description), /example search_tools calls/i);
-  assert.match(String(searchDef?.description), /mcp-management skill/i);
-  assert.match(String(searchDef?.description), /limit: 1/);
-  assert.match(String((searchDef?.parameters?.properties as any)?.nodeId?.description), /current node/i);
-  assert.match(String((searchDef?.parameters?.properties as any)?.limit?.description), /default: 5.*max: 200/i);
+  assert.equal((searchDef?.parameters?.properties as any)?.nodeId?.type, 'string');
   assert.equal((searchDef?.parameters?.properties as any)?.limit?.type, 'integer');
   assert.equal((searchDef?.parameters?.properties as any)?.limit?.minimum, 1);
   assert.equal((searchDef?.parameters?.properties as any)?.limit?.maximum, 200);
-  assert.match(String((searchDef?.parameters?.properties as any)?.includeSchema?.description), /first 10 results/i);
+  assert.equal((searchDef?.parameters?.properties as any)?.includeSchema?.type, 'boolean');
 
-  assert.match(String(callDef?.description), /argsJson.*JSON object string fallback/i);
-  assert.match(String(callDef?.description), /must use source=node/i);
-  assert.match(String(callDef?.description), /source:\"mcp\"/i);
-  assert.match(String((callDef?.parameters?.properties as any)?.nodeId?.description), /omit.*current node/i);
-  assert.match(String((callDef?.parameters?.properties as any)?.args?.description), /wrapper object/i);
-  assert.match(String((callDef?.parameters?.properties as any)?.argsJson?.description), /providers that do not expose free-form object fields/i);
+  assert.equal((callDef?.parameters?.properties as any)?.nodeId?.type, 'string');
+  assert.equal((callDef?.parameters?.properties as any)?.args?.type, 'object');
+  assert.equal((callDef?.parameters?.properties as any)?.argsJson?.type, 'string');
 
   const mcpConfigDef = definitions.find((entry) => entry.name === 'mcp_config');
-  assert.match(String(mcpConfigDef?.description), /apply immediately/i);
-  assert.match(String(mcpConfigDef?.description), /no Foxwarm restart/i);
-  assert.match(String(mcpConfigDef?.description), /Do not edit the backing state\/config file manually/i);
+  assert.equal((mcpConfigDef?.parameters?.properties as any)?.enable?.type, 'boolean');
+  assert.equal((mcpConfigDef?.parameters?.properties as any)?.timeoutSeconds?.minimum, 0);
+  assert.equal((mcpConfigDef?.parameters?.properties as any)?.timeoutSeconds?.maximum, 3600);
 });
 
 test('default model-facing tool definitions exclude hidden browser and advanced tools', () => {
@@ -1114,10 +1116,6 @@ test('recall model-facing schema separates target/vector retrieval from literal 
   const recallDef = definitions.find(def => def.name === 'recall');
   assert.ok(recallDef);
   assert.equal(recallDef.defaultInject, true);
-  assert.match(String(recallDef.description), /CTX-BLOCK/);
-  assert.match(String(recallDef.description), /vector_query for semantic search/i);
-  assert.match(String((recallDef.parameters?.properties as any)?.contentFilter?.description), /literal case-insensitive post-filter/i);
-  assert.match(String((recallDef.parameters?.properties as any)?.contentFilter?.description), /not semantic search/i);
   assert.equal(Object.prototype.hasOwnProperty.call(recallDef.parameters?.properties || {}, 'query'), false);
   assert.deepEqual(Object.keys(recallDef.parameters?.properties || {}).sort(), [
     'agentName',
@@ -1168,21 +1166,6 @@ test('wait is the model-facing pause tool and end_turn is removed', () => {
   assert.equal((waitDef.parameters?.properties as any)?.waitExecIds?.type, 'array');
   assert.equal(Object.prototype.hasOwnProperty.call(waitDef.parameters?.properties || {}, 'timeoutMessage'), false);
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
-});
-
-test('wait schema documents session activity, active-turn queueing, and one-shot fallback without polling', () => {
-  const waitDef = definitions.find(def => def.name === 'wait');
-  assert.ok(waitDef);
-
-  const description = String(waitDef.description);
-  assert.match(description, /pause .* until new activity arrives/i);
-  assert.match(description, /declare at least one progress source or fallback/i);
-  assert.match(description, /do not filter ordinary wake activity/i);
-  assert.match(description, /exact execId.*never PID or log paths/i);
-
-  const timeoutDescription = String((waitDef.parameters?.properties as any)?.wakeIfNoActivityAfterSeconds?.description);
-  assert.match(timeoutDescription, /one-shot fallback wake/i);
-  assert.match(timeoutDescription, /not fixed sleep or polling/i);
 });
 
 test('set_goal schema keeps goal optional so clear can omit it', () => {

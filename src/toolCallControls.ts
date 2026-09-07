@@ -24,14 +24,16 @@ export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled
   if (enabled) {
     properties.confirmation = {
       type: 'string',
-      description: `Required final argument property. Review the handoff honestly. If you discover a problem that means it should not proceed, do not append the final approval sentence merely to pass validation; cancel the call with __cancelTool: true instead.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
+      description: `Put confirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the middle placeholder with your own review. If the handoff should not proceed, cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
     };
     required.push('confirmation');
   }
   return {
     ...definition,
     description: enabled
-      ? `${definition.description} Every call${definition.name === 'create_child_session' ? ', including creation without an initial message,' : ''} requires the structured inter-agent handoff confirmation.`
+      ? `${definition.description}${definition.name === 'create_child_session'
+        ? ' A confirmation review is required, even when creating a child without an initial message.'
+        : ' A confirmation review is required.'}`
       : definition.description,
     parameters: {
       ...parameters,
@@ -52,11 +54,11 @@ export function addToolCancellationSchema(definition: ToolDefinition): ToolDefin
         ...(parameters.properties || {}),
         [CANCEL_TOOL_ARGUMENT]: {
           ...CANCEL_PROPERTY_SCHEMA,
-          description: 'Cancel this call before execution; only true is accepted.',
+          description: 'Set true to cancel this tool call before it runs.',
         },
         [CANCEL_ALL_TOOLS_ARGUMENT]: {
           ...CANCEL_PROPERTY_SCHEMA,
-          description: 'Cancel all tool calls in this model response before execution; only true is accepted.',
+          description: 'Set true to cancel every tool call in this model response before any of them runs.',
         },
       },
     },

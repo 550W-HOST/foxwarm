@@ -151,14 +151,14 @@ export class CompactPlanValidationError extends Error {
 const COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA = {
   type: 'object',
   properties: {
-    level: { type: 'integer', minimum: 1, description: 'Created block level. Use 1 for message sources, or one level above block sources.' },
-    sourceKind: { type: 'string', enum: ['message', 'block'], description: 'Whether the source range contains raw messages or existing summary blocks.' },
-    sourceStart: { type: 'integer', minimum: 1, description: 'First source message seq or block id shown in the compact prompt.' },
-    sourceEnd: { type: 'integer', minimum: 1, description: 'Last source message seq or block id shown in the compact prompt, following history order.' },
-    summary: { type: 'string', description: 'Non-empty continuation-oriented summary of only this source range.' },
+    level: { type: 'integer', minimum: 1, description: "Level of the new block: 1 for raw messages, or one above the source blocks." },
+    sourceKind: { type: 'string', enum: ['message', 'block'], description: "Whether this range contains raw messages or existing blocks." },
+    sourceStart: { type: 'integer', minimum: 1, description: "First message sequence number or block ID in the candidate range." },
+    sourceEnd: { type: 'integer', minimum: 1, description: "Last message sequence number or block ID in the range, following its displayed history order." },
+    summary: { type: 'string', description: "Summary of this range, retaining what is needed to continue the work." },
     memoryFacts: {
       type: 'array',
-      description: 'Optional durable facts tied only to this source range. Malformed facts are skipped best-effort.',
+      description: "Durable facts supported by this range. Invalid fact entries are skipped.",
       items: {
         type: 'object',
         properties: {
@@ -179,26 +179,26 @@ const COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA = {
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
   defaultInject: true, // Keep compact/normal tool schemas stable for prompt-cache/KV-cache hits.
-  description: 'Submit layered-context block creation/removal plan for older context items. Create continuous same-level summary blocks, optionally preserve a few covered raw messages verbatim, or remove previously preserved raw messages from working history. Unmentioned older items stay verbatim.',
+  description: "Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. Use only the candidate ranges supplied in the compaction prompt. Items not covered by the plan remain unchanged.",
   parameters: {
     type: 'object',
     properties: {
       replaceAsBlocks: {
-        description: 'Summary blocks that replace continuous candidate ranges. Prefer the direct array; a JSON-encoded array string is also accepted. Use [] or "[]" when only removePreservedMessages performs work.',
+        description: "Blocks to create from continuous candidate ranges. Supply an array, or a JSON string encoding the same array. Use an empty array when only removing previously preserved messages.",
         oneOf: [
           { type: 'array', items: COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA },
-          { type: 'string', description: 'Fallback JSON string encoding an array whose items follow the same replacement-block schema.' },
+          { type: 'string', description: "JSON string encoding the same array of replacement blocks." },
         ],
       },
       preserveMessages: {
         type: 'array',
         items: { type: 'number' },
-        description: 'Optional small list of raw message seq numbers to keep verbatim even though they are covered by a created message-source summary block. Preserved messages are extracted after the covering block in working history.',
+        description: "Message sequence numbers to keep verbatim within ranges being summarized. These messages remain after their summary block in active context.",
       },
       removePreservedMessages: {
         type: 'array',
         items: { type: 'number' },
-        description: 'Optional list of previously preserved raw message seq numbers to remove from active history. This never deletes archive records or summary blocks, and can only target messages listed as preserved in the compact prompt.',
+        description: "Previously preserved message sequence numbers to remove from active context. Only messages identified as preserved in the compaction prompt are eligible; their archive records and summary blocks are not deleted.",
       },
     },
     required: ['replaceAsBlocks'],

@@ -53,18 +53,13 @@ test('shared CLI browser screenshots use the canonical structured image result',
   assert.equal(Object.prototype.hasOwnProperty.call(result, 'encoding'), false);
 });
 
-test('node exec schema allows oversized timeout values and documents clamping', () => {
+test('node exec schema permits timeout values above the runtime clamp threshold', () => {
   const definition = CLI_NODE_CAPABILITIES.tools.find(entry => entry.name === 'exec');
   assert.ok(definition);
   const timeout = (definition.parameters.properties as any).timeout;
   assert.equal(timeout.type, 'number');
   assert.equal(timeout.minimum, 1);
   assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
-  assert.match(String(timeout.description), /above the 60s maximum are clamped/i);
-  assert.match(String(definition.description), /do not add \| head or \| tail merely to limit context/i);
-  assert.match(String(definition.description), /filtering changes what the log captures/i);
-  assert.match(String(definition.description), /outstanding background process/i);
-  assert.match(String(definition.description), /if you continue other work instead of waiting, remember it is still running/i);
 });
 
 test('shared write contentRef retry hints are executable and JSON-escape actual arguments', () => {

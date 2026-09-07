@@ -8,69 +8,69 @@ export const CLI_NODE_CAPABILITIES = {
   tools: [
     {
       name: 'read',
-      description: 'Read a file or list a directory. Large non-image file reads use built-in bounded display with file-size metadata; use startLine/endLine for targeted content rather than shell head solely to limit context. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: "Read a file, view an image, or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",
       parameters: {
         type: 'object',
         properties: {
-          filePath: { type: 'string' },
-          startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional). 0 is treated as omitted.' },
-          endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional). 0 is treated as omitted.' },
+          filePath: { type: 'string' , description: "File or directory path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+          startLine: { type: 'number', description: "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning." },
+          endLine: { type: 'number', description: "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range." },
         },
         required: ['filePath'],
       },
     },
     {
       name: 'write',
-      description: 'Write a file. By default, parent directories must already exist; pass createDirs=true to create missing parent directories. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder. Absolute paths and ~/... are accepted when allowed.',
+      description: "Write text to a file on this Node. Existing files are protected unless overwrite is true; missing parent directories are created only when createDirs is true.",
       parameters: {
         type: 'object',
         properties: {
-          filePath: { type: 'string' },
-          content: { type: 'string' },
-          overwrite: { type: 'boolean' },
-          createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' },
+          filePath: { type: 'string' , description: "Destination path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+          content: { type: 'string' , description: "Complete file contents."},
+          overwrite: { type: 'boolean' , description: "Allow replacement of an existing file. Defaults to false."},
+          createDirs: { type: 'boolean', description: "Create missing parent directories. Defaults to false." },
         },
         required: ['filePath', 'content'],
       },
     },
     {
       name: 'edit',
-      description: 'Replace exact text in a file using oldText/newText. Relative paths resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder.',
+      description: "Replace one exact occurrence of text in a file. Use apply_patch when a line-based patch is more suitable.",
       parameters: {
         type: 'object',
         properties: {
-          filePath: { type: 'string' },
-          oldText: { type: 'string' },
-          newText: { type: 'string' },
+          filePath: { type: 'string' , description: "File to edit on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+          oldText: { type: 'string' , description: "Exact text to replace; it must identify a single occurrence."},
+          newText: { type: 'string' , description: "Replacement text."},
         },
         required: ['filePath', 'oldText', 'newText'],
       },
     },
     {
       name: 'apply_patch',
-      description: 'Apply an OpenAI-style patch envelope to modify files. Paths in patch file headers resolve from the session cwd when one is supplied for this node, otherwise from this node\'s agent folder.',
+      description: "Add, modify, or delete files on this Node using the apply_patch format with *** Begin Patch and *** End Patch. Relative paths in patch headers use the session working directory supplied for this Node, or its agent directory if unset.",
       parameters: {
         type: 'object',
-        properties: { input: { type: 'string' } },
+        properties: { input: { type: 'string' , description: "Complete patch text with Add File, Update File, or Delete File operations."} },
         required: ['input'],
       },
     },
     {
       name: 'exec',
-      description: 'Execute a shell command. Uses explicit cwd when provided, otherwise the session cwd when supplied for this node, otherwise the node process cwd. Relative cwd values resolve from the session cwd when set, otherwise from the node process cwd. Inline display is bounded and captured command/pipeline output is saved in the command log, so do not add | head or | tail merely to limit context: filtering changes what the log captures. For both a complete capture and filtered view, create that capture explicitly with a separate step or a tee pipeline whose downstream filter continues consuming input. Commands running over the timeout continue in the background and send a completion message later. Until that completion arrives, the command remains an outstanding background process; if you continue other work instead of waiting, remember it is still running. Timeout values above the 60s maximum are clamped to 60s with a warning.',
+      description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream.",
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string' },
-          cwd: { type: 'string' },
-          timeout: { type: 'number', minimum: 1, description: 'Optional timeout in seconds. Default: 15. Values above the 60s maximum are clamped to 60s with a warning.' },
+          command: { type: 'string' , description: "Shell command or pipeline to execute."},
+          cwd: { type: 'string' , description: "Working directory for this command. Relative paths use the session working directory supplied for this Node, or the Node process working directory if unset. With no cwd, execution uses that same default chain."},
+          timeout: { type: 'number', minimum: 1, description: "Seconds to wait before returning a still-running command as a background execution. Defaults to 15; values above 60 are reduced to 60 with a warning." },
         },
         required: ['command'],
       },
     },
     {
       name: 'get_default_cwd',
-      description: 'Return the node process working directory used as the default cwd for exec when no session cwd or explicit cwd is set.',
+      description: "Get this Node's process working directory, used by exec when neither a command nor the session specifies one.",
       parameters: {
         type: 'object',
         properties: {},
@@ -79,38 +79,38 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'browse_open',
-      description: 'Open a new browser tab and navigate to URL. Returns tab ID for future operations.',
+      description: "Open a browser tab at a URL and return its tab ID for later browser calls.",
       parameters: {
         type: 'object',
-        properties: { url: { type: 'string' } },
+        properties: { url: { type: 'string' , description: "URL to open."} },
         required: ['url'],
       },
     },
-    { name: 'browse_list', description: 'List all open browser tabs with their IDs, titles, and URLs.', parameters: { type: 'object', properties: {} } },
+    { name: 'browse_list', description: "List open browser tabs with their IDs, titles, and URLs.", parameters: { type: 'object', properties: {} } },
     {
       name: 'browse_get',
-      description: 'Get content or screenshot from a browser tab.',
+      description: "Read a browser tab's HTML or return a screenshot.",
       parameters: {
         type: 'object',
-        properties: { tabId: { type: 'string' }, screenshot: { type: ['boolean', 'string'], default: false } },
+        properties: { tabId: { type: 'string' , description: "Tab ID returned by browse_open or browse_list."}, screenshot: { type: ['boolean', 'string'], default: false , description: "Omit or set false for page HTML. Set true for a viewport screenshot, or use full for a full-page screenshot. Screenshots are returned as images, not saved to a supplied path."} },
         required: ['tabId'],
       },
     },
-    { name: 'browse_close', description: 'Close a browser tab.', parameters: { type: 'object', properties: { tabId: { type: 'string' } }, required: ['tabId'] } },
+    { name: 'browse_close', description: "Close a browser tab.", parameters: { type: 'object', properties: { tabId: { type: 'string' , description: "Tab to close."} }, required: ['tabId'] } },
     {
       name: 'browse_interact',
-      description: 'Interact with a browser tab. Supports: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload.',
+      description: "Interact with a browser tab: click, type, fill, press a key, scroll, wait, evaluate JavaScript, or navigate.",
       parameters: {
         type: 'object',
         properties: {
-          tabId: { type: 'string' },
-          action: { type: 'string', enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload'] },
+          tabId: { type: 'string' , description: "Tab to control."},
+          action: { type: 'string', enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload'] , description: "Browser action to perform."},
           params: {
             type: 'object',
             properties: {
-              selector: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, y: { type: 'number' }, url: { type: 'string' }, code: { type: 'string' }, timeout: { type: 'number' },
+              selector: { type: 'string' , description: "CSS selector for the target element."}, text: { type: 'string' , description: "Text to type or fill."}, key: { type: 'string' , description: "Key to press, such as Enter, Tab, or Escape."}, y: { type: 'number' , description: "Vertical scroll distance in pixels."}, url: { type: 'string' , description: "Destination URL for goto."}, code: { type: 'string' , description: "JavaScript to evaluate in the tab."}, timeout: { type: 'number' , description: "Action timeout in milliseconds. Defaults to 5,000."},
             },
-          },
+           description: "Arguments for the action, such as {selector: '#id'} for click, {selector: 'input', text: 'hello'} for fill, {key: 'Enter'} for press, {y: 500} for scroll, {url: 'https://example.com'} for goto, or {code: 'document.title'} for evaluate."},
         },
         required: ['tabId', 'action'],
       },
