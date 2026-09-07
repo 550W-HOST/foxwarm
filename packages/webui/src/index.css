@@ -1254,6 +1254,17 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   opacity: 0.8;
 }
 
+.foxwarm-inline-composer-editor[data-empty="true"]::before {
+  color: var(--foxwarm-color-text-muted);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]::before {
+  color: var(--foxwarm-console-text-dim) !important;
+  opacity: 0.8;
+}
+
 html[data-foxwarm-component-treatment="console"] .absolute.inset-x-0.bottom-0.z-20:has(.foxwarm-chat-composer-form) > .absolute.inset-0.bg-fw-accent-surface\/80 {
   z-index: 1;
 }

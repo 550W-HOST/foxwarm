@@ -1,15 +1,17 @@
 # Unit: webui-chat-composer
 
-Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
+Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/InlineComposerEditor.tsx, packages/webui/src/composerDraft.ts, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/composerDraft.test.mjs, packages/webui/test/composerPastedText.e2e.mjs, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
 Secondary files: packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
 ## Purpose
 
-A rich chat composer component for the web UI that handles text input with slash-command autocomplete, file attachments (drag-and-drop and picker), audio recording/transcription (live streaming and file upload), model selection, and message submission with draft persistence.
+A rich chat composer component for the web UI that handles ordered ordinary/pasted text editing, slash-command autocomplete, file attachments (drag-and-drop and picker), audio recording/transcription (live streaming and file upload), model selection, and message submission with versioned draft persistence.
 
 ## Key Exports
 
 - `ChatComposer` — memoized React component (default export) providing the full chat input experience
+- `InlineComposerEditor` — imperative contenteditable surface for native text flow plus atomic pasted-text segments
+- `makeComposerDraft` / `serializeComposerDraft` / `loadComposerDraft` / `persistComposerDraft` — normalized segment model, canonical wrapper serialization, and versioned browser persistence with legacy plain-string reads
 - `ModelOption` — type describing a selectable model plus allowed/default effort capability metadata
 - `filterModelOptions` / `formatModelLabel` — exact natural-text filtering and visible-label formatting for model candidates
 - `getMessageAttachmentDraft` / `setMessageAttachmentDraft` / `updateMessageAttachmentDraft` / `clearMessageAttachmentDraft` — page-memory attachment draft ownership keyed by exact Session ID
@@ -18,7 +20,10 @@ A rich chat composer component for the web UI that handles text input with slash
 
 | Function | Lines (approx) | Description (one phrase) |
 |----------|------|-------------|
-| `persistDraft(sessionId, value)` | ~62 | Saves or removes draft text in localStorage |
+| `normalizeComposerDraftSegments(segments)` | composerDraft.ts | Merges adjacent text while retaining ordered atomic pasted-text segments |
+| `serializeComposerDraft(draft)` | composerDraft.ts | Emits exact ordinary text and literal pasted-text wrappers |
+| `canConvertPasteToBlock(text)` | composerDraft.ts | Applies the default 2,000-code-point or 20-line conversion threshold and delimiter guard |
+| `InlineComposerEditor(props)` | InlineComposerEditor.tsx | Owns the live contenteditable DOM, chip operations, selection serialization, bounded history, and editable block modal |
 | `formatModelLabel(option, defaultModelKey)` | ~67 | Formats a model option label with default indicator |
 | `filterModelOptions(options, query, defaultModelKey?)` | modelFilter.ts | Case-insensitive visible-label/id substring filter that preserves server order |
 | `ModelSelector(props)` | ~85–430 | Popup component for filtering/selecting current and child models, selecting their effort overrides, or opening model settings |
@@ -29,8 +34,7 @@ A rich chat composer component for the web UI that handles text input with slash
 | `renderRow(row)` | ~157 | Renders a single model option row with current/child checkboxes |
 | `ChatComposer(props)` | ~235–end | Main composer component with all input/send/attachment/audio logic |
 | `handleSend(e)` | ~310 | Form submit handler; sends text + attachments, clears state |
-| `handleKeyDown(e)` | ~340 | Keyboard handler for send-on-enter/mod+enter and slash navigation |
-| `handleInputChange(e)` | ~380 | Updates input state, resizes textarea, triggers slash completion |
+| `handleCommandKeyDown(e)` | ChatComposer | Keyboard bridge for send-on-enter/mod+enter and plain-draft slash navigation |
 | `handleSlashSelect(option)` | ~395 | Applies selected slash command suggestion into input |
 | `handleAttach(e)` | ~405 | Processes file input selection into attachments state |
 | `handleDrop(e)` | ~415 | Handles drag-and-drop file additions |
@@ -41,13 +45,19 @@ A rich chat composer component for the web UI that handles text input with slash
 
 ## Dependencies
 
-- `./chatShared` — `applySlashCommandSuggestion`, `getSlashCommandCompletion`, `resizeTextarea`, `SlashCommandOption`, `SlashCommandSuggestion`
+- `./chatShared` — `applySlashCommandSuggestion`, `getSlashCommandCompletion`, `SlashCommandOption`, `SlashCommandSuggestion`
+- `../composerDraft` and `./InlineComposerEditor` — canonical segment/persistence operations and the imperative editing surface
 - `../config` — `API_BASE_PATH` (used for slash-command fetch endpoint)
 
 ## Behavior
 
-- Maintains local state for input text, attachments, slash-command suggestions, audio recording, waveform visualization, and drag-over status.
-- Persists draft text to localStorage keyed by Session ID; restores on mount or Session change.
+- Maintains a versioned ordered draft of ordinary text and pasted-text segments plus attachments, slash-command suggestions, audio recording, waveform visualization, and drag-over status.
+- Persists structured drafts to localStorage by exact Session ID, reads the former plain-string key as one ordinary text segment, and writes only the new versioned shape. Persistence/quota failures leave the live draft intact and show an actionable in-composer warning instead of silently losing it.
+- The inline editor uses native text nodes for ordinary input and `contenteditable=false` pasted-text chips. Parent state updates do not rerender the live editing DOM; Session changes, accepted clears, slash completion, transcription append, undo/redo, and other external replacements use its imperative reset boundary.
+- Plain clipboard text is inserted without HTML authority. Pasting at least 2,000 Unicode code points or 20 lines automatically creates a block unless the text contains the closing wrapper delimiter; smaller/colliding text remains ordinary. Hand-typed wrapper syntax is never auto-converted in the composer.
+- Pasted blocks serialize at their exact ordered position as literal `<pasted-text>...</pasted-text>`. Their editable modal supports Save, Cancel, Copy, and Restore to text; delimiter collisions cannot be saved as a block but can be restored as ordinary text.
+- Enter/Shift+Enter normalization owns exact newline insertion rather than accepting browser-specific block DOM. Copy/cut exports canonical plain text including wrappers, adjacent Backspace/Delete treats chips atomically, arrows cross native atomic boundaries, and range deletion may span text and chips.
+- Undo/redo is one bounded whole-editor history (80 entries and two million stored UTF-8 bytes), coalesces contiguous ordinary typing, groups composition into one entry, and never mixes browser-native text undo with non-undoable structural chip insertion. Ordinary input does not reset DOM or selection per key.
 - Keeps ordinary message attachment drafts in one module-scoped, page-lifetime Map keyed by exact Session ID. Picker, pasted-image, drop, and removal mutations synchronously update that owner while preserving `File` identity and order; state restoration defensively copies arrays without serializing file content.
 - Switching or unmounting never clears attachment drafts. Accepted sends clear only the submitted Session's attachment draft; rejected or failed sends retain it. Audio-transcription file selection remains separate and is never stored as a message attachment draft.
 - Loads slash-command completion metadata from `API_BASE_PATH/commands` through the shared page-lifetime parsed-result Promise; typing a `/` prefix filters that cached list without refetching.
@@ -55,7 +65,7 @@ A rich chat composer component for the web UI that handles text input with slash
 - Supports two send-key modes (`enter` and `modEnter`) for submitting messages.
 - Audio recording uses `MediaRecorder` with streaming transcription via `onCreateStreamingTranscriber`; also supports file-upload transcription via `onTranscribeAudio`.
 - Notifies parent of actual composer-layout height changes via `onHeightChange` using ResizeObserver. Slash suggestions are absolutely overlaid above the form inside a positioned composer anchor, so opening, closing, or resizing suggestions does not change this measured layout height.
-- Calls `onDraftEdited` whenever the draft text changes.
+- Calls `onDraftEdited` with canonical serialized text whenever the draft changes. Slash completion runs only when the entire draft is one ordinary text segment; transcription appends to the active exact Session draft without rewriting pasted contents, and late transcription completion is fenced from a newly active Session.
 - Model selector renders as a portal-based fixed popup with outside-click and Escape dismissal.
 - The model selector uses dialog focus semantics: every open clears and focuses its filter input, while Escape/outside dismissal restores the trigger before normal navigation proceeds. In the console component treatment, that filter focus uses only the manifest's accent focus treatment and explicitly replaces the default blue ring/shadow.
 - The filter performs a case-insensitive substring match against each candidate's currently visible label and model id without fuzzy reordering. The default/follow row and the server's option order/current/child semantics remain unchanged.
@@ -68,7 +78,7 @@ A rich chat composer component for the web UI that handles text input with slash
 ## Integration
 
 - Consumed by the chat view, receiving session state, model configuration, and callbacks for sending messages, changing models, and transcribing audio.
-- Relies on `chatShared` utilities for slash-command logic and textarea auto-resize.
+- Relies on `chatShared` utilities for slash-command logic; contenteditable height is native and remains bounded by the existing composer measurement owner.
 - Model/effort changes propagate up through paired callbacks to the existing session model and child-model endpoints. Model refresh and settings navigation propagate through `onRefreshModels`/`onOpenModelSettings`; canonical navigation behavior is [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 - Attachments and text are bundled and sent via `onSend` to the parent message-handling layer.
 - The composer keeps browser `File` objects unchanged; Chat owns upload reconciliation and builds optimistic attachment metadata from the corrected upload response through the shared descriptor formatter. Optimistic tags include only known name/MIME facts and never expose the temporary upload-spool path. Canonical grammar: [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
@@ -94,3 +104,7 @@ The model popup keeps a plain three-column header. Its effort controls belong in
 ### D-composer-session-draft-lifetimes
 
 [2026-08-25] Composer text and ordinary message attachments intentionally have different browser lifetimes. Text drafts remain localStorage-backed per Session. Selected, pasted, or dropped message attachment `File` objects live only in a module-scoped Map for the current browser page/JavaScript context, keyed by exact Session ID; Session switching restores the same `File` references and order, while reload/page close clears them naturally. Do not serialize, upload early, place in localStorage/IndexedDB, persist through Session state, or add cross-tab/cross-frame synchronization. Only an accepted send or explicit attachment removal clears the affected page-memory draft; rejected/failed sends and unmounts retain it.
+
+### D-composer-pasted-text-editor
+
+[2026-09-07] The composer owns a bounded ordered segment editor rather than a general rich-text document. Ordinary text remains native selectable text; pasted-text blocks are atomic inline presentation nodes whose canonical serialization is the literal wrapper in the same user message. Automatic conversion uses the implementation default of at least 2,000 Unicode code points or 20 lines and never converts image/file clipboard items or text containing the closing delimiter. Hand-typed wrappers remain ordinary composer text. Use one custom bounded undo/redo history across text and structural edits, group composition, preserve exact newline/plain-text copy semantics, and do not reset the live contenteditable DOM on each input. Structured browser drafts read the former plain-string key but write only the current version; storage failure must remain visible while the live draft stays editable. This decision does not define inline file-reference protocol or persistence.

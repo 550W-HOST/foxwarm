@@ -11,11 +11,21 @@ import {
 import {
   applySlashCommandSuggestion,
   getSlashCommandCompletion,
-  resizeTextarea,
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
 import { filterModelOptions, formatModelLabel } from './modelFilter'
+import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
+import {
+  appendTextToComposerDraft,
+  clearComposerDraft,
+  getPlainComposerDraftText,
+  loadComposerDraft,
+  makePlainComposerDraft,
+  persistComposerDraft,
+  serializeComposerDraft,
+  type ComposerDraft,
+} from '../composerDraft'
 
 export type ModelOption = {
   key: string
@@ -76,15 +86,6 @@ interface ChatComposerProps {
     cancel: () => void
   }>
   onDraftEdited?: (draftText: string) => void
-}
-
-function persistDraft(sessionId: string, value: string) {
-  const draftKey = `draft_${sessionId}`
-  if (value.length > 0) {
-    localStorage.setItem(draftKey, value)
-  } else {
-    localStorage.removeItem(draftKey)
-  }
 }
 
 function formatEffortLabel(value: string): string {
@@ -514,7 +515,12 @@ const ChatComposer = memo(function ChatComposer({
   onCreateStreamingTranscriber,
   onDraftEdited,
 }: ChatComposerProps) {
-  const [input, setInput] = useState('')
+  const loadedDraft = useMemo(() => loadComposerDraft(sessionId), [sessionId])
+  const [draftState, setDraftState] = useState<{ sessionId: string; draft: ComposerDraft }>(() => ({ sessionId, draft: loadedDraft }))
+  const draft = draftState.sessionId === sessionId ? draftState.draft : loadedDraft
+  const [draftPersistenceError, setDraftPersistenceError] = useState<string | null>(null)
+  const input = useMemo(() => serializeComposerDraft(draft), [draft])
+  const plainInput = useMemo(() => getPlainComposerDraftText(draft), [draft])
   const [attachments, setAttachments] = useState<File[]>(() => getMessageAttachmentDraft(sessionId))
   const [isDragging, setIsDragging] = useState(false)
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
@@ -528,10 +534,12 @@ const ChatComposer = memo(function ChatComposer({
   const [highlightedCommandIndex, setHighlightedCommandIndex] = useState(0)
   const [dismissedSlashQuery, setDismissedSlashQuery] = useState<string | null>(null)
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<InlineComposerEditorHandle>(null)
+  const commandKeyDownRef = useRef<(event: KeyboardEvent) => boolean>(() => false)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
@@ -557,6 +565,28 @@ const ChatComposer = memo(function ChatComposer({
   const submitInFlightRef = useRef(false)
   const activeSessionIdRef = useRef(sessionId)
   activeSessionIdRef.current = sessionId
+
+  const persistDraftSafely = useCallback((targetSessionId: string, nextDraft: ComposerDraft) => {
+    try {
+      persistComposerDraft(targetSessionId, nextDraft)
+      if (activeSessionIdRef.current === targetSessionId) setDraftPersistenceError(null)
+      return true
+    } catch (error) {
+      console.error('Failed to persist composer draft:', error)
+      if (activeSessionIdRef.current === targetSessionId) {
+        setDraftPersistenceError('Draft could not be saved in this browser. Copy it before leaving this session.')
+      }
+      return false
+    }
+  }, [])
+
+  const commitDraft = useCallback((nextDraft: ComposerDraft, targetSessionId = sessionId) => {
+    persistDraftSafely(targetSessionId, nextDraft)
+    if (activeSessionIdRef.current !== targetSessionId) return
+    draftRef.current = nextDraft
+    setDraftState({ sessionId: targetSessionId, draft: nextDraft })
+    onDraftEdited?.(serializeComposerDraft(nextDraft))
+  }, [onDraftEdited, persistDraftSafely, sessionId])
 
   useEffect(() => {
     let cancelled = false
@@ -596,9 +626,10 @@ const ChatComposer = memo(function ChatComposer({
   }, [])
 
   useEffect(() => {
-    const draftKey = `draft_${sessionId}`
-    const savedDraft = localStorage.getItem(draftKey)
-    setInput(savedDraft || '')
+    const savedDraft = loadedDraft
+    draftRef.current = savedDraft
+    setDraftState({ sessionId, draft: savedDraft })
+    setDraftPersistenceError(null)
     setAttachments(getMessageAttachmentDraft(sessionId))
     setIsRecordingAudio(false)
     setTranscribeError(null)
@@ -606,27 +637,11 @@ const ChatComposer = memo(function ChatComposer({
     setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
     submitInFlightRef.current = false
-
-    setTimeout(() => {
-      resizeTextarea(textareaRef.current)
-    }, 0)
-  }, [sessionId])
-
-  useEffect(() => {
-    if (draftSaveTimerRef.current) {
-      clearTimeout(draftSaveTimerRef.current)
-    }
-
-    draftSaveTimerRef.current = setTimeout(() => {
-      persistDraft(sessionId, input)
-    }, 2000)
-
-    return () => {
-      if (draftSaveTimerRef.current) {
-        clearTimeout(draftSaveTimerRef.current)
-      }
-    }
-  }, [input, sessionId])
+    const frame = requestAnimationFrame(() => {
+      if (activeSessionIdRef.current === sessionId) editorRef.current?.replaceDraft(savedDraft)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [loadedDraft, sessionId])
 
   const cleanupRecording = useCallback(async () => {
     recordingActiveRef.current = false
@@ -696,11 +711,14 @@ const ChatComposer = memo(function ChatComposer({
     }
   }, [onHeightChange])
 
-  const slashCompletion = useMemo(() => getSlashCommandCompletion(input, availableCommands), [availableCommands, input])
+  const slashCompletion = useMemo(
+    () => plainInput === null ? null : getSlashCommandCompletion(plainInput, availableCommands),
+    [availableCommands, plainInput],
+  )
   const slashCommandSuggestions = slashCompletion?.suggestions || []
   const slashCommandHints = slashCompletion?.hints || []
 
-  const showSlashCommandMenu = slashCompletion !== null && dismissedSlashQuery !== input && (
+  const showSlashCommandMenu = slashCompletion !== null && dismissedSlashQuery !== plainInput && (
     commandsLoading ||
     slashCommandSuggestions.length > 0 ||
     slashCommandHints.length > 0 ||
@@ -729,19 +747,16 @@ const ChatComposer = memo(function ChatComposer({
     if (!slashCompletion) return
 
     const nextValue = applySlashCommandSuggestion(slashCompletion, suggestion)
-    setInput(nextValue)
+    const nextDraft = makePlainComposerDraft(nextValue)
+    commitDraft(nextDraft)
+    editorRef.current?.replaceDraft(nextDraft)
     setHighlightedCommandIndex(0)
     setDismissedSlashQuery(null)
 
     requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        resizeTextarea(textareaRef.current)
-        textareaRef.current.focus()
-        const caret = nextValue.length
-        textareaRef.current.setSelectionRange(caret, caret)
-      }
+      editorRef.current?.focusEnd()
     })
-  }, [slashCompletion])
+  }, [commitDraft, slashCompletion])
 
   const updateAttachments = useCallback((update: (files: File[]) => readonly File[]) => {
     const targetSessionId = sessionId
@@ -767,23 +782,32 @@ const ChatComposer = memo(function ChatComposer({
 
     clearMessageAttachmentDraft(targetSessionId)
     if (activeSessionIdRef.current === targetSessionId) {
-      setInput('')
+      const emptyDraft = makePlainComposerDraft()
+      draftRef.current = emptyDraft
+      setDraftState({ sessionId: targetSessionId, draft: emptyDraft })
+      editorRef.current?.replaceDraft(emptyDraft)
       setAttachments([])
       setDismissedSlashQuery(null)
     }
-    const draftKey = `draft_${sessionId}`
-    localStorage.removeItem(draftKey)
+    try {
+      clearComposerDraft(targetSessionId)
+      if (activeSessionIdRef.current === targetSessionId) setDraftPersistenceError(null)
+    } catch (error) {
+      console.error('Failed to clear composer draft:', error)
+      if (activeSessionIdRef.current === targetSessionId) {
+        setDraftPersistenceError('The sent draft could not be cleared from browser storage.')
+      }
+    }
 
     requestAnimationFrame(() => {
       if (activeSessionIdRef.current !== targetSessionId) return
-      resizeTextarea(textareaRef.current)
-      textareaRef.current?.focus()
+      editorRef.current?.focus()
     })
   }, [attachments, input, loading, onSend, sessionId, sessionMissing])
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
-      return
+  const handleCommandKeyDown = useCallback((e: KeyboardEvent): boolean => {
+    if (e.isComposing || e.keyCode === 229) {
+      return false
     }
 
     if (showSlashCommandMenu) {
@@ -792,7 +816,7 @@ const ChatComposer = memo(function ChatComposer({
         if (slashCommandSuggestions.length > 0) {
           setHighlightedCommandIndex((current) => (current + 1) % slashCommandSuggestions.length)
         }
-        return
+        return true
       }
 
       if (e.key === 'ArrowUp') {
@@ -800,58 +824,37 @@ const ChatComposer = memo(function ChatComposer({
         if (slashCommandSuggestions.length > 0) {
           setHighlightedCommandIndex((current) => (current - 1 + slashCommandSuggestions.length) % slashCommandSuggestions.length)
         }
-        return
+        return true
       }
 
       if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         if (slashCommandSuggestions.length > 0) {
           e.preventDefault()
           applySlashCommand(slashCommandSuggestions[highlightedCommandIndex])
-          return
+          return true
         }
       }
 
       if (e.key === 'Escape') {
         e.preventDefault()
         setDismissedSlashQuery(input)
-        return
+        return true
       }
     }
 
     if (e.key !== 'Enter') {
-      return
+      return false
     }
 
     if (e.ctrlKey || e.metaKey || (sendKeyMode === 'enter' && !e.shiftKey)) {
       e.preventDefault()
       void handleSubmit()
+      return true
     }
+    return false
   }, [applySlashCommand, handleSubmit, highlightedCommandIndex, input, sendKeyMode, showSlashCommandMenu, slashCommandSuggestions])
-
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const nextValue = e.target.value
-    setInput(nextValue)
-    persistDraft(sessionId, nextValue)
-    onDraftEdited?.(nextValue)
-    setDismissedSlashQuery(null)
-    resizeTextarea(e.target)
-  }, [onDraftEdited, sessionId])
-
-  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = e.clipboardData?.items
-    if (!items) return
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      if (item.type.startsWith('image/')) {
-        e.preventDefault()
-        const file = item.getAsFile()
-        if (file) {
-          updateAttachments(prev => [...prev, file])
-        }
-      }
-    }
-  }, [updateAttachments])
+  commandKeyDownRef.current = handleCommandKeyDown
+  const handleCommandKeyDownBridge = useCallback((event: KeyboardEvent) => commandKeyDownRef.current(event), [])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -877,26 +880,19 @@ const ChatComposer = memo(function ChatComposer({
   }, [updateAttachments])
 
   const appendTranscriptToDraft = useCallback((transcript: string) => {
-    const trimmed = transcript.trim()
-    if (!trimmed) return
-
-    setInput(prev => {
-      const prefix = prev.trim()
-      const nextValue = prefix ? `${prefix}\n\n${trimmed}` : trimmed
-      persistDraft(sessionId, nextValue)
-      onDraftEdited?.(nextValue)
-      return nextValue
-    })
+    if (!transcript.trim()) return
+    const targetSessionId = sessionId
+    const currentDraft = activeSessionIdRef.current === targetSessionId
+      ? draftRef.current
+      : loadComposerDraft(targetSessionId)
+    const nextDraft = appendTextToComposerDraft(currentDraft, transcript)
+    commitDraft(nextDraft, targetSessionId)
+    if (activeSessionIdRef.current === targetSessionId) editorRef.current?.replaceDraft(nextDraft)
 
     requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        resizeTextarea(textareaRef.current)
-        textareaRef.current.focus()
-        const caret = textareaRef.current.value.length
-        textareaRef.current.setSelectionRange(caret, caret)
-      }
+      if (activeSessionIdRef.current === targetSessionId) editorRef.current?.focusEnd()
     })
-  }, [onDraftEdited, sessionId])
+  }, [commitDraft, sessionId])
 
   const pushAsrDebug = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString([], { hour12: false })
@@ -1344,32 +1340,23 @@ const ChatComposer = memo(function ChatComposer({
           }}
           className="hidden"
         />
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          onBlur={() => {
-            const draftKey = `draft_${sessionId}`
-            if (input.trim()) {
-              localStorage.setItem(draftKey, input)
-            } else {
-              localStorage.removeItem(draftKey)
-            }
-          }}
+        <InlineComposerEditor
+          ref={editorRef}
+          draftId={sessionId}
+          value={draft}
           disabled={loading || sessionMissing}
-          rows={1}
-          inputMode="text"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          className="foxwarm-chat-composer-textarea mb-1.5 min-h-[60px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-fw-text-strong placeholder:text-fw-text-muted focus:outline-none focus:ring-0 dark:text-fw-text-strong dark:placeholder:text-fw-text-muted"
-          style={{ maxHeight: '200px', fontSize: '16px' }}
           placeholder={sessionMissing
             ? 'Session not found'
             : 'Ask Foxwarm anything, + to add files, / for commands'}
+          onChange={(nextDraft) => {
+            commitDraft(nextDraft)
+            setDismissedSlashQuery(null)
+          }}
+          onBlur={() => persistDraftSafely(sessionId, draftRef.current)}
+          onPasteImages={(files) => updateAttachments(previous => [...previous, ...files])}
+          onCommandKeyDown={handleCommandKeyDownBridge}
         />
+        {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">

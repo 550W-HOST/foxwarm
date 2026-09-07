@@ -111,12 +111,12 @@ test('message attachments survive A to B to A and clear only on remove or accept
   const page = await browser.newPage()
   await page.goto(fixtureUrl, { waitUntil: 'load' })
 
-  await page.type('textarea', 'draft text for session A')
-  await page.$eval('textarea', textarea => {
+  await page.type('[role="textbox"][aria-label="Message"]', 'draft text for session A')
+  await page.$eval('[role="textbox"][aria-label="Message"]', editor => {
     const transfer = new DataTransfer()
     const pastedFile = new File(['synthetic image bytes'], 'pasted-shot.png', { type: 'image/png' })
     transfer.items.add(pastedFile)
-    textarea.dispatchEvent(new ClipboardEvent('paste', {
+    editor.dispatchEvent(new ClipboardEvent('paste', {
       bubbles: true,
       cancelable: true,
       clipboardData: transfer,
@@ -128,7 +128,7 @@ test('message attachments survive A to B to A and clear only on remove or accept
   await page.waitForFunction(() => (
     document.querySelector('[data-active-session]')?.textContent === 'fixture/b'
     && document.querySelectorAll('.foxwarm-attachment-chip').length === 0
-    && document.querySelector('textarea')?.value === ''
+    && document.querySelector('[role="textbox"][aria-label="Message"]')?.textContent === ''
   ))
   assert.deepEqual(await attachmentNames(page), [])
 
@@ -139,7 +139,7 @@ test('message attachments survive A to B to A and clear only on remove or accept
   await page.waitForFunction(() => (
     document.querySelector('[data-active-session]')?.textContent === 'fixture/a'
     && document.body.textContent.includes('pasted-shot.png')
-    && document.querySelector('textarea')?.value === 'draft text for session A'
+    && document.querySelector('[role="textbox"][aria-label="Message"]')?.textContent === 'draft text for session A'
   ))
   assert.deepEqual(await attachmentNames(page), ['pasted-shot.png'])
 
@@ -150,7 +150,7 @@ test('message attachments survive A to B to A and clear only on remove or accept
   await page.waitForFunction(() => (
     document.querySelector('[data-active-session]')?.textContent === 'fixture/a'
     && document.querySelectorAll('.foxwarm-attachment-chip').length === 0
-    && document.querySelector('textarea')?.value === 'draft text for session A'
+    && document.querySelector('[role="textbox"][aria-label="Message"]')?.textContent === 'draft text for session A'
   ))
   assert.deepEqual(await attachmentNames(page), [])
 
