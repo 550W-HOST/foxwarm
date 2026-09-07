@@ -348,12 +348,12 @@ function ModelSelector({
   )
 
   return (
-    <div ref={rootRef} className="relative inline-flex min-w-0 shrink-0" title={error || undefined}>
+    <div ref={rootRef} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] flex-1" title={error || undefined}>
       <button
         ref={buttonRef}
         type="button"
         onClick={toggleOpen}
-        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+        className="foxwarm-model-selector-trigger inline-flex h-8 min-w-0 max-w-full shrink items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
         aria-haspopup="dialog"
         aria-expanded={open}
       >
@@ -1371,43 +1371,43 @@ const ChatComposer = memo(function ChatComposer({
             : 'Ask Foxwarm anything, + to add files, / for commands'}
         />
         <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5">
-            <label
-              htmlFor="file-upload"
-              className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
-              title="Attach files"
-              aria-label="Attach files"
-            >
-              <Plus size={18} />
-            </label>
-            <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-              {attachments.length === 0 ? (
-                <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-fw-text-muted">
-                  <Paperclip size={13} />
-                  <span>No files</span>
-                </div>
-              ) : (
-                attachments.map((file, idx) => (
-                  <div
-                    key={`${file.name}-${idx}`}
-                    className="foxwarm-attachment-chip inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-fw-border bg-fw-surface px-3 text-[13px] shadow-sm dark:border-fw-border dark:bg-fw-surface"
-                  >
-                    <Paperclip size={12} className="shrink-0 text-fw-text-muted" />
-                    <span className="truncate text-fw-text">{file.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => updateAttachments(prev => prev.filter((_, i) => i !== idx))}
-                      className="shrink-0 text-fw-text-muted transition hover:text-fw-danger"
-                      title="Remove attachment"
-                    >
-                      ×
-                    </button>
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
+              <label
+                htmlFor="file-upload"
+                className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+                title="Attach files"
+                aria-label="Attach files"
+              >
+                <Plus size={18} />
+              </label>
+              <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+                {attachments.length === 0 ? (
+                  <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-fw-text-muted">
+                    <Paperclip size={13} />
+                    <span>No files</span>
                   </div>
-                ))
-              )}
-            </div>
-            {asrAvailable && (
-              <>
+                ) : (
+                  attachments.map((file, idx) => (
+                    <div
+                      key={`${file.name}-${idx}`}
+                      className="foxwarm-attachment-chip inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-fw-border bg-fw-surface px-3 text-[13px] shadow-sm dark:border-fw-border dark:bg-fw-surface"
+                    >
+                      <Paperclip size={12} className="shrink-0 text-fw-text-muted" />
+                      <span className="truncate text-fw-text">{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => updateAttachments(prev => prev.filter((_, i) => i !== idx))}
+                        className="shrink-0 text-fw-text-muted transition hover:text-fw-danger"
+                        title="Remove attachment"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+              {asrAvailable && (
                 <div className="inline-flex shrink-0 items-center rounded-full bg-transparent">
                   <button
                     type="button"
@@ -1445,8 +1445,8 @@ const ChatComposer = memo(function ChatComposer({
                     <span>file</span>
                   </label>
                 </div>
-              </>
-            )}
+              )}
+            </div>
             <ModelSelector
               options={modelOptions}
               currentModelKey={currentModelKey}
