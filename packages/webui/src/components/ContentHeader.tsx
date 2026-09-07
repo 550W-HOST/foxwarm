@@ -13,7 +13,7 @@ interface ContentHeaderProps {
 
 export default function ContentHeader({ icon, title, subtitle, actions, onBack, sticky = false, below }: ContentHeaderProps) {
   return (
-    <div className={`${sticky ? 'sticky top-0 z-30 ' : ''}border-b border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface`}>
+    <div className={`${sticky ? 'sticky top-0 z-40 ' : ''}border-b border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface`}>
       <div className="flex h-16 items-center justify-between gap-3 px-3">
         <div className="flex min-w-0 items-center gap-3">
           {onBack && (

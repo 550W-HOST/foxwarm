@@ -22,12 +22,13 @@ async function buildFixtureBundle() {
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
     import { useChatPreferences } from ${JSON.stringify(new URL('../src/chatPreferences.ts', import.meta.url).pathname)}
 
-    const directText = '<foxwarm-message type="channel">\\nuser body\\n</foxwarm-message>\\n<foxwarm-metadata kind="group-message" mentioned="true" />\\n<foxwarm-file name="notes.txt" mime="text/plain" />\\n<foxwarm-image name="photo.png" />'
+    const directText = '<foxwarm-message type="channel">\\nuser first\\n\\nuser second\\n</foxwarm-message>\\n<foxwarm-metadata kind="group-message" mentioned="true" />\\n<foxwarm-file name="notes.txt" mime="text/plain" />\\n<foxwarm-image name="photo.png" />'
     const messages = [
       { role: 'user', parts: [{ text: directText }], __meta: { seq: 1 } },
-      { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-09-06 08:00:00 +0000" />' }, { text: 'optimistic body' }], __meta: { clientMessageId: 'optimistic-1' } },
-      { role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nold system body\\n</foxwarm-system>' }], __meta: { seq: 2 } },
-      { role: 'model', parts: [{ text: 'assistant selection sentinel' }], __meta: { seq: 3 } },
+      { role: 'user', parts: [{ system: '<foxwarm-message type="channel">\\nwrapped first\\n\\nwrapped second\\n</foxwarm-message>' }], __meta: { seq: 2 } },
+      { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-09-06 08:00:00 +0000" />' }, { text: '\\noptimistic first\\n\\n\\noptimistic second\\n' }], __meta: { clientMessageId: 'optimistic-1' } },
+      { role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nold system body\\n</foxwarm-system>' }], __meta: { seq: 3 } },
+      { role: 'model', parts: [{ text: 'assistant selection sentinel' }], __meta: { seq: 4 } },
     ]
 
     function Fixture() {
@@ -115,12 +116,38 @@ test('user metadata defaults hidden while bodies, attachment tags, and old syste
   const text = await page.$eval('main', element => element.textContent || '')
   assert.equal(text.includes('<foxwarm-message'), false)
   assert.equal(text.includes('<foxwarm-metadata'), false)
-  assert.equal(text.includes('user body'), true)
-  assert.equal(text.includes('optimistic body'), true)
+  assert.equal(text.includes('user first'), true)
+  assert.equal(text.includes('optimistic first'), true)
   assert.equal(text.includes('<foxwarm-file name="notes.txt"'), true)
   assert.equal(text.includes('<foxwarm-image name="photo.png"'), true)
   assert.equal(await page.$$eval('[data-system-message-card]', cards => cards.length), 1)
   assert.equal((await page.$eval('[data-system-message-card]', card => card.textContent || '')).includes('wait-timeout'), true)
+})
+
+test('direct, wrapped, and optimistic user text preserves authored blank lines without changing copied text', async () => {
+  await mountFixture()
+  const evidence = await page.evaluate(() => {
+    const pres = [...document.querySelectorAll('pre')]
+    const find = text => pres.find(pre => pre.textContent?.includes(text))
+    const direct = find('user first')
+    const wrapped = find('wrapped first')
+    const optimistic = find('optimistic first')
+    if (!direct || !wrapped || !optimistic) throw new Error('Expected all user text variants')
+    const snapshot = pre => ({ text: pre.textContent, height: pre.getBoundingClientRect().height, lineHeight: Number.parseFloat(getComputedStyle(pre).lineHeight) })
+    const selection = getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(optimistic)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    return { direct: snapshot(direct), wrapped: snapshot(wrapped), optimistic: snapshot(optimistic), selected: selection.toString() }
+  })
+  assert.equal(evidence.direct.text, 'user first\n\nuser second\n<foxwarm-file name="notes.txt" mime="text/plain" />\n<foxwarm-image name="photo.png" />')
+  assert.equal(evidence.wrapped.text, 'wrapped first\n\nwrapped second')
+  assert.equal(evidence.optimistic.text, '\noptimistic first\n\n\noptimistic second\n')
+  assert.equal(evidence.selected, evidence.optimistic.text.slice(0, -1))
+  assert.ok(evidence.direct.height >= evidence.direct.lineHeight * 4.8)
+  assert.ok(evidence.wrapped.height >= evidence.wrapped.lineHeight * 2.8)
+  assert.ok(evidence.optimistic.height >= evidence.optimistic.lineHeight * 3.8)
 })
 
 test('session menu owns Input and Chat settings and persists the metadata toggle', async () => {
@@ -148,7 +175,10 @@ test('session menu owns Input and Chat settings and persists the metadata toggle
     text: getSelection()?.toString(),
     sameNode: window.selectedSentinelNode?.isConnected && getSelection()?.anchorNode === window.selectedSentinelNode,
   })), { text: 'assistant selection sentinel', sameNode: true })
-  assert.equal((await page.$eval('main', element => element.textContent || '')).includes('<foxwarm-message type="channel">'), true)
+  const enabledText = await page.$eval('main', element => element.textContent || '')
+  assert.equal(enabledText.includes('<foxwarm-message type="channel">'), true)
+  assert.equal(enabledText.includes('user first\n\nuser second'), true)
+  assert.equal(enabledText.includes('optimistic first\n\n\noptimistic second'), true)
   assert.equal((await page.$eval('main', element => element.textContent || '')).includes('<foxwarm-system kind="time"'), true)
   await clickMenuLabel('Enter')
   await page.waitForFunction(() => localStorage.getItem('foxwarm_send_key_mode_v1') === 'enter')

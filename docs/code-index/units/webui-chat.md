@@ -54,6 +54,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 
 - Header state and cwd come from the per-session history/stream snapshot, including in Code leaf Chat.
 - The header menu owns the existing browser-local Input and Chat preferences plus `Show user message metadata` (default off) and Debug. The move from the global menu does not make these settings server-backed or Session-semantic. Canonical placement: [D-webui-settings-placement](../modules/webui.md#d-webui-settings-placement).
+- The sticky Chat header establishes the pane-local layer above the context minimap/content layer, so its open session menu remains clickable where the menu geometrically overlaps the right-side minimap. It remains below modal/global overlay layers.
 - Chat itself owns only whether Debug is open and passes current source data to the separately mounted `SessionDebugModal`. Open and Refresh each capture one immutable diagnostic snapshot; ordinary Chat updates do not rebuild it, and close/session replacement/unmount aborts pending work and releases modal-owned payload/text. See [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap).
 - History/realtime/Debug/CTX image parts use authenticated deployment-relative blob API paths and contain no base64 or legacy filesystem path. Timeline rendering owns the safe-raster/download distinction; canonical persistence/provider/retention behavior is [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - Timeline defaults to a recent subset with explicit full expansion.

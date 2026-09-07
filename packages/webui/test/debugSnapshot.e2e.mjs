@@ -1,6 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { readdir, readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
+const assetsDirectory = new URL('../dist/assets/', import.meta.url)
 let browser
 let server
 let fixtureUrl
@@ -129,9 +131,13 @@ async function closeDebug(page) {
 
 before(async () => {
   const bundle = await buildFixtureBundle()
+  const assetNames = await readdir(assetsDirectory)
+  const cssAsset = assetNames.find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssAsset, 'build packages/webui before running the mounted Chat fixture')
+  const css = await readFile(new URL(cssAsset, assetsDirectory), 'utf8')
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><style>${css}</style><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -141,6 +147,37 @@ before(async () => {
 after(async () => {
   await browser?.close()
   await new Promise(resolve => server?.close(resolve))
+})
+
+test('mounted Chat session menu remains above the overlapping context minimap', async () => {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => document.querySelector('.foxwarm-context-scrollbar-shell'))
+  await page.click('button[aria-label="Open session options"]')
+  await page.waitForSelector('[data-session-ui-settings-menu]')
+  const evidence = await page.evaluate(() => {
+    const menu = document.querySelector('[data-session-ui-settings-menu]')
+    const minimap = document.querySelector('.foxwarm-context-scrollbar-shell')
+    if (!(menu instanceof HTMLElement) || !(minimap instanceof HTMLElement)) throw new Error('Expected menu and minimap')
+    const menuRect = menu.getBoundingClientRect()
+    const minimapRect = minimap.getBoundingClientRect()
+    const left = Math.max(menuRect.left, minimapRect.left)
+    const right = Math.min(menuRect.right, minimapRect.right)
+    const top = Math.max(menuRect.top, minimapRect.top)
+    const bottom = Math.min(menuRect.bottom, minimapRect.bottom)
+    if (right <= left || bottom <= top) throw new Error('Fixture did not produce menu/minimap overlap')
+    const x = (left + right) / 2
+    const y = (top + bottom) / 2
+    const hit = document.elementFromPoint(x, y)
+    return {
+      hitInsideMenu: !!hit?.closest('[data-session-ui-settings-menu]'),
+      headerZ: getComputedStyle(menu.closest('.sticky')).zIndex,
+      minimapZ: getComputedStyle(minimap).zIndex,
+    }
+  })
+  assert.deepEqual(evidence, { hitInsideMenu: true, headerZ: '40', minimapZ: '30' })
+  await page.close()
 })
 
 test('debug JSON is captured only on explicit open or refresh and remains immutable between captures', async () => {

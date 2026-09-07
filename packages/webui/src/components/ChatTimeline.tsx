@@ -390,22 +390,33 @@ const shouldRenderUserLine = (line: string, showUserMessageMetadata: boolean): b
   showUserMessageMetadata || !isLightweightSystemTextLine(line) || isUserAttachmentMetadataLine(line)
 )
 
+const renderUserPreLines = (text: string, showUserMessageMetadata: boolean, renderLine: (line: string, lineIndex: number) => ReactNode): ReactNode => {
+  const visibleLines = text.split('\n')
+    .map((line, lineIndex) => ({ line, lineIndex }))
+    .filter(({ line }) => shouldRenderUserLine(line, showUserMessageMetadata))
+  return visibleLines.map(({ line, lineIndex }, visibleIndex) => (
+    <span key={lineIndex}>
+      {renderLine(line, lineIndex)}
+      {visibleIndex < visibleLines.length - 1 ? '\n' : null}
+    </span>
+  ))
+}
+
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUserMessageMetadata = true }: { systemText: string; isUser: boolean; showUserMessageMetadata?: boolean }) {
   return (
     <pre
       className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-user-text' : 'text-fw-text-muted'}`}
       style={{ lineHeight: '1.3em' }}
     >
-      {systemText.split('\n').map((line, lineIdx) => {
+      {renderUserPreLines(systemText, !isUser || showUserMessageMetadata, (line, lineIdx) => {
         const isMetaLine = isSystemLikeText(line)
-        if (isUser && !shouldRenderUserLine(line, showUserMessageMetadata)) return null
         return (
           <span
             key={lineIdx}
             className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
             style={isMetaLine
-              ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-              : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+              ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+              : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
             }
           >
             {renderSystemTextWithSessionLinks(line)}
@@ -425,16 +436,15 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMe
     <div>
       <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
         <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: '1.5em' }}>
-          {text.split('\n').map((line, lineIdx) => {
+          {renderUserPreLines(text, showUserMessageMetadata, (line, lineIdx) => {
             const isPrefix = isSystemLikeText(line)
-            if (!shouldRenderUserLine(line, showUserMessageMetadata)) return null
             return (
               <span
                 key={lineIdx}
                 className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
                 style={isPrefix
-                  ? { display: 'block', fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
-                  : { display: 'block' }
+                  ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
+                  : undefined
                 }
               >
                 {line}
