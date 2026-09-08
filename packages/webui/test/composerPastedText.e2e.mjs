@@ -21,9 +21,11 @@ let server
 let fixtureUrl
 
 await writeFile(entryPath, `
-  import { useState } from 'react'
+  import { useLayoutEffect, useRef, useState } from 'react'
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
+  import InlineComposerEditor from ${JSON.stringify(path.join(webuiRoot, 'src/components/InlineComposerEditor.tsx'))}
+  import { makePlainComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [{ name: '/help', description: 'Help' }] }) })
   const noop = async () => {}
   function Fixture() {
@@ -52,10 +54,34 @@ await writeFile(entryPath, `
     }
     return <div id="host"><ChatComposer {...props} /></div>
   }
+  function StaleSameSessionPropFixture() {
+    const editorRef = useRef(null)
+    const [disabled, setDisabled] = useState(false)
+    const staleValue = useRef(makePlainComposerDraft('submitted value')).current
+    window.fixtureTriggerImperativeClearWithStaleProp = () => setDisabled(true)
+    useLayoutEffect(() => {
+      if (disabled) editorRef.current?.replaceDraft(makePlainComposerDraft())
+    }, [disabled])
+    return <InlineComposerEditor
+      ref={editorRef}
+      draftId="fixture/stale-same-session"
+      value={staleValue}
+      disabled={disabled}
+      placeholder="Message"
+      onChange={() => {}}
+      onBlur={() => {}}
+      onAttachFiles={() => []}
+      resolveAttachmentFile={() => null}
+      onReattachFile={() => {}}
+      onCommandKeyDown={() => false}
+    />
+  }
   window.fixtureSends = []
   window.fixtureAccept = false
   window.fixtureHoldTranscription = false
-  createRoot(document.getElementById('root')).render(<Fixture />)
+  const fixtureRoot = createRoot(document.getElementById('root'))
+  window.fixtureRenderStaleSameSessionProp = () => fixtureRoot.render(<StaleSameSessionPropFixture />)
+  fixtureRoot.render(<Fixture />)
   window.fixtureEditor = () => document.querySelector('[role="textbox"][aria-label="Message"]')
   window.fixtureSelectText = (start, end) => {
     const editor = window.fixtureEditor()
@@ -202,6 +228,17 @@ for (const spec of browsers) {
     assert.equal(await page.evaluate(() => window.fixtureDraft), 'ordinary </pasted-text> text')
   }))
 }
+
+test('Chromium does not replay a stale same-Session prop over an imperative replacement', async () => withBrowser(browsers[0], async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.evaluate(() => window.fixtureRenderStaleSameSessionProp())
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent === 'submitted value', {}, editor)
+  await page.evaluate(() => window.fixtureTriggerImperativeClearWithStaleProp())
+  await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-disabled') === 'true', {}, editor)
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  assert.equal(await page.$eval(editor, node => node.textContent), '')
+  assert.equal(await page.$eval(editor, node => node.dataset.empty), 'true')
+}))
 
 for (const spec of browsers) {
   test(`${spec.name} restores real empty state and permits physical caret entry around leading blocks`, async () => withBrowser(spec, async page => {

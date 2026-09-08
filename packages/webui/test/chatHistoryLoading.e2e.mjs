@@ -39,7 +39,7 @@ async function buildFixtureBundle() {
       entry.settled = true
       const latestSeq = extras.latestSeq ?? messages.reduce((latest, message) => Math.max(latest, message.__meta?.seq || 0), 0)
       entry.resolve(new Response(JSON.stringify({
-        session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, messageCount: extras.messageCount ?? messages.length, historyVersion, modelKey: 'fixture/model' },
+        session: { id: extras.sessionId || 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, messageCount: extras.messageCount ?? messages.length, historyVersion, modelKey: 'fixture/model' },
         messages,
         persistentMemorySnapshot: 'snapshot supplied by history',
         queuedMessages: [],
@@ -84,6 +84,10 @@ async function buildFixtureBundle() {
             reject(new DOMException('Aborted', 'AbortError'))
           }, { once: true })
         })
+      }
+      if (url.includes('/upload')) {
+        const file = init?.body?.get?.('file')
+        return new Response(JSON.stringify({ path: '/fixture/upload', filename: file?.name || 'attachment', mimeType: file?.type || 'application/octet-stream', size: file?.size || 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       if (url.includes('/message')) {
         window.fixtureMessageBodies.push(JSON.parse(init?.body || '{}'))
@@ -149,10 +153,10 @@ async function buildFixtureBundle() {
     window.emitFixtureMessage = message => window.emitFixtureEvent({ type: 'message', message })
 
     const fixtureRoot = createRoot(document.getElementById('root'))
-    window.renderFixtureChats = (count = 1, generation = 0) => fixtureRoot.render(React.createElement('div', {},
+    window.renderFixtureChats = (count = 1, generation = 0, sessionId = 'fixture/main') => fixtureRoot.render(React.createElement('div', {},
       ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
         key: generation + '-' + index,
-        sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture',
+        sessionId, canonicalSessionId: sessionId, sessionDisplayName: 'Fixture',
       })),
     ))
     window.renderFixtureChats()
@@ -494,6 +498,79 @@ test('rapid A/B sends issue distinct identified requests without waiting for A r
     .map(row => row.textContent.trim())
     .filter(text => text === 'A' || text === 'B')), ['A', 'B'])
   await page.evaluate(() => window.resolveFixtureMessages())
+  await page.close()
+})
+
+test('successful real Chat send clears the live and persisted composer draft', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.evaluate(() => window.resolveFixtureHistory())
+  await page.waitForFunction(() => document.body.textContent.includes('old history row'))
+
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'clear after accepted send')
+  await page.click('button[aria-label="Send message"]')
+  await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
+  assert.equal(await page.$eval(editor, node => node.textContent.includes('clear after accepted send')), true)
+  await page.evaluate(() => window.resolveFixtureMessages())
+  await page.waitForFunction(selector => {
+    const node = document.querySelector(selector)
+    return node?.textContent === '' && node.dataset.empty === 'true'
+  }, {}, editor)
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_fixture/main')), null)
+
+  await page.type(editor, 'before ')
+  await page.$eval(editor, node => {
+    const text = 'p'.repeat(2000)
+    const data = new DataTransfer(); data.setData('text/plain', text)
+    node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+    const files = new DataTransfer()
+    files.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
+    files.items.add(new File(['notes'], 'notes.txt', { type: 'text/plain' }))
+    node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: files }))
+  })
+  await page.keyboard.type(' after')
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-pasted-text-chip').length === 1
+    && document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
+  await page.click('button[aria-label="Send message"]')
+  await page.waitForFunction(() => window.fixtureMessageBodies.length === 2)
+  await page.evaluate(() => window.resolveFixtureMessages())
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent === '', {}, editor)
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
+
+  await page.type(editor, 'retain after rejected send')
+  await page.click('button[aria-label="Send message"]')
+  await page.waitForFunction(() => window.fixtureMessageBodies.length === 3)
+  await page.evaluate(() => window.rejectNextFixtureMessage())
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('retain after rejected send'), {}, editor)
+  assert.match(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main') || ''), /retain after rejected send/)
+  await page.close()
+})
+
+test('accepted send clears only its submitted Session after switching composers', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.evaluate(() => window.resolveFixtureHistory())
+  await page.waitForFunction(() => document.body.textContent.includes('old history row'))
+  const editor = '[role="textbox"][aria-label="Message"]'
+
+  await page.type(editor, 'submitted main draft')
+  await page.click('button[aria-label="Send message"]')
+  await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
+  await page.evaluate(() => window.renderFixtureChats(1, 1, 'fixture/other'))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.evaluate(() => window.resolveFixtureHistory(0, [], 0, { sessionId: 'fixture/other' }))
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent === '', {}, editor)
+  await new Promise(resolve => setTimeout(resolve, 50))
+  await page.type(editor, 'new Session draft')
+
+  await page.evaluate(() => window.resolveFixtureMessages())
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('new Session draft'), {}, editor)
+  assert.match(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/other') || ''), /new Session draft/)
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
   await page.close()
 })
 

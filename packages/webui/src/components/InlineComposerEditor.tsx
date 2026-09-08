@@ -732,24 +732,23 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [readDraftFromNode])
 
   useEffect(() => {
-    const serialized = serializeComposerDraft(value)
     const draftChanged = lastDraftIdRef.current !== draftId
-    if (draftChanged || serialized !== lastEmittedRef.current) {
-      cancelCompositionFinalize()
-      compositionBaseRef.current = null
-      compositionEndingRef.current = false
-      composingRef.current = false
-      beforeInputRef.current = null
-      renderDraft(value)
-      authoritativeDraftRef.current = value
-      undoRef.current = []
-      redoRef.current = []
-      historyGroupRef.current = null
-      lastEmittedRef.current = serialized
-      lastDraftIdRef.current = draftId
-      setActiveBlockId(null)
-      setActiveAttachmentRef(null)
-    }
+    if (!draftChanged) return
+    const serialized = serializeComposerDraft(value)
+    cancelCompositionFinalize()
+    compositionBaseRef.current = null
+    compositionEndingRef.current = false
+    composingRef.current = false
+    beforeInputRef.current = null
+    renderDraft(value)
+    authoritativeDraftRef.current = value
+    undoRef.current = []
+    redoRef.current = []
+    historyGroupRef.current = null
+    lastEmittedRef.current = serialized
+    lastDraftIdRef.current = draftId
+    setActiveBlockId(null)
+    setActiveAttachmentRef(null)
   }, [cancelCompositionFinalize, draftId, renderDraft, value])
 
   useEffect(() => {
