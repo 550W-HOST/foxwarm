@@ -59,6 +59,10 @@ function isCaretAnchor(node: Node | null): node is HTMLElement {
   return node instanceof HTMLElement && node.dataset.composerCaretAnchor !== undefined
 }
 
+function isTrailingNewlineScaffold(node: Node | null): node is HTMLBRElement {
+  return node instanceof HTMLBRElement && node.dataset.composerTrailingNewline !== undefined
+}
+
 function getCaretAnchor(node: Node | null): HTMLElement | null {
   if (!node) return null
   return isCaretAnchor(node) ? node : node.parentElement?.closest<HTMLElement>('[data-composer-caret-anchor]') || null
@@ -98,7 +102,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
 
   const readNodeSegments = useCallback((node: Node, output: ComposerDraftSegment[]) => {
-    if (getCaretAnchor(node)) return
+    if (getCaretAnchor(node) || isTrailingNewlineScaffold(node)) return
     if (node.nodeType === Node.TEXT_NODE) {
       output.push({ type: 'text', text: node.nodeValue || '' })
       return
@@ -131,6 +135,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     if (!editor) return makeComposerDraft([])
     const hasCanonicalContent = [...editor.childNodes].some(node => {
       if (isCaretAnchor(node)) return false
+      if (isTrailingNewlineScaffold(node)) return false
       if (isChip(node)) return true
       if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue || '').length > 0
       if (node instanceof HTMLElement && node.tagName === 'BR') return false
@@ -140,7 +145,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [readDraftFromNode])
 
   const getNodeUnits = useCallback((node: Node): number => {
-    if (getCaretAnchor(node)) return 0
+    if (getCaretAnchor(node) || isTrailingNewlineScaffold(node)) return 0
     if (node.nodeType === Node.TEXT_NODE) return node.nodeValue?.length || 0
     if (isChip(node) || (node instanceof HTMLElement && node.tagName === 'BR')) return 1
     return [...node.childNodes].reduce((sum, child) => sum + getNodeUnits(child), 0)
@@ -194,6 +199,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       const children = [...parent.childNodes]
       for (let index = 0; index < children.length; index += 1) {
         const child = children[index]
+        if (isTrailingNewlineScaffold(child)) continue
         if (isCaretAnchor(child)) {
           if (remaining === 0) return { node: child.firstChild || child, offset: child.firstChild ? CARET_ANCHOR_TEXT.length : 0 }
           continue
@@ -250,6 +256,15 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     editor.dataset.empty = serializeComposerDraft(readDraft()).length === 0 ? 'true' : 'false'
   }, [readDraft])
 
+  const updateCompositionPresentation = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const hasCanonicalText = serializeComposerDraft(readDraft()).length > 0
+    const hasAnchorText = [...editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')]
+      .some(anchor => removeCaretAnchorSentinel(anchor.textContent || '').length > 0)
+    editor.dataset.compositionVisible = hasCanonicalText || hasAnchorText ? 'true' : 'false'
+  }, [readDraft])
+
   const emitDraft = useCallback(() => {
     const next = readDraft()
     const editor = editorRef.current
@@ -267,6 +282,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     }
     authoritativeDraftRef.current = next
     lastEmittedRef.current = serializeComposerDraft(next)
+    if (editor) editor.dataset.compositionVisible = 'false'
     updateEmptyState()
     onChange(next)
   }, [onChange, readDraft, updateEmptyState])
@@ -305,15 +321,28 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [])
 
   const installCaretAnchors = useCallback((editor: HTMLElement) => {
+    for (const scaffold of editor.querySelectorAll<HTMLElement>('[data-composer-trailing-newline]')) scaffold.remove()
     for (const anchor of editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')) anchor.remove()
     editor.normalize()
+    const trailingBrowserBreak = editor.lastChild
+    if (trailingBrowserBreak instanceof HTMLBRElement) {
+      trailingBrowserBreak.remove()
+      const withoutTrailingBreak = serializeComposerDraft(readDraftFromNode(editor))
+      if (withoutTrailingBreak.length > 0 && !withoutTrailingBreak.endsWith('\n')) editor.append(trailingBrowserBreak)
+    }
     const contentNodes = [...editor.childNodes].filter(node => node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)
     if (isChip(contentNodes[0])) contentNodes[0].before(createCaretAnchor())
     for (let index = 1; index < contentNodes.length; index += 1) {
       if (isChip(contentNodes[index - 1]) && isChip(contentNodes[index])) contentNodes[index].before(createCaretAnchor())
     }
     if (isChip(contentNodes.at(-1) || null)) editor.append(createCaretAnchor())
-  }, [createCaretAnchor])
+    if (serializeComposerDraft(readDraftFromNode(editor)).endsWith('\n')) {
+      const scaffold = document.createElement('br')
+      scaffold.dataset.composerTrailingNewline = 'true'
+      scaffold.setAttribute('aria-hidden', 'true')
+      editor.append(scaffold)
+    }
+  }, [createCaretAnchor, readDraftFromNode])
 
   const renderDraft = useCallback((draft: ComposerDraft) => {
     const editor = editorRef.current
@@ -325,6 +354,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     }
     editor.replaceChildren(fragment)
     installCaretAnchors(editor)
+    editor.dataset.compositionVisible = 'false'
     updateEmptyState()
   }, [createChip, installCaretAnchors, updateEmptyState])
 
@@ -410,11 +440,14 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     compositionEndingRef.current = false
     composingRef.current = false
     beforeInputRef.current = null
-    if (!base || disabledRef.current) return
+    if (!base || disabledRef.current) {
+      updateCompositionPresentation()
+      return
+    }
     reconcileCaretAnchors()
     recordHistory(base, 'composition')
     emitDraft()
-  }, [cancelCompositionFinalize, emitDraft, reconcileCaretAnchors, recordHistory])
+  }, [cancelCompositionFinalize, emitDraft, reconcileCaretAnchors, recordHistory, updateCompositionPresentation])
 
   const flushForSubmit = useCallback(() => {
     const editor = editorRef.current
@@ -434,6 +467,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     compositionEndingRef.current = false
     composingRef.current = false
     beforeInputRef.current = null
+    if (editor) editor.dataset.compositionVisible = 'false'
     reconcileCaretAnchors(false)
     const next = readDraft()
     if (!sameDraft(base.draft, next)) {
@@ -660,8 +694,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           }
           if (composingRef.current || nativeEvent.isComposing) {
             beforeInputRef.current = null
+            updateCompositionPresentation()
             return
           }
+          event.currentTarget.dataset.compositionVisible = 'false'
           reconcileCaretAnchors()
           if (beforeInputRef.current) {
             const coalesce = nativeEvent.inputType === 'insertText' || nativeEvent.inputType.startsWith('deleteContent')
@@ -670,12 +706,13 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           beforeInputRef.current = null
           emitDraft()
         }}
-        onCompositionStart={() => {
+        onCompositionStart={(event) => {
           if (disabledRef.current) return
           cancelCompositionFinalize()
           compositionEndingRef.current = false
           composingRef.current = true
           compositionBaseRef.current = captureEditorState()
+          event.currentTarget.dataset.compositionVisible = 'false'
         }}
         onCompositionEnd={() => {
           if (disabledRef.current || !compositionBaseRef.current) {
@@ -683,6 +720,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
             compositionBaseRef.current = null
             compositionEndingRef.current = false
             composingRef.current = false
+            updateCompositionPresentation()
             return
           }
           compositionEndingRef.current = true

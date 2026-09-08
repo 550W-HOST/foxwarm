@@ -29,13 +29,15 @@ await writeFile(entryPath, `
   function Fixture() {
     const [sessionId, setSessionId] = useState('fixture/main')
     const [loading, setLoading] = useState(false)
+    const [sendKeyMode, setSendKeyMode] = useState('modEnter')
     const [, redraw] = useState(0)
     window.fixtureCurrentSession = sessionId
     window.fixtureSetSession = setSessionId
     window.fixtureSetLoading = setLoading
+    window.fixtureSetSendKeyMode = setSendKeyMode
     window.fixtureRedraw = () => redraw(value => value + 1)
     const props = {
-      sessionId, sessionMissing: false, loading, asrAvailable: false,
+      sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: false,
       modelOptions: [], currentModelKey: 'model/current', sessionModel: 'model/current', defaultModelKey: 'model/current',
       childModelDefault: 'model/current', effectiveChildModelKey: 'model/current', effectiveEffort: 'medium', effectiveChildEffort: 'medium',
       onChangeModel: noop, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
@@ -337,6 +339,188 @@ for (const spec of browsers) {
     }
   }))
 }
+
+for (const spec of browsers) {
+  test(`${spec.name} renders the first authored newline and preserves newline/send key modes`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+    const reset = async sessionId => {
+      await page.evaluate(id => window.fixtureSetSession(id), sessionId)
+      await page.waitForFunction(id => window.fixtureCurrentSession === id, {}, sessionId)
+      await new Promise(resolve => setTimeout(resolve, 50))
+      await page.waitForFunction(() => window.fixtureEditor()?.childNodes.length === 0)
+    }
+    const copyAll = () => page.evaluate(() => {
+      window.fixtureSelectAll()
+      const data = new DataTransfer()
+      const event = new Event('copy', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'clipboardData', { value: data })
+      window.fixtureEditor().dispatchEvent(event)
+      return data.getData('text/plain')
+    })
+    const selectedTextTop = () => page.evaluate(() => {
+      const editorNode = window.fixtureEditor()
+      const walker = document.createTreeWalker(editorNode, NodeFilter.SHOW_TEXT)
+      let text = walker.nextNode()
+      while (text && !(text.nodeValue || '').includes('x')) text = walker.nextNode()
+      const index = text.nodeValue.lastIndexOf('x')
+      const range = document.createRange(); range.setStart(text, index); range.setEnd(text, index + 1)
+      return { top: range.getBoundingClientRect().top, editorTop: editorNode.getBoundingClientRect().top, lineHeight: parseFloat(getComputedStyle(editorNode).lineHeight) }
+    })
+
+    const emptySession = 'fixture/main'
+    const emptyStorageKey = `composer_draft_v1_${emptySession}`
+    await reset(emptySession)
+    await page.click(editor)
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n')
+    assert.deepEqual(await page.$eval(editor, node => ({
+      empty: node.dataset.empty,
+      scaffold: node.querySelectorAll('[data-composer-trailing-newline]').length,
+      placeholder: getComputedStyle(node, '::before').content,
+    })), { empty: 'false', scaffold: 1, placeholder: 'none' })
+    assert.notEqual(await page.evaluate(key => localStorage.getItem(key), emptyStorageKey), null)
+    await page.keyboard.type('x')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\nx')
+    const firstLine = await selectedTextTop()
+    assert.equal(firstLine.top >= firstLine.editorTop + firstLine.lineHeight * 0.75, true)
+    assert.equal(await copyAll(), '\nx')
+    await page.evaluate(() => {
+      const node = [...window.fixtureEditor().childNodes].find(child => child.nodeType === Node.TEXT_NODE)
+      window.fixtureSelectText(node.nodeValue.length, node.nodeValue.length)
+    })
+    await page.keyboard.press('Backspace')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n')
+    assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-trailing-newline]').length), 1)
+    await page.keyboard.press('Backspace')
+    await page.waitForFunction(() => window.fixtureDraft === '' && window.fixtureEditor()?.dataset.empty === 'true')
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), emptyStorageKey), null)
+
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n\n')
+    assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-trailing-newline]').length), 1)
+    await page.reload({ waitUntil: 'load' })
+    await page.waitForSelector(editor)
+    await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+    assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-trailing-newline]').length), 1)
+    await page.evaluate(() => {
+      const editorNode = window.fixtureEditor(); const walker = document.createTreeWalker(editorNode, NodeFilter.SHOW_TEXT); const text = walker.nextNode()
+      editorNode.focus()
+      const range = document.createRange(); range.setStart(text, text.nodeValue.length); range.collapse(true)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    })
+    await page.keyboard.type('x')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n\nx')
+    assert.equal(await copyAll(), '\n\nx')
+
+    await reset(`fixture/newline-text-${spec.name}`)
+    await page.click(editor)
+    await page.keyboard.type('a')
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'a\n')
+    await page.keyboard.type('x')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'a\nx')
+    const ordinaryLine = await selectedTextTop()
+    assert.equal(ordinaryLine.top >= ordinaryLine.editorTop + ordinaryLine.lineHeight * 0.75, true)
+
+    await reset(`fixture/newline-block-${spec.name}`)
+    await page.click(editor)
+    const blockText = 'B'.repeat(2000)
+    const block = `<pasted-text>${blockText}</pasted-text>`
+    await page.evaluate(text => window.fixturePaste(text), blockText)
+    const anchors = await page.$$('.foxwarm-composer-caret-anchor')
+    await anchors.at(-1).click()
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `${block}\n`)
+    await page.keyboard.type('x')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `${block}\nx`)
+    assert.equal(await copyAll(), `${block}\nx`)
+
+    await reset(`fixture/newline-block-shift-${spec.name}`)
+    await page.click(editor)
+    await page.evaluate(text => window.fixturePaste(text), blockText)
+    const shiftAnchors = await page.$$('.foxwarm-composer-caret-anchor')
+    await shiftAnchors.at(-1).click()
+    await page.keyboard.down('Shift'); await page.keyboard.press('Enter'); await page.keyboard.up('Shift')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `${block}\n`)
+
+    await reset(`fixture/newline-send-${spec.name}`)
+    await page.evaluate(() => { window.fixtureSetSendKeyMode('enter'); window.fixtureSends = []; window.fixtureAccept = false })
+    await page.click(editor)
+    await page.keyboard.type('send')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => window.fixtureSends.length === 1)
+    assert.equal(await page.evaluate(() => window.fixtureSends[0].text), 'send')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'send')
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.keyboard.press('Backspace')
+    await page.keyboard.down('Shift'); await page.keyboard.press('Enter'); await page.keyboard.up('Shift')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n')
+  }))
+}
+
+test('Chromium hides the empty placeholder during trusted composition without persisting interim text', async () => withBrowser(browsers[0], async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  const client = await page.createCDPSession()
+  await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+  await page.click(editor)
+  await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
+  await page.waitForFunction(() => window.fixtureEditor()?.dataset.compositionVisible === 'true')
+  assert.deepEqual(await page.$eval(editor, node => ({
+    empty: node.dataset.empty,
+    placeholder: getComputedStyle(node, '::before').content,
+  })), { empty: 'true', placeholder: 'none' })
+  assert.equal(await page.evaluate(() => window.fixtureDraft || ''), '')
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
+
+  await client.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 })
+  await client.send('Input.insertText', { text: '' })
+  await page.waitForFunction(() => window.fixtureEditor()?.dataset.empty === 'true' && window.fixtureEditor()?.dataset.compositionVisible !== 'true')
+  assert.notEqual(await page.$eval(editor, node => getComputedStyle(node, '::before').content), 'none')
+  assert.equal(await page.evaluate(() => window.fixtureDraft || ''), '')
+
+  await page.click(editor)
+  await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
+  await client.send('Input.insertText', { text: '你' })
+  await page.waitForFunction(() => window.fixtureDraft === '你')
+  assert.deepEqual(await page.$eval(editor, node => ({
+    empty: node.dataset.empty,
+    compositionVisible: node.dataset.compositionVisible,
+    placeholder: getComputedStyle(node, '::before').content,
+  })), { empty: 'false', compositionVisible: 'false', placeholder: 'none' })
+  await client.detach()
+}))
+
+test('Firefox hides and restores the empty placeholder around synthetic composition', async () => withBrowser(browsers[1], async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+  await page.click(editor)
+  await page.evaluate(() => {
+    const editorNode = window.fixtureEditor()
+    editorNode.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const selection = getSelection(); const range = selection.getRangeAt(0); const node = document.createTextNode('に'); range.insertNode(node)
+    range.setStart(node, 1); range.collapse(true); selection.removeAllRanges(); selection.addRange(range)
+    editorNode.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: 'に', isComposing: true }))
+  })
+  await page.waitForFunction(() => window.fixtureEditor()?.dataset.compositionVisible === 'true')
+  assert.deepEqual(await page.$eval(editor, node => ({
+    empty: node.dataset.empty,
+    placeholder: getComputedStyle(node, '::before').content,
+  })), { empty: 'true', placeholder: 'none' })
+  assert.equal(await page.evaluate(() => window.fixtureDraft || ''), '')
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
+
+  await page.evaluate(() => {
+    const editorNode = window.fixtureEditor()
+    editorNode.replaceChildren()
+    editorNode.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: '', isComposing: true }))
+    editorNode.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }))
+  })
+  await page.waitForFunction(() => window.fixtureEditor()?.dataset.empty === 'true' && window.fixtureEditor()?.dataset.compositionVisible !== 'true')
+  assert.notEqual(await page.$eval(editor, node => getComputedStyle(node, '::before').content), 'none')
+  assert.equal(await page.evaluate(() => window.fixtureDraft || ''), '')
+}))
 
 test('Chromium preserves trusted CDP IME replacement through every caret-anchor position', async () => withBrowser(browsers[0], async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
