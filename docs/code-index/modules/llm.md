@@ -7,6 +7,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 ## Units
 
 - [src-llm](../units/src-llm.md) — routing, Anthropic path, prompt snapshots, retries, logs, tool batches, and one-shot/session requests.
+- [src-conditional-memory](../units/src-conditional-memory.md) — pure conditional memory-source filtering and current-model snapshot header helpers.
 - [src-llm-request-journal](../units/src-llm-request-journal.md) — content-addressed canonical request inputs, bounded manifests, attempts, and reconstruction.
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
