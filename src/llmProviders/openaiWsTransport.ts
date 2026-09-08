@@ -12,7 +12,7 @@ import {
 } from './openaiWsState';
 
 const OPENAI_WS_MAX_CHAIN_AGE_MS = 60 * 60 * 1000;
-const OPENAI_WS_IDLE_TIMEOUT_MS = 60 * 1000;
+const OPENAI_WS_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const OPENAI_WS_LOCAL_IDLE_LIMIT = 5;
 const OPENAI_WS_WORKER_IDLE_LIMIT = 1;
 

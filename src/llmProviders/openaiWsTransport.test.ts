@@ -606,7 +606,7 @@ test('openai-ws meaningful deltas switch to and reset the one-minute inactivity 
   assert.equal(socket.terminated, 1);
 });
 
-test('completed idle chains actively expire and close after one minute without another request', async () => {
+test('completed idle chains actively expire and close after ten minutes without another request', async () => {
   const timers = new FakeIdleTimers();
   const diagnostics = captureDiagnostics();
   let socket!: FakeSocket;
@@ -618,7 +618,7 @@ test('completed idle chains actively expire and close after one minute without a
   assert.equal(timers.entries.length, 0);
   pending.finalize([]);
   assert.equal(timers.entries.length, 1);
-  assert.equal(timers.entries[0].delayMs, 60 * 1000);
+  assert.equal(timers.entries[0].delayMs, 10 * 60 * 1000);
   assert.equal(timers.entries[0].unrefs, 1);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   timers.entries[0].callback();
