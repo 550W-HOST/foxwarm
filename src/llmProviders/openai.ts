@@ -75,6 +75,7 @@ export type OpenAIStreamProgressSnapshot = {
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     onMeaningfulProgress?: () => void;
+    onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -988,6 +989,12 @@ export async function collectOpenAIResponsesStream(
                 case 'response.reasoning_summary_text.done':
                     summaryParts.set(key, event.text || summaryParts.get(key) || '');
                     emitSummaryUpdate();
+                    return;
+                case 'response.metadata':
+                    if (event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+                        && event.metadata.type === 'safety_buffering') {
+                        options?.onSafetyBuffering?.(event.metadata);
+                    }
                     return;
                 case 'response.completed':
                     completedResponse = event.response;

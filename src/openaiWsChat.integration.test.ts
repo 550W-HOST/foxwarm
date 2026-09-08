@@ -6,6 +6,10 @@ import os from 'os';
 import path from 'path';
 import WebSocket from 'ws';
 import type { Message, Session } from './types';
+import {
+  SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+  setStreamingTimeoutTestHooks,
+} from './llmStreamingTimeout';
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-openai-ws-chat-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
@@ -50,8 +54,65 @@ const transportPromise = import('./llmProviders/openaiWsTransport');
 after(async () => {
   const transport = await transportPromise;
   transport.setOpenAIWsTransportTestHooks();
+  setStreamingTimeoutTestHooks();
   fs.removeSync(dataRoot);
   delete process.env.FOXWARM_DATA_DIR;
+});
+
+test('openai-ws safety buffering reaches outer LLM timeout error with metadata and correlated warning', async () => {
+  const { requestLlmOnce } = await llmPromise;
+  const transport = await transportPromise;
+  const diagnostics: Array<{ fields: any; message: string }> = [];
+  setStreamingTimeoutTestHooks({
+    set(callback, delayMs) {
+      const handle = { unref() {} };
+      if (delayMs === SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS) process.nextTick(callback);
+      return handle;
+    },
+    clear() {},
+  });
+  transport.setOpenAIWsTransportTestHooks({
+    diagnosticLogger: {
+      info(fields: any, message: string) { diagnostics.push({ fields, message }); },
+      warn(fields: any, message: string) { diagnostics.push({ fields, message }); },
+    } as any,
+    socketFactory: () => {
+      const socket = new EventEmitter() as any;
+      socket.readyState = WebSocket.CONNECTING;
+      socket._socket = { ref() {}, unref() {} };
+      socket.send = () => process.nextTick(() => socket.emit('message', Buffer.from(JSON.stringify({
+        type: 'response.metadata', sequence_number: 1,
+        metadata: { type: 'safety_buffering', use_cases: ['fixture'], reasons: ['review'], retry_model: 'fixture-model' },
+      }))));
+      socket.close = () => {};
+      socket.terminate = () => {
+        if (socket.readyState === WebSocket.CLOSED) return;
+        socket.readyState = WebSocket.CLOSED;
+        socket.emit('close', 1006, Buffer.alloc(0));
+      };
+      process.nextTick(() => { socket.readyState = WebSocket.OPEN; socket.emit('open'); });
+      return socket;
+    },
+  });
+  try {
+    await assert.rejects(
+      requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'fixture' }] }], systemPrompt: '', model: 'socket/model',
+        promptCacheKey: 'safety-buffering-ws', toolDefinitions: [], notifySessionEvents: false,
+        registerAbortController: false, maxRetries: 1,
+      }),
+      /after 600000ms\. Safety buffering metadata: \{"type":"safety_buffering","use_cases":\["fixture"\],"reasons":\["review"\],"retry_model":"fixture-model"\}/,
+    );
+    const warning = diagnostics.find(entry => entry.message === 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+    assert.equal(warning?.fields.purpose, 'low-level');
+    assert.equal(typeof warning?.fields.llmRequestId, 'string');
+    assert.deepEqual(warning?.fields.metadata, {
+      type: 'safety_buffering', use_cases: ['fixture'], reasons: ['review'], retry_model: 'fixture-model',
+    });
+  } finally {
+    transport.setOpenAIWsTransportTestHooks();
+    setStreamingTimeoutTestHooks();
+  }
 });
 
 test('normal chat commits provider replay once and the next turn sends only the new user suffix', async () => {

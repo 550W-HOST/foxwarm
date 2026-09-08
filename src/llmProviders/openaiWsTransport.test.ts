@@ -15,6 +15,7 @@ import type { Message } from '../types';
 import {
   DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from '../llmStreamingTimeout';
 
@@ -636,7 +637,7 @@ test('openai-ws first-activity watchdog covers handshake and ignores unrelated r
   }
 });
 
-test('openai-ws meaningful deltas switch to and reset the two-minute inactivity watchdog', async () => {
+test('openai-ws meaningful deltas switch to and reset the one-minute inactivity watchdog', async () => {
   const timers = new FakeIdleTimers();
   setStreamingTimeoutTestHooks(timers.hooks);
   let socket!: FakeSocket;
@@ -660,7 +661,7 @@ test('openai-ws meaningful deltas switch to and reset the two-minute inactivity 
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /while waiting for further model output activity after 120000ms/);
+  await assert.rejects(pending, /while waiting for further model output activity after 60000ms/);
   assert.equal(socket.terminated, 1);
 });
 
@@ -691,7 +692,7 @@ test('openai-ws reasoning-summary-only deltas reset inactivity without a present
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /while waiting for further model output activity after 120000ms/);
+  await assert.rejects(pending, /while waiting for further model output activity after 60000ms/);
   assert.equal(socket.terminated, 1);
 });
 
@@ -705,7 +706,7 @@ test('openai-ws valid output-item added and done events reset inactivity while i
       current.frame({ type: 'response.output_item.added', output_index: 0 });
       current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } });
       current.frame({ type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: '' });
-      current.frame({ type: 'response.metadata', response_id: 'r1', sequence_number: 4, metadata: { type: 'safety_buffering' } });
+      current.frame({ type: 'response.metadata', response_id: 'r1', sequence_number: 4, metadata: { type: 'ordinary_status' } });
       current.frame({ type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } });
     });
     return socket as any;
@@ -725,7 +726,82 @@ test('openai-ws valid output-item added and done events reset inactivity while i
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /while waiting for further model output activity after 120000ms/);
+  await assert.rejects(pending, /while waiting for further model output activity after 60000ms/);
+  assert.equal(socket.terminated, 1);
+});
+
+test('openai-ws safety buffering warns, enters ten-minute inactivity, and appends metadata on timeout', async () => {
+  const timers = new FakeIdleTimers();
+  const diagnostics = captureDiagnostics();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ diagnosticLogger: diagnostics.logger, socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({
+        type: 'response.metadata', sequence_number: 1,
+        metadata: { type: 'safety_buffering', use_cases: ['fixture'], reasons: ['review'], retry_model: 'fixture-model' },
+      });
+      current.frame({
+        type: 'response.metadata', sequence_number: 2,
+        metadata: { type: 'safety_buffering', use_cases: ['fixture-2'], reasons: ['updated'], retry_model: 'fixture-model-2' },
+      });
+      current.frame({
+        type: 'response.output_item.added', output_index: 0,
+        item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' },
+      });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+    placement: 'local', signal: signal(),
+    diagnostics: { sessionId: 'fixture-session', purpose: 'normal-turn', llmRequestId: 'fixture-request', iteration: 2, attempt: 3 },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+    SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+    SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  assert.equal(timers.entries[2].cleared, true);
+  timers.entries[0].callback();
+  timers.entries[1].callback();
+  timers.entries[2].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[3].callback();
+  await assert.rejects(pending, /after 600000ms\. Safety buffering metadata: \{"type":"safety_buffering","use_cases":\["fixture-2"\],"reasons":\["updated"\],"retry_model":"fixture-model-2"\}/);
+  const warnings = diagnostics.entries.filter(entry => entry.message === 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every(warning => warning.level === 'warn'));
+  assert.equal(warnings[1].fields.sessionId, 'fixture-session');
+  assert.equal(warnings[1].fields.llmRequestId, 'fixture-request');
+  assert.deepEqual(warnings[1].fields.metadata, {
+    type: 'safety_buffering', use_cases: ['fixture-2'], reasons: ['updated'], retry_model: 'fixture-model-2',
+  });
+});
+
+test('user abort after safety buffering remains AbortError rather than a metadata timeout', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => current.frame({
+      type: 'response.metadata', metadata: { type: 'safety_buffering', reasons: ['fixture'] },
+    }));
+    return socket as any;
+  }});
+  const controller = new AbortController();
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+    placement: 'local', signal: controller.signal,
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(timers.entries.at(-1)?.delayMs, SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS);
+  controller.abort();
+  await assert.rejects(pending, (error: any) => error?.name === 'AbortError' && !error.message.includes('Safety buffering metadata'));
   assert.equal(socket.terminated, 1);
 });
 

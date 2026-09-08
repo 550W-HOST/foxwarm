@@ -25,7 +25,7 @@ import {
 } from './llmProviders/openai';
 import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
 import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
-import { createStreamingAttemptWatchdog } from './llmStreamingTimeout';
+import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -3006,6 +3006,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     : null;
                 let attemptSignal = abortController.signal;
                 let markMeaningfulProgress: (() => void) | undefined;
+                let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
                 if (plan.useStreamingApi) {
                     const attemptAbortController = new AbortController();
                     const abortAttemptFromOuter = () => attemptAbortController.abort();
@@ -3020,6 +3021,18 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     });
                     attemptSignal = attemptAbortController.signal;
                     markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
+                    handleSafetyBuffering = metadata => {
+                        const boundedMetadata = boundSafetyBufferingMetadata(metadata);
+                        watchdog.enterSafetyBuffering(boundedMetadata);
+                        logger.warn({
+                            sessionId: options.sessionId,
+                            purpose: options.purpose || 'low-level',
+                            llmRequestId: requestId,
+                            iteration,
+                            attempt,
+                            metadata: boundedMetadata,
+                        }, 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+                    };
                     cleanupStreamingAttempt = () => {
                         watchdog.finish();
                         abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
@@ -3030,6 +3043,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
                         : undefined,
                     onMeaningfulProgress: markMeaningfulProgress,
+                    onSafetyBuffering: handleSafetyBuffering,
                     onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                     onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
                 };

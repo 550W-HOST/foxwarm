@@ -717,6 +717,7 @@ test('collectOpenAIResponsesStream rejects official incomplete and top-level err
 
 test('OpenAI collectors report only approved output-item lifecycle and generated deltas as timeout activity', async () => {
   let responsesMeaningful = 0;
+  const safetyStatuses: Record<string, unknown>[] = [];
   await collectOpenAIResponsesStream(makeStream([
     { type: 'response.created', response: { id: 'r1', status: 'in_progress' } },
     { type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } },
@@ -733,9 +734,15 @@ test('OpenAI collectors report only approved output-item lifecycle and generated
     { type: 'response.reasoning_summary_text.delta', output_index: 1, summary_index: 0, delta: 'r' },
     { type: 'response.function_call_arguments.delta', output_index: 2, delta: '{' },
     { type: 'response.refusal.delta', output_index: 3, content_index: 0, delta: 'n' },
+    { type: 'response.metadata', metadata: { type: 'ordinary_status', value: 'ignored' } },
+    { type: 'response.metadata', metadata: { type: 'safety_buffering', use_cases: ['fixture'] } },
     { type: 'response.completed', response: { id: 'r1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
-  ]), new AbortController().signal, { onMeaningfulProgress: () => { responsesMeaningful += 1; } });
+  ]), new AbortController().signal, {
+    onMeaningfulProgress: () => { responsesMeaningful += 1; },
+    onSafetyBuffering: metadata => { safetyStatuses.push(metadata); },
+  });
   assert.equal(responsesMeaningful, 9);
+  assert.deepEqual(safetyStatuses, [{ type: 'safety_buffering', use_cases: ['fixture'] }]);
 
   let chatMeaningful = 0;
   await collectOpenAIChatCompletionsStream(makeStream([

@@ -2,7 +2,7 @@ import { PassThrough } from 'stream';
 import WebSocket, { RawData } from 'ws';
 import { logger } from '../common';
 import { hashJournalValue } from '../llmRequestJournal';
-import { createStreamingAttemptWatchdog } from '../llmStreamingTimeout';
+import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from '../llmStreamingTimeout';
 import { collectOpenAIResponsesStream, OpenAIStreamProgressSnapshot } from './openai';
 import {
     extendOpenAIWsPrefix,
@@ -376,6 +376,15 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
             attemptAbortController.abort();
         },
     });
+    const handleSafetyBuffering = (metadata: Record<string, unknown>) => {
+        const boundedMetadata = boundSafetyBufferingMetadata(metadata);
+        watchdog.enterSafetyBuffering(boundedMetadata);
+        emitDiagnostic('warn', {
+            providerType: 'openai-ws',
+            ...options.diagnostics,
+            metadata: boundedMetadata,
+        }, 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+    };
     const attemptSignal = attemptAbortController.signal;
     matched?.chain.resource.removeIdleListeners?.();
     if (matched) matched.chain.resource.removeIdleListeners = undefined;
@@ -592,6 +601,7 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         }, 'OpenAI Responses WebSocket request dispatched');
         const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
+            onSafetyBuffering: handleSafetyBuffering,
             onMeaningfulProgress: () => {
                 if (firstContentAt === undefined) firstContentAt = now();
                 watchdog.markMeaningfulProgress();

@@ -6,7 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import axios from 'axios';
-import { DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS, setStreamingTimeoutTestHooks } from './llmStreamingTimeout';
+import {
+  DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+  setStreamingTimeoutTestHooks,
+} from './llmStreamingTimeout';
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-stream-timeout-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
@@ -14,6 +18,7 @@ fs.writeFileSync(path.join(dataRoot, 'state', 'models.yaml'), `default: fixture/
 process.env.FOXWARM_DATA_DIR = dataRoot;
 
 const llmPromise = import('./llm');
+const commonPromise = import('./common');
 
 function responsesStream(): PassThrough {
   const stream = new PassThrough();
@@ -79,6 +84,50 @@ test('stream timeout aborts only one SSE attempt and normal outer retry succeeds
     assert.notEqual(configs[0].signal, configs[1].signal);
   } finally {
     (axios as any).post = originalPost;
+    setStreamingTimeoutTestHooks();
+  }
+});
+
+test('SSE safety buffering warns and reaches outer LLM timeout error with bounded metadata', async () => {
+  const { requestLlmOnce } = await llmPromise;
+  const { logger } = await commonPromise;
+  const originalPost = axios.post;
+  const originalWarn = (logger as any).warn;
+  const warnings: Array<{ fields: any; message: string }> = [];
+  (logger as any).warn = (fields: any, message: string) => { warnings.push({ fields, message }); };
+  setStreamingTimeoutTestHooks({
+    set(callback, delayMs) {
+      const handle = { unref() {} };
+      if (delayMs === SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS) process.nextTick(callback);
+      return handle;
+    },
+    clear() {},
+  });
+  (axios as any).post = async () => {
+    const stream = new PassThrough();
+    process.nextTick(() => stream.write(`data: ${JSON.stringify({
+      type: 'response.metadata', sequence_number: 1,
+      metadata: { type: 'safety_buffering', use_cases: ['fixture'], reasons: ['review'], retry_model: 'fixture-model' },
+    })}\n\n`));
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  try {
+    await assert.rejects(
+      requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'fixture' }] }], systemPrompt: '', model: 'fixture/model',
+        promptCacheKey: 'safety-buffering-sse', toolDefinitions: [], notifySessionEvents: false,
+        registerAbortController: false, maxRetries: 1,
+      }),
+      /after 600000ms\. Safety buffering metadata: \{"type":"safety_buffering","use_cases":\["fixture"\],"reasons":\["review"\],"retry_model":"fixture-model"\}/,
+    );
+    const warning = warnings.find(entry => entry.message === 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+    assert.equal(warning?.fields.purpose, 'low-level');
+    assert.deepEqual(warning?.fields.metadata, {
+      type: 'safety_buffering', use_cases: ['fixture'], reasons: ['review'], retry_model: 'fixture-model',
+    });
+  } finally {
+    (axios as any).post = originalPost;
+    (logger as any).warn = originalWarn;
     setStreamingTimeoutTestHooks();
   }
 });
