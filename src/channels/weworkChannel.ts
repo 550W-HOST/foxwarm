@@ -1358,12 +1358,8 @@ export class WeWorkWebhookChannel implements Channel {
         return;
       }
 
-      // 企业微信群机器人支持多种消息类型，默认使用 markdown
-      const messageType = options?.messageType || 'markdown';
-      
-      // Use provided webhookUrl or fall back to configured one
-      const webhookUrl = options?.webhookUrl || this.webhookUrl;
-      if (!webhookUrl && this.websocketConfig?.enabled) {
+      const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
+      if (!explicitWebhookUrl && this.websocketConfig?.enabled) {
         const websocketPayload = {
           msgtype: 'markdown',
           markdown: { content: text },
@@ -1372,6 +1368,9 @@ export class WeWorkWebhookChannel implements Channel {
         return;
       }
 
+      // 企业微信群机器人支持多种消息类型，默认使用 markdown
+      const messageType = options?.messageType || 'markdown';
+      const webhookUrl = explicitWebhookUrl || this.webhookUrl;
       if (!webhookUrl) {
         throw new Error('WeWork webhookUrl is not configured for proactive sendMessage');
       }

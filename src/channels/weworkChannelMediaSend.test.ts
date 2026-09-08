@@ -157,6 +157,144 @@ async function createHttpHarness(): Promise<{
   };
 }
 
+test('WeWork sendMessage prefers AIBot WebSocket in dual configuration', async () => {
+  const ws = await createWsHarness();
+  const httpHarness = await createHttpHarness();
+  const channel = await startWsChannel(ws.url, httpHarness.webhookUrl);
+
+  try {
+    await waitForSubscription(ws.frames);
+    await channel.sendMessage('fallback-chat', 'proactive text', {
+      chatId: 'target-chat',
+      chatType: 'single',
+    });
+
+    const proactive = ws.frames.filter(frame => frame.cmd === 'aibot_send_msg');
+    assert.deepEqual(proactive.map(frame => frame.body), [{
+      chatid: 'target-chat',
+      chat_type: 1,
+      msgtype: 'markdown',
+      markdown: { content: 'proactive text' },
+    }]);
+    assert.equal(httpHarness.requests.length, 0);
+  } finally {
+    await channel.stop();
+    await ws.close();
+    await httpHarness.close();
+  }
+});
+
+test('WeWork sendMessage keeps explicit webhook overrides and legacy-only text on the legacy route', async () => {
+  const ws = await createWsHarness();
+  const httpHarness = await createHttpHarness();
+  const dualChannel = await startWsChannel(ws.url, httpHarness.webhookUrl);
+  const legacyChannel = new WeWorkWebhookChannel({ name: 'legacy-text-only', webhookUrl: httpHarness.webhookUrl });
+
+  try {
+    await waitForSubscription(ws.frames);
+    await dualChannel.sendMessage('wrk-explicit', 'explicit legacy', {
+      webhookUrl: httpHarness.webhookUrl,
+      messageType: 'text',
+    });
+    await legacyChannel.sendMessage('wrk-legacy', 'legacy only');
+
+    assert.equal(ws.frames.some(frame => frame.cmd === 'aibot_send_msg'), false);
+    assert.equal(httpHarness.requests.length, 2);
+    assert.deepEqual(JSON.parse(httpHarness.requests[0].body.toString()), {
+      msgtype: 'text',
+      text: {
+        content: 'explicit legacy',
+        mentioned_list: [],
+        mentioned_mobile_list: [],
+      },
+      chatid: 'wrk-explicit',
+    });
+    assert.deepEqual(JSON.parse(httpHarness.requests[1].body.toString()), {
+      msgtype: 'markdown',
+      markdown: { content: 'legacy only' },
+      chatid: 'wrk-legacy',
+    });
+  } finally {
+    await dualChannel.stop();
+    await ws.close();
+    await httpHarness.close();
+  }
+});
+
+test('WeWork sendMessage does not duplicate a failed WebSocket send through the configured webhook', async () => {
+  const ws = await createWsHarness(frame => frame.cmd === 'aibot_send_msg'
+    ? { errcode: 41002, errmsg: 'injected send failure' }
+    : {});
+  const httpHarness = await createHttpHarness();
+  const channel = await startWsChannel(ws.url, httpHarness.webhookUrl);
+
+  try {
+    await waitForSubscription(ws.frames);
+    await assert.rejects(channel.sendMessage('chat-1', 'must not duplicate'), /injected send failure.*41002/);
+    assert.equal(ws.frames.filter(frame => frame.cmd === 'aibot_send_msg').length, 1);
+    assert.equal(httpHarness.requests.length, 0);
+  } finally {
+    await channel.stop();
+    await ws.close();
+    await httpHarness.close();
+  }
+});
+
+test('WeWork dual configuration preserves source-bound stream-card routing before proactive selection', async () => {
+  const ws = await createWsHarness();
+  const httpHarness = await createHttpHarness();
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-stream-priority-test',
+    webhookUrl: httpHarness.webhookUrl,
+    aibot: {
+      stream: true,
+      websocket: {
+        enabled: true,
+        botId: 'test-bot',
+        secret: 'test-secret',
+        url: ws.url,
+        heartbeatMs: 60_000,
+        reconnectMs: 60_000,
+      },
+    },
+  });
+  channel.onMessage(async () => {});
+  await channel.start();
+
+  try {
+    await waitForSubscription(ws.frames);
+    const inbound = await (channel as any).processInboundBody({
+      msgid: 'stream-priority-message',
+      aibotid: 'bot-1',
+      chatid: 'chat-stream',
+      chattype: 'group',
+      from: { userid: 'user-1' },
+      response_url: 'https://example.test/response',
+      msgtype: 'text',
+      text: { content: 'hello' },
+    }, {
+      mode: 'webhook',
+      responseUrl: 'https://example.test/response',
+    }, true);
+    const streamId = inbound.passiveResponse.stream.id;
+
+    await channel.sendMessage('chat-stream', 'stream final', { weworkStreamId: streamId, turnFinal: true });
+    const refresh = await (channel as any).processInboundBody({
+      msgtype: 'stream',
+      stream: { id: streamId },
+    }, { mode: 'webhook' }, true);
+
+    assert.equal(refresh.passiveResponse.stream.content, 'stream final');
+    assert.equal(refresh.passiveResponse.stream.finish, true);
+    assert.equal(ws.frames.some(frame => frame.cmd === 'aibot_send_msg'), false);
+    assert.equal(httpHarness.requests.length, 0);
+  } finally {
+    await channel.stop();
+    await ws.close();
+    await httpHarness.close();
+  }
+});
+
 test('WeWork sendFile prefers AIBot WebSocket and uploads multi-chunk files in zero-based order', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'foxwarm-wework-media-'));
   const bytes = Buffer.alloc(CHUNK_BYTES + 17);
