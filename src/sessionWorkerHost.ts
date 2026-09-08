@@ -794,6 +794,7 @@ export class SessionWorkerHost {
       appendMessage: (owner, message) => appendMessages(owner, [message]),
       appendMessages,
       persistSession: owner => { this.assertOwner(owner); return persist(); },
+      persistSessionStrict: owner => { this.assertOwner(owner); return persist(); },
       updateBusy: async (owner, busy) => {
         this.assertOwner(owner);
         const update = () => transactional(() => updateSessionBusyStateForSession(

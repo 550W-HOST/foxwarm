@@ -7,7 +7,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 ## Source assembly
 
 - [src-conditional-memory](../units/src-conditional-memory.md) owns the pure conditional grammar and current-model header format.
-- [src-llm](../units/src-llm.md) applies frontmatter Session selection first, then conditional filtering independently to each framework, inherited, current-agent, or configured custom memory-source body, and only then adds memory provenance wrappers.
+- [src-llm](../units/src-llm.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The root framework source and its legacy framework fallback remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
 - Skill catalog text, generated directory/recall guidance, tool instructions, and chat history are not scanned for conditional blocks.
 - A materialized snapshot always starts with the exact canonical concrete model identity. Snapshot construction does not select a virtual route.
 
@@ -20,7 +20,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 
 ## Ownership and detached work
 
-- Normal authoritative Sessions persist a rebuilt snapshot through their existing Main or Session-worker `CurrentSessionEffects` before provider send. A failed build or persistence prevents that send; a failed persistence restores the prior hot snapshot so a matching marker cannot suppress the required later write.
+- Normal authoritative Sessions persist a rebuilt snapshot through a strict owner seam on their existing Main or Session-worker `CurrentSessionEffects` before provider send. Main reuses the authority save lane and catalog-resync behavior while unrelated `saveSession` callers remain best-effort. A precommit failure prevents send and restores the prior hot snapshot; an authority-postcommit projection failure also prevents send but retains the committed/resynchronized snapshot rather than falsely rolling it back.
 - BTW and compact planning explicitly mark their cloned Sessions as detached. They may update only the clone's snapshot and never persist or reload the live owner by shared Session ID.
 - Compact clones preserve `systemPromptFiles`, prompt-cache lineage, and the captured model/settings alongside the copied snapshot.
 

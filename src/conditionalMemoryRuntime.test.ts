@@ -39,6 +39,8 @@ let modulesPromise: Promise<{
   journal: typeof import('./llmRequestJournal');
   btw: typeof import('./btw');
   agentMetadata: typeof import('./session/agentMetadata');
+  sessionManager: typeof import('./sessionManager');
+  metadataStore: typeof import('./session/metadataStore');
 }> | undefined;
 
 async function loadModules() {
@@ -48,7 +50,11 @@ async function loadModules() {
     import('./llmRequestJournal'),
     import('./btw'),
     import('./session/agentMetadata'),
-  ]).then(([llm, config, journal, btw, agentMetadata]) => ({ llm, config, journal, btw, agentMetadata }));
+    import('./sessionManager'),
+    import('./session/metadataStore'),
+  ]).then(([llm, config, journal, btw, agentMetadata, sessionManager, metadataStore]) => ({
+    llm, config, journal, btw, agentMetadata, sessionManager, metadataStore,
+  }));
   return modulesPromise;
 }
 
@@ -171,6 +177,75 @@ test('authoritative persistence failure restores the old snapshot and prevents p
     assert.equal(session.persistentMemorySnapshot, oldSnapshot);
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('default Main effects fail closed on precommit snapshot persistence and retain committed postcommit state', async () => {
+  const { llm, config, sessionManager, metadataStore } = await loadModules();
+  const agentName = 'runtime-main-strict';
+  const memoryDir = config.getAgentMemoryDir(agentName);
+  await fs.ensureDir(memoryDir);
+  await fs.writeFile(path.join(memoryDir, 'MEMORY.md'), [
+    '<foxwarm-if model-id="leafA/*">',
+    'strict-astra',
+    '</foxwarm-if>',
+    '<foxwarm-if model-id="leafB/*">',
+    'strict-beta',
+    '</foxwarm-if>',
+  ].join('\n'), 'utf8');
+  const originalPost = axios.post;
+  let sends = 0;
+  (axios as any).post = async () => {
+    sends += 1;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('must not send') };
+  };
+
+  const precommitId = `${agentName}/precommit`;
+  const postcommitId = `${agentName}/postcommit`;
+  try {
+    const precommit = await sessionManager.getSession(precommitId);
+    precommit.agent = agentName;
+    precommit.model = 'alias';
+    precommit.history = [{ role: 'user', parts: [{ text: 'precommit' }] }];
+    precommit.persistentMemorySnapshot = 'old precommit markerless snapshot';
+    precommit.promptCacheKey = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    await sessionManager.saveSessionForSessionCritical(precommit);
+    sessionManager.setSessionPersistenceFaultInjectorForTests(async (phase, sessionId) => {
+      if (phase === 'history' && sessionId === precommitId) throw new Error('injected snapshot precommit failure');
+    });
+    await assert.rejects(() => llm.chat(null, precommit, 0, {
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+    }), /injected snapshot precommit failure/);
+    assert.equal(sends, 0);
+    assert.equal(precommit.persistentMemorySnapshot, 'old precommit markerless snapshot');
+    assert.equal((await metadataStore.readSessionHistorySnapshot(precommitId))?.persistentMemorySnapshot, 'old precommit markerless snapshot');
+
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    const postcommit = await sessionManager.getSession(postcommitId);
+    postcommit.agent = agentName;
+    postcommit.model = 'leafB/beta';
+    postcommit.history = [{ role: 'user', parts: [{ text: 'postcommit' }] }];
+    postcommit.persistentMemorySnapshot = '<foxwarm-current-model model-id="leafA/astra" />\n\nold astra snapshot';
+    postcommit.promptCacheKey = 'ffffffff-1111-2222-3333-444444444444';
+    await sessionManager.saveSessionForSessionCritical(postcommit);
+    sessionManager.setSessionPersistenceFaultInjectorForTests(async phase => {
+      if (phase === 'metadata') throw new Error('injected snapshot postcommit projection failure');
+    });
+    await assert.rejects(() => llm.chat(null, postcommit, 0, {
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+    }), (error: any) => error?.code === 'SESSION_AUTHORITY_POSTCOMMIT_FAILED');
+    assert.equal(sends, 0);
+    assert.match(postcommit.persistentMemorySnapshot, /^<foxwarm-current-model model-id="leafB\/beta" \/>/);
+    assert.match(postcommit.persistentMemorySnapshot, /strict-beta/);
+    assert.equal(
+      (await metadataStore.readSessionHistorySnapshot(postcommitId))?.persistentMemorySnapshot,
+      postcommit.persistentMemorySnapshot,
+    );
+  } finally {
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    (axios as any).post = originalPost;
+    await sessionManager.deleteSession(precommitId).catch(() => {});
+    await sessionManager.deleteSession(postcommitId).catch(() => {});
   }
 });
 

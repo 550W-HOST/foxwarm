@@ -2102,7 +2102,7 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
   await saveSessionForSessionCritical(session);
 }
 
-async function saveSessionForSessionCritical(session: Session): Promise<void> {
+export async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await withSessionAuthoritySaveLane(session.id, () => saveSessionForSessionCriticalUnlocked(session));
 }
 

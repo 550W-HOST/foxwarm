@@ -66,6 +66,7 @@ import {
     filterConditionalMemorySource,
     readCurrentModelSnapshotId,
 } from './conditionalMemory';
+import { isSessionAuthorityPostCommitError } from './session/stateFile';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -235,6 +236,7 @@ export interface CurrentSessionEffects {
     placement: 'local' | 'session-worker';
     appendMessage(session: Session, message: Message): Promise<void>;
     persistSession(session: Session): Promise<void>;
+    persistSessionStrict?(session: Session): Promise<void>;
     notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
     registerAbortController(sessionId: string, controller: AbortController): void;
     clearAbortController(sessionId: string, controller: AbortController): void;
@@ -258,11 +260,17 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
             await sessionManager.saveSession(session);
         }
     };
+    const persistSessionStrict = async (session: Session) => {
+        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+            await sessionManager.saveSessionForSessionCritical(session);
+        }
+    };
     return {
         placement: 'local',
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
         persistSession,
+        persistSessionStrict,
         updateBusy: (session, busy) => {
             if (busy) sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'start new work');
             return sessionManager.updateSessionBusyStateForSession(
@@ -1028,14 +1036,14 @@ async function appendDefaultMemoryFiles(agentName: string, modelId: string, sess
     let combined = '';
 
     if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
-        const content = await readSessionFilteredMemoryFile(AGENTS_SYSTEM_PROMPT_PATH, sessionId, modelId);
-        if (content !== null) combined += formatMemoryBlock(AGENTS_SYSTEM_PROMPT_PATH, 'framework', 'inherited', content);
+        const content = filterConditionalMemorySource(await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8'), modelId);
+        combined += formatMemoryBlock(AGENTS_SYSTEM_PROMPT_PATH, 'framework', 'inherited', content);
     } else {
         const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
         if (await fs.pathExists(mainSystemPath)) {
-            const content = await readSessionFilteredMemoryFile(mainSystemPath, sessionId, modelId);
+            const content = filterConditionalMemorySource(await fs.readFile(mainSystemPath, 'utf8'), modelId);
             const kind = agentName === 'main' ? 'self' : 'inherited';
-            if (content !== null) combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
+            combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
         }
     }
 
@@ -2080,11 +2088,15 @@ export async function chat(
 
         session.persistentMemorySnapshot = rebuiltSnapshot;
         try {
-            await currentSessionEffects.persistSession(session);
+            if (currentSessionEffects.persistSessionStrict) {
+                await currentSessionEffects.persistSessionStrict(session);
+            } else {
+                await currentSessionEffects.persistSession(session);
+            }
         } catch (error) {
             // A failed authoritative persistence must not leave a matching hot
             // marker that suppresses the required write on the next attempt.
-            if (session.persistentMemorySnapshot === rebuiltSnapshot) {
+            if (!isSessionAuthorityPostCommitError(error) && session.persistentMemorySnapshot === rebuiltSnapshot) {
                 session.persistentMemorySnapshot = currentSnapshot;
             }
             throw error;

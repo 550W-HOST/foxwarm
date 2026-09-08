@@ -68,7 +68,8 @@ test('snapshot injects visible skills catalog, skill(load) loads docs, and attac
     assert.match(String(loadedTimerSkill), /list_timers/);
     assert.match(String(loadedTimerSkill), /day-of-month `L`/);
     assert.match(String(loadedTimerSkill), /`W` .*not supported/);
-    assert.doesNotMatch(String(loadedTimerSkill), /memory\//);
+    assert.doesNotMatch(String(loadedTimerSkill), /\n- memory\//);
+    assert.doesNotMatch(String(loadedTimerSkill), /\nFILE: [^\n]*\/memory\//);
 
     const loadedMarkerSkill = await tool_skill({ action: 'load', skillName: 'webui-markers', agentName }, {});
     assert.match(String(loadedMarkerSkill), /<foxwarm-commit node=/);

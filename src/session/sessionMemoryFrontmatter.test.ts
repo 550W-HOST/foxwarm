@@ -41,11 +41,12 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
 
   await fs.ensureDir(config.AGENTS_DIR);
   await fs.ensureDir(path.dirname(legacyMainSystemPrompt));
-  await fs.writeFile(config.AGENTS_SYSTEM_PROMPT_PATH, 'ROOT_FRAMEWORK_SYSTEM_PROMPT\n<foxwarm-if model-id="fixture/*">\nFRAMEWORK_CONDITIONAL_VISIBLE\n</foxwarm-if>\n<foxwarm-if model-id="other/*">\nFRAMEWORK_CONDITIONAL_HIDDEN\n</foxwarm-if>\n', 'utf8');
-  await fs.writeFile(legacyMainSystemPrompt, 'LEGACY_MAIN_SYSTEM_PROMPT\n', 'utf8');
+  await fs.writeFile(config.AGENTS_SYSTEM_PROMPT_PATH, '---\ninclude-session: other/session\n---\nROOT_FRAMEWORK_SYSTEM_PROMPT\n<foxwarm-if model-id="fixture/*">\nFRAMEWORK_CONDITIONAL_VISIBLE\n</foxwarm-if>\n<foxwarm-if model-id="other/*">\nFRAMEWORK_CONDITIONAL_HIDDEN\n</foxwarm-if>\n', 'utf8');
+  await fs.writeFile(legacyMainSystemPrompt, '---\nexclude-session: main\n---\nLEGACY_MAIN_SYSTEM_PROMPT\n<foxwarm-if model-id="fixture/*">\nLEGACY_CONDITIONAL_VISIBLE\n</foxwarm-if>\n<foxwarm-if model-id="other/*">\nLEGACY_CONDITIONAL_HIDDEN\n</foxwarm-if>\n', 'utf8');
 
   const rootSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main', modelId: 'fixture/model' });
   assert.match(rootSnapshot, /ROOT_FRAMEWORK_SYSTEM_PROMPT/);
+  assert.match(rootSnapshot, /include-session: other\/session/);
   assert.match(rootSnapshot, /FRAMEWORK_CONDITIONAL_VISIBLE/);
   assert.doesNotMatch(rootSnapshot, /FRAMEWORK_CONDITIONAL_HIDDEN|<foxwarm-if/);
   assert.doesNotMatch(rootSnapshot, /LEGACY_MAIN_SYSTEM_PROMPT/);
@@ -66,6 +67,9 @@ test('framework root 00_SYSTEM takes precedence over legacy fallback and dynamic
   await fs.remove(config.AGENTS_SYSTEM_PROMPT_PATH);
   const fallbackSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: 'main', sessionId: 'main', modelId: 'fixture/model' });
   assert.match(fallbackSnapshot, /LEGACY_MAIN_SYSTEM_PROMPT/);
+  assert.match(fallbackSnapshot, /exclude-session: main/);
+  assert.match(fallbackSnapshot, /LEGACY_CONDITIONAL_VISIBLE/);
+  assert.doesNotMatch(fallbackSnapshot, /LEGACY_CONDITIONAL_HIDDEN|<foxwarm-if/);
   assert.doesNotMatch(fallbackSnapshot, /ROOT_FRAMEWORK_SYSTEM_PROMPT/);
 });
 
