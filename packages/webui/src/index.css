@@ -1841,3 +1841,10 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-header {
   border-color: var(--foxwarm-console-border-panel) !important;
 }
+
+html .foxwarm-composer-pasted-text-chip[data-composer-block-selected],
+html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
+  background-color: var(--foxwarm-color-accent-surface-strong) !important;
+  border-color: var(--foxwarm-color-accent-border) !important;
+  box-shadow: inset 0 0 0 2px rgb(var(--foxwarm-color-focus-ring-rgb) / 0.72) !important;
+}

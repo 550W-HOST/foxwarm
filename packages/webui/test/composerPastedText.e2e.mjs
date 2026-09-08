@@ -645,6 +645,163 @@ for (const spec of browsers) {
   }))
 }
 
+for (const spec of browsers) {
+  test(`${spec.name} highlights atomic composer blocks covered by native selection`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const sessionId = `fixture/block-selection-${spec.name}`
+    await page.evaluate(sessionId => window.fixtureSetSession(sessionId), sessionId)
+    await page.waitForFunction(sessionId => window.fixtureCurrentSession === sessionId && window.fixtureEditor()?.textContent === '', {}, sessionId)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.type(editor, 'LEFTTEXT RIGHTTEXT')
+    await page.evaluate(() => window.fixtureSelectText(9, 9))
+    await page.evaluate(() => window.fixturePaste('p'.repeat(2000)))
+    const expectedBlocks = spec.browser ? 1 : 3
+    if (!spec.browser) {
+      await page.$eval(editor, editorNode => {
+        const transfer = new DataTransfer()
+        transfer.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
+        transfer.items.add(new File(['file'], 'notes.txt', { type: 'text/plain' }))
+        editorNode.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+      })
+    }
+    await page.waitForFunction(expected => document.querySelectorAll('[data-composer-pasted-text-id], [data-composer-attachment-ref]').length === expected, {}, expectedBlocks)
+    const exactDraft = await page.evaluate(() => window.fixtureDraft)
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.waitForFunction(expected => document.querySelectorAll('[data-composer-block-selected]').length === expected, {}, expectedBlocks)
+    await page.evaluate(() => getSelection()?.removeAllRanges())
+    await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
+    const points = await page.$eval(editor, node => {
+      const texts = [...node.childNodes].filter(child => child.nodeType === Node.TEXT_NODE && child.nodeValue.length > 0)
+      const point = (text, offset) => {
+        const range = document.createRange(); range.setStart(text, offset); range.setEnd(text, Math.min(text.length, offset + 1))
+        const rect = range.getBoundingClientRect()
+        for (let y = rect.top + 2; y < rect.bottom - 1; y += 2) {
+          for (let x = rect.left + 1; x < rect.right; x += 1) {
+            const caret = document.caretPositionFromPoint?.(x, y)
+            const legacy = document.caretRangeFromPoint?.(x, y)
+            if ((caret?.offsetNode === text) || (legacy?.startContainer === text)) return { x, y }
+          }
+        }
+        return { x: rect.left + Math.max(1, rect.width / 2), y: rect.top + rect.height / 2 }
+      }
+      return { start: point(texts[0], Math.min(2, texts[0].length - 1)), end: point(texts.at(-1), Math.min(2, texts.at(-1).length - 1)) }
+    })
+    assert.deepEqual(await page.evaluate(points => [document.elementFromPoint(points.start.x, points.start.y)?.closest('[role="textbox"]')?.getAttribute('aria-label'), document.elementFromPoint(points.end.x, points.end.y)?.closest('[role="textbox"]')?.getAttribute('aria-label')], points), ['Message', 'Message'])
+    const drag = async (from, to) => {
+      await page.focus(editor)
+      await page.evaluate(() => getSelection()?.removeAllRanges())
+      await page.mouse.move(from.x, from.y)
+      await page.mouse.down()
+      for (let step = 1; step <= 12; step += 1) {
+        await page.mouse.move(from.x + ((to.x - from.x) * step / 12), from.y + ((to.y - from.y) * step / 12))
+        await new Promise(resolve => setTimeout(resolve, 12))
+      }
+      await page.mouse.up()
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const diagnostic = await page.evaluate(() => ({
+        selected: document.querySelectorAll('[data-composer-block-selected]').length,
+        text: getSelection()?.toString(),
+        anchor: getSelection()?.anchorNode?.parentElement?.className || getSelection()?.anchorNode?.nodeValue,
+        focus: getSelection()?.focusNode?.parentElement?.className || getSelection()?.focusNode?.nodeValue,
+        anchorOffset: getSelection()?.anchorOffset,
+        focusOffset: getSelection()?.focusOffset,
+      }))
+      assert.equal(diagnostic.selected, expectedBlocks, JSON.stringify({ ...diagnostic, from, to }))
+    }
+    await drag(points.start, points.end)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactDraft)
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--foxwarm-color-accent-surface-strong', '#dbeafe')
+      document.documentElement.style.setProperty('--foxwarm-color-accent-border', '#2563eb')
+      document.documentElement.style.setProperty('--foxwarm-color-focus-ring-rgb', '37 99 235')
+    })
+    const selectedStyles = await page.$$eval('[data-composer-block-selected]', chips => chips.map(chip => {
+      const style = getComputedStyle(chip)
+      const remove = chip.querySelector('[data-composer-block-remove]')
+      const image = chip.querySelector('img')
+      const preview = chip.querySelector('.foxwarm-composer-pasted-text-preview')
+      return {
+        shadow: style.boxShadow,
+        border: style.borderColor,
+        removeVisibility: remove && getComputedStyle(remove).visibility,
+        imageOpacity: image ? getComputedStyle(image).opacity : '1',
+        previewVisibility: preview ? getComputedStyle(preview).visibility : 'visible',
+      }
+    }))
+    assert.equal(selectedStyles.every(style => style.shadow !== 'none' && style.border !== 'rgba(0, 0, 0, 0)' && style.removeVisibility === 'visible' && style.imageOpacity !== '0' && style.previewVisibility === 'visible'), true, JSON.stringify(selectedStyles))
+    await page.evaluate(() => document.documentElement.classList.add('dark'))
+    assert.equal(await page.$$eval('[data-composer-block-selected]', chips => chips.every(chip => getComputedStyle(chip).boxShadow !== 'none')), true)
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.waitForFunction(expected => document.querySelectorAll('[data-composer-block-selected]').length === expected, {}, expectedBlocks)
+    if (!spec.browser) {
+      const copied = await page.$eval(editor, node => {
+        const data = new DataTransfer()
+        node.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
+        return data.getData('text/plain')
+      })
+      assert.equal(copied, exactDraft)
+    }
+
+    await drag(points.end, points.start)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactDraft)
+    await page.mouse.click(points.start.x, points.start.y)
+    await page.keyboard.down('Shift'); await page.mouse.click(points.end.x, points.end.y); await page.keyboard.up('Shift')
+    await page.waitForFunction(expected => document.querySelectorAll('[data-composer-block-selected]').length === expected, {}, expectedBlocks)
+    await page.click(editor, { clickCount: 1 })
+    await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
+
+    await page.evaluate(() => {
+      const editorNode = window.fixtureEditor()
+      const firstChip = editorNode.querySelector('[data-composer-pasted-text-id], [data-composer-attachment-ref]')
+      const index = [...editorNode.childNodes].indexOf(firstChip)
+      const text = [...editorNode.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.length > 0)
+      const range = document.createRange(); range.setStart(text, 0); range.setEnd(editorNode, index)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    })
+    await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
+    await page.evaluate(() => {
+      const editorNode = window.fixtureEditor()
+      const chip = editorNode.querySelector('[data-composer-pasted-text-id], [data-composer-attachment-ref]')
+      const index = [...editorNode.childNodes].indexOf(chip)
+      const range = document.createRange(); range.setStart(editorNode, index); range.collapse(true)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    })
+    await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
+
+    await page.focus(editor)
+    await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control')
+    await page.waitForFunction(expected => document.querySelectorAll('[data-composer-block-selected]').length === expected, {}, expectedBlocks)
+    if (!spec.browser) {
+      await page.evaluate(() => {
+        document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+        document.documentElement.style.setProperty('--foxwarm-console-text', '#d1fae5')
+        document.documentElement.style.setProperty('--foxwarm-console-panel', '#052e16')
+        document.documentElement.style.setProperty('--foxwarm-console-border-panel', '#16a34a')
+        document.documentElement.style.setProperty('--foxwarm-color-accent', '#1d4ed8')
+        document.documentElement.style.setProperty('--foxwarm-color-text-muted', '#475569')
+      })
+      const consoleStyles = await page.$$eval('[data-composer-block-selected]', chips => chips.map(chip => {
+        const style = getComputedStyle(chip)
+        return { shadow: style.boxShadow, color: style.color, remove: !!chip.querySelector('[data-composer-block-remove]') }
+      }))
+      assert.equal(consoleStyles.every(style => style.shadow !== 'none' && style.remove && style.color !== 'rgba(0, 0, 0, 0)'), true, JSON.stringify(consoleStyles))
+    }
+    await page.mouse.click(points.end.x, points.end.y)
+    await page.focus('[data-composer-block-remove]')
+    await page.waitForFunction(() => document.querySelectorAll('[data-composer-block-selected]').length === 0)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    if (!spec.browser) {
+      await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 0)
+      assert.equal(await page.$eval(editor, node => node.querySelectorAll('.foxwarm-composer-pasted-text-chip').length), 1)
+    } else {
+      await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-pasted-text-chip').length === 0)
+    }
+    await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+    await page.waitForFunction(expected => document.querySelectorAll('[data-composer-pasted-text-id], [data-composer-attachment-ref]').length === expected, {}, expectedBlocks)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactDraft)
+  }))
+}
+
 test('Chromium removes image, file, and missing-file blocks without opening their modal', async () => withBrowser(browsers[0], async page => {
     const editor = '[role="textbox"][aria-label="Message"]'
     const sessionId = 'fixture/remove-attachments'

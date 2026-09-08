@@ -210,6 +210,24 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     return anchor === null || focus === null ? null : { anchor, focus }
   }, [getPointOffset])
 
+  const updateBlockSelectionPresentation = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const selection = window.getSelection()
+    const anchor = selection && !selection.isCollapsed ? getPointOffset(selection.anchorNode, selection.anchorOffset) : null
+    const focus = selection && !selection.isCollapsed ? getPointOffset(selection.focusNode, selection.focusOffset) : null
+    const selectionStart = anchor === null || focus === null ? null : Math.min(anchor, focus)
+    const selectionEnd = anchor === null || focus === null ? null : Math.max(anchor, focus)
+    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]')) {
+      const parent = chip.parentNode
+      const index = parent ? [...parent.childNodes].indexOf(chip) : -1
+      const chipStart = parent && index >= 0 ? getPointOffset(parent, index) : null
+      const selected = selectionStart !== null && selectionEnd !== null && chipStart !== null
+        && selectionStart < chipStart + 1 && selectionEnd > chipStart
+      chip.toggleAttribute('data-composer-block-selected', selected)
+    }
+  }, [getPointOffset])
+
   const getPointAtOffset = useCallback((requestedOffset: number): { node: Node; offset: number } | null => {
     const editor = editorRef.current
     if (!editor) return null
@@ -730,6 +748,17 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const fragment = range.cloneContents()
     return serializeComposerDraft(readDraftFromNode(fragment))
   }, [readDraftFromNode])
+
+  useEffect(() => {
+    document.addEventListener('selectionchange', updateBlockSelectionPresentation)
+    updateBlockSelectionPresentation()
+    return () => {
+      document.removeEventListener('selectionchange', updateBlockSelectionPresentation)
+      for (const chip of editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-block-selected]') || []) {
+        chip.removeAttribute('data-composer-block-selected')
+      }
+    }
+  }, [updateBlockSelectionPresentation])
 
   useEffect(() => {
     const draftChanged = lastDraftIdRef.current !== draftId
