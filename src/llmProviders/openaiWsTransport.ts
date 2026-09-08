@@ -177,7 +177,7 @@ function closeResource(
             resource.socket.once('close', onClose);
             resource.socket.once('error', onError);
             resource.removeGracefulCloseListeners = cleanup;
-            resource.socket.close(1000, 'foxwarm completed idle recycle');
+            resource.socket.close(1000, 'OK');
             return;
         }
         if (resource.socket.readyState === WebSocket.OPEN || resource.socket.readyState === WebSocket.CONNECTING) {
