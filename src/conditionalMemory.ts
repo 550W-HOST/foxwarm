@@ -5,8 +5,8 @@ import {
 
 const CONDITIONAL_OPEN_RE = /^[ \t]*<foxwarm-if model-id="([^"]*)">[ \t]*$/;
 const CONDITIONAL_CLOSE_RE = /^[ \t]*<\/foxwarm-if>[ \t]*$/;
-const CONDITIONAL_OPEN_LIKE_RE = /^[ \t]*<foxwarm-if\b.*$/;
-const CONDITIONAL_CLOSE_LIKE_RE = /^[ \t]*<\/foxwarm-if\b.*$/;
+const CONDITIONAL_OPEN_LIKE_RE = /^[ \t]*<foxwarm-if\b[^>]*>[ \t]*$/;
+const CONDITIONAL_CLOSE_LIKE_RE = /^[ \t]*<\/foxwarm-if\b[^>]*>[ \t]*$/;
 const CURRENT_MODEL_HEADER_RE = /^<foxwarm-current-model model-id="([^"]*)" \/>$/;
 const SNAPSHOT_HEADER_SEPARATOR = '\n\n';
 

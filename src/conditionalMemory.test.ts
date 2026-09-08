@@ -53,6 +53,46 @@ test('wrapper lines allow horizontal whitespace while inline examples remain lit
   );
 });
 
+test('tag-first prose does not block a later standalone condition', () => {
+  const source = [
+    '<foxwarm-if model-id="leaf"> is an opening example',
+    '</foxwarm-if> is a closing example',
+    '<foxwarm-if model-id="other">',
+    'removed',
+    '</foxwarm-if>',
+    'tail',
+  ].join('\n');
+
+  assert.equal(
+    filterConditionalMemorySource(source, 'leaf'),
+    [
+      '<foxwarm-if model-id="leaf"> is an opening example',
+      '</foxwarm-if> is a closing example',
+      'tail',
+    ].join('\n'),
+  );
+});
+
+test('tag-first prose inside a valid block does not affect its pairing', () => {
+  const source = [
+    '<foxwarm-if model-id="leaf">',
+    '<foxwarm-if model-id="other"> is an opening example',
+    '</foxwarm-if> is a closing example',
+    'kept',
+    '</foxwarm-if>',
+  ].join('\n');
+
+  assert.equal(
+    filterConditionalMemorySource(source, 'leaf'),
+    [
+      '<foxwarm-if model-id="other"> is an opening example',
+      '</foxwarm-if> is a closing example',
+      'kept',
+    ].join('\n') + '\n',
+  );
+  assert.equal(filterConditionalMemorySource(source, 'other'), '');
+});
+
 test('multiple and empty conditional pairs preserve surrounding line structure', () => {
   const source = 'a\n<foxwarm-if model-id="x">\n</foxwarm-if>\n<foxwarm-if model-id="x">\nb\n</foxwarm-if>\nc\n';
   assert.equal(filterConditionalMemorySource(source, 'x'), 'a\nb\nc\n');
