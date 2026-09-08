@@ -181,15 +181,13 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.match(broadcasts[0], /btw text answer/);
     assert.equal(after.history.some(message => message.role === 'user' && message.parts.some(part => part.text === 'side question')), false);
     assert.equal(after.promptCacheKey, sourcePromptCacheKey);
-    assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[display-only\]:/);
+    assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[non-context\]:/);
 
     const toolPreview = await toolsSessionAgent.tool_get_session_messages({ sessionId }, { sessionId, session: after } as any);
-    assert.match(toolPreview, /model \[display-only\]:\s+\[display-only message hidden\]/);
-    assert.doesNotMatch(toolPreview, /btw text answer/);
+    assert.match(toolPreview, /model \[non-context\]:[\s\S]*btw text answer/);
 
     const archivePreview = await toolsSessionAgent.tool_recall({ sessionId, target: 'msg#1-2' }, { sessionId, session: after } as any);
-    assert.match(archivePreview, /model \[display-only\]:\s+\[display-only message hidden\]/);
-    assert.doesNotMatch(archivePreview, /btw text answer/);
+    assert.match(archivePreview, /model \[non-context\]:[\s\S]*btw text answer/);
 
     assert.deepEqual(tools.modelFacingDefinitions.map(def => def.name), toolNamesBefore);
   } finally {
@@ -301,7 +299,7 @@ test('display-only messages persist in history but are omitted from model-facing
 
     const preview = formatSessionMessagesPreview(session.id, [ordinaryUser, displayOnly, ordinaryModel], 0, 3);
     assert.match(preview, /hidden btw result/);
-    assert.match(preview, /model \[display-only\]:/);
+    assert.match(preview, /model \[non-context\]:/);
 
     const tokenSummary = estimateSessionSummary({ history: [ordinaryUser, displayOnly], persistentMemorySnapshot: '' });
     const visibleOnlySummary = estimateSessionSummary({ history: [ordinaryUser], persistentMemorySnapshot: '' });

@@ -75,7 +75,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | Function | Description |
 |----------|-------------|
 | `normalizeContextPreviewBudget` | Treats `previewLength` as a total budget, clamps to 1000-20000, and returns warning strings |
-| `createMessageContextPreviewItem` | Converts a message into searchable/renderable preview data with configurable tool folding |
+| `createMessageContextPreviewItem` | Converts a message into searchable/renderable preview data with configurable tool folding; explicit read callers render stored display-only content while retaining the heading visibility marker |
 | `createArchivedBlockContextPreviewItem` | Converts an archive block into searchable/renderable preview data |
 | `renderContextPreviewItems` | Applies staged literal/regex post-filters, collects bounded priority notices only from selected items plus caller notices, reserves an exact empty result or meaningful item body, clips lower-priority title text first, optionally caps the filtered item set with a truthful selection notice, and enforces an exact UTF-16 code-unit total budget without splitting grapheme clusters |
 | `selectVectorRawMessageWindow` | Selects a bounded contiguous authoritative raw window from query/chunk and explicit-positive-filter locators, bilingual/identifier overlap, substantive-content preference, and unique-ID complete atomic tool exchanges; reports exact omitted positive-filter source IDs |

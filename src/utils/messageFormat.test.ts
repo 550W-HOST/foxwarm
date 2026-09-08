@@ -4,6 +4,7 @@ import { Message } from '../types';
 import { formatMessagePreviewText, formatSubstantiveMessageSearchText } from './messageFormat';
 import { formatMessagePreviewLine, getMessagePreview } from './messagePreview';
 import { containsLoneSurrogate } from './unicode';
+import { redactDisplayOnlyMessageForModel } from '../session/messageVisibility';
 
 function makeMessage(parts: Message['parts']): Message {
   return {
@@ -35,6 +36,13 @@ test('formatMessagePreviewLine does not duplicate continuation prefixes', () => 
 
   assert.match(line, /\[7\] 🤖 model: line 1\n> line 2\n> line 3\n$/);
   assert.doesNotMatch(line, /> > /);
+});
+
+test('non-context previews retain content while model redaction remains explicit', () => {
+  const message = { ...makeMessage([{ text: 'provider detail' }]), modelVisible: false };
+
+  assert.match(formatMessagePreviewLine(message, 8, 200), /model \[non-context\]: provider detail/);
+  assert.equal(getMessagePreview(redactDisplayOnlyMessageForModel(message), 200), '[display-only message hidden]');
 });
 
 test('formatMessagePreviewText does not split surrogate pairs when truncating previews', () => {

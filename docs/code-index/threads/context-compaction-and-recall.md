@@ -67,6 +67,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 - `previewLength` is one total output budget, clamped to 1,000–20,000. Tool details are folded unless explicitly expanded.
 - Filtering notices remain visible when every item is excluded or the preview is truncated.
 - `get_session_messages` uses the same preview renderer and filter vocabulary for selected session-history messages.
+- Explicit session-message and recalled raw-message previews mark `modelVisible:false` rows as `[non-context]` and render their stored content under the same filters, tool folding, and total preview budget. This inspection boundary does not make those rows model-visible or add them to semantic indexing.
 
 ### 7. WebUI expansion
 

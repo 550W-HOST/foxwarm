@@ -214,7 +214,6 @@ function formatArchivedMessagePreview(
         message: record.message,
       }),
       message: record.message,
-      hideDisplayOnlyContent: true,
       toolDetail: renderOptions.toolDetail as ContextPreviewToolDetail | undefined,
       renderOptions,
     });
@@ -736,7 +735,6 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
       message,
     }),
     message,
-    hideDisplayOnlyContent: true,
     toolDetail,
     renderOptions: {
       previewLength: args.previewLength,
@@ -1491,7 +1489,6 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
           message: record.message,
         }),
         message: record.message,
-        hideDisplayOnlyContent: true,
         toolDetail: renderOptions.toolDetail as ContextPreviewToolDetail | undefined,
         renderOptions,
       }));

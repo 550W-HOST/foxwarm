@@ -25,6 +25,15 @@ function installArchiveFixtures() {
   const messages: any[] = [
     { seq: 1, message: { role: 'user', parts: [{ text: 'archived one' }], __meta: { timestamp: 1000 } } },
     { seq: 2, message: { role: 'model', parts: [{ text: 'archived two' }], __meta: { timestamp: 2000 } } },
+    {
+      seq: 3,
+      message: {
+        role: 'model',
+        modelVisible: false,
+        parts: [{ text: 'LLM request failed: archive provider timeout' }],
+        __meta: { timestamp: 3000, noticeType: 'llm-retry' },
+      },
+    },
   ];
   const blocks: any[] = [{
     id: 1,
@@ -47,7 +56,7 @@ function installArchiveFixtures() {
       records: selected,
       totalMatched: selected.length,
       returnedCount: selected.length,
-      availableRange: { startSeq: 1, endSeq: 2 },
+      availableRange: { startSeq: 1, endSeq: 3 },
       requestedRange: { startSeq: options.startSeq, endSeq: options.endSeq },
     };
   };
@@ -86,6 +95,7 @@ test('detached current recall exact targets and aliases match legacy output with
     { target: 'B#1' },
     { target: 'msg:B#1' },
     { target: 'msg#1-2', contentFilter: 'archived', toolDetail: 'full', previewLength: 2000 },
+    { target: 'msg#1-3', contentFilter: 'archive provider timeout', previewLength: 1000 },
     { sessionId: session.aliases![0], target: 'overview' },
   ];
 
@@ -96,6 +106,7 @@ test('detached current recall exact targets and aliases match legacy output with
     const ctx: any = { sessionId: session.id, session, persistCurrentSession: async () => {}, sessionPlacement: 'session-worker' };
     const detached = await Promise.all(cases.map(args => tool_recall(args, ctx)));
     assert.deepEqual(detached, legacy);
+    assert.match(String(detached[5]), /model \[non-context\]:[\s\S]*archive provider timeout/);
   } finally {
     restoreArchive();
     (sessionManager as any).getExistingSession = originals.getExisting;

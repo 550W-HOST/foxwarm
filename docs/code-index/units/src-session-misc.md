@@ -61,7 +61,7 @@ Parent-cycle traversal canonicalizes every ancestor alias before seen/self check
 | `isModelVisibleMessage(message)` | ~5 | Checks if a message is visible to the model |
 | `createDisplayOnlyModelMessage(text, meta)` | ~9 | Creates a model message marked display-only |
 | `redactDisplayOnlyMessageForModel(message)` | ~19 | Replaces display-only message content with placeholder |
-| `formatModelVisibilitySuffix(message)` | ~29 | Returns suffix string for display-only messages |
+| `formatModelVisibilitySuffix(message)` | ~29 | Returns the `[non-context]` presentation suffix for messages excluded from ordinary model context |
 | `getSessionIdleMs(session, now)` | ~8 | Calculates milliseconds since last message |
 | `shouldAutoRefreshSessionSnapshot(session, now)` | ~16 | Checks if session is stale enough for refresh |
 | `maybeRefreshStaleSessionSnapshot(session, refresh, now)` | ~20 | Conditionally triggers snapshot refresh with error handling |

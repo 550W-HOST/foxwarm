@@ -24,9 +24,9 @@ function createParityHistory(): Message[] {
   } as Message));
   messages.push({
     role: 'model',
-    parts: [{ text: 'display-only-secret' }],
+    parts: [{ text: 'LLM request failed: provider overloaded; retrying in 2 seconds' }],
     modelVisible: false,
-    __meta: {},
+    __meta: { noticeType: 'llm-retry' },
   } as Message);
   messages.push({
     role: 'model',
@@ -60,6 +60,7 @@ test('detached get_session_messages is byte-compatible without global session re
     { sessionId: session.id, start: 8, count: 100 },
     { sessionId: session.id, start: 99, count: 3 },
     { sessionId: session.id, start: 0, count: 12, contentFilter: 'filter-needle', previewLength: 1000 },
+    { sessionId: session.id, start: 0, count: 12, contentFilter: 'provider overloaded', previewLength: 1000 },
     { sessionId: session.id, start: 0, count: 12, toolDetail: 'full', previewLength: 5000 },
   ];
 
@@ -70,8 +71,9 @@ test('detached get_session_messages is byte-compatible without global session re
     const trustedCtx: any = { sessionId: session.id, session, persistCurrentSession: async () => {} };
     const detached = await Promise.all(cases.map(args => tool_get_session_messages(args, trustedCtx)));
     assert.deepEqual(detached, legacy);
-    assert.doesNotMatch(String(detached[5]), /display-only-secret/);
-    assert.match(String(detached[5]), /tool-output-detail/);
+    assert.match(String(detached[5]), /model \[non-context\]:[\s\S]*provider overloaded/);
+    assert.match(String(detached[6]), /model \[non-context\]:[\s\S]*provider overloaded/);
+    assert.match(String(detached[6]), /tool-output-detail/);
     assert.match(String(detached[3]), /No messages found/);
   } finally {
     (sessionManager as any).getExistingSession = originals.getExisting;
