@@ -295,7 +295,7 @@ test('concurrent journal owners safely add the optional attempt prompt column to
   const modulePath = path.join(__dirname, 'llmRequestJournal.js');
   try {
     await runJournalChild(`
-      const fs=require('fs-extra');const path=require('node:path');const {DatabaseSync}=require('node:sqlite');const j=require(${JSON.stringify(modulePath)});fs.ensureDirSync(path.dirname(j.LLM_REQUEST_JOURNAL_DB_PATH));const db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH);db.exec('CREATE TABLE llm_journal_attempt_starts (event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL, concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL)');db.close();
+      const fs=require('fs-extra');const path=require('node:path');const {DatabaseSync}=require('node:sqlite');const j=require(${JSON.stringify(modulePath)});fs.ensureDirSync(path.dirname(j.LLM_REQUEST_JOURNAL_DB_PATH));const db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH);db.exec('PRAGMA journal_mode=WAL; CREATE TABLE llm_journal_attempt_starts (event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL, concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL)');db.close();
     `, dataRoot);
     const writeScript = (sessionId: string) => `
       const j=require(${JSON.stringify(modulePath)});j.beginLlmRequestJournal({sessionId:${JSON.stringify(sessionId)},systemPrompt:'prompt',toolDefinitions:[],messages:[{role:'user',parts:[{text:'message'}]}],requestedModelKey:'fixture/model',promptCacheKey:'cache'}).then(()=>process.exit(0),e=>{console.error(e.stack);process.exit(1)});

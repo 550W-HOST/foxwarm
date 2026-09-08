@@ -354,14 +354,14 @@ function reconstructMessageIdsSync(requestId: string, seen = new Set<string>()):
 
 export async function beginLlmRequestJournal(args: {
   sessionId?: string; purpose?: LlmRequestPurpose; iteration?: number; systemPrompt: string; toolDefinitions: ToolDefinition[];
-  messages: Message[]; requestedModelKey: string; promptCacheKey: string;
+  messages: Message[]; requestedModelKey: string; promptCacheKey: string; requestId?: string;
 }): Promise<{ requestId: string }> {
   await initLlmRequestJournal();
   const promptObjectId = await ensureObject('prompt', args.systemPrompt);
   const toolSchemaObjectId = await ensureObject('tool-schema', args.toolDefinitions);
   const messageObjectIds: string[] = [];
   for (const message of args.messages) messageObjectIds.push(await ensureObject('message', message));
-  const requestId = randomUUID();
+  const requestId = args.requestId || randomUUID();
   let baseRequestId: string | undefined;
   let commonPrefixLength = 0;
   let deltaDepth = 0;

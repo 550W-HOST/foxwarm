@@ -575,6 +575,7 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[])
     agent: session.agent,
     aliases: session.aliases ? [...session.aliases] : undefined,
     history: structuredClone(historySnapshot),
+    systemPromptFiles: session.systemPromptFiles ? [...session.systemPromptFiles] : undefined,
     persistentMemorySnapshot: session.persistentMemorySnapshot,
     stats: structuredClone(session.stats),
     busy: false,
@@ -1010,13 +1011,9 @@ async function finalizeCompaction(
   insertedCompletionMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [],
   operation: CompactOperation,
 ): Promise<void> {
-  const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
-    agentName: session.agent || 'main',
-    sessionId,
-    systemPromptFiles: session.systemPromptFiles,
-  });
+  const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
-  session.persistentMemorySnapshot = persistentMemorySnapshot;
+  if (persistentMemorySnapshot !== undefined) session.persistentMemorySnapshot = persistentMemorySnapshot;
   session.history = newHistory;
 
   const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames, Date.now());
@@ -1162,6 +1159,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       registerAbortController: false,
       abortSignal: operation.controller.signal,
       purpose: 'compact-plan',
+      snapshotAuthority: 'detached',
     });
 
     const toolCalls = result.toolCalls || [];

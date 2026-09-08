@@ -1007,11 +1007,9 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     }
   }
   session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
-  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
-    agentName: session.agent,
-    sessionId: realId,
-    systemPromptFiles: session.systemPromptFiles,
-  });
+  if (!session.persistentMemorySnapshot) {
+    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session) || '';
+  }
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
@@ -1909,11 +1907,15 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
     const spawnedSettings = resolveSpawnedSessionModelEffort(parentSession, options?.model, options?.effort);
 
     const agentName = parentSession.agent || 'main';
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({
-      agentName,
-      sessionId: childSessionId,
-      systemPromptFiles: parentSession.systemPromptFiles,
-    });
+    const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(spawnedSettings.model);
+    const snapshot = snapshotModelId
+      ? await llm.buildSessionSystemPromptSnapshot({
+          agentName,
+          sessionId: childSessionId,
+          systemPromptFiles: parentSession.systemPromptFiles,
+          modelId: snapshotModelId,
+        })
+      : '';
     const newSession: Session = {
       id: childSessionId,
       agent: agentName,

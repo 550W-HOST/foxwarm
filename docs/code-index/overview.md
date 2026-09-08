@@ -75,6 +75,7 @@ Nodes, providers, and authenticated CLI Node runtime
 | [context compaction and recall](./threads/context-compaction-and-recall.md) | Context budgeting, summarization, archival, and retrieval |
 | [image blob lifecycle](./threads/image-blob-lifecycle.md) | Canonical image persistence, provider hydration, tools, and authenticated browser URLs |
 | [canonical LLM request journal](./threads/llm-request-journal.md) | Content-addressed provider-neutral inputs, attempt provenance, reconstruction, and training boundary |
+| [conditional memory snapshots](./threads/conditional-memory-snapshots.md) | Concrete-model memory filtering, snapshot identity, reuse, refresh, and detached ownership |
 | [message processing pipeline](./threads/message-processing-pipeline.md) | Inbound message through LLM/tool loop to final broadcast |
 | [Main catalog storage and indexed queries](./threads/main-catalog-storage-and-indexed-queries.md) | Main-owned identity/topology catalog, migration, indexed access, and bounded list boundaries |
 | [model routing](./threads/model-routing.md) | Concrete/virtual selection, prefix hashing, failover health, attempts, and attribution |

@@ -29,7 +29,7 @@ Provides pure parsing and formatting primitives for model-conditional memory sou
 
 ## Integration
 
-A later runtime integration may call these helpers while assembling per-source memory bodies and materializing a prompt for an already selected concrete model. This unit performs no file I/O, model selection, Session mutation, persistence, or journal writes.
+[src-llm](./src-llm.md) calls these helpers while assembling each selected memory-source body and materializing or validating a prompt for an already selected concrete model. This unit itself performs no file I/O, model selection, Session mutation, persistence, or journal writes. Canonical cross-module behavior is owned by [conditional memory snapshots](../threads/conditional-memory-snapshots.md).
 
 ## Design Decisions
 
@@ -37,4 +37,4 @@ A later runtime integration may call these helpers while assembling per-source m
 
 [2026-09-08] Conditional memory is a small source-body grammar rather than a general template language. Only complete, nonnested full-line `foxwarm-if` pairs outside fenced Markdown are evaluated. Malformed or unsupported markup remains ordinary literal prompt text because the feature is behavioral prompt selection, not an authorization or confidentiality boundary.
 
-Model conditions use exact case-sensitive canonical concrete identities with literal `*` wildcards. Generated snapshots carry one deterministic first-line current-model header with no time-varying metadata; header identity is stored in the prompt text rather than a separate persisted metadata field.
+Model conditions use exact case-sensitive canonical concrete identities with literal `*` wildcards. Generated snapshots carry one deterministic first-line current-model header with no time-varying metadata; header identity is stored in the prompt text rather than a separate persisted metadata field. Runtime identity, persistence, and refresh decisions are canonical in [D-conditional-memory-concrete-snapshot-identity](../threads/conditional-memory-snapshots.md#d-conditional-memory-concrete-snapshot-identity).

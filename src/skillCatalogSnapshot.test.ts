@@ -42,7 +42,7 @@ test('snapshot injects visible skills catalog, skill(load) loads docs, and attac
   await fs.writeJson(path.join(jsonOnlySkillDir, 'skill.json'), { name: jsonOnlySkillName, description: 'Should not be visible' });
 
   try {
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [] });
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [], modelId: 'fixture/model' });
     assert.match(snapshot, /<available_skills>/);
     assert.match(snapshot, /call skill with action="load"/);
     assert.match(snapshot, new RegExp(`<name>${skillName}</name>`));
@@ -164,7 +164,7 @@ test('snapshot skill catalog uses compact escaped XML and reports the selected s
   await sessionManager.setAgentInherit(agentName, inheritedAgentName);
 
   try {
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [] });
+    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, systemPromptFiles: [], modelId: 'fixture/model' });
     const catalog = snapshot.match(/<available_skills>\n([\s\S]*?)<\/available_skills>/)?.[1] || '';
     const skillLines = catalog.trimEnd().split('\n');
 

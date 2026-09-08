@@ -127,6 +127,7 @@ test('/btw command acks immediately and writes async result as display-only hist
       tempHistoryAtCall = structuredClone(activeSession.history);
       tempPromptCacheKeyAtCall = activeSession.promptCacheKey;
       requestPurposeAtCall = options?.purpose;
+      assert.equal((options as any)?.snapshotAuthority, 'detached');
       chatStarted.resolve();
       await chatGate.promise;
       await appendTempConversation(parts, 'btw text answer', options);

@@ -8,6 +8,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 
 ### 1. Trigger and snapshot
 
+- Compact planning snapshots preserve custom memory sources and mutate prompt state only on the detached clone; commit refreshes live memory using its recorded concrete snapshot identity. Canonical prompt behavior: [conditional memory snapshots](./conditional-memory-snapshots.md).
 - `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
 - At that automatic trigger, Foxwarm first dry-runs one historical function-response pruning pass against the complete authoritative history. It uses the ordinary oldest/compactable split and atomic tool boundary, keeps recent/current activity untouched, and never prunes function-call arguments.
 - Explicit compact requests enter `processSessionCompactionRequest()`.

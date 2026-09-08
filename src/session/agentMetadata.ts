@@ -6,12 +6,11 @@ import { Session } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 import { AgentToolRule, normalizeAgentToolRules } from '../permissions';
 
-function getSessionSystemPromptOptions(session: Session): { agentName: string; sessionId: string; systemPromptFiles?: string[] } {
-  return {
-    agentName: session.agent || 'main',
-    sessionId: session.id,
-    systemPromptFiles: session.systemPromptFiles,
-  };
+async function rebuildSessionSnapshotIfMaterialized(session: Session): Promise<boolean> {
+  const snapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
+  if (snapshot === undefined) return false;
+  session.persistentMemorySnapshot = snapshot;
+  return true;
 }
 
 export interface AgentMetadata {
@@ -175,8 +174,7 @@ export async function refreshSessionSnapshotForSession(
   persistSession: () => Promise<void>,
 ): Promise<{ sessionId: string; agentName: string }> {
   const agentName = session.agent || 'main';
-  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-  await persistSession();
+  if (await rebuildSessionSnapshotIfMaterialized(session)) await persistSession();
 
   return { sessionId: session.id, agentName };
 }
@@ -241,8 +239,7 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
     if (!getAgentInheritanceChain(sessionAgent).includes(agentName)) continue;
 
     const session = await deps.getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-    await deps.saveSession(sessionId);
+    if (await rebuildSessionSnapshotIfMaterialized(session)) await deps.saveSession(sessionId);
     affectedSessions.push(sessionId);
   }
 
@@ -291,7 +288,7 @@ export async function setAgentIsolation(
     if (normalizedNode) {
       session.currentNode = normalizedNode;
     }
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
+    await rebuildSessionSnapshotIfMaterialized(session);
     await deps.saveSession(session.id);
     affectedSessions.push(session.id);
   }

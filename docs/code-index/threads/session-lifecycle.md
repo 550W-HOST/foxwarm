@@ -7,6 +7,7 @@ Cross-module lifecycle from public creation through lazy hydration, queued execu
 ## Creation surfaces
 
 - `createEmptySession(sessionId?)` is the simple public façade. It returns an existing session when present or lazily creates/saves an empty one and reports `{ session, created }`.
+- Fresh concrete lifetimes materialize a concrete-model memory snapshot; fresh virtual lifetimes defer until actual leaf selection. Forks retain the copied snapshot until actual-use correction. Canonical snapshot behavior: [conditional memory snapshots](./conditional-memory-snapshots.md).
 - `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options.
 - `createAgentWithMainSession(options)` owns agent creation plus optional main session.
 - Low-level `createSession(sessionId, sessionData)` accepts a fully constructed session object, ensures its prompt-cache key, installs it in the map, and saves it. It does **not** allocate an ID from an options object.

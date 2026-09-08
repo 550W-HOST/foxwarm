@@ -149,6 +149,7 @@ export async function executeBtwRequest(
       notifySessionEvents: false,
       registerAbortController: false,
       purpose: 'btw',
+      snapshotAuthority: 'detached',
     });
     modelId = result.modelId;
     virtualModelKey = result.virtualModelKey;
