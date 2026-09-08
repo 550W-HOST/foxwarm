@@ -70,7 +70,8 @@ export function PastedTextModal({ text, onClose, onSave, onRestoreToText }: Past
         aria-modal="true"
         aria-labelledby="foxwarm-pasted-text-title"
         onKeyDown={handleKeyDown}
-        className="flex max-h-[min(80vh,48rem)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
+        style={{ width: 'min(80vw, calc(100vw - 2rem))', height: 'min(80dvh, calc(100dvh - 2rem))' }}
+        className="flex h-[80dvh] max-h-[calc(100dvh-2rem)] w-[80vw] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
       >
         <div className="flex items-center gap-3 border-b border-fw-border px-4 py-3 dark:border-fw-border">
           <FileText size={17} className="shrink-0 text-fw-accent" aria-hidden="true" />

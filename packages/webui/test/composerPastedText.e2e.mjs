@@ -152,6 +152,14 @@ for (const spec of browsers) {
 
     await page.click('.foxwarm-composer-pasted-text-chip')
     assert.equal(await page.$eval('textarea[aria-label="Full pasted text"]', node => node.readOnly), false)
+    const modalGeometry = await page.$eval('[role="dialog"]', dialog => {
+      const box = dialog.getBoundingClientRect()
+      const textarea = dialog.querySelector('textarea').getBoundingClientRect()
+      return { width: box.width, height: box.height, viewportWidth: innerWidth, viewportHeight: innerHeight, textareaHeight: textarea.height }
+    })
+    assert.equal(modalGeometry.width >= modalGeometry.viewportWidth * 0.75 && modalGeometry.width <= modalGeometry.viewportWidth * 0.81, true)
+    assert.equal(modalGeometry.height >= modalGeometry.viewportHeight * 0.75 && modalGeometry.height <= modalGeometry.viewportHeight * 0.81, true)
+    assert.equal(modalGeometry.textareaHeight > modalGeometry.height * 0.5, true)
     await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'edited\n\n  block'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Cancel').click())
     assert.equal(await page.evaluate(text => window.fixtureDraft.includes(`${text}</pasted-text>`), pasted), true)
@@ -190,6 +198,143 @@ for (const spec of browsers) {
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Restore to text').click())
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
     assert.equal(await page.evaluate(() => window.fixtureDraft), 'ordinary </pasted-text> text')
+  }))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} restores real empty state and permits physical caret entry around leading blocks`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+      document.documentElement.classList.add('dark')
+    })
+    const placeholder = await page.$eval(editor, node => ({
+      empty: node.dataset.empty,
+      children: node.childNodes.length,
+      position: getComputedStyle(node, '::before').position,
+      pointerEvents: getComputedStyle(node, '::before').pointerEvents,
+      content: getComputedStyle(node, '::before').content,
+    }))
+    assert.equal(placeholder.empty, 'true')
+    assert.equal(placeholder.children, 0)
+    assert.equal(placeholder.position, 'absolute')
+    assert.equal(placeholder.pointerEvents, 'none')
+    assert.notEqual(placeholder.content, 'none')
+
+    await page.click(editor, { offset: { x: 180, y: 12 } })
+    assert.equal(await page.evaluate(() => {
+      const selection = getSelection(); const editorNode = window.fixtureEditor()
+      return selection?.isCollapsed && (selection.anchorNode === editorNode || editorNode.contains(selection.anchorNode)) && selection.anchorOffset === 0
+    }), true)
+    await page.keyboard.type('visible')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'visible')
+    await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control')
+    await page.keyboard.press('Backspace')
+    await page.waitForFunction(() => window.fixtureDraft === '' && window.fixtureEditor()?.dataset.empty === 'true' && window.fixtureEditor()?.childNodes.length === 0)
+    assert.deepEqual(await page.evaluate(() => ({
+      structured: localStorage.getItem('composer_draft_v1_fixture/main'),
+      legacy: localStorage.getItem('draft_fixture/main'),
+    })), { structured: null, legacy: null })
+
+    await page.reload({ waitUntil: 'load' })
+    await page.waitForSelector(editor)
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+      document.documentElement.classList.remove('dark')
+    })
+    assert.deepEqual(await page.$eval(editor, node => ({ empty: node.dataset.empty, children: node.childNodes.length })), { empty: 'true', children: 0 })
+
+    await page.click(editor)
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n\n')
+    assert.notEqual(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.keyboard.press('Delete')
+    await page.waitForFunction(() => window.fixtureDraft === '' && window.fixtureEditor()?.childNodes.length === 0)
+
+    const first = 'f'.repeat(2000)
+    const second = 's'.repeat(2000)
+    await page.evaluate(text => window.fixturePaste(text), first)
+    await page.evaluate(text => window.fixturePaste(text), second)
+    const exactBlocks = `<pasted-text>${first}</pasted-text><pasted-text>${second}</pasted-text>`
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactBlocks)
+    assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-caret-anchor]').length), 3)
+
+    for (const dark of [false, true]) {
+      await page.evaluate(enabled => document.documentElement.classList.toggle('dark', enabled), dark)
+      await page.click('.foxwarm-composer-pasted-text-chip')
+      const modal = await page.$eval('[role="dialog"]', dialog => {
+        const box = dialog.getBoundingClientRect()
+        const textarea = dialog.querySelector('textarea').getBoundingClientRect()
+        return { width: box.width, height: box.height, viewportWidth: innerWidth, viewportHeight: innerHeight, textareaHeight: textarea.height }
+      })
+      assert.equal(modal.width >= modal.viewportWidth * 0.75 && modal.width <= modal.viewportWidth * 0.81, true)
+      assert.equal(modal.height >= modal.viewportHeight * 0.75 && modal.height <= modal.viewportHeight * 0.81, true)
+      assert.equal(modal.textareaHeight > modal.height * 0.5, true)
+      await page.click('button[aria-label="Close pasted text"]')
+    }
+
+    await page.click('.foxwarm-composer-caret-anchor')
+    await page.evaluate(() => window.fixturePaste('\u200B'))
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `\u200B${exactBlocks}`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactBlocks)
+
+    const initialAnchors = await page.$$('.foxwarm-composer-caret-anchor')
+    await initialAnchors.at(-1).click()
+    await page.keyboard.press('Home')
+    await page.keyboard.type('home ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft.startsWith('home <pasted-text>')), true)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactBlocks)
+
+    await page.focus('.foxwarm-composer-pasted-text-chip')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.type('arrow ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft.startsWith('arrow <pasted-text>')), true)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactBlocks)
+
+    await page.click('.foxwarm-composer-caret-anchor')
+    await page.keyboard.type('mouse ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft.startsWith('mouse <pasted-text>')), true)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exactBlocks)
+
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.keyboard.down('Control'); await page.keyboard.press('c'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), exactBlocks)
+    assert.equal((await page.evaluate(() => navigator.clipboard.readText())).includes('\u200B'), false)
+
+    const anchors = await page.$$('.foxwarm-composer-caret-anchor')
+    await anchors.at(-1).click()
+    await page.keyboard.press('Backspace')
+    assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 1)
+    const remainingAnchors = await page.$$('.foxwarm-composer-caret-anchor')
+    await remainingAnchors.at(-1).click()
+    await page.keyboard.press('Backspace')
+    await page.waitForFunction(() => window.fixtureDraft === '' && window.fixtureEditor()?.childNodes.length === 0)
+    assert.deepEqual(await page.evaluate(() => ({
+      structured: localStorage.getItem('composer_draft_v1_fixture/main'),
+      legacy: localStorage.getItem('draft_fixture/main'),
+    })), { structured: null, legacy: null })
+
+    if (spec.name === 'Chromium') {
+      await page.setViewport({ width: 390, height: 640 })
+      await page.evaluate(text => window.fixturePaste(text), first)
+      await page.click('.foxwarm-composer-pasted-text-chip')
+      await page.setViewport({ width: 390, height: 420 })
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.getBoundingClientRect().height <= 340)
+      const mobileModal = await page.$eval('[role="dialog"]', dialog => {
+        const box = dialog.getBoundingClientRect()
+        const textarea = dialog.querySelector('textarea').getBoundingClientRect()
+        const footerButton = [...dialog.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save').getBoundingClientRect()
+        return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height, textareaHeight: textarea.height, footerBottom: footerButton.bottom }
+      })
+      assert.equal(mobileModal.left >= 15 && mobileModal.right <= 375 && mobileModal.top >= 15 && mobileModal.bottom <= 405, true)
+      assert.equal(mobileModal.textareaHeight > 100 && mobileModal.footerBottom <= 405, true)
+    }
   }))
 }
 
@@ -289,6 +434,8 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.type(editor, 'session A')
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).version), 1)
   await page.evaluate(() => window.fixtureSetSession('fixture/other'))
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/other')
+  await new Promise(resolve => setTimeout(resolve, 50))
   await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
   await page.type(editor, 'session B')
   await page.evaluate(() => window.fixtureSetSession('fixture/main'))
@@ -313,14 +460,19 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
 
   await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste(Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n')) })
   const exact = await page.evaluate(() => window.fixtureDraft)
-  await page.evaluate(() => window.fixtureSelectAll())
-  await page.keyboard.down('Control'); await page.keyboard.press('c'); await page.keyboard.up('Control')
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), exact)
+  const copied = await page.evaluate(() => {
+    window.fixtureSelectAll()
+    const data = new DataTransfer()
+    const event = new Event('copy', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: data })
+    window.fixtureEditor().dispatchEvent(event)
+    return data.getData('text/plain')
+  })
+  assert.equal(copied, exact)
   await page.evaluate(() => window.fixtureSelectAll())
   await page.keyboard.down('Control'); await page.keyboard.press('x'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), '')
-  await page.focus(editor)
-  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  await page.evaluate(() => window.fixtureEditor().dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'historyUndo' })))
   assert.equal(await page.evaluate(() => window.fixtureDraft), exact)
 
   await page.evaluate(() => { window.fixtureAccept = false })

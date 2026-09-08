@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test, { after, before } from 'node:test'
@@ -13,6 +13,10 @@ const webuiRoot = path.resolve(__dirname, '..')
 const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-pasted-text-blocks-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
+const assetsDirectory = path.join(webuiRoot, 'dist/assets')
+const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
+const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
+const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 const pasted = '\n  First technical 😀 line  \n\n<foxwarm-system kind="event">inert pasted example</foxwarm-system>\nfinal line\n'
 let server
 let fixtureUrl
@@ -20,8 +24,6 @@ let fixtureUrl
 await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatTimeline from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatTimeline.tsx'))}
-  import ${JSON.stringify(path.join(webuiRoot, 'src/index.css'))}
-
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.copiedText = text } } })
   const pasted = ${JSON.stringify(pasted)}
   const common = { sessionId: 'fixture/main', isMobile: false, groupTools: false, showUsageBadge: false, showUserMessageMetadata: false }
@@ -45,9 +47,12 @@ await writeFile(entryPath, `
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: 'preact/compat', 'react-dom': 'preact/compat', 'react-dom/client': 'preact/compat/client', 'react/jsx-runtime': 'preact/jsx-runtime' },
+    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
+  const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssAsset, 'build packages/webui before running pasted-text history browser tests')
+  const css = await readFile(path.join(assetsDirectory, cssAsset), 'utf8')
   server = createServer(async (request, response) => {
     if (request.url === '/fixture.js') {
       response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' })
@@ -56,7 +61,7 @@ before(async () => {
     }
     if (request.url === '/fixture.css') {
       response.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' })
-      response.end(await readFile(path.join(outputDirectory, 'fixture.css')))
+      response.end(css)
       return
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -105,6 +110,15 @@ for (const browserSpec of browsers) {
       const modal = await page.waitForSelector('[role="dialog"][aria-labelledby="foxwarm-pasted-text-title"]')
       assert.equal(await modal.$eval('textarea[aria-label="Full pasted text"]', node => node.value), pasted)
       assert.equal(await modal.$eval('textarea[aria-label="Full pasted text"]', node => node.readOnly), true)
+      const geometry = await modal.evaluate(dialog => {
+        const box = dialog.getBoundingClientRect()
+        const textarea = dialog.querySelector('textarea').getBoundingClientRect()
+        const style = getComputedStyle(dialog)
+        return { width: box.width, height: box.height, viewportWidth: innerWidth, viewportHeight: innerHeight, textareaHeight: textarea.height, cssWidth: style.width, cssHeight: style.height }
+      })
+      assert.ok(geometry.width >= geometry.viewportWidth * 0.75 && geometry.width <= geometry.viewportWidth * 0.81, JSON.stringify(geometry))
+      assert.ok(geometry.height >= geometry.viewportHeight * 0.75 && geometry.height <= geometry.viewportHeight * 0.81, JSON.stringify(geometry))
+      assert.ok(geometry.textareaHeight > geometry.height * 0.7, JSON.stringify(geometry))
       assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Close pasted text')
       await page.click('button[aria-label="Copy pasted text"]')
       await page.waitForFunction(expected => window.copiedText === expected, {}, pasted)

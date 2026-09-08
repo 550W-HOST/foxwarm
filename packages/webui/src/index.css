@@ -1258,10 +1258,23 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea
   color: var(--foxwarm-color-text-muted);
   content: attr(data-placeholder);
   pointer-events: none;
+  position: absolute;
+  inset-inline-start: 0.75rem;
+  top: 0.25rem;
+}
+
+.foxwarm-composer-caret-anchor {
+  display: inline-block;
+  width: 0.25rem;
+  min-height: 1em;
+  overflow: hidden;
+  vertical-align: text-bottom;
+  white-space: nowrap;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]::before {
   color: var(--foxwarm-console-text-dim) !important;
+  inset-inline-start: 0;
   opacity: 0.8;
 }
 

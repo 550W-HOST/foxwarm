@@ -13,6 +13,7 @@ import { PastedTextModal } from './PastedTextBlock'
 const MAX_UNDO_ENTRIES = 80
 const MAX_UNDO_BYTES = 2_000_000
 const TYPING_COALESCE_MS = 750
+const CARET_ANCHOR_TEXT = '\u200B'
 
 export interface InlineComposerEditorHandle {
   focus: () => void
@@ -53,6 +54,20 @@ function isChip(node: Node | null): boolean {
   return node instanceof HTMLElement && node.dataset.composerPastedTextId !== undefined
 }
 
+function isCaretAnchor(node: Node | null): node is HTMLElement {
+  return node instanceof HTMLElement && node.dataset.composerCaretAnchor !== undefined
+}
+
+function getCaretAnchor(node: Node | null): HTMLElement | null {
+  if (!node) return null
+  return isCaretAnchor(node) ? node : node.parentElement?.closest<HTMLElement>('[data-composer-caret-anchor]') || null
+}
+
+function removeCaretAnchorSentinel(text: string): string {
+  const index = text.indexOf(CARET_ANCHOR_TEXT)
+  return index < 0 ? text : `${text.slice(0, index)}${text.slice(index + CARET_ANCHOR_TEXT.length)}`
+}
+
 const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineComposerEditorProps>(function InlineComposerEditor({
   draftId,
   value,
@@ -80,6 +95,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
 
   const readNodeSegments = useCallback((node: Node, output: ComposerDraftSegment[]) => {
+    if (getCaretAnchor(node)) return
     if (node.nodeType === Node.TEXT_NODE) {
       output.push({ type: 'text', text: node.nodeValue || '' })
       return
@@ -108,10 +124,20 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [readNodeSegments])
 
   const readDraft = useCallback((): ComposerDraft => {
-    return editorRef.current ? readDraftFromNode(editorRef.current) : makeComposerDraft([])
+    const editor = editorRef.current
+    if (!editor) return makeComposerDraft([])
+    const hasCanonicalContent = [...editor.childNodes].some(node => {
+      if (isCaretAnchor(node)) return false
+      if (isChip(node)) return true
+      if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue || '').length > 0
+      if (node instanceof HTMLElement && node.tagName === 'BR') return false
+      return (node.textContent || '').length > 0 || (node instanceof Element && !!node.querySelector('[data-composer-pasted-text-id]'))
+    })
+    return hasCanonicalContent ? readDraftFromNode(editor) : makeComposerDraft([])
   }, [readDraftFromNode])
 
   const getNodeUnits = useCallback((node: Node): number => {
+    if (getCaretAnchor(node)) return 0
     if (node.nodeType === Node.TEXT_NODE) return node.nodeValue?.length || 0
     if (isChip(node) || (node instanceof HTMLElement && node.tagName === 'BR')) return 1
     return [...node.childNodes].reduce((sum, child) => sum + getNodeUnits(child), 0)
@@ -120,11 +146,17 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const getPointOffset = useCallback((target: Node | null, targetOffset: number): number | null => {
     const editor = editorRef.current
     if (!editor || !target || (target !== editor && !editor.contains(target))) return null
+    const targetAnchor = getCaretAnchor(target)
+    const normalizedTarget: Node = targetAnchor || target
     let traversed = 0
     let result: number | null = null
     const visit = (node: Node) => {
       if (result !== null) return
-      if (node === target) {
+      if (node === normalizedTarget) {
+        if (isCaretAnchor(node)) {
+          result = traversed
+          return
+        }
         if (node.nodeType === Node.TEXT_NODE) {
           result = traversed + Math.min(targetOffset, node.nodeValue?.length || 0)
         } else {
@@ -159,6 +191,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       const children = [...parent.childNodes]
       for (let index = 0; index < children.length; index += 1) {
         const child = children[index]
+        if (isCaretAnchor(child)) {
+          if (remaining === 0) return { node: child.firstChild || child, offset: child.firstChild ? CARET_ANCHOR_TEXT.length : 0 }
+          continue
+        }
         if (child.nodeType === Node.TEXT_NODE) {
           const length = child.nodeValue?.length || 0
           if (remaining <= length) return { node: child, offset: remaining }
@@ -213,6 +249,19 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
 
   const emitDraft = useCallback(() => {
     const next = readDraft()
+    const editor = editorRef.current
+    if (editor && serializeComposerDraft(next).length === 0 && editor.childNodes.length > 0) {
+      const restoreEmptyCaret = document.activeElement === editor
+      editor.replaceChildren()
+      if (restoreEmptyCaret) {
+        const range = document.createRange()
+        range.setStart(editor, 0)
+        range.collapse(true)
+        const selection = window.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(range)
+      }
+    }
     authoritativeDraftRef.current = next
     lastEmittedRef.current = serializeComposerDraft(next)
     updateEmptyState()
@@ -243,6 +292,26 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     return chip
   }, [disabled])
 
+  const createCaretAnchor = useCallback(() => {
+    const anchor = document.createElement('span')
+    anchor.className = 'foxwarm-composer-caret-anchor'
+    anchor.dataset.composerCaretAnchor = 'true'
+    anchor.setAttribute('aria-hidden', 'true')
+    anchor.textContent = CARET_ANCHOR_TEXT
+    return anchor
+  }, [])
+
+  const installCaretAnchors = useCallback((editor: HTMLElement) => {
+    for (const anchor of editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')) anchor.remove()
+    editor.normalize()
+    const contentNodes = [...editor.childNodes].filter(node => node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)
+    if (isChip(contentNodes[0])) contentNodes[0].before(createCaretAnchor())
+    for (let index = 1; index < contentNodes.length; index += 1) {
+      if (isChip(contentNodes[index - 1]) && isChip(contentNodes[index])) contentNodes[index].before(createCaretAnchor())
+    }
+    if (isChip(contentNodes.at(-1) || null)) editor.append(createCaretAnchor())
+  }, [createCaretAnchor])
+
   const renderDraft = useCallback((draft: ComposerDraft) => {
     const editor = editorRef.current
     if (!editor) return
@@ -252,8 +321,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       fragment.append(segment.type === 'text' ? document.createTextNode(segment.text) : createChip(segment))
     }
     editor.replaceChildren(fragment)
+    installCaretAnchors(editor)
     updateEmptyState()
-  }, [createChip, updateEmptyState])
+  }, [createChip, installCaretAnchors, updateEmptyState])
 
   const placeCaret = useCallback((container: Node, offset: number) => {
     const editor = editorRef.current
@@ -266,6 +336,37 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     selection?.removeAllRanges()
     selection?.addRange(range)
   }, [])
+
+  const reconcileCaretAnchors = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const selection = window.getSelection()
+    let desiredSelection = getSelectionOffsets()
+    const pointWithinAnchor = (node: Node | null, offset: number) => {
+      if (!node) return null
+      const anchor = getCaretAnchor(node)
+      if (!anchor || !editor.contains(anchor)) return null
+      const raw = anchor.textContent || ''
+      const rawOffset = node.nodeType === Node.TEXT_NODE ? Math.min(offset, raw.length) : raw.length
+      const before = removeCaretAnchorSentinel(raw.slice(0, rawOffset)).length
+      const base = getPointOffset(anchor, 0) || 0
+      return base + before
+    }
+    const anchorOffset = pointWithinAnchor(selection?.anchorNode || null, selection?.anchorOffset || 0)
+    const focusOffset = pointWithinAnchor(selection?.focusNode || null, selection?.focusOffset || 0)
+    if (anchorOffset !== null || focusOffset !== null) {
+      desiredSelection = {
+        anchor: anchorOffset ?? desiredSelection?.anchor ?? 0,
+        focus: focusOffset ?? desiredSelection?.focus ?? 0,
+      }
+    }
+    for (const anchor of editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')) {
+      const authoredText = removeCaretAnchorSentinel(anchor.textContent || '')
+      if (authoredText) anchor.before(document.createTextNode(authoredText))
+    }
+    installCaretAnchors(editor)
+    restoreSelection(desiredSelection)
+  }, [getPointOffset, getSelectionOffsets, installCaretAnchors, restoreSelection])
 
   const focusEnd = useCallback(() => {
     const editor = editorRef.current
@@ -355,10 +456,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     if (disabledRef.current) return false
     const base = captureEditorState()
     action()
+    reconcileCaretAnchors()
     recordHistory(base, kind)
     emitDraft()
     return true
-  }, [captureEditorState, emitDraft, recordHistory])
+  }, [captureEditorState, emitDraft, reconcileCaretAnchors, recordHistory])
 
   const insertPastedText = useCallback((text: string) => {
     const editor = editorRef.current
@@ -381,6 +483,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const range = selection.getRangeAt(0)
     const container = range.startContainer
     const offset = range.startOffset
+    const caretAnchor = getCaretAnchor(container)
+    if (caretAnchor) {
+      const candidate = direction < 0 ? caretAnchor.previousSibling : caretAnchor.nextSibling
+      return isChip(candidate) ? candidate as HTMLElement : null
+    }
     if (container === editor) {
       const candidate = editor.childNodes[offset + (direction < 0 ? -1 : 0)]
       return isChip(candidate) ? candidate as HTMLElement : null
@@ -459,7 +566,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         suppressContentEditableWarning
         spellCheck
         data-placeholder={placeholder}
-        className="foxwarm-chat-composer-textarea foxwarm-inline-composer-editor min-h-[60px] max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-fw-text-strong outline-none focus:ring-0 dark:text-fw-text-strong"
+        className="foxwarm-chat-composer-textarea foxwarm-inline-composer-editor relative min-h-[60px] max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-fw-text-strong outline-none focus:ring-0 dark:text-fw-text-strong"
         onBeforeInput={(event) => {
           if (disabled) { event.preventDefault(); return }
           const nativeEvent = event.nativeEvent as InputEvent
@@ -479,6 +586,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
             beforeInputRef.current = null
             return
           }
+          reconcileCaretAnchors()
           const nativeEvent = event.nativeEvent as InputEvent
           if (!composingRef.current && beforeInputRef.current) {
             const coalesce = nativeEvent.inputType === 'insertText' || nativeEvent.inputType.startsWith('deleteContent')
@@ -545,6 +653,25 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return }
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return }
           const targetChip = event.target instanceof HTMLElement && isChip(event.target) ? event.target : null
+          const selectionCaretAnchor = getCaretAnchor(window.getSelection()?.anchorNode || null)
+          if (event.key === 'Home' && !event.shiftKey && (targetChip || selectionCaretAnchor)) {
+            const editor = editorRef.current
+            const firstChip = editor ? [...editor.childNodes].find(node => !isCaretAnchor(node) && (node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)) : null
+            const leadingAnchor = editor?.querySelector<HTMLElement>(':scope > [data-composer-caret-anchor]:first-child') || null
+            if (isChip(firstChip || null) && leadingAnchor) {
+              event.preventDefault()
+              placeCaret(leadingAnchor.firstChild || leadingAnchor, leadingAnchor.firstChild ? CARET_ANCHOR_TEXT.length : 0)
+              return
+            }
+          }
+          if (targetChip && event.key === 'ArrowLeft') {
+            const previousAnchor = targetChip.previousSibling
+            if (isCaretAnchor(previousAnchor)) {
+              event.preventDefault()
+              placeCaret(previousAnchor.firstChild || previousAnchor, previousAnchor.firstChild ? CARET_ANCHOR_TEXT.length : 0)
+              return
+            }
+          }
           if (targetChip && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault()
             activeChipRef.current = targetChip
@@ -558,6 +685,13 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
             return
           }
           if (event.key === 'Backspace' || event.key === 'Delete') {
+            const selection = window.getSelection()
+            const editor = editorRef.current
+            if (editor && selection?.rangeCount && !selection.isCollapsed && editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+              event.preventDefault()
+              mutate('delete-selection', () => selection.getRangeAt(0).deleteContents())
+              return
+            }
             const chip = adjacentChip(event.key === 'Backspace' ? -1 : 1)
             if (chip) { event.preventDefault(); removeChip(chip) }
           }
