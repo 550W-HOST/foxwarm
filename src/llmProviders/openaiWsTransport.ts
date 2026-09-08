@@ -33,6 +33,7 @@ type OpenAIWsResource = {
     closeRecorded?: boolean;
     removeIdleListeners?: () => void;
     removeGracefulCloseListeners?: () => void;
+    removeConnectingAbortListeners?: () => void;
 };
 
 export type OpenAIWsAttemptDiagnostics = {
@@ -180,7 +181,32 @@ function closeResource(
             resource.socket.close(1000, 'OK');
             return;
         }
-        if (resource.socket.readyState === WebSocket.OPEN || resource.socket.readyState === WebSocket.CONNECTING) {
+        if (resource.socket.readyState === WebSocket.CONNECTING) {
+            if (!resource.removeConnectingAbortListeners) {
+                const onError = () => {
+                    // ws emits this asynchronously after terminate() aborts a
+                    // still-pending client handshake. The request promise has
+                    // already rejected, so this listener only owns that late
+                    // transport event until the matching close arrives.
+                };
+                const onClose = () => {
+                    resource.socket.off('error', onError);
+                    resource.removeConnectingAbortListeners = undefined;
+                };
+                resource.socket.on('error', onError);
+                resource.socket.once('close', onClose);
+                resource.removeConnectingAbortListeners = () => {
+                    resource.socket.off('error', onError);
+                    resource.socket.off('close', onClose);
+                    resource.removeConnectingAbortListeners = undefined;
+                };
+            }
+            resource.socket.terminate();
+            return;
+        }
+        resource.removeConnectingAbortListeners?.();
+        resource.removeConnectingAbortListeners = undefined;
+        if (resource.socket.readyState === WebSocket.OPEN) {
             resource.socket.terminate();
         }
     } catch {}

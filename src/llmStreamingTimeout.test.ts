@@ -26,7 +26,9 @@ class FakeTimers {
 
 afterEach(() => setStreamingTimeoutTestHooks());
 
-test('stream watchdog uses three minutes to first content and one minute between increments', () => {
+test('stream watchdog uses three minutes to first activity and two minutes between increments', () => {
+  assert.equal(DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS, 3 * 60 * 1000);
+  assert.equal(DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS, 2 * 60 * 1000);
   const timers = new FakeTimers();
   setStreamingTimeoutTestHooks(timers.hooks);
   const fired: string[] = [];

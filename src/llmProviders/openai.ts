@@ -879,7 +879,9 @@ export async function collectOpenAIResponsesStream(
             switch (event.type) {
                 case 'response.output_item.added':
                 case 'response.output_item.done':
-                    if (typeof event.output_index === 'number' && event.item) {
+                    if (typeof event.output_index === 'number' && event.item
+                        && typeof event.item === 'object' && !Array.isArray(event.item)) {
+                        options?.onMeaningfulProgress?.();
                         ensureOutputItem(event.output_index, event.item);
                         emitProgressUpdate();
                     }

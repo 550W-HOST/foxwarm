@@ -715,12 +715,16 @@ test('collectOpenAIResponsesStream rejects official incomplete and top-level err
   );
 });
 
-test('OpenAI collectors report only genuinely new generated content as timeout activity', async () => {
+test('OpenAI collectors report only approved output-item lifecycle and generated deltas as timeout activity', async () => {
   let responsesMeaningful = 0;
   await collectOpenAIResponsesStream(makeStream([
     { type: 'response.created', response: { id: 'r1', status: 'in_progress' } },
     { type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } },
     { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.output_item.added', output_index: 2 },
+    { type: 'response.output_item.added', output_index: 2, item: 'not-an-item-object' },
+    { type: 'response.output_item.added', output_index: 2, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } },
+    { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } },
     { type: 'response.output_item.added', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'in_progress' } },
     { type: 'response.output_item.done', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'completed' } },
     { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' },
@@ -731,7 +735,7 @@ test('OpenAI collectors report only genuinely new generated content as timeout a
     { type: 'response.refusal.delta', output_index: 3, content_index: 0, delta: 'n' },
     { type: 'response.completed', response: { id: 'r1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
   ]), new AbortController().signal, { onMeaningfulProgress: () => { responsesMeaningful += 1; } });
-  assert.equal(responsesMeaningful, 4);
+  assert.equal(responsesMeaningful, 9);
 
   let chatMeaningful = 0;
   await collectOpenAIChatCompletionsStream(makeStream([

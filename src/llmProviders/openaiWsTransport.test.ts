@@ -537,6 +537,52 @@ test('aborting an active WS request rejects normally without an uncaught PassThr
   assert.doesNotMatch(result.stderr, /UNCAUGHT:/);
 });
 
+test('aborting a real WebSocket during a held opening handshake has no deferred uncaught error', async () => {
+  const modulePath = path.join(__dirname, 'openaiWsTransport.js');
+  const script = `
+    const net = require('net');
+    const transport = require(${JSON.stringify(modulePath)});
+    const heldSockets = new Set();
+    process.once('uncaughtException', error => { console.error('UNCAUGHT:' + error.stack); process.exit(7); });
+    process.once('unhandledRejection', error => { console.error('UNHANDLED:' + (error && error.stack || error)); process.exit(8); });
+    setTimeout(() => { console.error('TEST_TIMEOUT'); process.exit(10); }, 2000).unref();
+    const server = net.createServer(socket => { heldSockets.add(socket); socket.once('close', () => heldSockets.delete(socket)); });
+    server.listen(0, '127.0.0.1', async () => {
+      const controller = new AbortController();
+      const pending = transport.requestOpenAIResponsesWs({
+        url: 'ws://127.0.0.1:' + server.address().port + '/v1/responses',
+        headers: {}, concreteIdentity: 'held-handshake',
+        data: { model: 'm', input: [], store: false }, placement: 'local', signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 25);
+      try {
+        await pending;
+        process.exit(9);
+      } catch (error) {
+        if (!error || error.name !== 'AbortError') {
+          console.error('WRONG_REJECTION:' + (error && error.stack || error));
+          process.exit(11);
+        }
+        setTimeout(() => {
+          if (transport.getOpenAIWsCompletedChainCountForTests() !== 0) process.exit(12);
+          for (const socket of heldSockets) socket.destroy();
+          server.close();
+          process.exit(0);
+        }, 50);
+      }
+    });
+  `;
+  const result = await new Promise<{ code: number | null; stderr: string }>(resolve => {
+    const child = spawn(process.execPath, ['-e', script], { cwd: path.dirname(__dirname) });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('exit', code => resolve({ code, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /UNCAUGHT:|UNHANDLED:|TEST_TIMEOUT/);
+});
+
 test('active and pending-append sockets stay referenced, idle sockets unref, and reuse refs again', async () => {
   const sockets: FakeSocket[] = [];
   setOpenAIWsTransportTestHooks({ socketFactory: () => {
@@ -566,7 +612,7 @@ test('close after response.completed but before assistant append invalidates the
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
 });
 
-test('openai-ws first-content watchdog covers handshake and ignores response scaffolding', async () => {
+test('openai-ws first-activity watchdog covers handshake and ignores unrelated response scaffolding', async () => {
   for (const mode of ['handshake', 'scaffolding'] as const) {
     const timers = new FakeIdleTimers();
     setStreamingTimeoutTestHooks(timers.hooks);
@@ -575,7 +621,7 @@ test('openai-ws first-content watchdog covers handshake and ignores response sca
       socket = new FakeSocket(mode === 'scaffolding' ? (_request, current) => {
         current.frame({ type: 'response.created', response: { id: 'r1', status: 'in_progress' } });
         current.frame({ type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } });
-        current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } });
+        current.frame({ type: 'response.output_item.added', output_index: 0 });
         current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' });
       } : undefined, mode !== 'handshake');
       return socket as any;
@@ -590,7 +636,7 @@ test('openai-ws first-content watchdog covers handshake and ignores response sca
   }
 });
 
-test('openai-ws meaningful deltas switch to and reset the one-minute inactivity watchdog', async () => {
+test('openai-ws meaningful deltas switch to and reset the two-minute inactivity watchdog', async () => {
   const timers = new FakeIdleTimers();
   setStreamingTimeoutTestHooks(timers.hooks);
   let socket!: FakeSocket;
@@ -614,7 +660,72 @@ test('openai-ws meaningful deltas switch to and reset the one-minute inactivity 
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /between meaningful generated content increments/);
+  await assert.rejects(pending, /between meaningful generated content increments after 120000ms/);
+  assert.equal(socket.terminated, 1);
+});
+
+test('openai-ws reasoning-summary-only deltas reset inactivity without a presentation subscriber', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: 'first' });
+      current.frame({ type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: 'first' });
+      current.frame({ type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: ' second' });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a',
+    data: baseData([]), placement: 'local', signal: signal(),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  timers.entries[1].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[2].callback();
+  await assert.rejects(pending, /between meaningful generated content increments after 120000ms/);
+  assert.equal(socket.terminated, 1);
+});
+
+test('openai-ws valid output-item added and done events reset inactivity while invalid scaffolding does not', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.created', response: { id: 'r1', status: 'in_progress' } });
+      current.frame({ type: 'response.output_item.added', output_index: 0 });
+      current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } });
+      current.frame({ type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: '' });
+      current.frame({ type: 'response.metadata', response_id: 'r1', sequence_number: 4, metadata: { type: 'safety_buffering' } });
+      current.frame({ type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a',
+    data: baseData([]), placement: 'local', signal: signal(),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  timers.entries[1].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[2].callback();
+  await assert.rejects(pending, /between meaningful generated content increments after 120000ms/);
   assert.equal(socket.terminated, 1);
 });
 

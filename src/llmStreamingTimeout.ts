@@ -1,5 +1,5 @@
 export const DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS = 3 * 60 * 1000;
-export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 60 * 1000;
+export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 2 * 60 * 1000;
 
 export type StreamingTimeoutKind = 'first-content' | 'content-inactivity' | 'hard-deadline';
 
