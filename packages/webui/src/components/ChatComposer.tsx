@@ -768,13 +768,16 @@ const ChatComposer = memo(function ChatComposer({
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if (sessionMissing || (!input.trim() && attachments.length === 0) || loading || submitInFlightRef.current) return
+    if (sessionMissing || loading || submitInFlightRef.current) return
+    const submittedDraft = editorRef.current?.flushForSubmit() || draftRef.current
+    const submittedInput = serializeComposerDraft(submittedDraft)
+    if (!submittedInput.trim() && attachments.length === 0) return
 
     const targetSessionId = sessionId
     submitInFlightRef.current = true
     let accepted = false
     try {
-      accepted = await onSend({ text: input.trim(), attachments })
+      accepted = await onSend({ text: submittedInput.trim(), attachments })
     } finally {
       submitInFlightRef.current = false
     }
@@ -803,7 +806,7 @@ const ChatComposer = memo(function ChatComposer({
       if (activeSessionIdRef.current !== targetSessionId) return
       editorRef.current?.focus()
     })
-  }, [attachments, input, loading, onSend, sessionId, sessionMissing])
+  }, [attachments, loading, onSend, sessionId, sessionMissing])
 
   const handleCommandKeyDown = useCallback((e: KeyboardEvent): boolean => {
     if (e.isComposing || e.keyCode === 229) {

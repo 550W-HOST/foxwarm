@@ -18,6 +18,7 @@ const CARET_ANCHOR_TEXT = '\u200B'
 export interface InlineComposerEditorHandle {
   focus: () => void
   focusEnd: () => void
+  flushForSubmit: () => ComposerDraft
   replaceDraft: (draft: ComposerDraft, focusEnd?: boolean) => void
 }
 
@@ -339,7 +340,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     selection?.addRange(range)
   }, [])
 
-  const reconcileCaretAnchors = useCallback(() => {
+  const reconcileCaretAnchors = useCallback((shouldRestoreSelection = true) => {
     const editor = editorRef.current
     if (!editor) return
     const selection = window.getSelection()
@@ -367,7 +368,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       if (authoredText) anchor.before(document.createTextNode(authoredText))
     }
     installCaretAnchors(editor)
-    restoreSelection(desiredSelection)
+    if (shouldRestoreSelection) restoreSelection(desiredSelection)
   }, [getPointOffset, getSelectionOffsets, installCaretAnchors, restoreSelection])
 
   const focusEnd = useCallback(() => {
@@ -415,6 +416,33 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     emitDraft()
   }, [cancelCompositionFinalize, emitDraft, reconcileCaretAnchors, recordHistory])
 
+  const flushForSubmit = useCallback(() => {
+    const editor = editorRef.current
+    const current = readDraft()
+    const hasPendingComposition = composingRef.current || compositionEndingRef.current || compositionBaseRef.current !== null
+    const hasCommittedAnchorText = !!editor && [...editor.querySelectorAll<HTMLElement>('[data-composer-caret-anchor]')]
+      .some(anchor => removeCaretAnchorSentinel(anchor.textContent || '').length > 0)
+    if (!hasPendingComposition && !hasCommittedAnchorText && sameDraft(authoritativeDraftRef.current, current)) {
+      return cloneDraft(current)
+    }
+    cancelCompositionFinalize()
+    const base = compositionBaseRef.current || {
+      draft: cloneDraft(authoritativeDraftRef.current),
+      selection: null,
+    }
+    compositionBaseRef.current = null
+    compositionEndingRef.current = false
+    composingRef.current = false
+    beforeInputRef.current = null
+    reconcileCaretAnchors(false)
+    const next = readDraft()
+    if (!sameDraft(base.draft, next)) {
+      recordHistory(base, 'composition')
+      emitDraft()
+    }
+    return cloneDraft(next)
+  }, [cancelCompositionFinalize, emitDraft, readDraft, reconcileCaretAnchors, recordHistory])
+
   const applyHistoryDraft = useCallback((snapshot: DraftSnapshot) => {
     renderDraft(snapshot.draft)
     authoritativeDraftRef.current = snapshot.draft
@@ -461,8 +489,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   useImperativeHandle(forwardedRef, () => ({
     focus: () => editorRef.current?.focus(),
     focusEnd,
+    flushForSubmit,
     replaceDraft,
-  }), [focusEnd, replaceDraft])
+  }), [flushForSubmit, focusEnd, replaceDraft])
 
   const insertTextAtSelection = useCallback((text: string) => {
     const editor = editorRef.current

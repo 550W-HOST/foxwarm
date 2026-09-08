@@ -413,6 +413,84 @@ test('Chromium preserves trusted CDP IME replacement through every caret-anchor 
   await client.detach()
 }))
 
+test('Chromium Send pointer click synchronously submits composition committed on blur', async () => withBrowser(browsers[0], async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  const sendButton = 'button[aria-label="Send message"]'
+  const client = await page.createCDPSession()
+  const switchSession = async id => {
+    await page.evaluate(sessionId => window.fixtureSetSession(sessionId), id)
+    await page.waitForFunction(sessionId => window.fixtureCurrentSession === sessionId, {}, id)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
+  }
+  const observeOrder = () => page.evaluate(() => {
+    window.fixtureOrder = []
+    const editorNode = window.fixtureEditor()
+    for (const type of ['compositionstart', 'compositionupdate', 'compositionend', 'beforeinput', 'input', 'blur', 'focusout']) {
+      editorNode.addEventListener(type, event => window.fixtureOrder.push(`${type}:${event.inputType || event.data || ''}`), true)
+    }
+    const send = document.querySelector('button[aria-label="Send message"]')
+    for (const type of ['pointerdown', 'mousedown', 'focus', 'click']) send.addEventListener(type, () => window.fixtureOrder.push(`send-${type}`), true)
+  })
+  const assertBlurCommitOrder = async () => {
+    const order = await page.evaluate(() => window.fixtureOrder)
+    const compositionEnd = order.findIndex(item => item.startsWith('compositionend:'))
+    const sendClick = order.indexOf('send-click')
+    assert.equal(compositionEnd >= 0 && sendClick > compositionEnd, true)
+    assert.equal(order.slice(compositionEnd + 1, sendClick).some(item => item.startsWith('input:')), false)
+  }
+
+  const blockText = 'S'.repeat(2000)
+  const block = `<pasted-text>${blockText}</pasted-text>`
+  await switchSession('fixture/ime-send-leading')
+  await page.click(editor)
+  await page.evaluate(text => window.fixturePaste(text), blockText)
+  await observeOrder()
+  await page.click('.foxwarm-composer-caret-anchor')
+  await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
+  await client.send('Input.imeSetComposition', { text: '你', selectionStart: 1, selectionEnd: 1 })
+  await page.click(sendButton)
+  await page.waitForFunction(() => window.fixtureSends.length === 1)
+  await assertBlurCommitOrder()
+  assert.equal(await page.evaluate(() => window.fixtureSends[0].text), `你${block}`)
+  assert.equal(await page.evaluate(() => window.fixtureDraft), `你${block}`)
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Send message')
+  await page.focus(editor)
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), block)
+
+  await switchSession('fixture/ime-send-ordinary')
+  await page.evaluate(() => { window.fixtureSends = [] })
+  await page.click(editor)
+  await page.keyboard.type('prefix ')
+  await observeOrder()
+  await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
+  await client.send('Input.imeSetComposition', { text: '你', selectionStart: 1, selectionEnd: 1 })
+  await page.click(sendButton)
+  await page.waitForFunction(() => window.fixtureSends.length === 1)
+  await assertBlurCommitOrder()
+  assert.equal(await page.evaluate(() => window.fixtureSends[0].text), 'prefix 你')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'prefix 你')
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Send message')
+  await page.focus(editor)
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'prefix ')
+
+  await switchSession('fixture/ime-send-accepted')
+  await page.evaluate(() => { window.fixtureSends = []; window.fixtureAccept = true })
+  await page.click(editor)
+  await page.keyboard.type('accepted ')
+  await observeOrder()
+  await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
+  await client.send('Input.imeSetComposition', { text: '你', selectionStart: 1, selectionEnd: 1 })
+  await page.click(sendButton)
+  await page.waitForFunction(() => window.fixtureSends.length === 1 && window.fixtureEditor()?.textContent === '')
+  await assertBlurCommitOrder()
+  assert.equal(await page.evaluate(() => window.fixtureSends[0].text), 'accepted 你')
+  assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/ime-send-accepted')), null)
+  await client.detach()
+}))
+
 for (const spec of browsers) {
 test(`${spec.name} restores caret and selected ranges through custom undo and redo`, async () => withBrowser(spec, async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
