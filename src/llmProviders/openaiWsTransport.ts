@@ -33,7 +33,7 @@ type OpenAIWsResource = {
     closeRecorded?: boolean;
     removeIdleListeners?: () => void;
     removeGracefulCloseListeners?: () => void;
-    removeConnectingAbortListeners?: () => void;
+    connectingAbortGuardInstalled?: boolean;
 };
 
 export type OpenAIWsAttemptDiagnostics = {
@@ -182,7 +182,7 @@ function closeResource(
             return;
         }
         if (resource.socket.readyState === WebSocket.CONNECTING) {
-            if (!resource.removeConnectingAbortListeners) {
+            if (!resource.connectingAbortGuardInstalled) {
                 const onError = () => {
                     // ws emits this asynchronously after terminate() aborts a
                     // still-pending client handshake. The request promise has
@@ -191,21 +191,15 @@ function closeResource(
                 };
                 const onClose = () => {
                     resource.socket.off('error', onError);
-                    resource.removeConnectingAbortListeners = undefined;
+                    resource.connectingAbortGuardInstalled = false;
                 };
+                resource.connectingAbortGuardInstalled = true;
                 resource.socket.on('error', onError);
                 resource.socket.once('close', onClose);
-                resource.removeConnectingAbortListeners = () => {
-                    resource.socket.off('error', onError);
-                    resource.socket.off('close', onClose);
-                    resource.removeConnectingAbortListeners = undefined;
-                };
             }
             resource.socket.terminate();
             return;
         }
-        resource.removeConnectingAbortListeners?.();
-        resource.removeConnectingAbortListeners = undefined;
         if (resource.socket.readyState === WebSocket.OPEN) {
             resource.socket.terminate();
         }

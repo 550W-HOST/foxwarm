@@ -25,9 +25,9 @@ export type StreamingAttemptWatchdog = {
 
 function timeoutError(kind: StreamingTimeoutKind, timeoutMs: number): Error {
   const label = kind === 'first-content'
-    ? 'before first meaningful generated content'
+    ? 'before the first model output activity'
     : kind === 'content-inactivity'
-      ? 'between meaningful generated content increments'
+      ? 'while waiting for further model output activity'
       : 'at the explicit caller deadline';
   const error: any = new Error(`Streaming LLM request timed out ${label} after ${timeoutMs}ms.`);
   error.code = 'LLM_STREAM_TIMEOUT';

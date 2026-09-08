@@ -631,7 +631,7 @@ test('openai-ws first-activity watchdog covers handshake and ignores unrelated r
     assert.equal(timers.entries.length, 1);
     assert.equal(timers.entries[0].delayMs, DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS);
     timers.entries[0].callback();
-    await assert.rejects(pending, /before first meaningful generated content/);
+    await assert.rejects(pending, /before the first model output activity/);
     assert.equal(socket.terminated, 1);
   }
 });
@@ -660,7 +660,7 @@ test('openai-ws meaningful deltas switch to and reset the two-minute inactivity 
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /between meaningful generated content increments after 120000ms/);
+  await assert.rejects(pending, /while waiting for further model output activity after 120000ms/);
   assert.equal(socket.terminated, 1);
 });
 
@@ -691,7 +691,7 @@ test('openai-ws reasoning-summary-only deltas reset inactivity without a present
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /between meaningful generated content increments after 120000ms/);
+  await assert.rejects(pending, /while waiting for further model output activity after 120000ms/);
   assert.equal(socket.terminated, 1);
 });
 
@@ -725,7 +725,7 @@ test('openai-ws valid output-item added and done events reset inactivity while i
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /between meaningful generated content increments after 120000ms/);
+  await assert.rejects(pending, /while waiting for further model output activity after 120000ms/);
   assert.equal(socket.terminated, 1);
 });
 
