@@ -14,7 +14,7 @@ The journal uses `state/llm-request-journal.sqlite` as its sole runtime authorit
 - A request manifest references those objects and identifies its purpose, optional session, iteration, requested model key, and a hash of the prompt-cache key.
 - The first request is a message-list checkpoint. Later same-session requests use common-prefix deltas, with a checkpoint at least every eight links.
 - Reconstruction follows only the bounded manifest chain and verifies every referenced object exists.
-- Each physical provider attempt has an append-only start record with the selected concrete model, protocol, virtual key when applicable, and a hash of the semantic provider payload.
+- Each physical provider attempt has an append-only start record with the selected concrete model, protocol, virtual key when applicable, and a hash of the semantic provider payload. The request prompt is the first attempt's effective prompt; a later attempt may reference a different content-addressed prompt object, while an absent reference inherits the request prompt.
 - Attempt results contain normalized success output or bounded failure/abort metadata. Auth headers and provider-hydrated request bodies are never stored.
 - Successful normal assistant messages carry `llmRequestId` and `llmAttempt` metadata linking them to the journal. Ephemeral compact, BTW, ToolScript, CLI, and setup outputs remain reconstructable through attempt results even though they do not all become ordinary session assistant rows.
 
@@ -36,7 +36,7 @@ Existing session message/block archives remain readable and unchanged. They do n
 
 The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Shared stateful UTF-8 LF/CRLF framing preserves literal U+2028/U+2029 inside JSON strings, and an incremental import offset advances only after its selected source range succeeds. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. A request manifest and every attempt start commit before the corresponding provider send.
 
-Full request/attempt row structure, object type/hash integrity, bounded delta ancestry, and reconstructed message count are checked during import and reconstruction. Corrupt records fail closed and are never labeled complete.
+Full request/attempt row structure, request and attempt-prompt object type/hash integrity, bounded delta ancestry, and reconstructed message count are checked during import and reconstruction. Corrupt records fail closed and are never labeled complete. Reconstruction retains the request-level prompt and also resolves the effective prompt for every attempt.
 
 Request listing uses a stable `(createdAt, requestId)` composite cursor, including when multiple requests share one millisecond timestamp.
 
@@ -55,7 +55,9 @@ suffixes are not persisted.
 
 ### D-llm-request-journal-canonical-boundary
 
-[2026-08-03] Foxwarm durably records each provider-neutral LLM request before the first provider send using content-addressed prompt, tool-schema, and canonical-message objects plus a bounded checkpoint/delta manifest. The same narrow journal covers normal turns and every current one-shot/side/compact caller. Physical attempts record concrete routing and semantic-payload hashes, while successful assistant rows link to the request identity.
+[2026-08-03, updated 2026-09-08] Foxwarm durably records each provider-neutral LLM request before the first provider send using content-addressed prompt, tool-schema, and canonical-message objects plus a bounded checkpoint/delta manifest. The same narrow journal covers normal turns and every current one-shot/side/compact caller. Physical attempts record concrete routing and semantic-payload hashes, while successful assistant rows link to the request identity.
+
+The request prompt is the first attempt's effective system prompt. An attempt whose effective prompt differs stores only an optional reference to another existing content-addressed prompt object; attempts without that reference inherit the request prompt. Reconstruction exposes each attempt's effective prompt and fails closed when an override reference is missing, malformed, or points to the wrong object kind. This additive record shape preserves old attempts and does not store raw provider payloads.
 
 The normal journal never stores auth headers or provider-hydrated request payloads and does not claim exact HTTP wire replay. Existing archives remain legacy-partial rather than receiving inferred request records. A post-response journal-result failure is observable but must not re-enter provider retry logic and create a duplicate successful generation.
 

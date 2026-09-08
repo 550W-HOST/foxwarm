@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'fs-extra';
 import {
   beginLlmRequestJournal,
@@ -19,6 +20,8 @@ import {
   appendLlmAttemptResult,
   replaceLlmJournalRequestIdentityForTests,
   replaceLlmJournalAttemptStartHashForTests,
+  getLlmJournalRequestObjectIdsForTests,
+  replaceLlmJournalAttemptPromptObjectIdForTests,
   replaceLlmJournalAttemptResultOutcomeForTests,
   exportLlmRequestJournalJsonl,
   LLM_REQUEST_JOURNAL_JSONL_PATH,
@@ -27,6 +30,22 @@ import { ARCHIVE_DB_PATH } from './config';
 import { appendMessagesToArchive } from './session/archive';
 
 function unique(prefix: string): string { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`; }
+
+function runJournalChild(script: string, dataRoot: string): Promise<string> {
+  const child = spawn(process.execPath, ['-e', script], {
+    cwd: process.cwd(),
+    env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_SYNC_FILE_LOG: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', chunk => { stdout += String(chunk); });
+  child.stderr.on('data', chunk => { stderr += String(chunk); });
+  return new Promise((resolve, reject) => child.on('exit', code => {
+    if (code === 0) resolve(stdout);
+    else reject(new Error(stderr || `child exit ${code}`));
+  }));
+}
 
 const tools = [{ name: 'echo', description: 'echo', parameters: { type: 'object', properties: { text: { type: 'string' } } } }];
 
@@ -78,6 +97,57 @@ test('request journal reconstructs checkpoint and bounded delta inputs exactly',
   }
   const listed = await listLlmRequestJournal({ sessionId, purpose: 'normal-turn' });
   assert.deepEqual(listed.slice(0, 2).map(item => item.requestId), [second.requestId, first.requestId]);
+});
+
+test('attempt prompts use request fallback and exact content-addressed overrides', async () => {
+  const promptA = unique('attempt_prompt_a');
+  const promptB = unique('attempt_prompt_b');
+  const request = await beginLlmRequestJournal({
+    sessionId: unique('attempt_prompt_session'), systemPrompt: promptA, toolDefinitions: [],
+    messages: [{ role: 'user', parts: [{ text: 'prompt attempts' }] }] as any,
+    requestedModelKey: 'fixture/route', promptCacheKey: 'attempt-prompt-cache',
+  });
+  const afterRequest = await getLlmRequestJournalStatsForTests();
+
+  await appendLlmAttemptStart({ requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/a', providerType: 'anthropic', semanticPayload: { attempt: 1 } });
+  await appendLlmAttemptStart({ requestId: request.requestId, attempt: 2, concreteModelId: 'fixture/b', providerType: 'anthropic', semanticPayload: { attempt: 2 }, systemPrompt: promptB });
+  await appendLlmAttemptStart({ requestId: request.requestId, attempt: 3, concreteModelId: 'fixture/a', providerType: 'anthropic', semanticPayload: { attempt: 3 }, systemPrompt: promptA });
+
+  const afterAttempts = await getLlmRequestJournalStatsForTests();
+  assert.equal(afterAttempts.objects, afterRequest.objects + 1);
+  const reconstructed = await reconstructLlmRequest(request.requestId);
+  assert.equal(reconstructed.completeness, 'complete');
+  if (reconstructed.completeness === 'complete') {
+    assert.equal(reconstructed.systemPrompt, promptA);
+    assert.deepEqual(reconstructed.attempts.map(attempt => attempt.systemPrompt), [promptA, promptB, promptA]);
+    assert.equal(reconstructed.attempts[0].start.promptObjectId, undefined);
+    assert.match(reconstructed.attempts[1].start.promptObjectId || '', /^sha256:[a-f0-9]{64}$/);
+    assert.equal(reconstructed.attempts[2].start.promptObjectId, undefined);
+  }
+});
+
+test('attempt prompt references must resolve to valid prompt objects', async () => {
+  const request = await beginLlmRequestJournal({
+    sessionId: unique('attempt_prompt_corrupt'), systemPrompt: unique('base_prompt'), toolDefinitions: tools as any,
+    messages: [{ role: 'user', parts: [{ text: 'corruption' }] }] as any,
+    requestedModelKey: 'fixture/route', promptCacheKey: 'attempt-corrupt-cache',
+  });
+  await appendLlmAttemptStart({
+    requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/b', providerType: 'anthropic',
+    semanticPayload: {}, systemPrompt: unique('override_prompt'),
+  });
+  const reconstructed = await reconstructLlmRequest(request.requestId);
+  assert.equal(reconstructed.completeness, 'complete');
+  if (reconstructed.completeness !== 'complete') return;
+  const originalOverride = reconstructed.attempts[0].start.promptObjectId!;
+  const objectIds = await getLlmJournalRequestObjectIdsForTests(request.requestId);
+
+  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, `sha256:${'0'.repeat(64)}`);
+  assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'corrupt');
+  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, objectIds.toolSchemaObjectId);
+  assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'corrupt');
+  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, originalOverride);
+  assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'complete');
 });
 
 test('a pre-SQLite journal failure blocks the provider-bound request manifest', async () => {
@@ -164,6 +234,51 @@ test('normal runtime is SQLite-only and exports compatibility JSONL on demand', 
   assert.match(exportedText, new RegExp(request.requestId));
   assert.doesNotMatch(exportedText, /stale-output/);
   await fs.remove(output);
+});
+
+test('attempt prompt overrides survive compatibility export and strict reimport', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-attempt-prompt-roundtrip-'));
+  const modulePath = path.join(__dirname, 'llmRequestJournal.js');
+  try {
+    const stdout = await runJournalChild(`
+      const fs=require('fs-extra');const j=require(${JSON.stringify(modulePath)});
+      (async()=>{const a='prompt A';const b='prompt B';const r=await j.beginLlmRequestJournal({sessionId:'roundtrip',systemPrompt:a,toolDefinitions:[],messages:[{role:'user',parts:[{text:'roundtrip'}]}],requestedModelKey:'fixture/route',promptCacheKey:'cache'});await j.appendLlmAttemptStart({requestId:r.requestId,attempt:1,concreteModelId:'fixture/a',providerType:'anthropic',semanticPayload:{attempt:1}});await j.appendLlmAttemptStart({requestId:r.requestId,attempt:2,concreteModelId:'fixture/b',providerType:'anthropic',semanticPayload:{attempt:2},systemPrompt:b});await j.appendLlmAttemptStart({requestId:r.requestId,attempt:3,concreteModelId:'fixture/a',providerType:'anthropic',semanticPayload:{attempt:3},systemPrompt:a});await j.exportLlmRequestJournalJsonl(j.LLM_REQUEST_JOURNAL_JSONL_PATH);j.resetLlmRequestJournalForTests();for(const suffix of ['', '-wal', '-shm'])await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+suffix);await j.migrateLegacyLlmRequestJournalToSqlite();const x=await j.reconstructLlmRequest(r.requestId);console.log(JSON.stringify(x))})().catch(e=>{console.error(e.stack);process.exit(1)});
+    `, dataRoot);
+    const reconstructed = JSON.parse(stdout.trim().split('\n').pop() || '{}');
+    assert.equal(reconstructed.completeness, 'complete');
+    assert.equal(reconstructed.systemPrompt, 'prompt A');
+    assert.deepEqual(reconstructed.attempts.map((attempt: any) => attempt.systemPrompt), ['prompt A', 'prompt B', 'prompt A']);
+    assert.equal(reconstructed.attempts[0].start.promptObjectId, undefined);
+    assert.match(reconstructed.attempts[1].start.promptObjectId, /^sha256:[a-f0-9]{64}$/);
+    assert.equal(reconstructed.attempts[2].start.promptObjectId, undefined);
+  } finally {
+    await fs.remove(dataRoot);
+  }
+});
+
+test('concurrent journal owners safely add the optional attempt prompt column to an old database', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-attempt-prompt-schema-'));
+  const modulePath = path.join(__dirname, 'llmRequestJournal.js');
+  try {
+    await runJournalChild(`
+      const fs=require('fs-extra');const path=require('node:path');const {DatabaseSync}=require('node:sqlite');const j=require(${JSON.stringify(modulePath)});fs.ensureDirSync(path.dirname(j.LLM_REQUEST_JOURNAL_DB_PATH));const db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH);db.exec('CREATE TABLE llm_journal_attempt_starts (event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL, concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL)');db.close();
+    `, dataRoot);
+    const writeScript = (sessionId: string) => `
+      const j=require(${JSON.stringify(modulePath)});j.beginLlmRequestJournal({sessionId:${JSON.stringify(sessionId)},systemPrompt:'prompt',toolDefinitions:[],messages:[{role:'user',parts:[{text:'message'}]}],requestedModelKey:'fixture/model',promptCacheKey:'cache'}).then(()=>process.exit(0),e=>{console.error(e.stack);process.exit(1)});
+    `;
+    await Promise.all([
+      runJournalChild(writeScript('owner-a'), dataRoot),
+      runJournalChild(writeScript('owner-b'), dataRoot),
+    ]);
+    const stdout = await runJournalChild(`
+      const {DatabaseSync}=require('node:sqlite');const j=require(${JSON.stringify(modulePath)});(async()=>{await j.initLlmRequestJournal();const db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH,{readOnly:true});const columns=db.prepare('PRAGMA table_info(llm_journal_attempt_starts)').all().map(x=>x.name);const requests=db.prepare('SELECT COUNT(*) AS count FROM llm_journal_requests').get().count;db.close();console.log(JSON.stringify({columns,requests}))})().catch(e=>{console.error(e.stack);process.exit(1)});
+    `, dataRoot);
+    const result = JSON.parse(stdout.trim().split('\n').pop() || '{}');
+    assert.ok(result.columns.includes('prompt_object_id'));
+    assert.equal(result.requests, 2);
+  } finally {
+    await fs.remove(dataRoot);
+  }
 });
 
 test('composite pagination is lossless when requests share a millisecond timestamp', async () => {
