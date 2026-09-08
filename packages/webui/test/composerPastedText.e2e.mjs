@@ -169,7 +169,7 @@ for (const spec of browsers) {
     await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'edited\n\n  block'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save').click())
     assert.equal(await page.evaluate(() => window.fixtureDraft), 'before<pasted-text>edited\n\n  block</pasted-text>X\nYafter')
-    await page.waitForFunction(() => document.activeElement?.classList.contains('foxwarm-composer-pasted-text-chip'))
+    await page.waitForFunction(() => document.activeElement?.closest('.foxwarm-composer-pasted-text-chip'))
 
     await page.evaluate(() => window.fixtureCaretAtRootOffset(2))
     await page.keyboard.press('Backspace')
@@ -572,6 +572,93 @@ for (const spec of [browsers[0]]) {
   }))
 }
 
+for (const spec of browsers) {
+  test(`${spec.name} removes composer blocks with their visible controls and restores them with undo`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const sessionId = `fixture/remove-${spec.name}`
+    await page.evaluate(sessionId => window.fixtureSetSession(sessionId), sessionId)
+    await page.waitForFunction(sessionId => window.fixtureCurrentSession === sessionId && window.fixtureEditor()?.textContent === '', {}, sessionId)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.type(editor, 'A  B')
+    await page.evaluate(() => window.fixtureSelectText(2, 2))
+    await page.evaluate(() => window.fixturePaste('p'.repeat(2000)))
+    await page.waitForSelector('.foxwarm-composer-pasted-text-chip')
+    await page.waitForSelector('button[aria-label="Remove pasted text block"]')
+    const pastedDraft = await page.evaluate(() => window.fixtureDraft)
+    await page.click('button[aria-label="Remove pasted text block"]')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft.replace(/<pasted-text>[\s\S]*<\/pasted-text>/, ''))
+    assert.equal(await page.$('[role="dialog"]'), null)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft)
+    await page.focus('button[aria-label="Remove pasted text block"]')
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft.replace(/<pasted-text>[\s\S]*<\/pasted-text>/, ''))
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft)
+    await page.focus('button[aria-label="Remove pasted text block"]')
+    await page.keyboard.press('Enter')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft.replace(/<pasted-text>[\s\S]*<\/pasted-text>/, ''))
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft)
+
+    await page.evaluate(() => window.fixtureSetLoading(true))
+    await page.waitForFunction(() => document.querySelector('button[aria-label="Remove pasted text block"]')?.disabled === true)
+    await page.click('button[aria-label="Remove pasted text block"]')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), pastedDraft)
+  }))
+}
+
+test('Chromium removes image, file, and missing-file blocks without opening their modal', async () => withBrowser(browsers[0], async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const sessionId = 'fixture/remove-attachments'
+    await page.evaluate(sessionId => window.fixtureSetSession(sessionId), sessionId)
+    await page.waitForFunction(sessionId => window.fixtureCurrentSession === sessionId && window.fixtureEditor()?.textContent === '', {}, sessionId)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.type(editor, 'A  B')
+    await page.evaluate(() => window.fixtureSelectText(2, 2))
+    await page.$eval(editor, editorNode => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
+      transfer.items.add(new File(['file'], 'notes.txt', { type: 'text/plain' }))
+      editorNode.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+    })
+    await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
+    const attachmentDraft = await page.evaluate(() => window.fixtureDraft)
+    const attachmentRefs = await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.composerAttachmentRef))
+    await page.click('button[aria-label="Remove attachment photo.png"]')
+    assert.equal(await page.evaluate(ref => window.fixtureDraft.includes(`<attachment-ref ref="${ref}" />`), attachmentRefs[0]), false)
+    assert.equal(await page.$('[role="dialog"]'), null)
+    assert.equal(await page.$eval(editor, node => node.textContent.startsWith('A') && node.textContent.endsWith('B')), true)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), attachmentDraft)
+    assert.equal(await page.evaluate(() => window.fixtureSends.at(-1)?.attachments?.length || 0), 0)
+    await page.$eval(editor, node => node.blur())
+    await page.waitForFunction((sessionId, refs) => refs.every(ref => localStorage.getItem(`composer_draft_v1_${sessionId}`)?.includes(ref)), {}, sessionId, await page.evaluate(() => [...document.querySelectorAll('.foxwarm-composer-attachment-chip')].map(chip => chip.dataset.composerAttachmentRef)))
+
+    await page.reload({ waitUntil: 'load' })
+    await page.evaluate(sessionId => window.fixtureSetSession(sessionId), sessionId)
+    await page.waitForFunction((sessionId) => window.fixtureCurrentSession === sessionId
+      && document.querySelector('button[aria-label="Remove attachment notes.txt"]')
+      && [...document.querySelectorAll('.foxwarm-composer-attachment-chip')].every(node => node.textContent.includes('Reattach required')), {}, sessionId)
+    assert.equal(await page.$eval('.foxwarm-composer-attachment-chip', node => node.textContent.includes('Reattach required')), true)
+    const missingDraft = attachmentDraft
+    await page.locator('button[aria-label="Remove attachment notes.txt"]').click()
+    assert.notEqual(await page.evaluate(() => window.fixtureDraft), missingDraft)
+    assert.equal(await page.$('[role="dialog"]'), null)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), missingDraft)
+
+    await page.evaluate(() => window.fixtureSetLoading(true))
+    await page.waitForFunction(() => document.querySelector('button[aria-label="Remove attachment notes.txt"]')?.disabled === true)
+    const disabledDraft = await page.evaluate(() => window.fixtureDraft)
+    const disabledRemoveBox = await page.$eval('button[aria-label="Remove attachment notes.txt"]', button => {
+      const rect = button.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    })
+    await page.mouse.click(disabledRemoveBox.x, disabledRemoveBox.y)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), disabledDraft)
+}))
+
 test('Chromium preserves trusted CDP IME replacement through every caret-anchor position', async () => withBrowser(browsers[0], async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
   const client = await page.createCDPSession()
@@ -783,7 +870,7 @@ test('Chromium blocks custom and native draft mutations throughout disabled tran
   await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'false'
     && document.querySelector('.foxwarm-composer-pasted-text-chip')?.getAttribute('aria-disabled') === 'true'
     && !document.querySelector('textarea[aria-label="Full pasted text"]'))
-  assert.deepEqual(await page.$eval('.foxwarm-composer-pasted-text-chip', node => ({ tabIndex: node.tabIndex, disabled: node.getAttribute('aria-disabled') })), { tabIndex: -1, disabled: 'true' })
+  assert.deepEqual(await page.$eval('.foxwarm-composer-pasted-text-chip', node => ({ tabIndex: node.tabIndex, disabled: node.getAttribute('aria-disabled'), buttonsDisabled: [...node.querySelectorAll('button')].every(button => button.disabled && button.tabIndex === -1) })), { tabIndex: -1, disabled: 'true', buttonsDisabled: true })
   await page.evaluate(() => { window.fixtureStaleSave.click(); window.fixtureStaleRestore.click() })
   assert.equal(await page.evaluate(() => window.fixtureDraft), expected)
 
@@ -813,7 +900,7 @@ test('Chromium blocks custom and native draft mutations throughout disabled tran
   await page.evaluate(() => window.fixtureSetLoading(false))
   await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true'
     && document.querySelector('.foxwarm-composer-pasted-text-chip')?.getAttribute('aria-disabled') === 'false')
-  assert.deepEqual(await page.$eval('.foxwarm-composer-pasted-text-chip', node => ({ tabIndex: node.tabIndex, disabled: node.getAttribute('aria-disabled') })), { tabIndex: 0, disabled: 'false' })
+  assert.deepEqual(await page.$eval('.foxwarm-composer-pasted-text-chip', node => ({ tabIndex: node.tabIndex, disabled: node.getAttribute('aria-disabled'), buttonsEnabled: [...node.querySelectorAll('button')].every(button => !button.disabled && button.tabIndex === 0) })), { tabIndex: -1, disabled: 'false', buttonsEnabled: true })
 }))
 
 test('Chromium preserves storage, send, copy, selection, composition, slash, and mobile contracts', async () => withBrowser(browsers[0], async page => {

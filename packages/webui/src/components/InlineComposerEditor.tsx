@@ -311,8 +311,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const chip = document.createElement('span')
     chip.className = 'foxwarm-composer-pasted-text-chip foxwarm-pasted-text-block mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-1.5 rounded-md border border-fw-accent-border/60 bg-fw-accent-surface px-2 py-0.5 align-middle text-left text-xs leading-5 text-fw-accent shadow-sm hover:bg-fw-accent-surface-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring dark:bg-fw-accent-surface-strong/25 dark:hover:bg-fw-accent-surface-strong/40'
     chip.contentEditable = 'false'
-    chip.tabIndex = disabled ? -1 : 0
-    chip.setAttribute('role', 'button')
+    chip.tabIndex = -1
+    chip.setAttribute('role', 'group')
     chip.setAttribute('aria-disabled', String(disabled))
     chip.dataset.composerPastedTextId = segment.id
     const icon = document.createElement('span')
@@ -325,8 +325,23 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const count = document.createElement('span')
     count.className = 'foxwarm-composer-pasted-text-count shrink-0 text-fw-text-muted'
     count.textContent = countPastedTextCharacters(segment.text).toLocaleString()
-    chip.append(icon, preview, count)
-    chip.setAttribute('aria-label', `Edit pasted text, ${countPastedTextCharacters(segment.text)} characters`)
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'inline-flex min-w-0 items-center gap-1.5 rounded text-left focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    open.tabIndex = disabled ? -1 : 0
+    open.disabled = disabled
+    open.dataset.composerBlockOpen = 'true'
+    open.setAttribute('aria-label', `Edit pasted text, ${countPastedTextCharacters(segment.text)} characters`)
+    open.append(icon, preview, count)
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'ml-1 shrink-0 rounded px-1 text-fw-text-muted hover:text-fw-danger focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    remove.tabIndex = disabled ? -1 : 0
+    remove.disabled = disabled
+    remove.dataset.composerBlockRemove = 'true'
+    remove.setAttribute('aria-label', 'Remove pasted text block')
+    remove.textContent = '×'
+    chip.append(open, remove)
     return chip
   }, [disabled])
 
@@ -335,8 +350,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const chip = document.createElement('span')
     chip.className = 'foxwarm-composer-attachment-chip mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1 align-middle text-left text-xs leading-5 text-fw-text shadow-sm focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
     chip.contentEditable = 'false'
-    chip.tabIndex = disabled ? -1 : 0
-    chip.setAttribute('role', 'button')
+    chip.tabIndex = -1
+    chip.setAttribute('role', 'group')
     chip.setAttribute('aria-disabled', String(disabled))
     chip.dataset.composerAttachmentRef = segment.ref
     const file = resolveAttachmentFile(segment.ref)
@@ -360,8 +375,24 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const info = document.createElement('span')
     info.className = 'shrink-0 text-fw-text-muted'
     info.textContent = file ? `${segment.mimeType || 'file'} · ${segment.size.toLocaleString()} B` : 'Reattach required'
-    chip.append(label, info)
-    chip.setAttribute('aria-label', file ? `Attachment ${segment.name}` : `Attachment ${segment.name}, reattach required`)
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'inline-flex min-w-0 items-center gap-2 rounded text-left focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    open.tabIndex = disabled ? -1 : 0
+    open.disabled = disabled
+    open.dataset.composerBlockOpen = 'true'
+    open.setAttribute('aria-label', file ? `Attachment ${segment.name}` : `Attachment ${segment.name}, reattach required`)
+    while (chip.firstChild) open.append(chip.firstChild)
+    open.append(label, info)
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'ml-1 shrink-0 rounded px-1 text-fw-text-muted hover:text-fw-danger focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    remove.tabIndex = disabled ? -1 : 0
+    remove.disabled = disabled
+    remove.dataset.composerBlockRemove = 'true'
+    remove.setAttribute('aria-label', `Remove attachment ${segment.name}`)
+    remove.textContent = '×'
+    chip.append(open, remove)
     return chip
   }, [disabled, resolveAttachmentFile])
 
@@ -726,9 +757,13 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     if (!editor) return
     editor.contentEditable = String(!disabled)
     editor.setAttribute('aria-disabled', String(disabled))
-    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id]')) {
-      chip.tabIndex = disabled ? -1 : 0
+    for (const chip of editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]')) {
+      chip.tabIndex = -1
       chip.setAttribute('aria-disabled', String(disabled))
+      for (const button of chip.querySelectorAll<HTMLButtonElement>('button')) {
+        button.disabled = disabled
+        button.tabIndex = disabled ? -1 : 0
+      }
     }
     if (disabled) {
       cancelCompositionFinalize()
@@ -876,7 +911,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if (composingRef.current || compositionEndingRef.current || nativeEvent.isComposing) return
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return }
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return }
-          const targetChip = event.target instanceof HTMLElement && isChip(event.target) ? event.target : null
+          const targetChip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') : null
+          if (targetChip && event.target instanceof HTMLButtonElement) return
           const selectionCaretAnchor = getCaretAnchor(window.getSelection()?.anchorNode || null)
           if (event.key === 'Home' && !event.shiftKey && (targetChip || selectionCaretAnchor)) {
             const editor = editorRef.current
@@ -896,7 +932,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
               return
             }
           }
-          if (targetChip && (event.key === 'Enter' || event.key === ' ')) {
+          if (targetChip && event.target === targetChip && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault()
             activeChipRef.current = targetChip
             if (targetChip.dataset.composerAttachmentRef) setActiveAttachmentRef(targetChip.dataset.composerAttachmentRef)
@@ -926,6 +962,13 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if (disabled) return
           const chip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') : null
           if (!chip) return
+          if (event.target instanceof Element && event.target.closest('[data-composer-block-remove]')) {
+            event.preventDefault()
+            event.stopPropagation()
+            removeChip(chip)
+            return
+          }
+          if (event.target !== chip && !(event.target instanceof Element && event.target.closest('[data-composer-block-open]'))) return
           activeChipRef.current = chip
           if (chip.dataset.composerAttachmentRef) setActiveAttachmentRef(chip.dataset.composerAttachmentRef)
           else setActiveBlockId(chip.dataset.composerPastedTextId || null)
