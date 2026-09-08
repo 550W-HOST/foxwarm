@@ -338,6 +338,81 @@ for (const spec of browsers) {
   }))
 }
 
+test('Chromium preserves trusted CDP IME replacement through every caret-anchor position', async () => withBrowser(browsers[0], async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  const client = await page.createCDPSession()
+  const switchSession = async id => {
+    await page.evaluate(sessionId => window.fixtureSetSession(sessionId), id)
+    await page.waitForFunction(sessionId => window.fixtureCurrentSession === sessionId, {}, id)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
+  }
+  const commitIme = async (base, expected) => {
+    const sendCount = await page.evaluate(() => window.fixtureSends.length)
+    await client.send('Input.imeSetComposition', { text: 'n', selectionStart: 1, selectionEnd: 1 })
+    assert.equal(await page.evaluate(() => window.fixtureDraft || ''), base)
+    assert.equal(await page.evaluate(() => window.fixtureSends.length), sendCount)
+    await client.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
+    assert.equal(await page.evaluate(() => window.fixtureDraft || ''), base)
+    assert.equal(await page.evaluate(() => window.fixtureSends.length), sendCount)
+    await client.send('Input.insertText', { text: '你' })
+    await page.waitForFunction(value => window.fixtureDraft === value, {}, expected)
+    const actual = await page.evaluate(() => window.fixtureDraft)
+    assert.equal(actual.includes('n你'), false)
+    assert.equal(actual.includes('\u200B'), false)
+  }
+
+  await switchSession('fixture/ime-plain')
+  await page.click(editor)
+  await commitIme('', '你')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+
+  const first = 'L'.repeat(2000)
+  const second = 'R'.repeat(2000)
+  const firstBlock = `<pasted-text>${first}</pasted-text>`
+  const secondBlock = `<pasted-text>${second}</pasted-text>`
+
+  await switchSession('fixture/ime-leading')
+  await page.evaluate(text => window.fixturePaste(text), first)
+  await page.click('.foxwarm-composer-caret-anchor')
+  await commitIme(firstBlock, `你${firstBlock}`)
+  const copied = await page.evaluate(() => {
+    window.fixtureSelectAll()
+    const data = new DataTransfer()
+    const event = new Event('copy', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: data })
+    window.fixtureEditor().dispatchEvent(event)
+    return data.getData('text/plain')
+  })
+  assert.equal(copied, `你${firstBlock}`)
+  await page.focus(editor)
+  await page.keyboard.down('Control'); await page.keyboard.press('Enter'); await page.keyboard.up('Control')
+  await page.waitForFunction(() => window.fixtureSends.length === 1)
+  assert.equal(await page.evaluate(() => window.fixtureSends[0].text), `你${firstBlock}`)
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), firstBlock)
+
+  await switchSession('fixture/ime-trailing')
+  await page.evaluate(text => window.fixturePaste(text), first)
+  const trailingAnchors = await page.$$('.foxwarm-composer-caret-anchor')
+  await trailingAnchors.at(-1).click()
+  await commitIme(firstBlock, `${firstBlock}你`)
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), firstBlock)
+
+  await switchSession('fixture/ime-between')
+  await page.evaluate(text => window.fixturePaste(text), first)
+  await page.evaluate(text => window.fixturePaste(text), second)
+  const betweenBase = `${firstBlock}${secondBlock}`
+  const betweenAnchors = await page.$$('.foxwarm-composer-caret-anchor')
+  await betweenAnchors[1].click()
+  await commitIme(betweenBase, `${firstBlock}你${secondBlock}`)
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), betweenBase)
+  await client.detach()
+}))
+
 for (const spec of browsers) {
 test(`${spec.name} restores caret and selected ranges through custom undo and redo`, async () => withBrowser(spec, async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
@@ -500,7 +575,7 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
     editorNode.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', isComposing: true }))
     editorNode.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中文' }))
   })
-  assert.equal(await page.evaluate(() => window.fixtureDraft), '中文')
+  await page.waitForFunction(() => window.fixtureDraft === '中文')
   assert.equal(await page.evaluate(() => window.fixtureSends.length), 2)
   await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
   assert.equal(await page.$eval(editor, node => node.textContent), '/help ')

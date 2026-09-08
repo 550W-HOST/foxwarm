@@ -89,6 +89,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const beforeInputRef = useRef<EditorState | null>(null)
   const compositionBaseRef = useRef<EditorState | null>(null)
   const composingRef = useRef(false)
+  const compositionEndingRef = useRef(false)
+  const compositionFinalizeFrameRef = useRef<number | null>(null)
   const lastEmittedRef = useRef('')
   const lastDraftIdRef = useRef('')
   const activeChipRef = useRef<HTMLElement | null>(null)
@@ -395,6 +397,24 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     redoRef.current = []
   }, [readDraft, trimHistory])
 
+  const cancelCompositionFinalize = useCallback(() => {
+    if (compositionFinalizeFrameRef.current !== null) cancelAnimationFrame(compositionFinalizeFrameRef.current)
+    compositionFinalizeFrameRef.current = null
+  }, [])
+
+  const finalizeComposition = useCallback(() => {
+    cancelCompositionFinalize()
+    const base = compositionBaseRef.current
+    compositionBaseRef.current = null
+    compositionEndingRef.current = false
+    composingRef.current = false
+    beforeInputRef.current = null
+    if (!base || disabledRef.current) return
+    reconcileCaretAnchors()
+    recordHistory(base, 'composition')
+    emitDraft()
+  }, [cancelCompositionFinalize, emitDraft, reconcileCaretAnchors, recordHistory])
+
   const applyHistoryDraft = useCallback((snapshot: DraftSnapshot) => {
     renderDraft(snapshot.draft)
     authoritativeDraftRef.current = snapshot.draft
@@ -424,6 +444,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [applyHistoryDraft, captureEditorState, trimHistory])
 
   const replaceDraft = useCallback((nextDraft: ComposerDraft, shouldFocusEnd = false) => {
+    cancelCompositionFinalize()
+    compositionBaseRef.current = null
+    compositionEndingRef.current = false
+    composingRef.current = false
+    beforeInputRef.current = null
     renderDraft(nextDraft)
     authoritativeDraftRef.current = nextDraft
     undoRef.current = []
@@ -431,7 +456,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     historyGroupRef.current = null
     lastEmittedRef.current = serializeComposerDraft(nextDraft)
     if (shouldFocusEnd) focusEnd()
-  }, [focusEnd, renderDraft])
+  }, [cancelCompositionFinalize, focusEnd, renderDraft])
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => editorRef.current?.focus(),
@@ -519,6 +544,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const serialized = serializeComposerDraft(value)
     const draftChanged = lastDraftIdRef.current !== draftId
     if (draftChanged || serialized !== lastEmittedRef.current) {
+      cancelCompositionFinalize()
+      compositionBaseRef.current = null
+      compositionEndingRef.current = false
+      composingRef.current = false
+      beforeInputRef.current = null
       renderDraft(value)
       authoritativeDraftRef.current = value
       undoRef.current = []
@@ -528,7 +558,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       lastDraftIdRef.current = draftId
       setActiveBlockId(null)
     }
-  }, [draftId, renderDraft, value])
+  }, [cancelCompositionFinalize, draftId, renderDraft, value])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -540,13 +570,17 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       chip.setAttribute('aria-disabled', String(disabled))
     }
     if (disabled) {
+      cancelCompositionFinalize()
       setActiveBlockId(null)
       activeChipRef.current = null
       beforeInputRef.current = null
       compositionBaseRef.current = null
+      compositionEndingRef.current = false
       composingRef.current = false
     }
-  }, [disabled])
+  }, [cancelCompositionFinalize, disabled])
+
+  useEffect(() => cancelCompositionFinalize, [cancelCompositionFinalize])
 
   const activeBlock = activeBlockId ? blockMapRef.current.get(activeBlockId) || null : null
   const closeModal = useCallback(() => {
@@ -570,6 +604,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         onBeforeInput={(event) => {
           if (disabled) { event.preventDefault(); return }
           const nativeEvent = event.nativeEvent as InputEvent
+          if (composingRef.current || compositionEndingRef.current || nativeEvent.isComposing) {
+            beforeInputRef.current = null
+            return
+          }
           if (nativeEvent.inputType === 'historyUndo') { event.preventDefault(); undo(); return }
           if (nativeEvent.inputType === 'historyRedo') { event.preventDefault(); redo(); return }
           if (nativeEvent.inputType === 'insertParagraph' || nativeEvent.inputType === 'insertLineBreak') {
@@ -586,9 +624,17 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
             beforeInputRef.current = null
             return
           }
-          reconcileCaretAnchors()
           const nativeEvent = event.nativeEvent as InputEvent
-          if (!composingRef.current && beforeInputRef.current) {
+          if (compositionEndingRef.current) {
+            finalizeComposition()
+            return
+          }
+          if (composingRef.current || nativeEvent.isComposing) {
+            beforeInputRef.current = null
+            return
+          }
+          reconcileCaretAnchors()
+          if (beforeInputRef.current) {
             const coalesce = nativeEvent.inputType === 'insertText' || nativeEvent.inputType.startsWith('deleteContent')
             recordHistory(beforeInputRef.current, nativeEvent.inputType || 'input', coalesce)
           }
@@ -596,17 +642,24 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           emitDraft()
         }}
         onCompositionStart={() => {
-          if (disabled) return
+          if (disabledRef.current) return
+          cancelCompositionFinalize()
+          compositionEndingRef.current = false
           composingRef.current = true
           compositionBaseRef.current = captureEditorState()
         }}
         onCompositionEnd={() => {
-          if (disabled) return
-          composingRef.current = false
-          if (compositionBaseRef.current) recordHistory(compositionBaseRef.current, 'composition')
-          compositionBaseRef.current = null
+          if (disabledRef.current || !compositionBaseRef.current) {
+            cancelCompositionFinalize()
+            compositionBaseRef.current = null
+            compositionEndingRef.current = false
+            composingRef.current = false
+            return
+          }
+          compositionEndingRef.current = true
           beforeInputRef.current = null
-          emitDraft()
+          cancelCompositionFinalize()
+          compositionFinalizeFrameRef.current = requestAnimationFrame(finalizeComposition)
         }}
         onPaste={(event) => {
           if (disabled) { event.preventDefault(); return }
@@ -650,6 +703,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
             historyGroupRef.current = null
           }
+          if (composingRef.current || compositionEndingRef.current || nativeEvent.isComposing) return
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return }
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return }
           const targetChip = event.target instanceof HTMLElement && isChip(event.target) ? event.target : null
