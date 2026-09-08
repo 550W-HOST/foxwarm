@@ -109,7 +109,12 @@ test('attempt prompts use request fallback and exact content-addressed overrides
   });
   const afterRequest = await getLlmRequestJournalStatsForTests();
 
-  await appendLlmAttemptStart({ requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/a', providerType: 'anthropic', semanticPayload: { attempt: 1 } });
+  await assert.rejects(
+    appendLlmAttemptStart({ requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/b', providerType: 'anthropic', semanticPayload: { attempt: 1 }, systemPrompt: promptB }),
+    /attempt 1 must use the request system prompt/,
+  );
+  assert.equal((await getLlmRequestJournalStatsForTests()).objects, afterRequest.objects);
+  await appendLlmAttemptStart({ requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/a', providerType: 'anthropic', semanticPayload: { attempt: 1 }, systemPrompt: promptA });
   await appendLlmAttemptStart({ requestId: request.requestId, attempt: 2, concreteModelId: 'fixture/b', providerType: 'anthropic', semanticPayload: { attempt: 2 }, systemPrompt: promptB });
   await appendLlmAttemptStart({ requestId: request.requestId, attempt: 3, concreteModelId: 'fixture/a', providerType: 'anthropic', semanticPayload: { attempt: 3 }, systemPrompt: promptA });
 
@@ -123,30 +128,42 @@ test('attempt prompts use request fallback and exact content-addressed overrides
     assert.equal(reconstructed.attempts[0].start.promptObjectId, undefined);
     assert.match(reconstructed.attempts[1].start.promptObjectId || '', /^sha256:[a-f0-9]{64}$/);
     assert.equal(reconstructed.attempts[2].start.promptObjectId, undefined);
+
+    await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, reconstructed.attempts[1].start.promptObjectId!);
+    assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'corrupt');
+    await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, null);
+    const restored = await reconstructLlmRequest(request.requestId);
+    assert.equal(restored.completeness, 'complete');
+    if (restored.completeness === 'complete') assert.equal(restored.attempts[0].systemPrompt, promptA);
   }
 });
 
 test('attempt prompt references must resolve to valid prompt objects', async () => {
+  const basePrompt = unique('base_prompt');
   const request = await beginLlmRequestJournal({
-    sessionId: unique('attempt_prompt_corrupt'), systemPrompt: unique('base_prompt'), toolDefinitions: tools as any,
+    sessionId: unique('attempt_prompt_corrupt'), systemPrompt: basePrompt, toolDefinitions: tools as any,
     messages: [{ role: 'user', parts: [{ text: 'corruption' }] }] as any,
     requestedModelKey: 'fixture/route', promptCacheKey: 'attempt-corrupt-cache',
   });
   await appendLlmAttemptStart({
-    requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/b', providerType: 'anthropic',
+    requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/a', providerType: 'anthropic',
+    semanticPayload: {}, systemPrompt: basePrompt,
+  });
+  await appendLlmAttemptStart({
+    requestId: request.requestId, attempt: 2, concreteModelId: 'fixture/b', providerType: 'anthropic',
     semanticPayload: {}, systemPrompt: unique('override_prompt'),
   });
   const reconstructed = await reconstructLlmRequest(request.requestId);
   assert.equal(reconstructed.completeness, 'complete');
   if (reconstructed.completeness !== 'complete') return;
-  const originalOverride = reconstructed.attempts[0].start.promptObjectId!;
+  const originalOverride = reconstructed.attempts[1].start.promptObjectId!;
   const objectIds = await getLlmJournalRequestObjectIdsForTests(request.requestId);
 
-  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, `sha256:${'0'.repeat(64)}`);
+  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 2, `sha256:${'0'.repeat(64)}`);
   assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'corrupt');
-  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, objectIds.toolSchemaObjectId);
+  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 2, objectIds.toolSchemaObjectId);
   assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'corrupt');
-  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 1, originalOverride);
+  await replaceLlmJournalAttemptPromptObjectIdForTests(request.requestId, 2, originalOverride);
   assert.equal((await reconstructLlmRequest(request.requestId)).completeness, 'complete');
 });
 
@@ -251,6 +268,23 @@ test('attempt prompt overrides survive compatibility export and strict reimport'
     assert.equal(reconstructed.attempts[0].start.promptObjectId, undefined);
     assert.match(reconstructed.attempts[1].start.promptObjectId, /^sha256:[a-f0-9]{64}$/);
     assert.equal(reconstructed.attempts[2].start.promptObjectId, undefined);
+  } finally {
+    await fs.remove(dataRoot);
+  }
+});
+
+test('an empty persisted attempt prompt reference remains invalid through export and reimport', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-empty-attempt-prompt-'));
+  const modulePath = path.join(__dirname, 'llmRequestJournal.js');
+  try {
+    const stdout = await runJournalChild(`
+      const fs=require('fs-extra');const j=require(${JSON.stringify(modulePath)});
+      (async()=>{const r=await j.beginLlmRequestJournal({sessionId:'empty-ref',systemPrompt:'prompt A',toolDefinitions:[],messages:[{role:'user',parts:[{text:'empty ref'}]}],requestedModelKey:'fixture/route',promptCacheKey:'cache'});await j.appendLlmAttemptStart({requestId:r.requestId,attempt:1,concreteModelId:'fixture/a',providerType:'anthropic',semanticPayload:{attempt:1},systemPrompt:'prompt A'});await j.appendLlmAttemptStart({requestId:r.requestId,attempt:2,concreteModelId:'fixture/b',providerType:'anthropic',semanticPayload:{attempt:2},systemPrompt:'prompt B'});await j.replaceLlmJournalAttemptPromptObjectIdForTests(r.requestId,2,'');await j.exportLlmRequestJournalJsonl(j.LLM_REQUEST_JOURNAL_JSONL_PATH);const exported=await fs.readFile(j.LLM_REQUEST_JOURNAL_JSONL_PATH,'utf8');const record=exported.split('\\n').filter(Boolean).map(JSON.parse).find(x=>x.kind==='attempt-start'&&x.requestId===r.requestId&&x.attempt===2);const before=await j.reconstructLlmRequest(r.requestId);j.resetLlmRequestJournalForTests();for(const suffix of ['', '-wal', '-shm'])await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+suffix);let importError='';try{await j.migrateLegacyLlmRequestJournalToSqlite()}catch(e){importError=String(e.message||e)}console.log(JSON.stringify({record,before,importError}))})().catch(e=>{console.error(e.stack);process.exit(1)});
+    `, dataRoot);
+    const result = JSON.parse(stdout.trim().split('\n').pop() || '{}');
+    assert.equal(result.record.promptObjectId, '');
+    assert.equal(result.before.completeness, 'corrupt');
+    assert.match(result.importError, /Invalid LLM journal attempt-start record/);
   } finally {
     await fs.remove(dataRoot);
   }

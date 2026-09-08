@@ -90,6 +90,10 @@ export function canonicalJournalJson(value: unknown): string { return JSON.strin
 function sha256(value: string): string { return `sha256:${crypto.createHash('sha256').update(value).digest('hex')}`; }
 export function hashJournalValue(value: unknown): string { return sha256(canonicalJournalJson(value)); }
 
+function journalObjectId(objectKind: ObjectKind, value: unknown): string {
+  return sha256(`${objectKind}\0${canonicalJournalJson(value)}`);
+}
+
 function getDb(): DatabaseSync {
   if (!db) throw new Error('LLM request journal is not initialized');
   return db;
@@ -224,7 +228,7 @@ function requestRecordFromRow(row: any): RequestRecord {
 function attemptStartRecordFromRow(row: any): AttemptStartRecord {
   return { v: 1, kind: 'attempt-start', eventId: row.event_id, requestId: row.request_id, attempt: row.attempt, startedAt: row.started_at,
     concreteModelId: row.concrete_model_id, virtualModelKey: row.virtual_model_key || undefined, providerType: row.provider_type, semanticPayloadSha256: row.semantic_payload_sha256,
-    ...(row.prompt_object_id ? { promptObjectId: row.prompt_object_id } : {}) };
+    ...(row.prompt_object_id !== null && row.prompt_object_id !== undefined ? { promptObjectId: row.prompt_object_id } : {}) };
 }
 
 function attemptResultRecordFromRow(row: any): AttemptResultRecord {
@@ -313,7 +317,7 @@ async function appendRecord(record: JournalRecord): Promise<void> {
 
 async function ensureObject(objectKind: ObjectKind, value: unknown): Promise<string> {
   const payload = canonicalJournalJson(value);
-  const objectId = sha256(`${objectKind}\0${payload}`);
+  const objectId = journalObjectId(objectKind, value);
   await initLlmRequestJournal();
   const exists = getDb().prepare('SELECT 1 FROM llm_journal_objects WHERE object_id=?').get(objectId);
   if (!exists) await appendRecord({ v: 1, kind: 'object', objectId, objectKind, payload, createdAt: Date.now() });
@@ -387,8 +391,13 @@ export async function appendLlmAttemptStart(args: Omit<AttemptStartRecord, 'v'|'
     await initLlmRequestJournal();
     const request: any = getDb().prepare('SELECT prompt_object_id FROM llm_journal_requests WHERE request_id=?').get(args.requestId);
     if (!request) throw new Error(`LLM request journal request ${args.requestId} not found`);
-    const effectivePromptObjectId = await ensureObject('prompt', systemPrompt);
-    if (effectivePromptObjectId !== request.prompt_object_id) promptObjectId = effectivePromptObjectId;
+    const effectivePromptObjectId = journalObjectId('prompt', systemPrompt);
+    if (args.attempt === 1 && effectivePromptObjectId !== request.prompt_object_id) {
+      throw new Error('LLM request journal attempt 1 must use the request system prompt');
+    }
+    if (effectivePromptObjectId !== request.prompt_object_id) {
+      promptObjectId = await ensureObject('prompt', systemPrompt);
+    }
   }
   await appendRecord({ v: 1, kind: 'attempt-start', eventId: randomUUID(), startedAt: args.startedAt || Date.now(), ...rest,
     semanticPayloadSha256: hashJournalValue(semanticPayload), ...(promptObjectId ? { promptObjectId } : {}) });
@@ -424,6 +433,9 @@ export async function reconstructLlmRequest(requestId: string): Promise<Reconstr
     for (const start of starts) {
       assertAttemptStartRecord(start);
       if (start.requestId !== requestId || startsByAttempt.has(start.attempt)) throw new Error(`Invalid or duplicate LLM journal attempt start for ${requestId}`);
+      if (start.attempt === 1 && start.promptObjectId !== undefined && start.promptObjectId !== requestRecord.promptObjectId) {
+        throw new Error(`LLM journal attempt 1 prompt differs from request prompt for ${requestId}`);
+      }
       startsByAttempt.set(start.attempt, start);
     }
     for (const result of results) {
@@ -438,7 +450,7 @@ export async function reconstructLlmRequest(requestId: string): Promise<Reconstr
       messages: ids.map(id => objectValue<Message>(id, 'message')), requestedModelKey: requestRecord.requestedModelKey, promptCacheKeyHash: requestRecord.promptCacheKeyHash,
       attempts: starts.map(start => ({
         start,
-        systemPrompt: start.promptObjectId ? objectValue<string>(start.promptObjectId, 'prompt') : systemPrompt,
+        systemPrompt: start.promptObjectId !== undefined ? objectValue<string>(start.promptObjectId, 'prompt') : systemPrompt,
         result: resultsByAttempt.get(start.attempt),
       })), completeness: 'complete',
     };

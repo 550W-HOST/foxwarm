@@ -26,7 +26,7 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - Prompt, full tool schema, and each canonical message use type-namespaced SHA-256 object IDs.
 - Same-session manifests use the longest common message prefix against the latest request. Chains checkpoint after a maximum depth of eight.
 - Request records store only a hash of the prompt-cache key.
-- Attempt records store a hash, not the body, of the provider-specific semantic payload. A nullable prompt-object reference records only an effective prompt that differs from the request prompt; old/null attempts inherit the request prompt.
+- Attempt records store a hash, not the body, of the provider-specific semantic payload. Attempt 1 must use the request prompt. A nullable prompt-object reference records only a later effective prompt that differs; old/null attempts inherit the request prompt, while a present empty reference is invalid rather than equivalent to NULL.
 - Initialization adds the nullable attempt prompt column inside the existing immediate SQLite transaction boundary. The busy timeout is installed before WAL/schema setup so concurrent server and CLI owners can serialize the additive migration.
 - Legacy JSONL is strictly imported only by the startup migration, then moved to path-preserving migration backup. Runtime uses FULL synchronous writer transactions and explicit JSONL export.
 - Legacy JSONL import and verification use the shared stateful UTF-8 LF/CRLF framing helper in [src-jsonl](./src-jsonl.md). Incremental import advances its persisted byte offset only after the selected source range has decoded, framed, parsed, and flushed successfully.
