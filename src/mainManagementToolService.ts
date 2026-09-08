@@ -68,7 +68,7 @@ export type ValidateWaitExecIdsResponse = { activeExecIds: string[] };
 export type ResolveAuthorizationSessionTargetRequest = { sourceSessionId: string; toolName: string; args: ToolArgs };
 export type ResolveAuthorizationSessionTargetResponse = { sourceParentSessionId?: string; target?: ToolAuthorizationSessionTarget };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 10, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 11, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
   validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),

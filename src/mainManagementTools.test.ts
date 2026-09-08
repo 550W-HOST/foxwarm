@@ -257,13 +257,17 @@ test('direct, unified, and ToolScript creation calls reject removed and unknown 
   }
 });
 
-test('child node remains a semantic argument through direct unified ToolScript and Worker management paths', async () => {
+test('creation node remains a semantic argument through direct unified ToolScript and Worker management paths', async () => {
   const sourceId = makeId('management_child_node');
   const source = await sessionManager.getSession(sourceId);
   const inheritedId = `${sourceId}_inherited-node`;
   const unifiedId = `${sourceId}_unified-node`;
   const scriptId = `${sourceId}_script-node`;
   const workerId = `${sourceId}_worker-node`;
+  const directSessionId = makeId('management_session_inherited_node');
+  const unifiedSessionId = makeId('management_session_unified_node');
+  const scriptSessionId = makeId('management_session_script_node');
+  const workerSessionId = makeId('management_session_worker_node');
   source.currentNode = 'dedicated-node';
   await sessionManager.saveSession(sourceId);
   setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
@@ -285,6 +289,18 @@ rules:
     tool: { source: builtin, name: create_child_session }
     args: { node: dedicated-node }
   action: allow
+- id: allow-session-current-node
+  match:
+    session: ${sourceId}
+    tool: { source: builtin, name: create_session }
+    args: { node: { exists: false } }
+  action: allow
+- id: allow-session-dedicated-node
+  match:
+    session: ${sourceId}
+    tool: { source: builtin, name: create_session }
+    args: { node: dedicated-node }
+  action: allow
 - id: deny-source
   match: { session: ${sourceId} }
   action: deny
@@ -302,6 +318,8 @@ rules:
 
     await create_child_session({ suffix: 'inherited-node', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
     assert.equal((await sessionManager.getSession(inheritedId)).currentNode, 'dedicated-node');
+    await create_session({ agentName: 'main', sessionName: directSessionId }, ctx);
+    assert.equal((await sessionManager.getSession(directSessionId)).currentNode, 'dedicated-node');
 
     source.currentNode = 'master';
     await sessionManager.saveSession(sourceId);
@@ -310,19 +328,34 @@ rules:
       args: { suffix: 'unified-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION },
     }, ctx);
     assert.equal((await sessionManager.getSession(unifiedId)).currentNode, 'dedicated-node');
+    await call_tool({
+      source: 'builtin', name: 'create_session',
+      args: { agentName: 'main', sessionName: unifiedSessionId, node: 'dedicated-node' },
+    }, ctx);
+    assert.equal((await sessionManager.getSession(unifiedSessionId)).currentNode, 'dedicated-node');
 
     const script = await tool_run_script({
       code: `def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={"suffix":"script-node","node":"dedicated-node","confirmation":${JSON.stringify(TEST_HANDOFF_CONFIRMATION)}})`,
     }, ctx);
     assert.equal(script.status, 'completed');
     assert.equal((await sessionManager.getSession(scriptId)).currentNode, 'dedicated-node');
+    const sessionScript = await tool_run_script({
+      code: `def main(args):\n    return call_tool(source="builtin", name="create_session", args={"agentName":"main","sessionName":${JSON.stringify(scriptSessionId)},"node":"dedicated-node"})`,
+    }, ctx);
+    assert.equal(sessionScript.status, 'completed');
+    assert.equal((await sessionManager.getSession(scriptSessionId)).currentNode, 'dedicated-node');
 
     await create_child_session({
       suffix: 'worker-node', node: 'dedicated-node', confirmation: TEST_HANDOFF_CONFIRMATION,
     }, { ...ctx, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} });
     assert.equal((await sessionManager.getSession(workerId)).currentNode, 'dedicated-node');
+    await create_session({
+      agentName: 'main', sessionName: workerSessionId, node: 'dedicated-node',
+    }, { ...ctx, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} });
+    assert.equal((await sessionManager.getSession(workerSessionId)).currentNode, 'dedicated-node');
   } finally {
-    await cleanup(sourceId, inheritedId, unifiedId, scriptId, workerId, `${sourceId}_denied-master`);
+    await cleanup(sourceId, inheritedId, unifiedId, scriptId, workerId, directSessionId,
+      unifiedSessionId, scriptSessionId, workerSessionId, `${sourceId}_denied-master`);
   }
 });
 

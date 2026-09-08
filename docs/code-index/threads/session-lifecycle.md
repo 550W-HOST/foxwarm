@@ -11,7 +11,7 @@ Cross-module lifecycle from public creation through lazy hydration, queued execu
 - `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options.
 - `createAgentWithMainSession(options)` owns agent creation plus optional main session.
 - Low-level `createSession(sessionId, sessionData)` accepts a fully constructed session object, ensures its prompt-cache key, installs it in the map, and saves it. It does **not** allocate an ID from an options object.
-- `forkSession` and `createChildSession(parentSessionId, suffix, fork, options)` own fork/non-fork child creation.
+- `forkSession` and `createChildSession(parentSessionId, suffix, fork, options)` own fork/non-fork child creation. A child may name another existing Agent only for a fresh non-fork lifetime.
 - A new session lifetime may use an internal session ID only when the ID is absent from both live persistence and the retained archive. One non-reentrant process-wide identity lock makes check-and-commit atomic across explicit creation, automatic allocation, agent-main creation, forks/children, and internal-ID moves; nested implementation calls use private unlocked helpers rather than ambient lock ownership. Automatic allocators skip reserved IDs; explicit creation returns `SESSION_ID_ARCHIVED` for an archive-only collision.
 
 Canonical façade and child-ID ownership: [session core façade](../modules/session-core.md#d-session-core-facade) and [child identity](../modules/session-core.md#d-session-core-child-identity).
@@ -47,10 +47,11 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 ## Child and fork lifecycle
 
-- Agent-main children replace the `main` leaf; non-main children retain append-style IDs.
+- Same-Agent children replace an Agent `main` leaf or retain append-style IDs under a non-main parent. A fresh cross-Agent child uses the target Agent namespace as if named beneath its main leaf while retaining the actual caller as parent; cross-Agent forks are rejected before creation effects.
 - Fork and child allocators skip both live and archived IDs while incrementing their suffix counters.
 - Forks copy the model-visible active history/prompt snapshot and inherit prompt-cache/archive lineage only through the fork point.
 - Non-fork children start a fresh model-visible prefix and cache key.
+- Fresh cross-Agent children assemble the target Agent's default memory snapshot and do not copy the parent's custom prompt-file selection or cached snapshot. Their Node is the target Agent's isolation binding, then an explicit child Node, then the parent's current Node, then `master`.
 - Forked and non-fork children resolve one raw current model/effort pair. Effort resolution is explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; unset never freezes a concrete model default into the child. The spawned child leaves its own future-child defaults unset so they naturally follow that current pair.
 - A manual user fork calls `notifyManualForkCreated` so the parent history records the child even when no initial instruction was supplied.
 

@@ -265,15 +265,16 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: "Create a child session under this session's agent, optionally with a copy of the current conversation. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
+            description: "Create a child session under the current or a specified agent. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
             parameters: {
                 type: 'object',
                 properties: {
-                    suffix: { type: 'string', description: "Name for the child. For agent/main, research produces agent/research; for other parent sessions, it is appended to the parent ID." },
-                    fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false, which starts a separate conversation.", default: false },
+                    agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
+                    suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
+                    fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },
                     message: { type: 'string', description: "Initial task or message to send immediately after creation. Omit to create the child without starting a turn." },
                     afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session." },
-                    node: { type: 'string', description: "Node for the new child session. Omit to inherit the parent's current Node." },
+                    node: { type: 'string', description: "Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node." },
                     forceModel: FORCE_MODEL_SCHEMA,
                 },
                 required: ['suffix']
@@ -904,6 +905,7 @@ Example:
                     sessionName: { type: 'string', description: "Session name without the agent prefix; it cannot contain /." },
                     displayName: { type: 'string', description: "Display name for the new session." },
                     parentSessionId: { type: 'string', description: "Existing session to record as the new session's parent." },
+                    node: { type: 'string', description: "Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node." },
                     forceModel: FORCE_MODEL_SCHEMA,
                     systemPromptFiles: {
                         type: 'array',
@@ -916,12 +918,13 @@ Example:
         },
         {
             name: 'set_agent_inherit',
-            description: "Set or clear an agent's shared-memory inheritance. Memory is included from the oldest ancestor through the agent itself; files with the same name are not deduplicated.",
+            description: "Set or clear an agent's shared-memory inheritance. Memory is included from the oldest ancestor through the agent itself; files with the same name are not deduplicated. Existing session snapshots are unchanged unless updateSnapshots is true.",
             parameters: {
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Agent to update." },
-                    inheritAgentName: { type: 'string', description: "Agent to inherit from. An empty string clears inheritance." }
+                    inheritAgentName: { type: 'string', description: "Agent to inherit from. An empty string clears inheritance." },
+                    updateSnapshots: { type: 'boolean', description: "Rebuild existing session prompt snapshots for this agent and agents that inherit from it. Defaults to false.", default: false }
                 },
                 required: ['agentName']
             }

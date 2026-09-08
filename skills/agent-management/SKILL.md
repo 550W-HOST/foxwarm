@@ -302,7 +302,7 @@ The equivalent user-facing command is:
 /session update-snapshot target-agent/target-session
 ```
 
-Check whether an inheritance/isolation operation already refreshed affected snapshots before adding another refresh. Do not broadcast refreshes to all Sessions merely because a shared memory file changed.
+Inheritance changes leave existing Session snapshots unchanged by default. Isolation changes still update affected Sessions. Check the operation result before adding another refresh, and do not broadcast refreshes merely because a shared memory file changed.
 
 ## Common workflow: set or clear agent inheritance
 
@@ -311,6 +311,8 @@ Check whether an inheritance/isolation operation already refreshed affected snap
 Use:
 
 - `set_agent_inherit`
+
+By default this changes only Agent metadata, so existing Session snapshots keep their current cached prefix. Use `updateSnapshots:true` only when all existing Sessions under the Agent and its transitive inheritors must immediately rebuild. Otherwise, notify relevant Sessions or refresh an exact Session explicitly; new Sessions and later normal refreshes use the new inheritance automatically.
 
 ### User-facing path
 

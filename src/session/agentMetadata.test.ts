@@ -13,12 +13,14 @@ import {
   refreshAgentMetadata,
   resetAgentMetadataForTests,
   setAgentMetadata,
+  setAgentInherit,
   setAgentIsolation,
   setAgentMetadataStoreForTests,
 } from './agentMetadata';
-import { getAgentDir } from '../config';
+import { getAgentDir, getAgentMemoryDir, resolveModelConfig } from '../config';
 import * as sessionManager from '../sessionManager';
-import { tool_create_agent, tool_list_agents, tool_set_agent_isolated } from '../toolsSessionAgent/agents';
+import * as llm from '../llm';
+import { tool_create_agent, tool_list_agents, tool_set_agent_inherit, tool_set_agent_isolated } from '../toolsSessionAgent/agents';
 import { checkToolPermissionForSession } from '../isolatedCheck';
 import { tool_search_tools } from '../tools/unifiedSearch';
 
@@ -63,6 +65,77 @@ test('agent metadata persistence uses lightweight no-backup writes', async () =>
     assert.deepEqual(Object.keys(rewritten).sort(), ['alpha-agent', 'beta-agent']);
     assert.deepEqual(createAgentMetadataStore(filePath).listCandidatePaths(), [filePath]);
     assert.deepEqual(await listBackupMatches(filePath), []);
+  });
+});
+
+test('agent inheritance defaults to metadata-only and refreshes only affected sessions when requested', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'agents.json');
+    setAgentMetadataStoreForTests(createAgentMetadataStore(filePath));
+    resetAgentMetadataForTests();
+
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const parentAgent = `inherit-parent-${token}`;
+    const targetAgent = `inherit-target-${token}`;
+    const transitiveAgent = `inherit-transitive-${token}`;
+    const unrelatedAgent = `inherit-unrelated-${token}`;
+    const agentNames = [parentAgent, targetAgent, transitiveAgent, unrelatedAgent];
+    for (const agentName of agentNames) await fs.ensureDir(getAgentMemoryDir(agentName));
+    await fs.writeFile(path.join(getAgentMemoryDir(parentAgent), 'MEMORY.md'), 'PARENT_INHERITANCE_SOURCE', 'utf8');
+    await fs.writeFile(path.join(getAgentMemoryDir(targetAgent), 'MEMORY.md'), 'TARGET_INHERITANCE_SOURCE', 'utf8');
+    await setAgentMetadata(transitiveAgent, { inherit: targetAgent });
+
+    const modelsConfig = resolveModelConfig(undefined).modelsConfig;
+    const model = Object.keys(modelsConfig.models).find(key => llm.resolveConcreteModelIdForSnapshot(key, modelsConfig));
+    assert.ok(model, 'test configuration must expose at least one concrete model');
+    const sessions = new Map<string, any>([
+      [`${targetAgent}/old`, { id: `${targetAgent}/old`, agent: targetAgent, model, persistentMemorySnapshot: 'old target snapshot', systemPromptFiles: undefined }],
+      [`${transitiveAgent}/old`, { id: `${transitiveAgent}/old`, agent: transitiveAgent, model, persistentMemorySnapshot: 'old transitive snapshot', systemPromptFiles: undefined }],
+      [`${unrelatedAgent}/old`, { id: `${unrelatedAgent}/old`, agent: unrelatedAgent, model, persistentMemorySnapshot: 'old unrelated snapshot', systemPromptFiles: undefined }],
+    ]);
+    const loaded: string[] = [];
+    const saved: string[] = [];
+    const deps: any = {
+      validateAgentName: sessionManager.validateAgentName,
+      getSessionsMap: () => sessions,
+      getSession: async (sessionId: string) => {
+        loaded.push(sessionId);
+        return sessions.get(sessionId);
+      },
+      getExistingSession: async (sessionId: string) => sessions.get(sessionId) || null,
+      saveSession: async (sessionId: string) => { saved.push(sessionId); },
+    };
+
+    try {
+      await assert.rejects(
+        () => tool_set_agent_inherit({ agentName: targetAgent, inheritAgentName: parentAgent, updateSnapshots: 'yes' }, {} as any),
+        /updateSnapshots must be a boolean/,
+      );
+      assert.equal(getAgentMetadata(targetAgent).inherit, undefined);
+
+      const metadataOnly = await setAgentInherit(deps, targetAgent, parentAgent);
+      assert.deepEqual(metadataOnly.affectedSessions, []);
+      assert.deepEqual(loaded, []);
+      assert.deepEqual(saved, []);
+      assert.equal(sessions.get(`${targetAgent}/old`).persistentMemorySnapshot, 'old target snapshot');
+
+      const futureSnapshot = await llm.buildSessionSystemPromptSnapshot({ agentName: targetAgent, modelId: 'fixture/model' });
+      assert.match(futureSnapshot, /PARENT_INHERITANCE_SOURCE/);
+      assert.match(futureSnapshot, /TARGET_INHERITANCE_SOURCE/);
+
+      const refreshed = await setAgentInherit(deps, targetAgent, parentAgent, true);
+      assert.deepEqual(new Set(refreshed.affectedSessions), new Set([`${targetAgent}/old`, `${transitiveAgent}/old`]));
+      assert.deepEqual(new Set(loaded), new Set([`${targetAgent}/old`, `${transitiveAgent}/old`]));
+      assert.deepEqual(new Set(saved), new Set([`${targetAgent}/old`, `${transitiveAgent}/old`]));
+      assert.equal(loaded.includes(`${unrelatedAgent}/old`), false);
+      assert.match(sessions.get(`${targetAgent}/old`).persistentMemorySnapshot, /PARENT_INHERITANCE_SOURCE/);
+
+      await assert.rejects(() => setAgentInherit(deps, parentAgent, targetAgent), /Circular inheritance/);
+      await assert.rejects(() => setAgentInherit(deps, targetAgent, `${parentAgent}-missing`), /does not exist/);
+      assert.equal(getAgentMetadata(targetAgent).inherit, parentAgent);
+    } finally {
+      for (const agentName of agentNames) await fs.remove(getAgentDir(agentName)).catch(() => {});
+    }
   });
 });
 

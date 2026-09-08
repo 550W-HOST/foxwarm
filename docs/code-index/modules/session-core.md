@@ -96,7 +96,7 @@ Explicit direct parent/child relations are the only cross-agent inter-session ex
 
 ### D-session-core-child-identity
 
-Agent-main child creation replaces the `main` leaf; non-main child chains retain append-style IDs. Fork state inheritance and ID construction are separate concerns.
+[2026-09-08] Same-Agent child creation replaces an Agent `main` leaf or retains append-style IDs for non-main parents. A fresh child explicitly assigned to another Agent uses that target Agent's main-leaf namespace while preserving the actual caller as its parent. Cross-Agent forks are rejected; fork state inheritance and ID construction remain separate concerns.
 
 ## Open questions
 

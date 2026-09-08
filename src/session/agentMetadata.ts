@@ -198,7 +198,12 @@ export function getAgentInheritanceChain(agentName: string): string[] {
   return chain;
 }
 
-export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
+export async function setAgentInherit(
+  deps: AgentMetadataDeps,
+  agentName: string,
+  inheritAgentName?: string,
+  updateSnapshots: boolean = false,
+): Promise<{ affectedSessions: string[] }> {
   deps.validateAgentName(agentName);
 
   const agentDir = getAgentDir(agentName);
@@ -234,6 +239,7 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
   await setAgentMetadata(agentName, nextMeta);
 
   const affectedSessions: string[] = [];
+  if (!updateSnapshots) return { affectedSessions };
   for (const [sessionId, sessionMeta] of deps.getSessionsMap().entries()) {
     const sessionAgent = sessionMeta.agent || 'main';
     if (!getAgentInheritanceChain(sessionAgent).includes(agentName)) continue;

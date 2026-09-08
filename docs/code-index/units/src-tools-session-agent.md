@@ -97,7 +97,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 |----------|-------------|
 | `tool_create_agent` | Creates a new agent with optional main session and optional exact agent tool-rule replacement |
 | `tool_list_agents` | Lists all agents with session counts, isolation, inheritance, and exact tool-rule count |
-| `tool_set_agent_inherit` | Configures agent shared memory inheritance |
+| `tool_set_agent_inherit` | Configures agent shared memory inheritance, with optional explicit transitive snapshot refresh |
 | `tool_set_agent_isolated` | Sets or clears agent node isolation and optionally replaces exact tool rules (`[]` clears); rules without `nodeId` preserve the current binding |
 | `tool_move_session` | Moves a session to a new ID or agent, preserving its incoming parent unless an optional existing `parentSessionId` intentionally reparents it |
 | `tool_create_session` | Creates a new session under an agent |

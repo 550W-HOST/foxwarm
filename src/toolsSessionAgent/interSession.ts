@@ -28,7 +28,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   await requireNotIsolated(ctx, 'create_child_session');
   validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
-  const { suffix, fork = false, message, node } = normalizedArgs;
+  const { agentName, suffix, fork = false, message, node } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
   const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
@@ -41,7 +41,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 
   const currentSessionId = ctx.sessionId;
   const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+    { agentName, node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
     if (afterSend === 'wait' || afterSend === 'finish') {

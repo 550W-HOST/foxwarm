@@ -141,17 +141,20 @@ export async function tool_list_agents(_args: ToolArgs = {}, ctx?: ToolContext) 
 
 export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'set_agent_inherit');
-  const { agentName, inheritAgentName } = args;
+  const { agentName, inheritAgentName, updateSnapshots = false } = args;
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
+  }
+  if (typeof updateSnapshots !== 'boolean') {
+    throw new Error('updateSnapshots must be a boolean when provided');
   }
 
   const normalizedInherit = inheritAgentName && String(inheritAgentName).trim()
     ? String(inheritAgentName).trim()
     : undefined;
 
-  const result = await sessionManager.setAgentInherit(agentName, normalizedInherit);
+  const result = await sessionManager.setAgentInherit(agentName, normalizedInherit, updateSnapshots);
   const chain = sessionManager.getAgentInheritanceChain(agentName);
 
   let message = normalizedInherit
@@ -252,7 +255,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('create_session', args, ctx);
   await requireNotIsolated(ctx, 'create_session');
   const normalizedArgs = normalizeCreateSessionArgs(args);
-  const { agentName, sessionName, displayName, parentSessionId } = normalizedArgs;
+  const { agentName, sessionName, displayName, parentSessionId, node } = normalizedArgs;
   const forced = normalizeForceModel(normalizedArgs, 'create_session');
   const systemPromptFiles = normalizedArgs.systemPromptFiles === undefined
     ? undefined
@@ -281,7 +284,7 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     displayName,
     parentSessionId,
     systemPromptFiles,
-    currentNode: ctx.session?.currentNode,
+    currentNode: node ?? ctx.session?.currentNode,
     model: spawnedSettings.model,
     effort: spawnedSettings.effort,
   });

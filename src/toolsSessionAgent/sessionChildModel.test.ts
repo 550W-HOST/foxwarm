@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import * as sessionManager from '../sessionManager';
-import { getAgentDir, loadModelsConfigFromObject, resolveModelConfig } from '../config';
+import { getAgentDir, getAgentMemoryDir, loadModelsConfigFromObject, resolveModelConfig } from '../config';
 import { tool_create_child_session as rawToolCreateChildSession, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
 import { Session } from '../types';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
@@ -61,6 +61,7 @@ test('create_session tool accepts intentional model and effort overrides', async
     const result = await tool_create_session({
       agentName: 'main',
       sessionName,
+      node: 'created-session-node',
       forceModel: { modelId: secondary, effort: 'max' },
     }, { sessionId: parentSessionId, session: parent });
 
@@ -69,6 +70,7 @@ test('create_session tool accepts intentional model and effort overrides', async
     const created = await sessionManager.getSession(createdSessionId);
     assert.equal(created.model, secondary);
     assert.equal(created.effort, 'max');
+    assert.equal(created.currentNode, 'created-session-node');
   } finally {
     await sessionManager.deleteSession(createdSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
@@ -148,6 +150,27 @@ test('agent main-session creation inherits raw current and future-child effort s
     await sessionManager.deleteSession(mainSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
     await fs.remove(getAgentDir(agentName)).catch(() => {});
+  }
+});
+
+test('agent creation with shared inheritance materializes the new main session from the inherited memory', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const inheritedAgent = makeId('create_agent_inherit_source');
+  const agentName = makeId('create_agent_inherit_target');
+  const mainSessionId = `${agentName}/main`;
+  await fs.ensureDir(getAgentMemoryDir(inheritedAgent));
+  await fs.writeFile(`${getAgentMemoryDir(inheritedAgent)}/MEMORY.md`, 'CREATE_AGENT_INHERITED_MEMORY', 'utf8');
+  try {
+    await sessionManager.createAgentWithMainSession({ agentName, inherit: inheritedAgent, model: primary });
+    const created = await sessionManager.getSession(mainSessionId);
+    assert.equal(sessionManager.getAgentMetadata(agentName).inherit, inheritedAgent);
+    assert.match(created.persistentMemorySnapshot, /CREATE_AGENT_INHERITED_MEMORY/);
+  } finally {
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+    await sessionManager.setAgentInherit(agentName, undefined).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
+    await fs.remove(getAgentDir(inheritedAgent)).catch(() => {});
   }
 });
 
@@ -380,6 +403,79 @@ test('create_child_session replaces main leaf for agent-qualified parents', asyn
     for (const id of [agentChildId, agentMainId]) {
       await sessionManager.deleteSession(id).catch(() => {});
     }
+  }
+});
+
+test('cross-agent fresh children use target identity and memory while preserving caller defaults and parent relation', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('cross_agent_parent');
+  const targetAgent = makeId('cross_agent_target');
+  const targetMemoryDir = getAgentMemoryDir(targetAgent);
+  const childId = `${targetAgent}/worker`;
+  const collisionId = `${childId}_2`;
+  const sameAgentChildId = `${parentSessionId}_same`;
+
+  await fs.ensureDir(targetMemoryDir);
+  await fs.writeFile(`${targetMemoryDir}/MEMORY.md`, '# Target role\nTARGET_AGENT_MEMORY_ONLY\n', 'utf8');
+  await sessionManager.setAgentIsolation(targetAgent, 'target-bound-node');
+
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.currentNode = 'parent-node';
+    parent.effort = 'low';
+    parent.childModelDefault = primary;
+    parent.childEffortDefault = 'max';
+    parent.systemPromptFiles = ['parent-only-prompt.md'];
+    parent.persistentMemorySnapshot = 'PARENT_AGENT_SNAPSHOT_ONLY';
+    parent.promptCacheKey = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    await sessionManager.saveSession(parent.id);
+
+    await tool_create_child_session({
+      agentName: targetAgent,
+      suffix: 'worker',
+      node: 'ignored-explicit-node',
+    }, { sessionId: parent.id, session: parent });
+
+    const child = await sessionManager.getSession(childId);
+    assert.equal(child.agent, targetAgent);
+    assert.equal(child.parentSessionId, parent.id);
+    assert.equal(child.currentNode, 'target-bound-node');
+    assert.equal(child.model, primary);
+    assert.equal(child.effort, 'max');
+    assert.equal(child.childModelDefault, undefined);
+    assert.equal(child.childEffortDefault, undefined);
+    assert.equal(child.systemPromptFiles, undefined);
+    assert.match(child.persistentMemorySnapshot, /TARGET_AGENT_MEMORY_ONLY/);
+    assert.doesNotMatch(child.persistentMemorySnapshot, /PARENT_AGENT_SNAPSHOT_ONLY/);
+    assert.notEqual(child.promptCacheKey, parent.promptCacheKey);
+
+    await assert.rejects(
+      () => tool_create_child_session({ agentName: targetAgent, suffix: 'forked', fork: true }, { sessionId: parent.id, session: parent }),
+      /cannot fork across agents/,
+    );
+    assert.equal(sessionManager.getAllSessions().has(`${targetAgent}/forked`), false);
+    await assert.rejects(
+      () => tool_create_child_session({ agentName: `${targetAgent}_missing`, suffix: 'missing' }, { sessionId: parent.id, session: parent }),
+      /does not exist/,
+    );
+
+    parent.systemPromptFiles = undefined;
+    await sessionManager.saveSession(parent.id);
+    await tool_create_child_session({ agentName: 'main', suffix: 'same' }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(sameAgentChildId)).agent, 'main');
+
+    await sessionManager.deleteSession(childId);
+    await tool_create_child_session({ agentName: targetAgent, suffix: 'worker' }, { sessionId: parent.id, session: parent });
+    const collision = await sessionManager.getSession(collisionId);
+    assert.equal(collision.agent, targetAgent);
+    assert.equal(collision.parentSessionId, parent.id);
+  } finally {
+    for (const id of [collisionId, childId, sameAgentChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+    await sessionManager.setAgentIsolation(targetAgent, undefined).catch(() => {});
+    await fs.remove(getAgentDir(targetAgent)).catch(() => {});
   }
 });
 

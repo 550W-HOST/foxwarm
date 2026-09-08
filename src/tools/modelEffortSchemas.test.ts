@@ -10,6 +10,7 @@ test('model-facing creation schemas require intentional nested forceModel overri
   const child = definitions.find(def => def.name === 'create_child_session')!;
   const create = definitions.find(def => def.name === 'create_session')!;
   const settings = definitions.find(def => def.name === 'set_session_child_model')!;
+  const inherit = definitions.find(def => def.name === 'set_agent_inherit')!;
   for (const definition of [child, create]) {
     const properties = definition.parameters.properties as any;
     assert.equal(properties.model, undefined);
@@ -20,6 +21,13 @@ test('model-facing creation schemas require intentional nested forceModel overri
     assert.deepEqual(properties.forceModel.properties.effort.enum, efforts);
     assert.deepEqual(properties.forceModel.required, undefined);
   }
+  assert.equal((child.parameters.properties as any).agentName.type, 'string');
+  assert.equal((child.parameters.properties as any).node.type, 'string');
+  assert.equal((create.parameters.properties as any).node.type, 'string');
+  assert.equal((create.parameters.properties as any).fork, undefined);
+  assert.equal((create.parameters.properties as any).message, undefined);
+  assert.equal((inherit.parameters.properties as any).updateSnapshots.type, 'boolean');
+  assert.equal((inherit.parameters.properties as any).updateSnapshots.default, false);
   assert.deepEqual((settings.parameters.properties as any).effort.enum, [...efforts, 'default', 'unset']);
   assert.equal((settings.parameters.properties as any).clearEffort, undefined);
 });
@@ -44,12 +52,16 @@ test('forceModel parser is strict, non-mutating, and accepts all supported overr
   assert.throws(() => normalizeForceModel({ model: modelId }, 'create_session'), /no longer accepts top-level model or effort/);
   assert.throws(() => normalizeForceModel({ effort: undefined }, 'create_child_session'), /no longer accepts top-level model or effort/);
 
-  const childArgs = { suffix: 'child', forceModel: { effort: 'low' } };
-  const sessionArgs = { agentName: 'main', sessionName: 'session', forceModel: {} };
+  const childArgs = { agentName: 'main', suffix: 'child', node: 'child-node', forceModel: { effort: 'low' } };
+  const sessionArgs = { agentName: 'main', sessionName: 'session', node: 'session-node', forceModel: {} };
   assert.deepEqual(normalizeCreateChildSessionArgs(childArgs), childArgs);
   assert.deepEqual(normalizeCreateSessionArgs(sessionArgs), sessionArgs);
   assert.notEqual(normalizeCreateChildSessionArgs(childArgs), childArgs);
   assert.notEqual(normalizeCreateChildSessionArgs(childArgs).forceModel, childArgs.forceModel);
   assert.throws(() => normalizeCreateChildSessionArgs({ suffix: 'child', bogus: true }), /unknown key: bogus/);
   assert.throws(() => normalizeCreateSessionArgs({ agentName: 'main', sessionName: 'session', bogus: true }), /unknown key: bogus/);
+  assert.throws(() => normalizeCreateChildSessionArgs({ suffix: 'child', agentName: '' }), /agentName must be a bounded non-empty string/);
+  assert.throws(() => normalizeCreateSessionArgs({ agentName: 'main', sessionName: 'session', node: '' }), /node must be a bounded non-empty string/);
+  assert.throws(() => normalizeCreateSessionArgs({ agentName: 'main', sessionName: 'session', fork: false }), /unknown key: fork/);
+  assert.throws(() => normalizeCreateSessionArgs({ agentName: 'main', sessionName: 'session', message: 'task' }), /unknown key: message/);
 });

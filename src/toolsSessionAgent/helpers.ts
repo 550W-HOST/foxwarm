@@ -298,10 +298,10 @@ export type ForcedSessionModelEffort = {
 };
 
 const CREATE_CHILD_SESSION_KEYS = new Set([
-  'suffix', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation',
+  'agentName', 'suffix', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation',
 ]);
 const CREATE_SESSION_KEYS = new Set([
-  'agentName', 'sessionName', 'displayName', 'parentSessionId', 'forceModel', 'systemPromptFiles',
+  'agentName', 'sessionName', 'displayName', 'parentSessionId', 'node', 'forceModel', 'systemPromptFiles',
 ]);
 
 function cloneCreationArgs(args: ToolArgs): ToolArgs {
@@ -368,7 +368,7 @@ export function normalizeCreateChildSessionArgs(
   normalizeForceModel(args, 'create_child_session', makeError);
   const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
   if (unknownKey) {
-    throw makeError(`create_child_session accepts only suffix, fork, message, node, forceModel, afterSend, and confirmation; unknown key: ${unknownKey}.`);
+    throw makeError(`create_child_session accepts only agentName, suffix, fork, message, node, forceModel, afterSend, and confirmation; unknown key: ${unknownKey}.`);
   }
   if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
     throw makeError('create_child_session requires a non-empty suffix.');
@@ -390,6 +390,10 @@ export function normalizeCreateChildSessionArgs(
     && (typeof args.node !== 'string' || !args.node.trim() || Buffer.byteLength(args.node, 'utf8') > 4096)) {
     throw makeError('create_child_session node must be a bounded non-empty string when provided.');
   }
+  if (args.agentName !== undefined
+    && (typeof args.agentName !== 'string' || !args.agentName.trim() || Buffer.byteLength(args.agentName, 'utf8') > 256)) {
+    throw makeError('create_child_session agentName must be a bounded non-empty string when provided.');
+  }
   return cloneCreationArgs(args);
 }
 
@@ -400,7 +404,11 @@ export function normalizeCreateSessionArgs(
   normalizeForceModel(args, 'create_session', makeError);
   const unknownKey = Object.keys(args).find(key => !CREATE_SESSION_KEYS.has(key));
   if (unknownKey) {
-    throw makeError(`create_session accepts only agentName, sessionName, displayName, parentSessionId, forceModel, and systemPromptFiles; unknown key: ${unknownKey}.`);
+    throw makeError(`create_session accepts only agentName, sessionName, displayName, parentSessionId, node, forceModel, and systemPromptFiles; unknown key: ${unknownKey}.`);
+  }
+  if (args.node !== undefined
+    && (typeof args.node !== 'string' || !args.node.trim() || Buffer.byteLength(args.node, 'utf8') > 4096)) {
+    throw makeError('create_session node must be a bounded non-empty string when provided.');
   }
   return cloneCreationArgs(args);
 }
