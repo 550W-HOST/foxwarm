@@ -122,7 +122,7 @@ official SDK's executable upload loop; its contradictory type comment is not
 the wire behavior used here. The adapter hashes and reads sequential chunks,
 requires valid `upload_id` and `media_id` ACK fields, then sends the resulting
 image/file through proactive `aibot_send_msg` to the resolved conversation.
-An optional caption is a separate proactive text message on that same route
+An optional caption is a separate proactive Markdown message on that same route
 after local validation/upload, never a generic text fallback or an update to
 an existing callback stream card. There is no retry, outbox, resume, receipt,
 or cross-route duplicate-delivery mechanism.

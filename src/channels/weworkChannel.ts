@@ -1447,8 +1447,8 @@ export class WeWorkWebhookChannel implements Channel {
       };
       if (options?.caption) {
         await this.sendWebSocketProactiveMessage(userId, {
-          msgtype: 'text',
-          text: { content: options.caption },
+          msgtype: 'markdown',
+          markdown: { content: options.caption },
         }, targetOptions);
       }
       await this.sendWebSocketProactiveMessage(userId, {

@@ -48,6 +48,14 @@ async function createWsHarness(
   reply: (frame: WsFrame) => WsReply = frame => {
     if (frame.cmd === 'aibot_upload_media_init') return { body: { upload_id: 'upload-1' } };
     if (frame.cmd === 'aibot_upload_media_finish') return { body: { media_id: 'media-1' } };
+    if (frame.cmd === 'aibot_send_msg') {
+      const supportedTypes = new Set(['markdown', 'template_card', 'file', 'image', 'voice', 'video']);
+      const messageType = frame.body?.msgtype;
+      const content = typeof messageType === 'string' ? frame.body?.[messageType] : undefined;
+      if (!supportedTypes.has(messageType) || !content || typeof content !== 'object') {
+        return { errcode: 40058, errmsg: 'unsupported proactive message body' };
+      }
+    }
     return {};
   },
 ): Promise<{
@@ -190,8 +198,8 @@ test('WeWork sendFile prefers AIBot WebSocket and uploads multi-chunk files in z
     assert.deepEqual(commands[4].body, {
       chatid: 'target-chat',
       chat_type: 2,
-      msgtype: 'text',
-      text: { content: 'file caption' },
+      msgtype: 'markdown',
+      markdown: { content: 'file caption' },
     });
     assert.deepEqual(commands[5].body, {
       chatid: 'target-chat',
