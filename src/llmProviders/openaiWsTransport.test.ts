@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import {
   clearOpenAIWsCompletedChains,
   getOpenAIWsCompletedChainCountForTests,
@@ -22,6 +22,7 @@ class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.CONNECTING;
   sent: any[] = [];
   terminated = 0;
+  closeCalls: Array<{ code?: number; reason?: string }> = [];
   refs = 0;
   unrefs = 0;
   _socket = { ref: () => { this.refs += 1; }, unref: () => { this.unrefs += 1; } };
@@ -37,7 +38,10 @@ class FakeSocket extends EventEmitter {
     this.sent.push(parsed);
     process.nextTick(() => this.responder?.(parsed, this));
   }
-  close() { this.terminate(); }
+  close(code?: number, reason?: string) {
+    this.closeCalls.push({ code, reason });
+    this.readyState = WebSocket.CLOSING;
+  }
   terminate() {
     if (this.readyState === WebSocket.CLOSED) return;
     this.terminated += 1;
@@ -396,7 +400,8 @@ test('openai-ws keeps busy chains outside matching and enforces worker idle limi
   busy.finalize([]);
   parallel.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
-  assert.equal(sockets.filter(socket => socket.terminated > 0).length, 1);
+  assert.equal(sockets.filter(socket => socket.closeCalls.length > 0).length, 1);
+  assert.equal(sockets.filter(socket => socket.terminated > 0).length, 0);
 });
 
 test('openai-ws rotates a completed chain at the sixty-minute boundary', async () => {
@@ -412,7 +417,8 @@ test('openai-ws rotates a completed chain at the sixty-minute boundary', async (
   clock = 60 * 60 * 1000;
   const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 2);
-  assert.equal(sockets[0].terminated, 1);
+  assert.equal(sockets[0].terminated, 0);
+  assert.deepEqual(sockets[0].closeCalls, [{ code: 1000, reason: 'foxwarm completed idle recycle' }]);
   second.finalize(false);
 });
 
@@ -431,6 +437,7 @@ test('openai-ws abort, malformed frames, and mid-stream close discard the leased
     if (mode === 'abort') process.nextTick(() => controller.abort());
     await assert.rejects(pending, mode === 'abort' ? /abort/i : /malformed|closed/i);
     assert.equal(socket.terminated, 1);
+    assert.equal(socket.closeCalls.length, 0);
     assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   }
 });
@@ -454,6 +461,7 @@ test('openai-ws failed, error, and incomplete terminal events invalidate the cha
     );
     assert.ok(Date.now() - startedAt < 1000, `${mode} should reject immediately rather than waiting for timeout`);
     assert.equal(socket.terminated, 1);
+    assert.equal(socket.closeCalls.length, 0);
     assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   }
 });
@@ -467,7 +475,11 @@ test('explicit cleanup closes idle sockets and removes process-owned resources',
   const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   pending.finalize([]);
   clearOpenAIWsCompletedChains();
-  assert.equal(socket.terminated, 1);
+  assert.equal(socket.terminated, 0);
+  assert.deepEqual(socket.closeCalls, [{ code: 1000, reason: 'foxwarm completed idle recycle' }]);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  assert.doesNotThrow(() => socket.emit('error', new Error('late cleanup error')));
+  assert.doesNotThrow(() => socket.emit('close', 1000, Buffer.alloc(0)));
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
 });
 
@@ -622,12 +634,45 @@ test('completed idle chains actively expire and close after ten minutes without 
   assert.equal(timers.entries[0].unrefs, 1);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   timers.entries[0].callback();
-  assert.equal(socket.terminated, 1);
+  assert.equal(socket.terminated, 0);
+  assert.deepEqual(socket.closeCalls, [{ code: 1000, reason: 'foxwarm completed idle recycle' }]);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  assert.doesNotThrow(() => socket.emit('error', new Error('late close-handshake error')));
+  assert.equal(socket.terminated, 0);
+  assert.doesNotThrow(() => socket.emit('close', 1000, Buffer.alloc(0)));
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   const close = diagnostics.entries.find(entry => entry.message === 'OpenAI Responses WebSocket closed locally');
   assert.equal(close?.fields.closeCause, 'idle-timeout');
   assert.equal(close?.fields.closePhase, 'idle');
   assert.equal(typeof close?.fields.idleDurationMs, 'number');
+});
+
+test('completed-idle recycling completes a real WebSocket close handshake with code 1000', async () => {
+  const timers = new FakeIdleTimers();
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const serverClose = new Promise<{ code: number; reason: string }>(resolve => {
+    server.once('connection', socket => {
+      socket.once('message', () => socket.send(JSON.stringify(completed('real-close'))));
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString('utf8') }));
+    });
+  });
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks });
+  try {
+    const pending = await requestOpenAIResponsesWs({
+      url: `ws://127.0.0.1:${address.port}/v1/responses`, headers: {}, concreteIdentity: 'real-close',
+      data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000,
+    });
+    pending.finalize([]);
+    assert.equal(timers.entries.length, 1);
+    timers.entries[0].callback();
+    assert.deepEqual(await serverClose, { code: 1000, reason: 'foxwarm completed idle recycle' });
+    assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test('reuse cancels the old idle timer and successful release starts a fresh idle period', async () => {
@@ -646,13 +691,15 @@ test('reuse cancels the old idle timer and successful release starts a fresh idl
   assert.equal(timers.entries.length, 1);
   oldTimer.callback();
   assert.equal(socket.terminated, 0);
+  assert.equal(socket.closeCalls.length, 0);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   second.finalize([]);
   assert.equal(timers.entries.length, 2);
   assert.equal(timers.entries[1].cleared, false);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   timers.entries[1].callback();
-  assert.equal(socket.terminated, 1);
+  assert.equal(socket.terminated, 0);
+  assert.equal(socket.closeCalls.length, 1);
 });
 
 test('LRU eviction and pool clear cancel every affected idle timer', async () => {
@@ -671,12 +718,14 @@ test('LRU eviction and pool clear cancel every affected idle timer', async () =>
   }
   assert.equal(timers.entries.length, 6);
   assert.equal(timers.entries[0].cleared, true);
-  assert.equal(sockets[0].terminated, 1);
+  assert.equal(sockets[0].terminated, 0);
+  assert.deepEqual(sockets[0].closeCalls, [{ code: 1000, reason: 'foxwarm completed idle recycle' }]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 5);
   clearOpenAIWsCompletedChains();
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   assert.ok(timers.entries.every(entry => entry.cleared));
-  assert.ok(sockets.every(socket => socket.terminated === 1));
+  assert.ok(sockets.every(socket => socket.terminated === 0));
+  assert.ok(sockets.every(socket => socket.closeCalls.length === 1));
   const closeCauses = diagnostics.entries
     .filter(entry => entry.message === 'OpenAI Responses WebSocket closed locally')
     .map(entry => entry.fields.closeCause);

@@ -32,6 +32,7 @@ type OpenAIWsResource = {
     };
     closeRecorded?: boolean;
     removeIdleListeners?: () => void;
+    removeGracefulCloseListeners?: () => void;
 };
 
 export type OpenAIWsAttemptDiagnostics = {
@@ -140,7 +141,11 @@ function recordSocketClose(resource: OpenAIWsResource, options: {
 function closeResource(
     resource: OpenAIWsResource,
     cause = 'transport-cleanup',
-    options?: { phase?: string; chain?: OpenAIWsCompletedChain<OpenAIWsResource> },
+    options?: {
+        phase?: string;
+        chain?: OpenAIWsCompletedChain<OpenAIWsResource>;
+        graceful?: boolean;
+    },
 ): void {
     try {
         recordSocketClose(resource, {
@@ -151,6 +156,30 @@ function closeResource(
         });
         resource.removeIdleListeners?.();
         resource.removeIdleListeners = undefined;
+        resource.removeGracefulCloseListeners?.();
+        resource.removeGracefulCloseListeners = undefined;
+        if (options?.graceful && resource.socket.readyState === WebSocket.OPEN) {
+            const cleanup = () => {
+                resource.socket.off('close', onClose);
+                resource.socket.off('error', onError);
+                resource.removeGracefulCloseListeners = undefined;
+            };
+            const onClose = () => cleanup();
+            const onError = () => {
+                cleanup();
+                try {
+                    if (resource.socket.readyState === WebSocket.OPEN
+                        || resource.socket.readyState === WebSocket.CONNECTING) {
+                        resource.socket.terminate();
+                    }
+                } catch {}
+            };
+            resource.socket.once('close', onClose);
+            resource.socket.once('error', onError);
+            resource.removeGracefulCloseListeners = cleanup;
+            resource.socket.close(1000, 'foxwarm completed idle recycle');
+            return;
+        }
         if (resource.socket.readyState === WebSocket.OPEN || resource.socket.readyState === WebSocket.CONNECTING) {
             resource.socket.terminate();
         }
@@ -158,7 +187,7 @@ function closeResource(
 }
 
 const completedPool = new OpenAIWsCompletedChainPool<OpenAIWsResource>((resource, cause, chain) => {
-    closeResource(resource, cause, { phase: 'idle', chain });
+    closeResource(resource, cause, { phase: 'idle', chain, graceful: true });
 });
 
 function makeAbortError(message = 'The operation was aborted'): Error & { code: string } {
@@ -298,7 +327,9 @@ function installIdleRemoval(chain: OpenAIWsCompletedChain<OpenAIWsResource>): vo
     };
     idleTimer = idleTimers.set(() => {
         idleTimer = undefined;
-        if (completedPool.remove(chain.id)) closeResource(chain.resource, 'idle-timeout', { phase: 'idle', chain });
+        if (completedPool.remove(chain.id)) {
+            closeResource(chain.resource, 'idle-timeout', { phase: 'idle', chain, graceful: true });
+        }
     }, OPENAI_WS_IDLE_TIMEOUT_MS);
     idleTimer.unref?.();
     chain.resource.socket._socket?.unref?.();
