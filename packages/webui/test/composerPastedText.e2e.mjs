@@ -522,6 +522,56 @@ test('Firefox hides and restores the empty placeholder around synthetic composit
   assert.equal(await page.evaluate(() => window.fixtureDraft || ''), '')
 }))
 
+for (const spec of [browsers[0]]) {
+  test(`${spec.name} inserts inline file attachments at the caret and preserves atomic undo`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.type(editor, 'before after')
+    await page.evaluate(() => window.fixtureSelectText(7, 7))
+    await page.$eval(editor, editorNode => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['one'], 'duplicate.txt', { type: 'text/plain' }))
+      transfer.items.add(new File(['two'], 'duplicate.txt', { type: 'text/plain' }))
+      editorNode.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+    })
+    await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
+    const refs = await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.composerAttachmentRef))
+    assert.notEqual(refs[0], refs[1])
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `before <attachment-ref ref="${refs[0]}" /><attachment-ref ref="${refs[1]}" />after`)
+    await page.keyboard.type('x')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `before <attachment-ref ref="${refs[0]}" /><attachment-ref ref="${refs[1]}" />xafter`)
+    await page.keyboard.press('Backspace')
+    await page.keyboard.press('Backspace')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `before <attachment-ref ref="${refs[0]}" />after`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `before <attachment-ref ref="${refs[0]}" /><attachment-ref ref="${refs[1]}" />after`)
+
+    await page.reload({ waitUntil: 'load' })
+    await page.waitForSelector(editor)
+    await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
+    assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.textContent.includes('Reattach required'))), [true, true])
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForSelector('[role="alert"]')
+    assert.match(await page.$eval('[role="alert"]', node => node.textContent), /reattached or removed/i)
+    assert.equal(await page.evaluate(() => window.fixtureSends.length), 0)
+    await page.click('.foxwarm-composer-attachment-chip')
+    await page.waitForSelector('[role="dialog"][aria-label="Attachment information"] input[type="file"]')
+    await page.$eval('[role="dialog"][aria-label="Attachment information"] input[type="file"]', input => {
+      const transfer = new DataTransfer(); transfer.items.add(new File(['replacement'], 'replacement.txt', { type: 'text/plain' }))
+      Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await page.waitForFunction(() => !document.querySelector('.foxwarm-composer-attachment-chip')?.textContent.includes('Reattach required'))
+    assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.dataset.composerAttachmentRef)), refs)
+    await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips[1].click())
+    await page.waitForSelector('[role="dialog"][aria-label="Attachment information"]')
+    await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Remove')?.click())
+    await page.evaluate(() => { window.fixtureAccept = true })
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => window.fixtureSends.length === 1)
+    assert.deepEqual(await page.evaluate(() => window.fixtureSends[0].attachments.map(item => ({ ref: item.ref, name: item.file.name }))), [{ ref: refs[0], name: 'replacement.txt' }])
+  }))
+}
+
 test('Chromium preserves trusted CDP IME replacement through every caret-anchor position', async () => withBrowser(browsers[0], async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
   const client = await page.createCDPSession()

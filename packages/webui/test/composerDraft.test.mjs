@@ -34,9 +34,10 @@ test('composer drafts serialize exact ordered text and pasted-text segments', ()
     { type: 'text', text: 'before\n' },
     { type: 'text', text: '' },
     { type: 'pasted-text', id: 'p1', text: 'first\n\n  second 😀' },
+    { type: 'attachment', ref: 'attachment1', name: 'same.txt', mimeType: 'text/plain', size: 12 },
     { type: 'text', text: '\nafter' },
   ])
-  assert.equal(serializeComposerDraft(draft), 'before\n<pasted-text>first\n\n  second 😀</pasted-text>\nafter')
+  assert.equal(serializeComposerDraft(draft), 'before\n<pasted-text>first\n\n  second 😀</pasted-text><attachment-ref ref="attachment1" />\nafter')
   assert.equal(getPlainComposerDraftText(draft), null)
   assert.equal(getPlainComposerDraftText(makePlainComposerDraft('typed <pasted-text>x</pasted-text>')), 'typed <pasted-text>x</pasted-text>')
 })
@@ -59,6 +60,7 @@ test('structured storage reads old plain strings and writes only the versioned s
     persistComposerDraft('agent/main', makeComposerDraft([
       { type: 'text', text: 'before' },
       { type: 'pasted-text', id: 'p1', text: 'block' },
+      { type: 'attachment', ref: 'attachment1', name: 'report.txt', mimeType: 'text/plain', size: 8 },
     ]))
     assert.equal(storage.values.has('draft_agent/main'), false)
     assert.deepEqual(JSON.parse(storage.values.get('composer_draft_v1_agent/main')), {
@@ -66,6 +68,7 @@ test('structured storage reads old plain strings and writes only the versioned s
       segments: [
         { type: 'text', text: 'before' },
         { type: 'pasted-text', id: 'p1', text: 'block' },
+        { type: 'attachment', ref: 'attachment1', name: 'report.txt', mimeType: 'text/plain', size: 8 },
       ],
     })
     clearComposerDraft('agent/main')

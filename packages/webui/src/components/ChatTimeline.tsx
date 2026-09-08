@@ -25,7 +25,7 @@ import {
   type ToolTagItem,
   type ViewMode,
 } from './chatShared'
-import ImageParts from './ImageParts'
+import ImageParts, { ImageItem } from './ImageParts'
 import ReasoningCard from './ReasoningCard'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
@@ -46,7 +46,8 @@ import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAn
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
 import PastedTextBlock from './PastedTextBlock'
-import { parsePastedTextSegments } from '../pastedText'
+import { PASTED_TEXT_CLOSE, PASTED_TEXT_OPEN, parsePastedTextSegments, type PastedTextSegment } from '../pastedText'
+import { splitGeneratedAttachmentName } from '../attachmentRefs'
 import {
   deriveRequestTimings,
   formatCompactDuration,
@@ -458,10 +459,94 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUs
   )
 })
 
-const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMessageMetadata }: { text: string; showUserMessageMetadata: boolean }) {
-  const segments = useMemo(() => parsePastedTextSegments(text), [text])
+type AttachmentCorrelation = {
+  ref: string
+  kind: 'image' | 'file'
+  name: string
+  mimeType: string
+  descriptorText: string
+  imagePart?: Message['parts'][number]
+}
+
+function getPartDisplayText(part: Message['parts'][number]): string {
+  return part.text || (part.system ? formatStructuredSystemText(part.system) : '')
+}
+
+function findAttachmentCorrelations(parts: Message['parts']): Map<string, AttachmentCorrelation> {
+  const correlations = new Map<string, AttachmentCorrelation>()
+  const activeRefs = new Set<string>()
+  for (const part of parts) {
+    for (const segment of parsePastedTextSegments(getPartDisplayText(part))) {
+      if (segment.kind !== 'text') continue
+      for (const match of segment.text.matchAll(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g)) activeRefs.add(match[1])
+    }
+  }
+  parts.forEach((part, partIndex) => {
+    for (const segment of parsePastedTextSegments(getPartDisplayText(part))) {
+      if (segment.kind !== 'text') continue
+      for (const line of segment.text.split('\n')) {
+        const descriptorText = line.trim()
+        const parsed = parseFoxwarmMetadataLine(descriptorText)
+        if (!parsed || parsed.closing || (parsed.tagName !== 'foxwarm-image' && parsed.tagName !== 'foxwarm-file')) continue
+        const generated = splitGeneratedAttachmentName(parsed.attrs.name || '')
+        if (!generated || !activeRefs.has(generated.ref) || correlations.has(generated.ref)) continue
+        const imagePart = parsed.tagName === 'foxwarm-image' ? parts[partIndex + 1] : undefined
+        correlations.set(generated.ref, {
+          ref: generated.ref,
+          kind: parsed.tagName === 'foxwarm-image' ? 'image' : 'file',
+          name: generated.originalName,
+          mimeType: parsed.attrs.mime || imagePart?.inlineDataRef?.mimeType || imagePart?.inlineData?.mimeType || '',
+          descriptorText,
+          ...(imagePart && (imagePart.inlineData || imagePart.inlineDataRef || imagePart.inlineDataUnavailable) ? { imagePart } : {}),
+        })
+      }
+    }
+  })
+  return correlations
+}
+
+function stripGeneratedDescriptorLines(text: string, correlations: Map<string, AttachmentCorrelation>): string {
+  const descriptors = new Set([...correlations.values()].map(item => item.descriptorText))
+  return parsePastedTextSegments(text).map(segment => segment.kind === 'pasted-text'
+    ? `${PASTED_TEXT_OPEN}${segment.text}${PASTED_TEXT_CLOSE}`
+    : segment.text.split('\n').filter(line => !descriptors.has(line.trim())).join('\n')).join('')
+}
+
+function AttachmentHistoryBlock({ correlation }: { correlation: AttachmentCorrelation }) {
+  const { ref, kind, name, mimeType: mime, imagePart } = correlation
+  return (
+    <span className="foxwarm-inline-history-attachment my-1 inline-flex max-w-full items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1.5 align-middle text-sm shadow-sm" data-attachment-ref={ref}>
+      {kind === 'image' && imagePart
+        ? <ImageItem part={imagePart} label={name} imageClassName="h-12 w-12 shrink-0 object-cover" />
+        : <span aria-hidden="true">{kind === 'image' ? '🖼' : '📎'}</span>}
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{name}</span>
+        {mime && <span className="block truncate text-xs text-fw-text-muted">{mime}</span>}
+      </span>
+    </span>
+  )
+}
+
+const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean }) {
+  const text = stripGeneratedDescriptorLines(getPartDisplayText(part), correlations)
+  const segments = useMemo<Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }>>(() => {
+    const output: Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }> = []
+    for (const segment of parsePastedTextSegments(text)) {
+      if (segment.kind === 'pasted-text') { output.push(segment); continue }
+      let cursor = 0
+      for (const match of segment.text.matchAll(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g)) {
+        const index = match.index || 0
+        if (index > cursor) output.push({ kind: 'text', text: segment.text.slice(cursor, index) })
+        if (correlations.has(match[1])) output.push({ kind: 'attachment', tagText: match[0], ref: match[1] })
+        else output.push({ kind: 'text', text: match[0] })
+        cursor = index + match[0].length
+      }
+      if (cursor < segment.text.length) output.push({ kind: 'text', text: segment.text.slice(cursor) })
+    }
+    return output
+  }, [correlations, text])
   const visibleClassificationText = useMemo(
-    () => segments.filter(segment => segment.kind === 'text').map(segment => segment.text).join(''),
+    () => segments.filter((segment): segment is Extract<typeof segments[number], { kind: 'text' }> => segment.kind === 'text').map(segment => segment.text).join(''),
     [segments],
   )
   const isSystemMessage = isCollapsibleSystemText(visibleClassificationText)
@@ -469,10 +554,12 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMe
   const shouldCollapse = isSystemMessage && !expanded
 
   return (
-    <div>
-      <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: 0 }}>
-          {segments.map((segment, segmentIndex) => segment.kind === 'pasted-text'
+    <div className={inlineFlow ? 'contents' : undefined}>
+      <div className={`${shouldCollapse ? 'overflow-hidden' : ''} ${inlineFlow ? 'contents' : ''}`} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
+        <pre className={`foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans ${inlineFlow ? 'inline' : ''}`} style={{ lineHeight: 0 }}>
+          {segments.map((segment, segmentIndex) => segment.kind === 'attachment'
+            ? <AttachmentHistoryBlock key={`attachment-${segmentIndex}`} correlation={correlations.get(segment.ref)!} />
+            : segment.kind === 'pasted-text'
             ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} />
             : (
               <span key={`text-${segmentIndex}`}>
@@ -782,7 +869,12 @@ const MessageRow = memo(function MessageRow({
     return visible
   }, [msg.parts])
   const textLikeParts = useMemo(() => visibleModelParts.map(item => item.part), [visibleModelParts])
-  const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable), [msg.parts])
+  const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
+  const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
+  const hasInlineAttachmentFlow = msg.role === 'user' && attachmentCorrelations.size > 0
+  const imageParts = useMemo(() => msg.parts.filter(p => (
+    p.inlineData || p.inlineDataRef || p.inlineDataUnavailable
+  ) && !associatedImageParts.has(p)), [associatedImageParts, msg.parts])
   const usage = useMemo(() => getModelMessageUsage(msg), [msg])
   const isInToolGroup = summaryTagItems.length > 0
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
@@ -824,12 +916,13 @@ const MessageRow = memo(function MessageRow({
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
         ) : msg.role === 'user' ? (
-          <div className="flex min-w-0 flex-col">
+          <div className={hasInlineAttachmentFlow ? 'min-w-0' : 'flex min-w-0 flex-col'}>
             {textLikeParts.map((part, partIdx) => (
-              <div key={`user-part-${partIdx}`}>
+              <div key={`user-part-${partIdx}`} className={hasInlineAttachmentFlow ? 'contents' : undefined}>
                 {part.system
+                  && !hasInlineAttachmentFlow
                   ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
-                  : <CollapsibleUserText text={part.text || ''} showUserMessageMetadata={showUserMessageMetadata} />}
+                  : <CollapsibleUserText part={part} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} />}
               </div>
             ))}
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />

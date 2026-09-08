@@ -5,6 +5,7 @@ import {
   serializeComposerDraft,
   type ComposerDraft,
   type ComposerDraftSegment,
+  type ComposerAttachmentSegment,
   type ComposerPastedTextSegment,
 } from '../composerDraft'
 import { countPastedTextCharacters, getPastedTextPreview } from '../pastedText'
@@ -19,6 +20,7 @@ export interface InlineComposerEditorHandle {
   focus: () => void
   focusEnd: () => void
   flushForSubmit: () => ComposerDraft
+  insertAttachments: (files: File[], point?: { x: number; y: number }) => void
   replaceDraft: (draft: ComposerDraft, focusEnd?: boolean) => void
 }
 
@@ -29,7 +31,9 @@ interface InlineComposerEditorProps {
   placeholder: string
   onChange: (draft: ComposerDraft) => void
   onBlur: () => void
-  onPasteImages: (files: File[]) => void
+  onAttachFiles: (files: File[]) => ComposerAttachmentSegment[]
+  resolveAttachmentFile: (ref: string) => File | undefined
+  onReattachFile: (ref: string, file: File) => void
   onCommandKeyDown: (event: KeyboardEvent) => boolean
 }
 
@@ -52,7 +56,10 @@ function sameDraft(left: ComposerDraft, right: ComposerDraft): boolean {
 }
 
 function isChip(node: Node | null): boolean {
-  return node instanceof HTMLElement && node.dataset.composerPastedTextId !== undefined
+  return node instanceof HTMLElement && (
+    node.dataset.composerPastedTextId !== undefined
+    || node.dataset.composerAttachmentRef !== undefined
+  )
 }
 
 function isCaretAnchor(node: Node | null): node is HTMLElement {
@@ -80,7 +87,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   placeholder,
   onChange,
   onBlur,
-  onPasteImages,
+  onAttachFiles,
+  resolveAttachmentFile,
+  onReattachFile,
   onCommandKeyDown,
 }, forwardedRef) {
   const editorRef = useRef<HTMLDivElement | null>(null)
@@ -88,6 +97,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   disabledRef.current = disabled
   const authoritativeDraftRef = useRef(value)
   const blockMapRef = useRef(new Map<string, ComposerPastedTextSegment>())
+  const attachmentMapRef = useRef(new Map<string, ComposerAttachmentSegment>())
+  const attachmentUrlMapRef = useRef(new Map<string, string>())
   const undoRef = useRef<DraftSnapshot[]>([])
   const redoRef = useRef<DraftSnapshot[]>([])
   const historyGroupRef = useRef<HistoryGroup>(null)
@@ -99,7 +110,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const lastEmittedRef = useRef('')
   const lastDraftIdRef = useRef('')
   const activeChipRef = useRef<HTMLElement | null>(null)
+  const lastSelectionRef = useRef<SelectionOffsets | null>(null)
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
+  const [activeAttachmentRef, setActiveAttachmentRef] = useState<string | null>(null)
 
   const readNodeSegments = useCallback((node: Node, output: ComposerDraftSegment[]) => {
     if (getCaretAnchor(node) || isTrailingNewlineScaffold(node)) return
@@ -109,6 +122,12 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     }
     if (!(node instanceof HTMLElement)) return
     if (isChip(node)) {
+      const attachmentRef = node.dataset.composerAttachmentRef
+      if (attachmentRef) {
+        const attachment = attachmentMapRef.current.get(attachmentRef)
+        if (attachment) output.push({ ...attachment })
+        return
+      }
       const segment = blockMapRef.current.get(node.dataset.composerPastedTextId || '')
       if (segment) output.push({ ...segment })
       return
@@ -311,6 +330,41 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     return chip
   }, [disabled])
 
+  const createAttachmentChip = useCallback((segment: ComposerAttachmentSegment): HTMLElement => {
+    attachmentMapRef.current.set(segment.ref, { ...segment })
+    const chip = document.createElement('span')
+    chip.className = 'foxwarm-composer-attachment-chip mx-0.5 inline-flex max-w-[min(24rem,100%)] items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1 align-middle text-left text-xs leading-5 text-fw-text shadow-sm focus:outline-none focus:ring-2 focus:ring-fw-focus-ring'
+    chip.contentEditable = 'false'
+    chip.tabIndex = disabled ? -1 : 0
+    chip.setAttribute('role', 'button')
+    chip.setAttribute('aria-disabled', String(disabled))
+    chip.dataset.composerAttachmentRef = segment.ref
+    const file = resolveAttachmentFile(segment.ref)
+    if (segment.mimeType.startsWith('image/') && file) {
+      const url = URL.createObjectURL(file)
+      attachmentUrlMapRef.current.set(segment.ref, url)
+      const image = document.createElement('img')
+      image.src = url
+      image.alt = ''
+      image.className = 'h-8 w-8 shrink-0 rounded object-cover'
+      chip.append(image)
+    } else {
+      const icon = document.createElement('span')
+      icon.setAttribute('aria-hidden', 'true')
+      icon.textContent = file ? '📎' : '⚠'
+      chip.append(icon)
+    }
+    const label = document.createElement('span')
+    label.className = 'min-w-0 truncate'
+    label.textContent = segment.name
+    const info = document.createElement('span')
+    info.className = 'shrink-0 text-fw-text-muted'
+    info.textContent = file ? `${segment.mimeType || 'file'} · ${segment.size.toLocaleString()} B` : 'Reattach required'
+    chip.append(label, info)
+    chip.setAttribute('aria-label', file ? `Attachment ${segment.name}` : `Attachment ${segment.name}, reattach required`)
+    return chip
+  }, [disabled, resolveAttachmentFile])
+
   const createCaretAnchor = useCallback(() => {
     const anchor = document.createElement('span')
     anchor.className = 'foxwarm-composer-caret-anchor'
@@ -348,15 +402,22 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const editor = editorRef.current
     if (!editor) return
     blockMapRef.current.clear()
+    attachmentMapRef.current.clear()
+    for (const url of attachmentUrlMapRef.current.values()) URL.revokeObjectURL(url)
+    attachmentUrlMapRef.current.clear()
     const fragment = document.createDocumentFragment()
     for (const segment of draft.segments) {
-      fragment.append(segment.type === 'text' ? document.createTextNode(segment.text) : createChip(segment))
+      fragment.append(segment.type === 'text'
+        ? document.createTextNode(segment.text)
+        : segment.type === 'pasted-text'
+          ? createChip(segment)
+          : createAttachmentChip(segment))
     }
     editor.replaceChildren(fragment)
     installCaretAnchors(editor)
     editor.dataset.compositionVisible = 'false'
     updateEmptyState()
-  }, [createChip, installCaretAnchors, updateEmptyState])
+  }, [createAttachmentChip, createChip, installCaretAnchors, updateEmptyState])
 
   const placeCaret = useCallback((container: Node, offset: number) => {
     const editor = editorRef.current
@@ -517,15 +578,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     redoRef.current = []
     historyGroupRef.current = null
     lastEmittedRef.current = serializeComposerDraft(nextDraft)
+    setActiveAttachmentRef(null)
     if (shouldFocusEnd) focusEnd()
   }, [cancelCompositionFinalize, focusEnd, renderDraft])
-
-  useImperativeHandle(forwardedRef, () => ({
-    focus: () => editorRef.current?.focus(),
-    focusEnd,
-    flushForSubmit,
-    replaceDraft,
-  }), [flushForSubmit, focusEnd, replaceDraft])
 
   const insertTextAtSelection = useCallback((text: string) => {
     const editor = editorRef.current
@@ -563,6 +618,48 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       placeCaret(chip.parentNode || editor, [...(chip.parentNode || editor).childNodes].indexOf(chip) + 1)
     })
   }, [createChip, mutate, placeCaret])
+
+  const insertAttachments = useCallback((files: File[], point?: { x: number; y: number }) => {
+    const editor = editorRef.current
+    if (!editor || files.length === 0) return
+    const currentSelection = window.getSelection()
+    const hadEditorSelection = !!currentSelection?.rangeCount && editor.contains(currentSelection.getRangeAt(0).commonAncestorContainer)
+    const desiredSelection = hadEditorSelection ? getSelectionOffsets() : lastSelectionRef.current
+    editor.focus()
+    if (point) {
+      const caret = document.caretPositionFromPoint?.(point.x, point.y)
+      if (caret?.offsetNode && editor.contains(caret.offsetNode)) placeCaret(caret.offsetNode, caret.offset)
+      else {
+        const rangeAtPoint = document.caretRangeFromPoint?.(point.x, point.y)
+        if (rangeAtPoint && editor.contains(rangeAtPoint.startContainer)) placeCaret(rangeAtPoint.startContainer, rangeAtPoint.startOffset)
+      }
+    } else {
+      if (!restoreSelection(desiredSelection)) focusEnd()
+    }
+    const segments = onAttachFiles(files)
+    mutate('insert-attachments', () => {
+      const selection = window.getSelection()
+      if (!selection?.rangeCount) return
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const fragment = document.createDocumentFragment()
+      let last: HTMLElement | null = null
+      for (const segment of segments) {
+        last = createAttachmentChip(segment)
+        fragment.append(last)
+      }
+      range.insertNode(fragment)
+      if (last?.parentNode) placeCaret(last.parentNode, [...last.parentNode.childNodes].indexOf(last) + 1)
+    })
+  }, [createAttachmentChip, focusEnd, getSelectionOffsets, mutate, onAttachFiles, placeCaret, restoreSelection])
+
+  useImperativeHandle(forwardedRef, () => ({
+    focus: () => editorRef.current?.focus(),
+    focusEnd,
+    flushForSubmit,
+    insertAttachments,
+    replaceDraft,
+  }), [flushForSubmit, focusEnd, insertAttachments, replaceDraft])
 
   const adjacentChip = useCallback((direction: -1 | 1): HTMLElement | null => {
     const editor = editorRef.current
@@ -620,6 +717,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       lastEmittedRef.current = serialized
       lastDraftIdRef.current = draftId
       setActiveBlockId(null)
+      setActiveAttachmentRef(null)
     }
   }, [cancelCompositionFinalize, draftId, renderDraft, value])
 
@@ -635,6 +733,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     if (disabled) {
       cancelCompositionFinalize()
       setActiveBlockId(null)
+      setActiveAttachmentRef(null)
       activeChipRef.current = null
       beforeInputRef.current = null
       compositionBaseRef.current = null
@@ -644,8 +743,12 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [cancelCompositionFinalize, disabled])
 
   useEffect(() => cancelCompositionFinalize, [cancelCompositionFinalize])
+  useEffect(() => () => {
+    for (const url of attachmentUrlMapRef.current.values()) URL.revokeObjectURL(url)
+  }, [])
 
   const activeBlock = activeBlockId ? blockMapRef.current.get(activeBlockId) || null : null
+  const activeAttachment = activeAttachmentRef ? attachmentMapRef.current.get(activeAttachmentRef) || null : null
   const closeModal = useCallback(() => {
     setActiveBlockId(null)
     requestAnimationFrame(() => activeChipRef.current?.focus())
@@ -731,10 +834,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         onPaste={(event) => {
           if (disabled) { event.preventDefault(); return }
           const fileItems = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file')
-          const imageFiles = fileItems.map(item => item.getAsFile()).filter((file): file is File => !!file && file.type.startsWith('image/'))
-          if (imageFiles.length > 0) {
+          const files = fileItems.map(item => item.getAsFile()).filter((file): file is File => !!file)
+          if (files.length > 0) {
             event.preventDefault()
-            onPasteImages(imageFiles)
+            insertAttachments(files)
             return
           }
           const text = event.clipboardData?.getData('text/plain') || ''
@@ -796,7 +899,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if (targetChip && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault()
             activeChipRef.current = targetChip
-            setActiveBlockId(targetChip.dataset.composerPastedTextId || null)
+            if (targetChip.dataset.composerAttachmentRef) setActiveAttachmentRef(targetChip.dataset.composerAttachmentRef)
+            else setActiveBlockId(targetChip.dataset.composerPastedTextId || null)
             return
           }
           if (onCommandKeyDown(nativeEvent)) return
@@ -820,17 +924,21 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         onClick={(event) => {
           historyGroupRef.current = null
           if (disabled) return
-          const chip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id]') : null
+          const chip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') : null
           if (!chip) return
           activeChipRef.current = chip
-          setActiveBlockId(chip.dataset.composerPastedTextId || null)
+          if (chip.dataset.composerAttachmentRef) setActiveAttachmentRef(chip.dataset.composerAttachmentRef)
+          else setActiveBlockId(chip.dataset.composerPastedTextId || null)
         }}
         onPointerDown={() => {
           historyGroupRef.current = null
         }}
         onBlur={(event) => {
+          lastSelectionRef.current = getSelectionOffsets()
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
         }}
+        onKeyUp={() => { lastSelectionRef.current = getSelectionOffsets() }}
+        onPointerUp={() => { lastSelectionRef.current = getSelectionOffsets() }}
       />
       {!disabled && activeBlock && (
         <PastedTextModal
@@ -860,6 +968,47 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
             closeModal()
           }}
         />
+      )}
+      {!disabled && activeAttachment && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActiveAttachmentRef(null) }}>
+          <div role="dialog" aria-modal="true" aria-label="Attachment information" className="w-full max-w-lg rounded-lg border border-fw-border bg-fw-surface p-4 shadow-xl">
+            {activeAttachment.mimeType.startsWith('image/') && resolveAttachmentFile(activeAttachment.ref) && (
+              <img src={attachmentUrlMapRef.current.get(activeAttachment.ref)} alt={activeAttachment.name} className="mb-3 max-h-72 w-full rounded object-contain" />
+            )}
+            <div className="font-medium text-fw-text-strong">{activeAttachment.name}</div>
+            <div className="mt-1 text-sm text-fw-text-muted">{activeAttachment.mimeType || 'application/octet-stream'} · {activeAttachment.size.toLocaleString()} B</div>
+            {!resolveAttachmentFile(activeAttachment.ref) && <div className="mt-2 text-sm text-fw-warning">This attachment must be reattached or removed before sending.</div>}
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              {!resolveAttachmentFile(activeAttachment.ref) && (
+                <label className="cursor-pointer rounded border border-fw-border px-3 py-1.5 text-sm text-fw-text">
+                  Reattach
+                  <input type="file" className="hidden" onChange={(event) => {
+                    const file = event.currentTarget.files?.[0]
+                    const chip = [...(editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]') || [])]
+                      .find(candidate => candidate.dataset.composerAttachmentRef === activeAttachment.ref) || null
+                    if (!file || !chip) return
+                    onReattachFile(activeAttachment.ref, file)
+                    mutate('reattach-file', () => {
+                      const updated: ComposerAttachmentSegment = { ...activeAttachment, name: file.name || activeAttachment.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+                      attachmentMapRef.current.set(updated.ref, updated)
+                      const replacement = createAttachmentChip(updated)
+                      chip.replaceWith(replacement)
+                      activeChipRef.current = replacement
+                    })
+                    setActiveAttachmentRef(null)
+                  }} />
+                </label>
+              )}
+              <button type="button" className="rounded border border-fw-border px-3 py-1.5 text-sm text-fw-danger" onClick={() => {
+                const chip = [...(editorRef.current?.querySelectorAll<HTMLElement>('[data-composer-attachment-ref]') || [])]
+                  .find(candidate => candidate.dataset.composerAttachmentRef === activeAttachment.ref) || null
+                if (chip) removeChip(chip)
+                setActiveAttachmentRef(null)
+              }}>Remove</button>
+              <button type="button" className="rounded bg-fw-accent px-3 py-1.5 text-sm text-fw-text-inverse" onClick={() => setActiveAttachmentRef(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

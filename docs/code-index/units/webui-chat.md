@@ -18,10 +18,10 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 
 - `handleSend({ text, attachments })`:
   1. rejects missing/empty/loading submissions;
-  2. uploads each attachment to `POST /api/upload`;
-  3. builds `{ parts, uploadedFiles }`;
-  4. creates one browser `clientMessageId` and appends an optimistic committed-looking user row only when the session is not busy and has no queued work;
-  5. starts `POST /api/sessions/:id/message`; busy/queued sends instead schedule targeted history refresh for queue preview.
+  2. uploads each stable `{ ref, file }` attachment to `POST /api/upload` with multipart filename `attachmentN_${originalFileName}`, failing the send if any upload fails;
+  3. builds marker-bearing request parts plus the unchanged legacy `{ path, filename, mimeType }` upload entries (no backend ref field);
+  4. creates one browser `clientMessageId` and appends an optimistic user row with the same ordinary appended descriptor shape used by canonical history; frontend presentation correlates the numeric filename prefix back to the marker;
+  5. awaits `POST /api/sessions/:id/message`; non-2xx removes only an unreconciled optimistic row and returns rejected send so the composer retains its draft, while busy/queued success schedules targeted queue-preview refresh.
 - Manually typed slash commands use the same POST route but omit optimistic history and `clientMessageId`, matching command dispatch's non-persisted user-input boundary.
 - `sendSessionCommand(command)` posts `{ text: command }` to the same message route without optimistic user history.
 - `handleStop`, `handleRunQueued`, and `handleContinue` send `/stop`, `/dequeue`, and `/continue` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.

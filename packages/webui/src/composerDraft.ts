@@ -2,7 +2,14 @@ import { PASTED_TEXT_CLOSE, PASTED_TEXT_OPEN } from './pastedText'
 
 export type ComposerTextSegment = { type: 'text'; text: string }
 export type ComposerPastedTextSegment = { type: 'pasted-text'; id: string; text: string }
-export type ComposerDraftSegment = ComposerTextSegment | ComposerPastedTextSegment
+export type ComposerAttachmentSegment = {
+  type: 'attachment'
+  ref: string
+  name: string
+  mimeType: string
+  size: number
+}
+export type ComposerDraftSegment = ComposerTextSegment | ComposerPastedTextSegment | ComposerAttachmentSegment
 export type ComposerDraft = { version: 1; segments: ComposerDraftSegment[] }
 
 const DRAFT_VERSION = 1
@@ -18,7 +25,8 @@ export function normalizeComposerDraftSegments(segments: readonly ComposerDraftS
       else normalized.push({ type: 'text', text: segment.text })
       continue
     }
-    normalized.push({ type: 'pasted-text', id: segment.id, text: segment.text })
+    if (segment.type === 'pasted-text') normalized.push({ type: 'pasted-text', id: segment.id, text: segment.text })
+    else normalized.push({ type: 'attachment', ref: segment.ref, name: segment.name, mimeType: segment.mimeType, size: segment.size })
   }
   return normalized.length > 0 ? normalized : [{ type: 'text', text: '' }]
 }
@@ -32,10 +40,11 @@ export function makeComposerDraft(segments: readonly ComposerDraftSegment[]): Co
 }
 
 export function serializeComposerDraft(draft: ComposerDraft): string {
-  return draft.segments.map(segment => segment.type === 'text'
-    ? segment.text
-    : `${PASTED_TEXT_OPEN}${segment.text}${PASTED_TEXT_CLOSE}`
-  ).join('')
+  return draft.segments.map(segment => {
+    if (segment.type === 'text') return segment.text
+    if (segment.type === 'pasted-text') return `${PASTED_TEXT_OPEN}${segment.text}${PASTED_TEXT_CLOSE}`
+    return `<attachment-ref ref="${segment.ref}" />`
+  }).join('')
 }
 
 export function getPlainComposerDraftText(draft: ComposerDraft): string | null {
@@ -71,11 +80,23 @@ function isStructuredDraft(value: unknown): value is ComposerDraft {
     if (!segment || typeof segment !== 'object' || Array.isArray(segment)) return false
     const item = segment as Partial<ComposerDraftSegment>
     if (item.type === 'text') return typeof item.text === 'string'
-    return item.type === 'pasted-text'
-      && typeof item.id === 'string'
+    if (item.type === 'pasted-text') return (
+      typeof item.id === 'string'
       && item.id.length > 0
       && item.id.length <= 160
       && typeof item.text === 'string'
+    )
+    return item.type === 'attachment'
+      && typeof item.ref === 'string'
+      && /^attachment[1-9]\d*$/.test(item.ref)
+      && typeof item.name === 'string'
+      && item.name.length > 0
+      && item.name.length <= 1024
+      && typeof item.mimeType === 'string'
+      && item.mimeType.length <= 255
+      && typeof item.size === 'number'
+      && Number.isFinite(item.size)
+      && item.size >= 0
   })
 }
 

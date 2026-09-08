@@ -4,7 +4,7 @@ import { makeApiUrl } from '../config'
 
 const SAFE_RASTER_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
-function ImageItem({ part, label }: { part: MessagePart; label: string }) {
+export function ImageItem({ part, label, imageClassName = 'max-w-[300px] max-h-[200px]' }: { part: MessagePart; label: string; imageClassName?: string }) {
   const [failed, setFailed] = useState(false)
   const mimeType = part.inlineDataRef?.mimeType
     || part.inlineData?.mimeType
@@ -29,16 +29,21 @@ function ImageItem({ part, label }: { part: MessagePart; label: string }) {
   }
 
   return (
-    <div className="relative group cursor-pointer" onClick={() => window.open(src, '_blank', 'noopener,noreferrer')}>
+    <button
+      type="button"
+      className="relative group cursor-pointer text-left"
+      aria-label={`Open ${label}`}
+      onClick={() => window.open(src, '_blank', 'noopener,noreferrer')}
+    >
       <img
         src={src}
         alt={label}
         loading="lazy"
         onError={() => setFailed(true)}
-        className="max-w-[300px] max-h-[200px] rounded-lg border border-fw-border-strong hover:opacity-90 transition"
+        className={`${imageClassName} rounded-lg border border-fw-border-strong hover:opacity-90 transition`}
       />
       <div className="absolute inset-0 bg-fw-overlay/0 group-hover:bg-fw-overlay/10 transition rounded-lg pointer-events-none" />
-    </div>
+    </button>
   )
 }
 

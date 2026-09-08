@@ -1,79 +1,38 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
 import { build } from 'esbuild'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const webuiRoot = fileURLToPath(new URL('..', import.meta.url))
-const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-message-attachment-drafts-test-'))
-const bundledPath = path.join(tempDir, 'messageAttachmentDrafts.mjs')
+const result = await build({ entryPoints: [new URL('../src/messageAttachmentDrafts.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', write: false })
+const drafts = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 
-await build({
-  entryPoints: [path.join(webuiRoot, 'src/messageAttachmentDrafts.ts')],
-  bundle: true,
-  format: 'esm',
-  platform: 'node',
-  target: 'node20',
-  outfile: bundledPath,
-  logLevel: 'silent',
+const makeFile = (name, body = name) => new File([body], name, { type: 'text/plain' })
+
+test('stable references preserve duplicate filenames, order, and exact File identity per Session', () => {
+  const first = makeFile('duplicate.txt', 'first')
+  const second = makeFile('duplicate.txt', 'second')
+  const entries = drafts.createMessageAttachmentDrafts('agent/a', [first, second])
+  assert.deepEqual(entries.map(item => item.ref), ['attachment1', 'attachment2'])
+  assert.equal(drafts.getMessageAttachmentFile('agent/a', entries[0].ref), first)
+  assert.equal(drafts.getMessageAttachmentFile('agent/a', entries[1].ref), second)
+  assert.deepEqual(drafts.getMessageAttachmentDraft('agent/a').map(item => item.ref), entries.map(item => item.ref))
+  assert.deepEqual(drafts.getMessageAttachmentDraft('agent/b'), [])
 })
 
-const {
-  clearMessageAttachmentDraft,
-  getMessageAttachmentDraft,
-  setMessageAttachmentDraft,
-  updateMessageAttachmentDraft,
-} = await import(`${pathToFileURL(bundledPath).href}?${Date.now()}`)
-
-const file = (name) => new File([name], name, { type: 'text/plain' })
-
-test.after(async () => {
-  await rm(tempDir, { recursive: true, force: true })
+test('numeric allocation does not reuse a removed identity and honors reload-reserved refs', () => {
+  const [first] = drafts.createMessageAttachmentDrafts('numeric/a', [makeFile('first.txt')])
+  drafts.removeMessageAttachmentDraft('numeric/a', first.ref)
+  assert.equal(drafts.createMessageAttachmentDrafts('numeric/a', [makeFile('second.txt')], ['attachment1'])[0].ref, 'attachment2')
 })
 
-test('preserves File identity and order while defending stored arrays', () => {
-  const first = file('first.txt')
-  const second = file('second.txt')
-  const source = [first, second]
-
-  const returned = setMessageAttachmentDraft('agent/a', source)
-  source.reverse()
-  returned.pop()
-
-  const restored = getMessageAttachmentDraft('agent/a')
-  assert.deepEqual(restored, [first, second])
-  assert.equal(restored[0], first)
-  assert.equal(restored[1], second)
-
-  restored.shift()
-  assert.deepEqual(getMessageAttachmentDraft('agent/a'), [first, second])
-})
-
-test('isolates sessions and updates only the targeted draft', () => {
-  const a = file('a.txt')
-  const b = file('b.txt')
-  setMessageAttachmentDraft('agent/a', [a])
-  setMessageAttachmentDraft('agent/b', [b])
-
-  const appended = file('a-2.txt')
-  updateMessageAttachmentDraft('agent/a', files => [...files, appended])
-
-  assert.deepEqual(getMessageAttachmentDraft('agent/a'), [a, appended])
-  assert.deepEqual(getMessageAttachmentDraft('agent/b'), [b])
-})
-
-test('clear and empty writes remove only the selected session draft', () => {
-  const a = file('clear-a.txt')
-  const b = file('keep-b.txt')
-  setMessageAttachmentDraft('clear/a', [a])
-  setMessageAttachmentDraft('clear/b', [b])
-
-  clearMessageAttachmentDraft('clear/a')
-  assert.deepEqual(getMessageAttachmentDraft('clear/a'), [])
-  assert.deepEqual(getMessageAttachmentDraft('clear/b'), [b])
-
-  setMessageAttachmentDraft('clear/b', [])
-  assert.deepEqual(getMessageAttachmentDraft('clear/b'), [])
+test('reattach replaces only the exact reference and clear removes one Session owner', () => {
+  const [entry] = drafts.createMessageAttachmentDrafts('agent/a', [makeFile('old.txt')])
+  drafts.createMessageAttachmentDrafts('agent/b', [makeFile('other.txt')])
+  const replacement = makeFile('new.txt')
+  drafts.setMessageAttachmentFile('agent/a', entry.ref, replacement)
+  assert.equal(drafts.getMessageAttachmentFile('agent/a', entry.ref), replacement)
+  drafts.removeMessageAttachmentDraft('agent/a', entry.ref)
+  assert.equal(drafts.getMessageAttachmentFile('agent/a', entry.ref), undefined)
+  assert.equal(drafts.getMessageAttachmentDraft('agent/b').length, 1)
+  drafts.clearMessageAttachmentDraft('agent/b')
+  assert.deepEqual(drafts.getMessageAttachmentDraft('agent/b'), [])
 })

@@ -1366,7 +1366,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-confirm
   color: var(--foxwarm-color-text-inverse) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip {
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip {
   background-color: var(--foxwarm-console-panel) !important;
   border: 1px solid var(--foxwarm-console-border-panel) !important;
   border-radius: var(--foxwarm-console-radius) !important;
@@ -1376,24 +1376,24 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip {
   letter-spacing: 0.02em;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip:hover {
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip:hover {
   background-color: var(--foxwarm-console-hover) !important;
   border-color: var(--foxwarm-console-border-hover) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip svg {
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip svg {
   color: var(--foxwarm-console-text-dim) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip span {
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip span {
   color: var(--foxwarm-console-text) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip button {
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip button {
   color: var(--foxwarm-console-text-dim) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-attachment-chip button:hover {
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip button:hover {
   color: var(--foxwarm-console-accent) !important;
 }
 

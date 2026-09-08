@@ -5,8 +5,9 @@ import { API_BASE_PATH } from '../config'
 import { loadPageOnce } from '../modelOptionsLoader'
 import {
   clearMessageAttachmentDraft,
-  getMessageAttachmentDraft,
-  updateMessageAttachmentDraft,
+  createMessageAttachmentDrafts,
+  getMessageAttachmentFile,
+  setMessageAttachmentFile,
 } from '../messageAttachmentDrafts'
 import {
   applySlashCommandSuggestion,
@@ -25,6 +26,7 @@ import {
   persistComposerDraft,
   serializeComposerDraft,
   type ComposerDraft,
+  type ComposerAttachmentSegment,
 } from '../composerDraft'
 
 export type ModelOption = {
@@ -66,7 +68,7 @@ interface ChatComposerProps {
   onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
-  onSend: (payload: { text: string; attachments: File[] }) => Promise<boolean>
+  onSend: (payload: { text: string; attachments: Array<{ ref: string; file: File }> }) => Promise<boolean>
   onTranscribeAudio: (file: File, context: string) => Promise<{
     text: string
     status: number
@@ -521,7 +523,6 @@ const ChatComposer = memo(function ChatComposer({
   const [draftPersistenceError, setDraftPersistenceError] = useState<string | null>(null)
   const input = useMemo(() => serializeComposerDraft(draft), [draft])
   const plainInput = useMemo(() => getPlainComposerDraftText(draft), [draft])
-  const [attachments, setAttachments] = useState<File[]>(() => getMessageAttachmentDraft(sessionId))
   const [isDragging, setIsDragging] = useState(false)
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [transcribingAudio, setTranscribingAudio] = useState(false)
@@ -630,7 +631,6 @@ const ChatComposer = memo(function ChatComposer({
     draftRef.current = savedDraft
     setDraftState({ sessionId, draft: savedDraft })
     setDraftPersistenceError(null)
-    setAttachments(getMessageAttachmentDraft(sessionId))
     setIsRecordingAudio(false)
     setTranscribeError(null)
     setLiveTranscriptionPreview('')
@@ -758,26 +758,32 @@ const ChatComposer = memo(function ChatComposer({
     })
   }, [commitDraft, slashCompletion])
 
-  const updateAttachments = useCallback((update: (files: File[]) => readonly File[]) => {
-    const targetSessionId = sessionId
-    const next = updateMessageAttachmentDraft(targetSessionId, update)
-    if (activeSessionIdRef.current === targetSessionId) {
-      setAttachments(next)
-    }
-  }, [sessionId])
+  const attachmentSegments = useMemo(
+    () => draft.segments.filter((segment): segment is ComposerAttachmentSegment => segment.type === 'attachment'),
+    [draft],
+  )
+  const availableAttachments = useMemo(() => attachmentSegments.flatMap(segment => {
+    const file = getMessageAttachmentFile(sessionId, segment.ref)
+    return file ? [{ ref: segment.ref, file }] : []
+  }), [attachmentSegments, sessionId])
+  const hasMissingAttachments = availableAttachments.length !== attachmentSegments.length
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if (sessionMissing || loading || submitInFlightRef.current) return
     const submittedDraft = editorRef.current?.flushForSubmit() || draftRef.current
     const submittedInput = serializeComposerDraft(submittedDraft)
-    if (!submittedInput.trim() && attachments.length === 0) return
+    if (!submittedInput.trim() && attachmentSegments.length === 0) return
+    if (hasMissingAttachments) {
+      setDraftPersistenceError('One or more attachments must be reattached or removed before sending.')
+      return
+    }
 
     const targetSessionId = sessionId
     submitInFlightRef.current = true
     let accepted = false
     try {
-      accepted = await onSend({ text: submittedInput.trim(), attachments })
+      accepted = await onSend({ text: submittedInput.trim(), attachments: availableAttachments })
     } finally {
       submitInFlightRef.current = false
     }
@@ -789,7 +795,6 @@ const ChatComposer = memo(function ChatComposer({
       draftRef.current = emptyDraft
       setDraftState({ sessionId: targetSessionId, draft: emptyDraft })
       editorRef.current?.replaceDraft(emptyDraft)
-      setAttachments([])
       setDismissedSlashQuery(null)
     }
     try {
@@ -806,7 +811,7 @@ const ChatComposer = memo(function ChatComposer({
       if (activeSessionIdRef.current !== targetSessionId) return
       editorRef.current?.focus()
     })
-  }, [attachments, loading, onSend, sessionId, sessionMissing])
+  }, [attachmentSegments.length, availableAttachments, hasMissingAttachments, loading, onSend, sessionId, sessionMissing])
 
   const handleCommandKeyDown = useCallback((e: KeyboardEvent): boolean => {
     if (e.isComposing || e.keyCode === 229) {
@@ -878,9 +883,9 @@ const ChatComposer = memo(function ChatComposer({
 
     const files = Array.from(e.dataTransfer.files)
     if (files.length > 0) {
-      updateAttachments(prev => [...prev, ...files])
+      editorRef.current?.insertAttachments(files, { x: e.clientX, y: e.clientY })
     }
-  }, [updateAttachments])
+  }, [])
 
   const appendTranscriptToDraft = useCallback((transcript: string) => {
     if (!transcript.trim()) return
@@ -1327,7 +1332,7 @@ const ChatComposer = memo(function ChatComposer({
           multiple
           onChange={(e) => {
             if (e.target.files) {
-              updateAttachments(prev => [...prev, ...Array.from(e.target.files!)])
+              editorRef.current?.insertAttachments(Array.from(e.target.files))
               e.currentTarget.value = ''
             }
           }}
@@ -1356,7 +1361,15 @@ const ChatComposer = memo(function ChatComposer({
             setDismissedSlashQuery(null)
           }}
           onBlur={() => persistDraftSafely(sessionId, draftRef.current)}
-          onPasteImages={(files) => updateAttachments(previous => [...previous, ...files])}
+          onAttachFiles={(files) => createMessageAttachmentDrafts(sessionId, files, draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
+            type: 'attachment',
+            ref,
+            name: file.name || 'attachment',
+            mimeType: file.type || 'application/octet-stream',
+            size: file.size,
+          }))}
+          resolveAttachmentFile={(ref) => getMessageAttachmentFile(sessionId, ref)}
+          onReattachFile={(ref, file) => setMessageAttachmentFile(sessionId, ref, file)}
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
@@ -1371,32 +1384,6 @@ const ChatComposer = memo(function ChatComposer({
               >
                 <Plus size={18} />
               </label>
-              <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-                {attachments.length === 0 ? (
-                  <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-fw-text-muted">
-                    <Paperclip size={13} />
-                    <span>No files</span>
-                  </div>
-                ) : (
-                  attachments.map((file, idx) => (
-                    <div
-                      key={`${file.name}-${idx}`}
-                      className="foxwarm-attachment-chip inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-fw-border bg-fw-surface px-3 text-[13px] shadow-sm dark:border-fw-border dark:bg-fw-surface"
-                    >
-                      <Paperclip size={12} className="shrink-0 text-fw-text-muted" />
-                      <span className="truncate text-fw-text">{file.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => updateAttachments(prev => prev.filter((_, i) => i !== idx))}
-                        className="shrink-0 text-fw-text-muted transition hover:text-fw-danger"
-                        title="Remove attachment"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
               {asrAvailable && (
                 <div className="inline-flex shrink-0 items-center rounded-full bg-transparent">
                   <button
@@ -1465,7 +1452,7 @@ const ChatComposer = memo(function ChatComposer({
           </div>
           <button
             type="submit"
-            disabled={loading || sessionMissing || (!input.trim() && attachments.length === 0)}
+            disabled={loading || sessionMissing || (!input.trim() && attachmentSegments.length === 0)}
             className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             aria-label="Send message"
             title="Send message"
