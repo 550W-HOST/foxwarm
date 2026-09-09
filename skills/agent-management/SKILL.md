@@ -32,7 +32,7 @@ These are the things an agent can normally use directly when they are in the too
 - `move_session`
 - `set_agent_inherit`
 - `set_agent_isolated`
-- `update_session_snapshot`
+- `refresh_session_snapshot`
 - `list_agents`
 - `session` (status by default, list with `action: "list"`)
 - `read_memory` / `write_memory` / `edit_memory` / `apply_patch_memory` for the **current** agent
@@ -291,15 +291,15 @@ Prefer sending that Session a concise change summary with `send_to_session`, inc
 If the target must immediately use the complete rebuilt snapshot or updated skill catalog, refresh that exact Session explicitly:
 
 ```text
-update_session_snapshot({ sessionId: "target-agent/target-session" })
+refresh_session_snapshot({ sessionId: "target-agent/target-session" })
 ```
 
-Do not omit `sessionId` when intending to update another Session: omission targets the caller. A message communicates the change; it does not itself rebuild the snapshot or alter runtime authorization.
+Do not omit `sessionId` when intending to refresh another Session: omission targets the caller. A message communicates the change; it does not itself rebuild the snapshot or alter runtime authorization.
 
 The equivalent user-facing command is:
 
 ```text
-/session update-snapshot target-agent/target-session
+/session refresh-snapshot target-agent/target-session
 ```
 
 Inheritance changes leave existing Session snapshots unchanged by default. Isolation changes still update affected Sessions. Check the operation result before adding another refresh, and do not broadcast refreshes merely because a shared memory file changed.
@@ -312,7 +312,7 @@ Use:
 
 - `set_agent_inherit`
 
-By default this changes only Agent metadata, so existing Session snapshots keep their current cached prefix. Use `updateSnapshots:true` only when all existing Sessions under the Agent and its transitive inheritors must immediately rebuild. Otherwise, notify relevant Sessions or refresh an exact Session explicitly; new Sessions and later normal refreshes use the new inheritance automatically.
+By default this changes only Agent metadata, so existing Session snapshots keep their current cached prefix. `refreshSnapshots:true` immediately refreshes affected Sessions that have not been inactive for more than one hour; older Sessions are skipped because their next ordinary turn performs the existing automatic refresh. To refresh one exact Session immediately regardless of inactivity, use `refresh_session_snapshot`. New Sessions and later normal refreshes use the new inheritance automatically.
 
 ### User-facing path
 

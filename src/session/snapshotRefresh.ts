@@ -14,7 +14,7 @@ function getSessionIdleMs(session: Pick<Session, 'meta'>, now: number = Date.now
   return Math.max(0, now - lastMessageTime);
 }
 
-function shouldAutoRefreshSessionSnapshot(session: Pick<Session, 'meta'>, now: number = Date.now()): boolean {
+export function shouldAutoRefreshSessionSnapshot(session: Pick<Session, 'meta'>, now: number = Date.now()): boolean {
   return getSessionIdleMs(session, now) > AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS;
 }
 

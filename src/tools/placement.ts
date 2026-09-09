@@ -58,7 +58,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   set_goal: { owner: 'session-owner' },
   set_session_child_model: { owner: 'session-owner' },
   set_session_compact_threshold: { owner: 'session-owner' },
-  update_session_snapshot: { owner: 'session-owner' },
+  refresh_session_snapshot: { owner: 'session-owner' },
   stop_session: { owner: 'dispatcher/container' },
   submit_compact_plan: { owner: 'session-owner' },
   compact_session: { owner: 'dispatcher/container' },

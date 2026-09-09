@@ -1057,6 +1057,8 @@ test('search_tools and call_tool schemas retain bounded discovery and invocation
 });
 
 test('default model-facing tool definitions exclude hidden browser and advanced tools', () => {
+  assert.equal(typeof (tools as any).refresh_session_snapshot, 'function');
+  assert.equal((tools as any).update_session_snapshot, undefined);
   for (const name of [
     'browse_open',
     'browse_list',
@@ -1074,7 +1076,7 @@ test('default model-facing tool definitions exclude hidden browser and advanced 
     'start_toolscript_run',
     'set_session_child_model',
     'set_session_compact_threshold',
-    'update_session_snapshot',
+    'refresh_session_snapshot',
     'create_agent',
     'create_session',
     'set_agent_inherit',
@@ -1110,6 +1112,34 @@ test('default model-facing tool definitions exclude hidden browser and advanced 
   assert.equal(definitions.some(def => def.name === 'set_todo'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'end_turn'), false);
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
+});
+
+test('renamed snapshot refresh works through direct unified and ToolScript paths while the old name is absent', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = `refresh_snapshot_dispatch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId);
+  const ctx: any = {
+    sessionId,
+    session,
+    persistCurrentSession: async () => sessionManager.saveSession(sessionId),
+  };
+  try {
+    session.persistentMemorySnapshot = 'stale direct snapshot';
+    assert.match(String(await tools.refresh_session_snapshot({}, ctx)), /snapshot refreshed/);
+    session.persistentMemorySnapshot = 'stale unified snapshot';
+    assert.match(String(await call_tool({ source: 'builtin', name: 'refresh_session_snapshot', args: {} }, ctx)), /snapshot refreshed/);
+    session.persistentMemorySnapshot = 'stale ToolScript snapshot';
+    const scripted: any = await tools.run_script({
+      code: 'def main(args):\n    return call_tool(source="builtin", name="refresh_session_snapshot", args={})',
+    }, ctx);
+    assert.equal(scripted.status, 'completed');
+    await assert.rejects(
+      () => call_tool({ source: 'builtin', name: 'update_session_snapshot', args: {} }, ctx),
+      /Unknown builtin tool/,
+    );
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
 });
 
 test('recall model-facing schema separates target/vector retrieval from literal result post-filtering', () => {

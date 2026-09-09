@@ -26,8 +26,8 @@ test('model-facing creation schemas require intentional nested forceModel overri
   assert.equal((create.parameters.properties as any).node.type, 'string');
   assert.equal((create.parameters.properties as any).fork, undefined);
   assert.equal((create.parameters.properties as any).message, undefined);
-  assert.equal((inherit.parameters.properties as any).updateSnapshots.type, 'boolean');
-  assert.equal((inherit.parameters.properties as any).updateSnapshots.default, false);
+  assert.equal((inherit.parameters.properties as any).refreshSnapshots.type, 'boolean');
+  assert.equal((inherit.parameters.properties as any).refreshSnapshots.default, false);
   assert.deepEqual((settings.parameters.properties as any).effort.enum, [...efforts, 'default', 'unset']);
   assert.equal((settings.parameters.properties as any).clearEffort, undefined);
 });

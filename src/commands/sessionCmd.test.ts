@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatSessionListChannels } from './sessionCmd';
 import { parseSessionMoveArgs } from './helpers';
+import { SESSION_AUTOCOMPLETE } from './autocomplete';
+
+test('/session snapshot autocomplete exposes only refresh terminology', () => {
+  const values = SESSION_AUTOCOMPLETE.map(node => node.value);
+  assert.equal(values.includes('refresh-snapshot'), true);
+  assert.equal(values.includes('update-snapshot'), false);
+});
 
 test('/session move parses an optional parent while omission preserves existing relations', () => {
   assert.deepEqual(parseSessionMoveArgs(['worker/task']), {

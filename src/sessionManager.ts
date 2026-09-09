@@ -1322,9 +1322,9 @@ export function getAgentToolRules(agentName: string) {
   return sessionAgentMetadata.getAgentToolRules(agentName);
 }
 
-export async function setAgentInherit(agentName: string, inheritAgentName?: string, updateSnapshots: boolean = false): Promise<{ affectedSessions: string[] }> {
+export async function setAgentInherit(agentName: string, inheritAgentName?: string, refreshSnapshots: boolean = false): Promise<{ affectedSessions: string[] }> {
   assertAgentMetadataMutationAllowed('Agent inheritance changes');
-  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName, updateSnapshots);
+  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName, refreshSnapshots);
 }
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string, toolRules?: unknown): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
@@ -1456,7 +1456,10 @@ export async function createAgentWithMainSession(options: {
       });
     }
     if (normalizedInherit !== undefined) {
-      await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit, true);
+      await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
+      if (result.createdMainSession) {
+        await sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(true), result.mainSessionId);
+      }
     }
     return result;
   });

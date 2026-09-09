@@ -513,12 +513,12 @@ Example:
             }
         },
         {
-            name: 'update_session_snapshot',
-            description: "Refresh a session's prompt snapshot after changes to its memory files, inheritance, or available skills.",
+            name: 'refresh_session_snapshot',
+            description: "Refresh a session's prompt snapshot now after changes to memory, inheritance, or available skills, without waiting for an automatic refresh.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: "Session to refresh. Defaults to this session." }
+                    sessionId: { type: 'string', description: "Session to refresh now, even if it has been inactive for more than an hour. Defaults to this session." }
                 }
             }
         },
@@ -918,13 +918,13 @@ Example:
         },
         {
             name: 'set_agent_inherit',
-            description: "Set or clear an agent's shared-memory inheritance. Memory is included from the oldest ancestor through the agent itself; files with the same name are not deduplicated. Existing session snapshots are unchanged unless updateSnapshots is true.",
+            description: "Set or clear an agent's shared-memory inheritance. Memory is included from the oldest ancestor through the agent itself; files with the same name are not deduplicated. Existing session snapshots are unchanged unless refreshSnapshots is true.",
             parameters: {
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: "Agent to update." },
                     inheritAgentName: { type: 'string', description: "Agent to inherit from. An empty string clears inheritance." },
-                    updateSnapshots: { type: 'boolean', description: "Rebuild existing session prompt snapshots for this agent and agents that inherit from it. Defaults to false.", default: false }
+                    refreshSnapshots: { type: 'boolean', description: "Refresh snapshots now for this agent and its inheriting agents, skipping sessions inactive for more than one hour because they refresh automatically when their next turn starts. Defaults to false.", default: false }
                 },
                 required: ['agentName']
             }

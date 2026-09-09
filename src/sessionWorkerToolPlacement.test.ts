@@ -186,6 +186,7 @@ test('worker guards run before unsupported handlers and exact current state tool
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
     ['session', { action: 'update-display-name', sessionId: 'other/session', name: 'x' }],
     ['set_session_child_model', { sessionId: ' ', model: 'x' }],
+    ['refresh_session_snapshot', { sessionId: 'other/session' }],
     ['set_agent_inherit', { agentName: 'main' }],
     ['set_agent_isolated', { agentName: 'main' }],
     ['move_session', { sessionId: session.id, newSessionId: 'moved' }],
@@ -196,6 +197,7 @@ test('worker guards run before unsupported handlers and exact current state tool
   await assert.rejects(() => callTool('compact_session', { sessionId: 'other/session' }, ctx), /exact current session/);
   assert.match(String(await callTool('session', { action: 'status' }, ctx)), new RegExp(session.id));
   assert.match(String(await callTool('set_goal', { goal: 'stay exact' }, ctx)), /ok/);
+  assert.match(String(await callTool('refresh_session_snapshot', {}, ctx)), /snapshot refreshed/);
   assert.match(String(await callTool('wait', { reason: 'pause', waitForInput: true }, ctx)), /object Object|stopCurrentTurn/);
   assert.match(String(await callTool('stop_session', { sessionId: session.id }, ctx)), /Stop signal set/);
   session.stopping = false;

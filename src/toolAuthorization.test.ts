@@ -244,6 +244,25 @@ rules:
   ]) assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: builtin, name: recall }, args: { sessionId: ${invalid} } }\n  action: allow\n`));
   assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: node, name: recall }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), /exact source builtin/i);
   assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: builtin, name: wait }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), /registered Session-target resolver/i);
+  assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: obsolete\n  match: { tool: { source: builtin, name: update_session_snapshot } }\n  action: deny\n`), /migrate it to `refresh_session_snapshot`/);
+  for (const toolSelector of [
+    `'  update_session_snapshot  '`,
+    `[other_tool, '  update_session_snapshot  ']`,
+    `{ source: { oneOf: [mcp, builtin] }, name: { equals: update_session_snapshot } }`,
+  ]) {
+    assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: obsolete-normalized\n  match: { tool: ${toolSelector} }\n  action: deny\n`), /migrate it to `refresh_session_snapshot`/);
+  }
+  for (const toolSelector of [
+    `{ source: mcp, name: update_session_snapshot }`,
+    `{ source: [mcp], name: update_session_snapshot }`,
+    `{ source: { equals: mcp }, name: update_session_snapshot }`,
+    `{ source: { oneOf: [node, mcp] }, name: { oneOf: [update_session_snapshot] } }`,
+    `{ source: builtin, name: { equals: '  update_session_snapshot  ' } }`,
+    `{ server: external-snapshot-server, name: update_session_snapshot }`,
+    `{ source: builtin, name: { exists: true } }`,
+  ]) {
+    assert.doesNotThrow(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: supported-external\n  match: { tool: ${toolSelector} }\n  action: deny\n`));
+  }
   assert.throws(() => parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: bad\n  match: { tool: { source: builtin, name: [recall, send_file] }, args: { sessionId: { session: { self: true } } } }\n  action: allow\n`), /share one registered/i);
 });
 

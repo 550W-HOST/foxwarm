@@ -174,6 +174,32 @@ test('agent creation with shared inheritance materializes the new main session f
   }
 });
 
+test('agent conversion with shared inheritance refreshes the exact converted lifetime even when inactive', async () => {
+  await sessionManager.loadSessions();
+  const inheritedAgent = makeId('convert_agent_inherit_source');
+  const agentName = makeId('convert_agent_inherit_target');
+  const sourceSessionId = makeId('convert_agent_inactive_source');
+  const mainSessionId = `${agentName}/main`;
+  await fs.ensureDir(getAgentMemoryDir(inheritedAgent));
+  await fs.writeFile(`${getAgentMemoryDir(inheritedAgent)}/MEMORY.md`, 'CONVERTED_AGENT_INHERITED_MEMORY', 'utf8');
+  try {
+    const source = await ensureSession(sourceSessionId);
+    source.meta = { ...(source.meta || {}), lastMessageTime: Date.now() - (2 * 60 * 60 * 1000) };
+    source.persistentMemorySnapshot = 'PRE_CONVERSION_SNAPSHOT';
+    await sessionManager.saveSession(source.id);
+    await sessionManager.createAgentWithMainSession({ agentName, inherit: inheritedAgent, convertSessionId: source.id });
+    const converted = await sessionManager.getSession(mainSessionId);
+    assert.match(converted.persistentMemorySnapshot, /CONVERTED_AGENT_INHERITED_MEMORY/);
+    assert.doesNotMatch(converted.persistentMemorySnapshot, /PRE_CONVERSION_SNAPSHOT/);
+  } finally {
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+    await sessionManager.deleteSession(sourceSessionId).catch(() => {});
+    await sessionManager.setAgentInherit(agentName, undefined).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
+    await fs.remove(getAgentDir(inheritedAgent)).catch(() => {});
+  }
+});
+
 test('child default model falls back to current session model when unset, then uses override, then clears back to inheritance', async () => {
   await sessionManager.loadSessions();
   const { primary, secondary } = getTestModels();

@@ -181,7 +181,7 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
   return formatChildMutationResult(result.session, action);
 }
 
-export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolContext) {
+export async function tool_refresh_session_snapshot(args: ToolArgs, ctx: ToolContext) {
   const { sessionId } = args;
   const targetId = sessionId || ctx?.sessionId;
 
@@ -192,9 +192,9 @@ export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolCont
   const currentSession = getTrustedCurrentSession(targetId, ctx);
   if (currentSession) {
     const result = await refreshSessionSnapshotForSession(currentSession, ctx.persistCurrentSession!);
-    return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
+    return `Session \`${result.sessionId}\` snapshot refreshed.\nAgent: \`${result.agentName}\``;
   }
 
   const result = await sessionManager.refreshSessionSnapshot(targetId);
-  return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
+  return `Session \`${result.sessionId}\` snapshot refreshed.\nAgent: \`${result.agentName}\``;
 }

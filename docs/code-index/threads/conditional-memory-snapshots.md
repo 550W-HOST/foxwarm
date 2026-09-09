@@ -21,7 +21,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 ## Ownership and detached work
 
 - Normal authoritative Sessions persist a rebuilt snapshot through a strict owner seam on their existing Main or Session-worker `CurrentSessionEffects` before provider send. Main reuses the authority save lane and catalog-resync behavior while unrelated `saveSession` callers remain best-effort. A precommit failure prevents send and restores the prior hot snapshot; an authority-postcommit projection failure also prevents send but retains the committed/resynchronized snapshot rather than falsely rolling it back.
-- BTW and compact planning explicitly mark their cloned Sessions as detached. They may update only the clone's snapshot and never persist or reload the live owner by shared Session ID.
+- BTW and compact planning explicitly mark their cloned Sessions as detached. They may refresh only the clone's snapshot and never persist or reload the live owner by shared Session ID.
 - Compact clones preserve `systemPromptFiles`, prompt-cache lineage, and the captured model/settings alongside the copied snapshot.
 
 ## Lifecycle refresh

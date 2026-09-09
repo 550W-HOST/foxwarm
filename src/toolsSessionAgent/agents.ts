@@ -141,20 +141,23 @@ export async function tool_list_agents(_args: ToolArgs = {}, ctx?: ToolContext) 
 
 export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'set_agent_inherit');
-  const { agentName, inheritAgentName, updateSnapshots = false } = args;
+  if (Object.prototype.hasOwnProperty.call(args, 'updateSnapshots')) {
+    throw new Error('updateSnapshots is no longer supported. Use refreshSnapshots.');
+  }
+  const { agentName, inheritAgentName, refreshSnapshots = false } = args;
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
   }
-  if (typeof updateSnapshots !== 'boolean') {
-    throw new Error('updateSnapshots must be a boolean when provided');
+  if (typeof refreshSnapshots !== 'boolean') {
+    throw new Error('refreshSnapshots must be a boolean when provided');
   }
 
   const normalizedInherit = inheritAgentName && String(inheritAgentName).trim()
     ? String(inheritAgentName).trim()
     : undefined;
 
-  const result = await sessionManager.setAgentInherit(agentName, normalizedInherit, updateSnapshots);
+  const result = await sessionManager.setAgentInherit(agentName, normalizedInherit, refreshSnapshots);
   const chain = sessionManager.getAgentInheritanceChain(agentName);
 
   let message = normalizedInherit

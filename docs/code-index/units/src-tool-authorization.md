@@ -7,6 +7,8 @@ Secondary files: src/isolatedCheck.ts, src/tools/resolvedTools.ts, src/tools/uni
 
 Owns the instance-level ordered tool authorization policy, strict YAML parser, bounded per-process loader cache, canonical request/path facts, first-match evaluation, and the master-only atomic replacement tool. Generic rules apply independently of Agent isolation; current exact isolated-Agent rules and structural isolation guards remain a later compatibility layer.
 
+The removed builtin identity `update_session_snapshot` is rejected during policy parsing with a migration error. Operators must rename matching rules to `refresh_session_snapshot`; this prevents an old deny from silently falling through to the policy default.
+
 ## Key exports
 
 - `TOOL_AUTH_CONFIG_PATH` — fixed `state/tool-authorization.yaml` authority.

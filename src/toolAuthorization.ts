@@ -205,28 +205,43 @@ function exactToolNamesForSessionMatcher(tool: ToolMatcher | undefined, label: s
   return names;
 }
 function normalizeToolMatcher(value: unknown, label: string): ToolMatcher {
-  if (typeof value === 'string') return boundedString(value, label);
-  if (Array.isArray(value)) return normalizeScalarList(value, label).map((item, index) => {
+  const explicitlyNames = (matcher: ScalarMatcher | undefined, expected: string): boolean => {
+    if (matcher === undefined || matcher === null || typeof matcher === 'boolean' || typeof matcher === 'number') return false;
+    if (typeof matcher === 'string') return matcher === expected;
+    if (Array.isArray(matcher)) return matcher.includes(expected);
+    return matcher.equals === expected || matcher.oneOf?.includes(expected) === true;
+  };
+  let normalized: ToolMatcher;
+  if (typeof value === 'string') normalized = boundedString(value, label);
+  else if (Array.isArray(value)) normalized = normalizeScalarList(value, label).map((item, index) => {
     if (typeof item !== 'string' || !item.trim()) throw new Error(`${label}[${index}] must be a non-empty string.`);
     return item.trim();
   });
-  if (!isPlainRecord(value)) throw new Error(`${label} must be a tool name, name list, or selector object.`);
-  assertExactFields(value, ['source', 'server', 'name'], label);
-  if (!Object.keys(value).length) throw new Error(`${label} selector must not be empty.`);
-  const normalized: Exclude<ToolMatcher, string | string[]> = {};
-  if (value.source !== undefined) {
-    normalized.source = normalizeScalarMatcher(value.source, `${label}.source`);
-    const values = Array.isArray(normalized.source)
-      ? normalized.source
-      : isPlainRecord(normalized.source)
-        ? [normalized.source.equals, ...(normalized.source.oneOf || [])].filter(item => item !== undefined)
-        : [normalized.source];
-    if (values.some(item => typeof item !== 'string' || !['builtin', 'mcp', 'node'].includes(item))) {
-      throw new Error(`${label}.source values must be builtin, mcp, or node.`);
+  else {
+    if (!isPlainRecord(value)) throw new Error(`${label} must be a tool name, name list, or selector object.`);
+    assertExactFields(value, ['source', 'server', 'name'], label);
+    if (!Object.keys(value).length) throw new Error(`${label} selector must not be empty.`);
+    const selector: Exclude<ToolMatcher, string | string[]> = {};
+    if (value.source !== undefined) {
+      selector.source = normalizeScalarMatcher(value.source, `${label}.source`);
+      const values = Array.isArray(selector.source)
+        ? selector.source
+        : isPlainRecord(selector.source)
+          ? [selector.source.equals, ...(selector.source.oneOf || [])].filter(item => item !== undefined)
+          : [selector.source];
+      if (values.some(item => typeof item !== 'string' || !['builtin', 'mcp', 'node'].includes(item))) {
+        throw new Error(`${label}.source values must be builtin, mcp, or node.`);
+      }
     }
+    if (value.server !== undefined) selector.server = normalizeScalarMatcher(value.server, `${label}.server`);
+    if (value.name !== undefined) selector.name = normalizeScalarMatcher(value.name, `${label}.name`);
+    normalized = selector;
   }
-  if (value.server !== undefined) normalized.server = normalizeScalarMatcher(value.server, `${label}.server`);
-  if (value.name !== undefined) normalized.name = normalizeScalarMatcher(value.name, `${label}.name`);
+  const name = typeof normalized === 'string' || Array.isArray(normalized) ? normalized : normalized.name;
+  if (explicitlyNames(name, 'update_session_snapshot')
+    && matchesTool(normalized, { source: 'builtin', name: 'update_session_snapshot' })) {
+    throw new Error(`${label} uses obsolete builtin \`update_session_snapshot\`; migrate it to \`refresh_session_snapshot\`.`);
+  }
   return normalized;
 }
 function normalizePathMatcher(value: unknown, label: string): PathMatcher {

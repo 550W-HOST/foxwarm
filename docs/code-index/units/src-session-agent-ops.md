@@ -31,7 +31,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `refreshSessionSnapshot(deps, sessionId)` — rebuilds a session's system prompt snapshot
 - `refreshSessionSnapshotForSession(session, persistSession)` — rebuilds the same snapshot for an already-established Session owner and persists through its supplied callback
 - `getAgentInheritanceChain(agentName)` — resolves the full inheritance chain
-- `setAgentInherit(deps, agentName, inheritAgentName, updateSnapshots?)` — sets/clears inheritance and optionally refreshes affected sessions
+- `setAgentInherit(deps, agentName, inheritAgentName, refreshSnapshots?)` — sets/clears inheritance and optionally refreshes affected sessions
 - `setAgentIsolation(deps, agentName, isolatedNode, toolRules?)` — toggles isolation, optionally replaces exact rules, and updates sessions
 - `setAgentMetadataStoreForTests(store)` / `resetAgentMetadataForTests()` — test helpers
 
@@ -65,7 +65,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `refreshSessionSnapshot(deps, sessionId)` | ~129 (agentMetadata) | Rebuilds single session's prompt snapshot |
 | `refreshSessionSnapshotForSession(session, persistSession)` | ~138 (agentMetadata) | Rebuilds a passed Session snapshot and persists through the supplied owner callback; the ID-based entry delegates here |
 | `getAgentInheritanceChain(agentName)` | ~139 (agentMetadata) | Walks inherit links with cycle detection |
-| `setAgentInherit(deps, agentName, inheritAgentName, updateSnapshots?)` | ~155 (agentMetadata) | Sets inheritance, validates cycles, and refreshes transitive sessions only when requested |
+| `setAgentInherit(deps, agentName, inheritAgentName, refreshSnapshots?)` | ~155 (agentMetadata) | Sets inheritance, validates cycles, and refreshes recent transitive sessions only when requested |
 | `setAgentIsolation(deps, agentName, isolatedNode, toolRules?)` | ~(agentMetadata) | Toggles isolation, optionally replaces rules, updates currentNode on sessions, and reports the live rule count |
 
 ## Dependencies
@@ -91,7 +91,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Rule validation rejects wildcard/extra fields and duplicate or conflicting exact identities before agent creation or metadata mutation effects. Rules remain attached only to the exact agent and are not inherited through `agent.inherit`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
-- Setting inheritance is metadata-only by default; new and later normally refreshed snapshots use the new chain. `updateSnapshots=true` rebuilds existing snapshots for the Agent and transitive inheritors. Isolation changes retain their existing affected-Session update behavior.
+- Setting inheritance is metadata-only by default; new and later normally refreshed snapshots use the new chain. `refreshSnapshots=true` uses the canonical inactivity predicate and catalog metadata to rebuild snapshots for the Agent and transitive inheritors that have been inactive for at most one hour. Older Sessions are skipped before hydration and retain the ordinary next-turn automatic refresh. Exact single-Session refresh remains immediate regardless of inactivity. Isolation changes retain their existing affected-Session update behavior.
 
 ## Integration
 

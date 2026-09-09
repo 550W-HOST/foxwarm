@@ -71,7 +71,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
     resp += '`/session delete <sessionId>` - Delete session\n'
     resp += '`/session clear` - Clear current session history\n'
     resp += '`/session rename <name>` - Rename session\n'
-    resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
+    resp += '`/session refresh-snapshot [session-id]` - Refresh session prompt snapshot now\n'
     resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
     resp += '`/session index` - Index messages to vector database\n'
     resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id> [--parent <parent-session-id>]` - Move/rename session\n'
@@ -311,19 +311,19 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       break
     }
 
-    case 'update-snapshot': {
+    case 'refresh-snapshot': {
       const targetSessionId = subArgs[0] || sessionId
 
       if (!targetSessionId) {
-        ctx.reply('❌ No active session. Usage: /session update-snapshot [session-id]')
+        ctx.reply('❌ No active session. Usage: /session refresh-snapshot [session-id]')
         return
       }
 
       try {
         const result = await sessionRuntime.refreshSnapshot(targetSessionId)
-        ctx.reply(`✅ Session \`${targetSessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``)
+        ctx.reply(`✅ Session \`${targetSessionId}\` snapshot refreshed.\nAgent: \`${result.agentName}\``)
       } catch (e: any) {
-        ctx.reply(`❌ Snapshot update failed: ${e.message}`)
+        ctx.reply(`❌ Snapshot refresh failed: ${e.message}`)
       }
       break
     }
