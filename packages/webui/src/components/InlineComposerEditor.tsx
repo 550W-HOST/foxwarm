@@ -282,6 +282,78 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     return true
   }, [getPointAtOffset])
 
+  const getCanonicalBoundaryPoint = useCallback((requestedOffset: number, direction: -1 | 1): { node: Node; offset: number } | null => {
+    const editor = editorRef.current
+    if (!editor) return null
+    const offset = Math.max(0, Math.min(requestedOffset, getNodeUnits(editor)))
+    let traversed = 0
+    const boundaryIndexes: number[] = []
+    const children = [...editor.childNodes]
+    for (let index = 0; index <= children.length; index += 1) {
+      if (traversed === offset) boundaryIndexes.push(index)
+      if (index < children.length) traversed += getNodeUnits(children[index])
+      if (traversed > offset) break
+    }
+    if (boundaryIndexes.length === 0) return getPointAtOffset(offset)
+    return { node: editor, offset: direction < 0 ? boundaryIndexes[0] : boundaryIndexes.at(-1)! }
+  }, [getNodeUnits, getPointAtOffset])
+
+  const moveAcrossAtomicBoundary = useCallback((direction: -1 | 1, extend: boolean): boolean => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount || !selection.anchorNode || !selection.focusNode) return false
+    if (!extend && !selection.isCollapsed) return false
+    const focusOffset = getPointOffset(selection.focusNode, selection.focusOffset)
+    if (focusOffset === null) return false
+    const chips = [...editor.querySelectorAll<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]')]
+      .map(chip => {
+        const parent = chip.parentNode
+        const index = parent ? [...parent.childNodes].indexOf(chip) : -1
+        return index < 0 || !parent ? null : getPointOffset(parent, index)
+      })
+      .filter((offset): offset is number => offset !== null)
+    const crossesChip = direction > 0 ? chips.includes(focusOffset) : chips.includes(focusOffset - 1)
+    const inOwnedAnchor = !!getCaretAnchor(selection.focusNode)
+    if (!crossesChip && !inOwnedAnchor) return false
+    const targetOffset = crossesChip ? focusOffset + direction : focusOffset
+    const target = getCanonicalBoundaryPoint(targetOffset, direction)
+    if (!target) return false
+    try {
+      if (extend) selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset, target.node, target.offset)
+      else {
+        const range = document.createRange()
+        range.setStart(target.node, target.offset)
+        range.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
+    } catch {
+      return false
+    }
+    return crossesChip
+  }, [getCanonicalBoundaryPoint, getPointOffset])
+
+  const ensureCaretVisibleAfterLineBreak = useCallback(() => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.isCollapsed || !selection.rangeCount) return
+    const caretOffset = getPointOffset(selection.focusNode, selection.focusOffset)
+    if (caretOffset === null) return
+    let targetRect: DOMRect | undefined
+    if (serializeComposerDraft(readDraft()).endsWith('\n') && caretOffset === getNodeUnits(editor)) {
+      targetRect = editor.querySelector<HTMLElement>('[data-composer-trailing-newline]')?.getBoundingClientRect()
+    } else {
+      const range = selection.getRangeAt(0).cloneRange()
+      targetRect = range.getClientRects()[0] || range.getBoundingClientRect()
+    }
+    if (!targetRect || (!targetRect.height && !targetRect.width)) return
+    const editorRect = editor.getBoundingClientRect()
+    const visibleTop = editorRect.top + editor.clientTop
+    const visibleBottom = visibleTop + editor.clientHeight
+    if (targetRect.bottom > visibleBottom) editor.scrollTop += targetRect.bottom - visibleBottom
+    else if (targetRect.top < visibleTop) editor.scrollTop -= visibleTop - targetRect.top
+  }, [getNodeUnits, getPointOffset, readDraft])
+
   const captureEditorState = useCallback((): EditorState => ({
     draft: readDraft(),
     selection: getSelectionOffsets(),
@@ -436,7 +508,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const contentNodes = [...editor.childNodes].filter(node => node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)
     if (isChip(contentNodes[0])) contentNodes[0].before(createCaretAnchor())
     for (let index = 1; index < contentNodes.length; index += 1) {
-      if (isChip(contentNodes[index - 1]) && isChip(contentNodes[index])) contentNodes[index].before(createCaretAnchor())
+      const previous = contentNodes[index - 1]
+      const current = contentNodes[index]
+      if (isChip(current) && (isChip(previous) || (previous.nodeType === Node.TEXT_NODE && (previous.nodeValue || '').endsWith('\n')))) {
+        current.before(createCaretAnchor())
+      }
     }
     if (isChip(contentNodes.at(-1) || null)) editor.append(createCaretAnchor())
     if (serializeComposerDraft(readDraftFromNode(editor)).endsWith('\n')) {
@@ -841,7 +917,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if (nativeEvent.inputType === 'historyRedo') { event.preventDefault(); redo(); return }
           if (nativeEvent.inputType === 'insertParagraph' || nativeEvent.inputType === 'insertLineBreak') {
             event.preventDefault()
-            mutate('line-break', () => insertTextAtSelection('\n'))
+            if (mutate('line-break', () => insertTextAtSelection('\n'))) ensureCaretVisibleAfterLineBreak()
             return
           }
           beforeInputRef.current = captureEditorState()
@@ -942,11 +1018,17 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           const targetChip = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') : null
           if (targetChip && event.target instanceof HTMLButtonElement) return
           const selectionCaretAnchor = getCaretAnchor(window.getSelection()?.anchorNode || null)
-          if (event.key === 'Home' && !event.shiftKey && (targetChip || selectionCaretAnchor)) {
+          if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+            if (moveAcrossAtomicBoundary(event.key === 'ArrowLeft' ? -1 : 1, event.shiftKey)) {
+              event.preventDefault()
+              return
+            }
+          }
+          if (event.key === 'Home' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && (targetChip || selectionCaretAnchor)) {
             const editor = editorRef.current
             const firstChip = editor ? [...editor.childNodes].find(node => !isCaretAnchor(node) && (node.nodeType !== Node.TEXT_NODE || (node.nodeValue || '').length > 0)) : null
             const leadingAnchor = editor?.querySelector<HTMLElement>(':scope > [data-composer-caret-anchor]:first-child') || null
-            if (isChip(firstChip || null) && leadingAnchor) {
+            if (isChip(firstChip || null) && leadingAnchor && (targetChip === firstChip || selectionCaretAnchor === leadingAnchor)) {
               event.preventDefault()
               placeCaret(leadingAnchor.firstChild || leadingAnchor, leadingAnchor.firstChild ? CARET_ANCHOR_TEXT.length : 0)
               return
@@ -970,7 +1052,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
           if (onCommandKeyDown(nativeEvent)) return
           if (event.key === 'Enter' && !nativeEvent.isComposing && !composingRef.current) {
             event.preventDefault()
-            mutate('line-break', () => insertTextAtSelection('\n'))
+            if (mutate('line-break', () => insertTextAtSelection('\n'))) ensureCaretVisibleAfterLineBreak()
             return
           }
           if (event.key === 'Backspace' || event.key === 'Delete') {
@@ -981,7 +1063,15 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
               mutate('delete-selection', () => selection.getRangeAt(0).deleteContents())
               return
             }
-            const chip = adjacentChip(event.key === 'Backspace' ? -1 : 1)
+            const direction = event.key === 'Backspace' ? -1 : 1
+            let chip = adjacentChip(direction)
+            if (!chip && selectionCaretAnchor) {
+              const selection = window.getSelection()
+              const offset = selection ? getPointOffset(selection.focusNode, selection.focusOffset) : null
+              const boundary = offset === null ? null : getCanonicalBoundaryPoint(offset, direction)
+              if (boundary) placeCaret(boundary.node, boundary.offset)
+              chip = adjacentChip(direction)
+            }
             if (chip) { event.preventDefault(); removeChip(chip) }
           }
         }}

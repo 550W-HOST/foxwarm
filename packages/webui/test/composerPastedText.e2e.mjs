@@ -497,6 +497,225 @@ for (const spec of browsers) {
   }))
 }
 
+for (const spec of browsers) {
+  test(`${spec.name} keeps custom newline carets visible without scrolling ancestors`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const sessionId = `fixture/newline-scroll-${spec.name}`
+    await page.evaluate(id => window.fixtureSetSession(id), sessionId)
+    await page.waitForFunction(id => window.fixtureCurrentSession === id && window.fixtureEditor()?.childNodes.length === 0, {}, sessionId)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+    await page.type(editor, Array.from({ length: 14 }, (_, index) => `line-${index}`).join('\n'))
+    await page.focus(editor)
+    await page.keyboard.press('End')
+    const enterAtEnd = async () => {
+      const before = await page.$eval(editor, node => ({ scrollTop: node.scrollTop, scrollHeight: node.scrollHeight, pageTop: document.scrollingElement.scrollTop }))
+      await page.keyboard.press('Enter')
+      const after = await page.$eval(editor, node => {
+        const scaffold = node.querySelector('[data-composer-trailing-newline]').getBoundingClientRect()
+        const box = node.getBoundingClientRect()
+        return { scrollTop: node.scrollTop, scrollHeight: node.scrollHeight, pageTop: document.scrollingElement.scrollTop, scaffoldBottom: scaffold.bottom, visibleBottom: box.top + node.clientTop + node.clientHeight }
+      })
+      assert.equal(after.scrollHeight >= before.scrollHeight && after.scrollTop >= before.scrollTop, true, JSON.stringify({ before, after }))
+      assert.equal(after.scaffoldBottom <= after.visibleBottom + 1.5, true, JSON.stringify({ before, after }))
+      assert.equal(after.pageTop, before.pageTop)
+    }
+    await enterAtEnd()
+    await enterAtEnd()
+
+    const mid = await page.$eval(editor, node => {
+      const text = [...node.childNodes].find(child => child.nodeType === Node.TEXT_NODE)
+      const offset = text.nodeValue.indexOf('line-7') + 3
+      const range = document.createRange(); range.setStart(text, offset); range.collapse(true)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+      node.scrollTop = Math.max(0, Math.floor(node.scrollHeight / 2 - node.clientHeight / 2))
+      return { scrollTop: node.scrollTop, pageTop: document.scrollingElement.scrollTop }
+    })
+    await page.keyboard.press('Enter')
+    assert.deepEqual(await page.$eval(editor, node => ({ scrollTop: node.scrollTop, pageTop: document.scrollingElement.scrollTop })), mid)
+
+    if (spec.name === 'Chromium') {
+      await page.focus(editor)
+      await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control')
+      const beforeInputTop = await page.$eval(editor, node => node.scrollTop)
+      await page.$eval(editor, node => node.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertParagraph' })))
+      assert.equal(await page.$eval(editor, (node, beforeInputTop) => {
+        const scaffold = node.querySelector('[data-composer-trailing-newline]').getBoundingClientRect()
+        const box = node.getBoundingClientRect()
+        return node.scrollTop > 0 && node.scrollTop >= beforeInputTop && scaffold.bottom <= box.top + node.clientTop + node.clientHeight + 0.5
+      }, beforeInputTop), true)
+    }
+  }))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} gives atomic blocks one keyboard step and later hard-line caret boundary`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const sessionId = `fixture/anchor-navigation-${spec.name}`
+    await page.evaluate(id => window.fixtureSetSession(id), sessionId)
+    await page.waitForFunction(id => window.fixtureCurrentSession === id && window.fixtureEditor()?.childNodes.length === 0, {}, sessionId)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const first = 'f'.repeat(2000)
+    const second = 's'.repeat(2000)
+    await page.click(editor)
+    await page.evaluate(text => window.fixturePaste(text), first)
+    await page.waitForSelector('.foxwarm-composer-caret-anchor:last-child')
+    await page.click('.foxwarm-composer-caret-anchor:last-child')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.type('after ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `<pasted-text>${first}</pasted-text>after `)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    await page.click('.foxwarm-composer-caret-anchor:first-child')
+    await page.keyboard.down('Shift'); await page.keyboard.press('ArrowRight'); await page.keyboard.up('Shift')
+    if (spec.name === 'Chromium') {
+      const selected = await page.$eval(editor, node => {
+        const data = new DataTransfer()
+        node.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
+        return data.getData('text/plain')
+      })
+      assert.equal(selected, `<pasted-text>${first}</pasted-text>`)
+      await page.keyboard.press('ArrowLeft')
+      await page.click('.foxwarm-composer-caret-anchor:last-child')
+      await page.keyboard.down('Shift'); await page.keyboard.press('ArrowLeft'); await page.keyboard.up('Shift')
+      const reverseSelected = await page.$eval(editor, node => {
+        const data = new DataTransfer()
+        node.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
+        return data.getData('text/plain')
+      })
+      assert.equal(reverseSelected, `<pasted-text>${first}</pasted-text>`)
+    }
+    await page.keyboard.press('ArrowLeft')
+    await page.click('.foxwarm-composer-caret-anchor:last-child')
+    await page.keyboard.press('Enter')
+    await page.evaluate(text => window.fixturePaste(text), second)
+    const exact = `<pasted-text>${first}</pasted-text>\n<pasted-text>${second}</pasted-text>`
+    assert.equal(await page.evaluate(() => window.fixtureDraft), exact)
+    assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-caret-anchor]').length), 3)
+
+    const hardLineAnchor = await page.$eval(editor, node => {
+      const chips = node.querySelectorAll('[data-composer-pasted-text-id]')
+      const anchor = chips[1].previousSibling
+      const rect = anchor.getBoundingClientRect()
+      return { x: rect.left + Math.max(0.5, rect.width / 2), y: rect.top + Math.max(1, rect.height / 2) }
+    })
+    await page.mouse.click(hardLineAnchor.x, hardLineAnchor.y)
+    await page.keyboard.type('mouse ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `<pasted-text>${first}</pasted-text>\nmouse <pasted-text>${second}</pasted-text>`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    await page.mouse.click(hardLineAnchor.x, hardLineAnchor.y)
+    await page.keyboard.press('Home')
+    await page.keyboard.type('home ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `<pasted-text>${first}</pasted-text>\nhome <pasted-text>${second}</pasted-text>`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    await page.mouse.click(hardLineAnchor.x, hardLineAnchor.y)
+    await page.keyboard.press('Backspace')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `<pasted-text>${first}</pasted-text><pasted-text>${second}</pasted-text>`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    await page.mouse.click(hardLineAnchor.x, hardLineAnchor.y)
+    await page.keyboard.press('Delete')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `<pasted-text>${first}</pasted-text>\n`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    await page.mouse.click(hardLineAnchor.x, hardLineAnchor.y)
+    await page.keyboard.down('Control'); await page.keyboard.press('Home'); await page.keyboard.up('Control')
+    await page.keyboard.type('document ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft.startsWith('document <pasted-text>')), true)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+
+    await page.evaluate(() => window.fixtureSelectAll())
+    await page.keyboard.press('Backspace')
+    await page.type(editor, 'w'.repeat(120))
+    await page.evaluate(text => window.fixturePaste(text), first)
+    assert.equal(await page.$eval(editor, node => {
+      const chip = node.querySelector('[data-composer-pasted-text-id]')
+      return chip.previousSibling?.nodeType === Node.TEXT_NODE && !chip.previousSibling.nodeValue.endsWith('\n')
+    }), true)
+  }))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} exits atomic boundaries into ordinary text and collapses native selections`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const block = 'q'.repeat(2000)
+    const reset = async suffix => {
+      const sessionId = `fixture/mixed-boundary-${spec.name}-${suffix}`
+      await page.evaluate(id => window.fixtureSetSession(id), sessionId)
+      await page.waitForFunction(id => window.fixtureCurrentSession === id && window.fixtureEditor()?.childNodes.length === 0, {}, sessionId)
+      await new Promise(resolve => setTimeout(resolve, 50))
+      await page.type(editor, 'a😀z')
+      await page.evaluate(() => window.fixtureSelectText(1, 1))
+      await page.evaluate(text => window.fixturePaste(text), block)
+      await page.waitForSelector('[data-composer-pasted-text-id]')
+      return `<pasted-text>${block}</pasted-text>`
+    }
+
+    const wrapper = await reset('forward')
+    await page.evaluate(() => window.fixtureSelectText(1, 1))
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.type('X')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `a${wrapper}😀Xz`)
+
+    await reset('reverse')
+    await page.evaluate(() => {
+      const editorNode = window.fixtureEditor()
+      const text = [...editorNode.childNodes].findLast(node => node.nodeType === Node.TEXT_NODE)
+      const range = document.createRange(); range.setStart(text, '😀'.length); range.collapse(true)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    })
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.type('X')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `aX${wrapper}😀z`)
+
+    await reset('collapse-right')
+    await page.evaluate(() => {
+      const editorNode = window.fixtureEditor(); const chip = editorNode.querySelector('[data-composer-pasted-text-id]')
+      const range = document.createRange(); range.selectNode(chip)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    })
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.type('X')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `a${wrapper}X😀z`)
+
+    await reset('collapse-left')
+    await page.evaluate(() => {
+      const editorNode = window.fixtureEditor(); const chip = editorNode.querySelector('[data-composer-pasted-text-id]')
+      const range = document.createRange(); range.selectNode(chip)
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    })
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.type('X')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `aX${wrapper}😀z`)
+
+    await reset('shift-text')
+    await page.evaluate(() => window.fixtureSelectText(1, 1))
+    await page.keyboard.down('Shift'); await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight'); await page.keyboard.up('Shift')
+    await page.keyboard.press('Delete')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'az')
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `a${wrapper}😀z`)
+
+    const hardSession = `fixture/mixed-hard-${spec.name}`
+    await page.evaluate(id => window.fixtureSetSession(id), hardSession)
+    await page.waitForFunction(id => window.fixtureCurrentSession === id && window.fixtureEditor()?.childNodes.length === 0, {}, hardSession)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.type(editor, 'before')
+    await page.keyboard.press('Enter')
+    await page.evaluate(text => window.fixturePaste(text), block)
+    await page.keyboard.type('after')
+    const hardAnchor = await page.$eval('[data-composer-pasted-text-id]', chip => {
+      const rect = chip.previousSibling.getBoundingClientRect()
+      return { x: rect.left + Math.max(0.5, rect.width / 2), y: rect.top + Math.max(1, rect.height / 2) }
+    })
+    await page.mouse.click(hardAnchor.x, hardAnchor.y)
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.type('X')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `before\n${wrapper}aXfter`)
+  }))
+}
+
 test('Chromium hides the empty placeholder during trusted composition without persisting interim text', async () => withBrowser(browsers[0], async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
   const client = await page.createCDPSession()
@@ -586,6 +805,13 @@ for (const spec of [browsers[0]]) {
     await page.waitForSelector(editor)
     await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
     assert.deepEqual(await page.$$eval('.foxwarm-composer-attachment-chip', chips => chips.map(chip => chip.textContent.includes('Reattach required'))), [true, true])
+    await page.locator('.foxwarm-composer-caret-anchor').click()
+    await page.waitForFunction(() => document.querySelector('.foxwarm-composer-caret-anchor')?.contains(getSelection()?.anchorNode))
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.type('between ')
+    await page.waitForFunction(expected => window.fixtureDraft === expected, {}, `before <attachment-ref ref="${refs[0]}" />between <attachment-ref ref="${refs[1]}" />after`)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
     await page.click('button[aria-label="Send message"]')
     await page.waitForSelector('[role="alert"]')
     assert.match(await page.$eval('[role="alert"]', node => node.textContent), /reattached or removed/i)
@@ -606,6 +832,30 @@ for (const spec of [browsers[0]]) {
     await page.click('button[aria-label="Send message"]')
     await page.waitForFunction(() => window.fixtureSends.length === 1)
     assert.deepEqual(await page.evaluate(() => window.fixtureSends[0].attachments.map(item => ({ ref: item.ref, name: item.file.name }))), [{ ref: refs[0], name: 'replacement.txt' }])
+
+    const hardLineSession = 'fixture/hardline-attachments'
+    await page.evaluate(id => window.fixtureSetSession(id), hardLineSession)
+    await page.waitForFunction(id => window.fixtureCurrentSession === id && window.fixtureEditor()?.childNodes.length === 0, {}, hardLineSession)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await page.type(editor, 'line')
+    await page.keyboard.press('Enter')
+    await page.$eval(editor, editorNode => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
+      transfer.items.add(new File(['file'], 'notes.txt', { type: 'text/plain' }))
+      editorNode.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+    })
+    await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
+    const beforeAttachment = await page.$eval(editor, node => {
+      const chip = node.querySelector('.foxwarm-composer-attachment-chip')
+      const anchor = chip.previousSibling
+      const rect = anchor.getBoundingClientRect()
+      return { isAnchor: anchor.dataset.composerCaretAnchor === 'true', x: rect.left + Math.max(0.5, rect.width / 2), y: rect.top + Math.max(1, rect.height / 2) }
+    })
+    assert.equal(beforeAttachment.isAnchor, true)
+    await page.mouse.click(beforeAttachment.x, beforeAttachment.y)
+    await page.keyboard.type('before ')
+    assert.equal(await page.evaluate(() => window.fixtureDraft.startsWith('line\nbefore <attachment-ref')), true)
   }))
 }
 
