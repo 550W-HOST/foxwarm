@@ -40,9 +40,9 @@ upload flow.
 | `QQBotChannel.start()` / `stop()` | Obtains a token, opens or closes the gateway, and fences reconnect/heartbeat callbacks by connection generation. |
 | `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
 | `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, buffers/batches group input, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral current-message media materializer. |
-| `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint. |
-| `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific direct-small or streamed-large upload and one rich-media message; rejects guild/DM media. |
-| `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID when available. |
+| `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint; C2C/group sends allocate one process-local outbound sequence per logical message. |
+| `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific direct-small or streamed-large upload and one rich-media message, using one outbound sequence across final-message fallback attempts; rejects guild/DM media. |
+| `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID and a process-local outbound sequence when available. |
 | `QQBotChannel.apiRequest()` / `getAccessToken()` | Performs authenticated API requests with a bounded 401 token refresh. |
 
 ## Identity and supported surface
@@ -115,9 +115,16 @@ upload flow.
   `message_scene.ext` `msg_idx=<value>` array entry when supplied; gateway
   dispatch `s` is transport resume state, never business dedup identity.
   Bounded malformed/ambiguous ext input falls back to a valid `msg_seq` or
-  id-only identity. A separate bounded per-`msg_id`
-  counter allocates C2C/group outbound `msg_seq` values monotonically across
-  typing and passive replies.
+  id-only identity. This inbound business sequence is independent from the
+  outbound allocator and the gateway dispatch sequence.
+- One module-scoped allocator supplies every C2C/group text, media, and typing
+  `msg_seq` across all adapter instances in the process. Module load chooses a
+  random nonzero uint32 seed; allocation advances through `1..0xffffffff` and
+  wraps to 1. Channel stop, reconnect, reload, instance recreation, passive
+  context expiry, and turn completion do not reset it. One logical outgoing
+  message allocates once, so the bounded 401 token retry and passive-expired
+  proactive fallback reuse the same value. This is process-local collision
+  mitigation only, with no persistence or cross-process/restart uniqueness.
 - QQ offers typing through C2C input-notify messages, so this adapter sends
   typing only for a C2C conversation with a current latest inbound message ID.
 - C2C/group `sendFile` reuses a latest conversation-local message ID when
@@ -196,15 +203,17 @@ chain serializes the decision, HTTP result, and successful-count update, so
 concurrent replies do not spend speculative quota; unrelated IDs remain
 concurrent. Each queued operation is fenced to the adapter run generation
 before it begins I/O; stop or reload clears state, and stale old-generation
-chains cannot affect a new run. Typing receives its own monotonic `msg_seq`
-but does not consume the four passive replies. The limiter is per adapter
-instance, bounded and in-memory only.
+chains cannot affect a new run. Typing uses the shared outbound sequence but
+does not consume the four passive replies. The limiter is per adapter instance,
+bounded and in-memory only; the outbound sequence allocator is module-scoped
+and survives adapter lifecycle changes.
 
 When a passive C2C/group text or media final/intermediate delivery receives
 the structured QQ API error code `40034005` (`code` or `err_code`), the
 adapter marks that `msg_id` expired and makes exactly one proactive retry.
 Text retries omit `msg_id`; media retries reuse the just-uploaded same-target
-`file_info` and send proactive `msg_seq: 1` without re-uploading. Future
+`file_info` without re-uploading. The passive attempt and proactive fallback
+reuse the outgoing message's allocated `msg_seq`. Future
 operations for that ID remain proactive. No other API failure, generic HTTP
 failure, network/auth/rate-limit failure, or proactive failure triggers a
 fallback loop or retry; a source-bound text final delivery logs and completes
@@ -306,7 +315,7 @@ inbound maximum. Upload URLs use HTTPS with no userinfo and normal ports, and
 the QQ API response is the trust boundary; bot credentials are never sent to
 the presigned host. Latest
 conversation-local QQ message IDs share the existing four-success passive
-limiter and monotonic `msg_seq`; age/count and the structured `40034005`
+limiter and module-scoped outbound `msg_seq`; age/count and the structured `40034005`
 fallback are canonical in
 [D-qqbot-passive-reply-fallback](#d-qqbot-passive-reply-fallback). Media final
 fallback reuses the just-uploaded same-target `file_info` and does not upload

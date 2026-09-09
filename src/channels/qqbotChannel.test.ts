@@ -39,6 +39,11 @@ function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
+function assertOutboundSequence(value: unknown): asserts value is number {
+  assert.equal(Number.isInteger(value), true);
+  assert.equal(Number(value) >= 1 && Number(value) <= 0xffff_ffff, true);
+}
+
 async function flush(): Promise<void> {
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
@@ -173,7 +178,7 @@ test('QQ Bot optionally accepts ordinary group messages and canonicalizes AT/non
   assert.equal(groupCalls.length, 1);
   assert.equal(groupCalls[0].url, 'https://api.sgroup.qq.com/v2/groups/group-1/messages');
   assert.equal(groupCalls[0].body.msg_id, 'ordinary-group-message');
-  assert.equal(groupCalls[0].body.msg_seq, 1);
+  assertOutboundSequence(groupCalls[0].body.msg_seq);
 });
 
 test('QQ Bot keeps ordinary GROUP_MESSAGE_CREATE events ignored by the default mention policy', async () => {
@@ -856,18 +861,21 @@ test('QQ Bot routes C2C text and uses the latest conversation-local passive repl
   });
   const typing = calls.find(call => String(call.init?.body).includes('input_notify'));
   const reply = calls.find(call => String(call.init?.body).includes('reply text'));
+  const typingBody = JSON.parse(String(typing?.init?.body || '{}'));
+  const replyBody = JSON.parse(String(reply?.init?.body || '{}'));
   assert.equal(typing?.url, 'https://api.sgroup.qq.com/v2/users/openid-1/messages');
-  assert.match(String(typing?.init?.body), /"msg_id":"incoming-3"/);
-  assert.match(String(typing?.init?.body), /"msg_seq":1/);
+  assert.equal(typingBody.msg_id, 'incoming-3');
   assert.equal(reply?.url, 'https://api.sgroup.qq.com/v2/users/openid-1/messages');
-  assert.match(String(reply?.init?.body), /"msg_id":"incoming-1"/);
-  assert.match(String(reply?.init?.body), /"msg_seq":1/);
+  assert.equal(replyBody.msg_id, 'incoming-1');
   const queuedFinal = calls.find(call => String(call.init?.body).includes('queued final'));
-  assert.match(String(queuedFinal?.init?.body), /"msg_id":"incoming-3"/);
-  assert.match(String(queuedFinal?.init?.body), /"msg_seq":2/);
+  const queuedFinalBody = JSON.parse(String(queuedFinal?.init?.body || '{}'));
+  assert.equal(queuedFinalBody.msg_id, 'incoming-3');
   await channel.sendMessage('c2c:openid-1', 'second-message reply', { replyToId: 'incoming-2' });
   const secondMessageReply = calls.find(call => String(call.init?.body).includes('second-message reply'));
-  assert.match(String(secondMessageReply?.init?.body), /"msg_seq":1/);
+  const secondMessageReplyBody = JSON.parse(String(secondMessageReply?.init?.body || '{}'));
+  const sequences = [typingBody.msg_seq, replyBody.msg_seq, queuedFinalBody.msg_seq, secondMessageReplyBody.msg_seq];
+  sequences.forEach(assertOutboundSequence);
+  assert.equal(new Set(sequences).size, sequences.length);
 
   await channel.stop();
   assert.equal(socket.closed, true);
@@ -1162,17 +1170,24 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
     .slice(beforeServerExpired)
     .filter(call => String(call.url).includes('/v2/users/'))
     .map(call => JSON.parse(String(call.init?.body || '{}')));
-  assert.deepEqual(serverExpiredBodies, [
-    { content: 'expired server fallback', msg_type: 0, msg_id: 'expired-server', msg_seq: 1 },
-    { content: 'expired server fallback', msg_type: 0 },
+  assert.equal(serverExpiredBodies.length, 2);
+  assert.deepEqual(serverExpiredBodies.map(body => ({ ...body, msg_seq: undefined })), [
+    { content: 'expired server fallback', msg_type: 0, msg_id: 'expired-server', msg_seq: undefined },
+    { content: 'expired server fallback', msg_type: 0, msg_seq: undefined },
   ]);
+  assertOutboundSequence(serverExpiredBodies[0].msg_seq);
+  assert.equal(serverExpiredBodies[1].msg_seq, serverExpiredBodies[0].msg_seq);
   const beforeFutureExpired = calls.length;
   await sendBound('expired-server', 'future expired server fallback', true);
   const futureExpiredBodies = calls
     .slice(beforeFutureExpired)
     .filter(call => String(call.url).includes('/v2/users/'))
     .map(call => JSON.parse(String(call.init?.body || '{}')));
-  assert.deepEqual(futureExpiredBodies, [{ content: 'future expired server fallback', msg_type: 0 }]);
+  assert.equal(futureExpiredBodies.length, 1);
+  assert.equal(futureExpiredBodies[0].content, 'future expired server fallback');
+  assert.equal(futureExpiredBodies[0].msg_type, 0);
+  assert.equal(futureExpiredBodies[0].msg_id, undefined);
+  assertOutboundSequence(futureExpiredBodies[0].msg_seq);
 
   const beforeProactiveKnownFailure = calls.length;
   await sendBound('expired-proactive-failure', 'expired-proactive-failure', true);
@@ -1180,10 +1195,13 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
     .slice(beforeProactiveKnownFailure)
     .filter(call => String(call.url).includes('/v2/users/'))
     .map(call => JSON.parse(String(call.init?.body || '{}')));
-  assert.deepEqual(proactiveKnownFailureBodies, [
-    { content: 'expired-proactive-failure', msg_type: 0, msg_id: 'expired-proactive-failure', msg_seq: 1 },
-    { content: 'expired-proactive-failure', msg_type: 0 },
+  assert.equal(proactiveKnownFailureBodies.length, 2);
+  assert.deepEqual(proactiveKnownFailureBodies.map(body => ({ ...body, msg_seq: undefined })), [
+    { content: 'expired-proactive-failure', msg_type: 0, msg_id: 'expired-proactive-failure', msg_seq: undefined },
+    { content: 'expired-proactive-failure', msg_type: 0, msg_seq: undefined },
   ]);
+  assertOutboundSequence(proactiveKnownFailureBodies[0].msg_seq);
+  assert.equal(proactiveKnownFailureBodies[1].msg_seq, proactiveKnownFailureBodies[0].msg_seq);
 
   failPassive = true;
   const beforeUnknownFailure = calls.length;
@@ -1241,10 +1259,11 @@ test('QQ Bot keeps aged and server-expired passive contexts through unrelated in
   const bodies = calls
     .filter(call => String(call.url).includes('/v2/users/'))
     .map(call => JSON.parse(String(call.init?.body || '{}')));
-  assert.deepEqual(bodies, [
-    { content: 'aged stays proactive', msg_type: 0 },
-    { content: 'expired stays proactive', msg_type: 0 },
+  assert.deepEqual(bodies.map(body => ({ ...body, msg_seq: undefined })), [
+    { content: 'aged stays proactive', msg_type: 0, msg_seq: undefined },
+    { content: 'expired stays proactive', msg_type: 0, msg_seq: undefined },
   ]);
+  bodies.forEach(body => assertOutboundSequence(body.msg_seq));
 });
 
 test('QQ Bot serializes concurrent source-bound replies per inbound message ID', async () => {
@@ -1285,6 +1304,94 @@ test('QQ Bot serializes concurrent source-bound replies per inbound message ID',
   await Promise.all(sends);
 });
 
+test('QQ Bot gives successive final replies to the same inbound message distinct outbound sequences', async () => {
+  const bodies: any[] = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-successive-finals',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).includes('getAppAccessToken')) return response({ access_token: 'token', expires_in: 7200 });
+        bodies.push(JSON.parse(String(init?.body || '{}')));
+        return response({ id: 'outbound-id' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+  const options = { replyToId: 'same-inbound-id', qqbotSourceBound: true, turnFinal: true };
+  await channel.sendMessage('c2c:openid-1', 'first final', options);
+  await channel.sendMessage('c2c:openid-1', 'next final', options);
+
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies.map(body => body.msg_id), ['same-inbound-id', 'same-inbound-id']);
+  bodies.forEach(body => assertOutboundSequence(body.msg_seq));
+  assert.notEqual(bodies[0].msg_seq, bodies[1].msg_seq);
+});
+
+test('QQ Bot reuses one outbound sequence across the bounded token retry', async () => {
+  const bodies: any[] = [];
+  let tokenRequests = 0;
+  let messageRequests = 0;
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-token-retry-sequence',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).includes('getAppAccessToken')) {
+          tokenRequests += 1;
+          return response({ access_token: `token-${tokenRequests}`, expires_in: 7200 });
+        }
+        messageRequests += 1;
+        bodies.push(JSON.parse(String(init?.body || '{}')));
+        return messageRequests === 1 ? response({}, 401) : response({ id: 'outbound-id' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+  await channel.sendMessage('group:group-openid', 'retry once');
+
+  assert.equal(tokenRequests, 2);
+  assert.equal(bodies.length, 2);
+  assertOutboundSequence(bodies[0].msg_seq);
+  assert.equal(bodies[1].msg_seq, bodies[0].msg_seq);
+});
+
+test('QQ Bot module allocator stays in the nonzero uint32 range and wraps to one', async () => {
+  const crypto = require('node:crypto') as typeof import('node:crypto');
+  const modulePath = require.resolve('./qqbotChannel');
+  const originalRandomBytes = crypto.randomBytes;
+  delete require.cache[modulePath];
+  (crypto as any).randomBytes = () => Buffer.from([0xff, 0xff, 0xff, 0xff]);
+  let WrappedQQBotChannel: typeof QQBotChannel;
+  try {
+    ({ QQBotChannel: WrappedQQBotChannel } = require('./qqbotChannel') as typeof import('./qqbotChannel'));
+  } finally {
+    (crypto as any).randomBytes = originalRandomBytes;
+  }
+
+  const bodies: any[] = [];
+  try {
+    const channel = new WrappedQQBotChannel!(
+      { appId: 'app-id', clientSecret: 'secret' },
+      'qq-sequence-wrap',
+      {
+        fetch: async (url: string | URL | Request, init?: RequestInit) => {
+          if (String(url).includes('getAppAccessToken')) return response({ access_token: 'token', expires_in: 7200 });
+          bodies.push(JSON.parse(String(init?.body || '{}')));
+          return response({ id: 'outbound-id' });
+        },
+      },
+    );
+    activateForDirectSend(channel);
+    await channel.sendMessage('c2c:openid-1', 'maximum sequence');
+    await channel.sendMessage('group:group-openid', 'wrapped sequence');
+  } finally {
+    delete require.cache[modulePath];
+  }
+
+  assert.deepEqual(bodies.map(body => body.msg_seq), [0xffff_ffff, 1]);
+});
+
 test('QQ Bot fences queued source-bound replies across stop and a new generation', async () => {
   const release: Array<() => void> = [];
   const outboundBodies: any[] = [];
@@ -1323,6 +1430,8 @@ test('QQ Bot fences queued source-bound replies across stop and a new generation
 
   release.shift()?.();
   await newGeneration;
+  outboundBodies.forEach(body => assertOutboundSequence(body.msg_seq));
+  assert.notEqual(outboundBodies[0].msg_seq, outboundBodies[1].msg_seq);
   assert.equal((channel as any).passiveReplyChains.size, 0);
 });
 

@@ -59,7 +59,9 @@ Persisted conversation attachments and broadcast selection are owned by [session
   fixed 10 MiB attachment cap. Direct video/voice are generic saved
   descriptors and nested attachments remain deferred. C2C/group `sendFile`
   uses the destination-specific direct-small or streamed-large official upload
-  flow. Guild/DM media and remote URL send remain unsupported.
+  flow. C2C/group text, media, and typing share one process-local outbound
+  sequence allocator across configured instances; lifecycle changes do not
+  reset it. Guild/DM media and remote URL send remain unsupported.
 
 ## Compatibility
 
