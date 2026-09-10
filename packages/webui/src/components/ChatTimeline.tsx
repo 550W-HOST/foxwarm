@@ -472,6 +472,36 @@ function getPartDisplayText(part: Message['parts'][number]): string {
   return part.text || (part.system ? formatStructuredSystemText(part.system) : '')
 }
 
+function getStandaloneUserChannelWrapperBoundary(part: Message['parts'][number]): 'open' | 'close' | null {
+  if (typeof part.system !== 'string' || part.system.includes('\n') || part.system.trim() !== part.system) return null
+  const tag = parseFoxwarmMetadataLine(part.system)
+  if (tag?.tagName !== 'foxwarm-message') return null
+  if (tag.closing) return 'close'
+  return tag.attrs.type === 'channel' ? 'open' : null
+}
+
+function getInlineUserWrapperBoundaries(parts: Message['parts']): { open: number; close: number } | null {
+  const open = parts.findIndex(part => getStandaloneUserChannelWrapperBoundary(part) === 'open')
+  if (open < 0) return null
+  const closeOffset = parts.slice(open + 1).findIndex(part => getStandaloneUserChannelWrapperBoundary(part) === 'close')
+  return closeOffset < 0 ? null : { open, close: open + closeOffset + 1 }
+}
+
+function UserWrapperBoundaryBreak({ afterMetadata }: { afterMetadata: boolean }) {
+  return (
+    <span
+      data-user-wrapper-boundary={afterMetadata ? 'after-open' : 'before-close'}
+      className="foxwarm-user-rendered-line-break"
+      style={afterMetadata
+        ? { whiteSpace: 'pre-wrap', fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
+        : { whiteSpace: 'pre-wrap', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+      }
+    >
+      {'\n'}
+    </span>
+  )
+}
+
 function findAttachmentCorrelations(parts: Message['parts']): Map<string, AttachmentCorrelation> {
   const correlations = new Map<string, AttachmentCorrelation>()
   const activeRefs = new Set<string>()
@@ -872,6 +902,10 @@ const MessageRow = memo(function MessageRow({
   const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
   const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
   const hasInlineAttachmentFlow = msg.role === 'user' && attachmentCorrelations.size > 0
+  const inlineUserWrapperBoundaries = useMemo(
+    () => hasInlineAttachmentFlow ? getInlineUserWrapperBoundaries(textLikeParts) : null,
+    [hasInlineAttachmentFlow, textLikeParts],
+  )
   const imageParts = useMemo(() => msg.parts.filter(p => (
     p.inlineData || p.inlineDataRef || p.inlineDataUnavailable
   ) && !associatedImageParts.has(p)), [associatedImageParts, msg.parts])
@@ -919,10 +953,12 @@ const MessageRow = memo(function MessageRow({
           <div className={hasInlineAttachmentFlow ? 'min-w-0' : 'flex min-w-0 flex-col'}>
             {textLikeParts.map((part, partIdx) => (
               <div key={`user-part-${partIdx}`} className={hasInlineAttachmentFlow ? 'contents' : undefined}>
+                {showUserMessageMetadata && inlineUserWrapperBoundaries?.close === partIdx && <UserWrapperBoundaryBreak afterMetadata={false} />}
                 {part.system
                   && !hasInlineAttachmentFlow
                   ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
                   : <CollapsibleUserText part={part} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} />}
+                {showUserMessageMetadata && inlineUserWrapperBoundaries?.open === partIdx && <UserWrapperBoundaryBreak afterMetadata />}
               </div>
             ))}
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
