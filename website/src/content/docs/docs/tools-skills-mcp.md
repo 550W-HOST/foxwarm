@@ -13,17 +13,22 @@ Use the smallest scope that completes the task. Review tool calls before exposin
 
 ## Skills provide reusable process knowledge
 
-A **Skill** is a documented workflow package with a `SKILL.md` file and optional supporting resources. Skills teach an Agent how to perform a task using tools it already has; attaching a Skill does not itself grant new operating-system or network access.
+A **Skill** is a documented workflow package with a `SKILL.md` file and optional supporting resources. Visible Skills are cataloged automatically for each Session. Loading one gives the Agent its full instructions, but does not grant new operating-system or network access.
 
-Useful commands include:
+List visible Skills or read one in full with:
 
 ```text
 /skill list
-/skill attach <name>
-/skill detach <name>
+/skill show <skill>
 ```
 
-Foxwarm exposes a visible Skill catalog in the prompt. Full Skill documents are loaded when needed instead of placing every workflow into every request.
+An Agent can load the same instructions on demand with:
+
+```text
+skill({ action: "load", skillName: "<skill>" })
+```
+
+Foxwarm puts the visible Skill catalog in the Session snapshot and loads full documents only when they are needed.
 
 ## MCP connects external tool servers
 

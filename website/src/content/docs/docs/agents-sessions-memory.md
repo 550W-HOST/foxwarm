@@ -34,7 +34,8 @@ Common commands:
 | Context | Purpose | Ownership |
 | --- | --- | --- |
 | Agent memory files | Curated, long-lived knowledge and instructions | `agents/<agent>/memory/` |
-| Session history | The active conversation and tool loop | Session state and archive |
+| Session history | The active, model-visible conversation and tool loop | Persisted `Session.history` |
+| Archive and recall | Older source context, lineage, and audit history | SQLite archive |
 | Vector memory | Optional semantic retrieval over archived context | Derived index; disabled by default |
 
 These are related but not interchangeable. Do not write routine progress into Agent memory just to preserve a long chat. Foxwarm can compact older Session history into traceable layers and recall archived source when needed.

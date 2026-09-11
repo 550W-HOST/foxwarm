@@ -23,7 +23,7 @@ cat foxwarm-data/state/token
 
 ## Add a provider
 
-In **Setup → Models**, enter YAML for one supported provider and use the built-in validation/test controls before saving. You need:
+In **Setup → Models**, enter YAML for one supported provider. **Save models** validates the YAML and resolves the configured model entries, but it does not make a live request to the provider. You need:
 
 - a provider type;
 - the provider's API base URL;

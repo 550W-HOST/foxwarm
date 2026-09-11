@@ -15,7 +15,7 @@ Managed Channel adapters on the current public Main source include:
 
 ## Configure Channels
 
-Open **Setup → Channels** in WebUI. The editor writes `state/config.yaml` in the active data directory and can reload managed Channels without a full Foxwarm restart.
+Open **Setup → Config** in WebUI. The editor writes `state/config.yaml` in the active data directory. Saving the file also refreshes managed Channels without a full Foxwarm restart.
 
 Each provider has its own credentials, platform setup, conversation identity, and allow-list controls. Follow the provider-specific example in the repository README and begin with the narrowest allowed user or target set.
 
