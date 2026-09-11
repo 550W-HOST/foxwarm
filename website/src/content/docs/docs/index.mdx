@@ -1,0 +1,46 @@
+---
+title: Foxwarm documentation
+description: Install Foxwarm, connect a model, and understand agents, sessions, tools, nodes, channels, and data.
+template: splash
+hero:
+  tagline: Run a self-hosted AI agent workspace with persistent sessions, tools, memory, and optional execution Nodes and messaging Channels.
+  actions:
+    - text: Install Foxwarm
+      link: /docs/installing/
+      icon: right-arrow
+      variant: primary
+    - text: Set up a model
+      link: /docs/model-setup/
+      icon: setting
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Foxwarm runs on your machine or server. The project website is documentation and download hosting only; it is not a hosted Foxwarm chat or API service.
+
+<CardGrid>
+  <Card title="Install and open WebUI" icon="rocket">
+    Use the Linux/macOS/WSL shell installer or the native Windows PowerShell installer, then open the local token URL it prints.
+  </Card>
+  <Card title="Connect your model" icon="setting">
+    First-run Setup writes your model provider, endpoint, model ID, and API key when one is required.
+  </Card>
+  <Card title="Keep work organized" icon="seti:folder">
+    Agents hold long-lived memory and workspaces. Sessions are separate runnable conversation threads attached to an Agent.
+  </Card>
+  <Card title="Extend only when needed" icon="puzzle">
+    Start with WebUI and built-in tools. Add Skills, MCP servers, execution Nodes, and messaging Channels later.
+  </Card>
+</CardGrid>
+
+## Recommended reading order
+
+1. [Install Foxwarm](/docs/installing/) and keep the program checkout separate from its data directory.
+2. [Set up your first model](/docs/model-setup/) in the WebUI first-run screen.
+3. Learn how [Agents, Sessions, and memory](/docs/agents-sessions-memory/) divide identity, conversation history, and curated knowledge.
+4. Explore [Tools, Skills, and MCP](/docs/tools-skills-mcp/).
+5. Add [Nodes](/docs/nodes/) or [Channels](/docs/channels/) only if your workflow needs them.
+6. Read [Data, upgrades, and backups](/docs/data-upgrades-backups/) before moving an important instance.
+
+For implementation details and contributor navigation, see the repository [Code Index](https://github.com/550W-HOST/foxwarm/tree/main/docs/code-index). Source code and tests remain authoritative.

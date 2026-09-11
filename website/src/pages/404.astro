@@ -1,0 +1,37 @@
+---
+import '../styles/home.css';
+---
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content="The requested Foxwarm page was not found." />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href="https://foxwarm.550w.host/404/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Page not found — Foxwarm</title>
+    <script is:inline>
+      const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = localStorage.getItem('foxwarm-site-theme') || preferred;
+    </script>
+  </head>
+  <body>
+    <main class="not-found">
+      <a class="brand" href="/" aria-label="Foxwarm home"><img class="fox-mark" src="/favicon.svg" alt="" width="28" height="28" /><span>Foxwarm</span></a>
+      <p class="error-code">404</p>
+      <h1>That page is not here.</h1>
+      <p>The address may have changed, or the link may be incomplete.</p>
+      <div class="hero-actions">
+        <a class="button primary" href="/docs/">Open documentation</a>
+        <a class="button secondary" href="/">Project home</a>
+      </div>
+    </main>
+    <style>
+      .not-found { min-height: 100svh; display: flex; max-width: 740px; flex-direction: column; justify-content: center; align-items: flex-start; padding-block: 60px; }
+      .error-code { margin: 80px 0 12px; color: var(--orange); font: 800 .8rem ui-monospace, monospace; letter-spacing: .16em; }
+      .not-found h1 { font-size: clamp(3rem, 8vw, 5.5rem); }
+      .not-found > p:not(.error-code) { max-width: 520px; margin: 24px 0 0; color: var(--muted); font-size: 1.1rem; }
+    </style>
+  </body>
+</html>

@@ -2,6 +2,8 @@
 
 Foxwarm is a lightweight, extensible AI assistant framework for development-oriented workflows. It combines WebUI chat, long-term memory, tool calling, agents/sessions, skills, channels, and optional remote nodes in a small TypeScript codebase.
 
+**[Project site](https://foxwarm.550w.host/)** · **[User documentation](https://foxwarm.550w.host/docs/)** · **[Source](https://github.com/550W-HOST/foxwarm)**
+
 ## Features
 
 - **WebUI + Channels**: WebUI, Telegram, Matrix, WeChat Work, Weixin, and external trigger support
@@ -17,10 +19,10 @@ The recommended first-time path is the installer script. It clones Foxwarm into 
 ### Linux / macOS / WSL
 
 ```bash
-curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
+curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
 ```
 
-Until the script is hosted publicly, run it from a checkout:
+To inspect the script before running it, use a checkout:
 
 ```bash
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
@@ -34,7 +36,7 @@ Useful overrides:
 
 ```bash
 # CLI flags
-curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash -s -- \
+curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash -s -- \
   --dir "$PWD/foxwarm" \
   --data-dir "$PWD/foxwarm-data"
 
@@ -44,7 +46,7 @@ export FOXWARM_DATA_DIR="$PWD/foxwarm-data"
 export FOXWARM_TMUX_SESSION=foxwarm
 export FOXWARM_BRANCH=main
 export FOXWARM_REPO=https://github.com/550W-HOST/foxwarm.git
-curl -fsSL https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.sh | bash
+curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
 ```
 
 The data directory contains runtime `state/`, `agents/`, tokens, logs, models, sessions, and channel config. Bundled skills stay in the program repo under `skills/`. Back up `foxwarm-data/` to preserve your Foxwarm runtime state.
@@ -77,10 +79,10 @@ npm run stop
 ### Windows PowerShell
 
 ```powershell
-irm https://YOUR_PUBLIC_FOXWARM_HOST/install-foxwarm.ps1 | iex
+irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
 ```
 
-Until hosted publicly, run from a checkout:
+To inspect the script before running it, use a checkout:
 
 ```powershell
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
@@ -672,6 +674,8 @@ foxwarm/
 
 ## Documentation
 
+- [User documentation](https://foxwarm.550w.host/docs/)
+- [Install guide](https://foxwarm.550w.host/docs/installing/)
 - [Code Index](docs/code-index/README.md)
 - [Architecture](docs/architecture.md)
 - [Session Management](docs/session-management.md)
