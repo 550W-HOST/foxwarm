@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="176" height="36" viewBox="0 0 176 36" role="img" aria-label="Foxwarm">
+  <path fill="#f36a2f" d="M6 7 17 12 28 7l-3 12c0 8-4 13-8 13S9 27 9 19L6 7Z"/>
+  <path fill="#fff4e8" d="m11 17 6 4 6-4c-1 7-3 10-6 10s-5-3-6-10Z"/>
+  <circle cx="14" cy="18" r="1.2" fill="#34261f"/><circle cx="20" cy="18" r="1.2" fill="#34261f"/>
+  <path d="M17 21.5 19 23h-4l2-1.5Z" fill="#34261f"/>
+  <text x="39" y="25" font-family="ui-sans-serif,system-ui,sans-serif" font-size="24" font-weight="750" letter-spacing="-.8" fill="#28211e">Foxwarm</text>
+</svg>

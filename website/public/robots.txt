@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://foxwarm.550w.host/sitemap-index.xml

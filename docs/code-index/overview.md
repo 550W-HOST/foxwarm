@@ -66,6 +66,7 @@ Nodes, providers, and authenticated CLI Node runtime
 | [shared-utilities](./modules/shared-utilities.md) | Cross-package patch, file, execution, formatting, and node-service utilities |
 | [tools-and-permissions](./modules/tools-and-permissions.md) | Tool registry, dispatch, isolation checks, browser, file, and exec tools |
 | [webui](./modules/webui.md) | Browser UI, chat, workbench, setup, terminal, and Code integration |
+| [project website](./modules/website.md) | Static homepage, focused user docs, installer downloads, and Pages artifact deployment |
 
 ## Thread index
 

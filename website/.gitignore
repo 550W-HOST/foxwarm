@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.astro/
+public/install-foxwarm.sh
+public/install-foxwarm.ps1
+public/favicon.svg
+public/favicon-32x32.png
+public/favicon-128x128.png
