@@ -17,7 +17,7 @@ import {
   normalizeProspectiveSessionModelEffortSettings,
 } from './session/modelEffortSettings';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
-import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
+import { beginCompactionSessionRuntimeState, clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
 import type { ChannelTurnProgress } from './types';
@@ -878,6 +878,7 @@ export class SessionWorkerHost {
       getExistingSession: async id => { this.assertId(id); return this.session || null; },
       saveSession: async id => { this.assertId(id); await this.persistOwner(); },
       notifyHistoryUpdate: () => {},
+      beginCompactionRuntimeState: beginCompactionSessionRuntimeState,
     };
   }
 

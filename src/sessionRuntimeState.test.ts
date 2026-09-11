@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Session } from './types';
 import {
+  beginCompactionSessionRuntimeState,
   buildSessionRuntimeState,
   clearSessionCatalogStub,
   clearActiveSessionRuntimeState,
@@ -108,6 +109,23 @@ test('active tool presentation normalizes invalid previews without weakening pro
   } finally {
     clearActiveSessionRuntimeState(session.id);
   }
+});
+
+test('compaction runtime ownership replaces an old tool without clearing a newer phase', () => {
+  const session = makeSession({ busy: true });
+  setActiveSessionRuntimeState(session.id, {
+    state: 'running-tool', tool: { name: 'create_child_session', startedAt: 1000 },
+  });
+  const release = beginCompactionSessionRuntimeState(session.id);
+  assert.equal(buildSessionRuntimeState(session).active?.phase, 'compaction');
+  assert.equal(formatSessionRuntimeStateSummary(buildSessionRuntimeState(session)), 'compacting');
+
+  setActiveSessionRuntimeState(session.id, {
+    state: 'requesting-model', active: { phase: 'normal-turn' },
+  });
+  release();
+  assert.equal(buildSessionRuntimeState(session).active?.phase, 'normal-turn');
+  clearActiveSessionRuntimeState(session.id);
 });
 
 test('buildSessionRuntimeState derives waitAll pending sessions', () => {

@@ -40,6 +40,7 @@ import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, fo
 import { runStartupMigrations } from './migrations';
 import {
   buildSessionRuntimeState,
+  beginCompactionSessionRuntimeState,
   clearSessionCatalogStub,
   clearActiveSessionRuntimeState,
   formatSessionRuntimeStateSummary,
@@ -1247,6 +1248,7 @@ function getSessionHistoryDeps() {
     saveSession: saveSessionCritical,
     enqueueSessionItem,
     notifyHistoryUpdate,
+    beginCompactionRuntimeState: beginCompactionSessionRuntimeState,
   };
 }
 

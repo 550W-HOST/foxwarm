@@ -14,6 +14,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The default compact request keeps the newest 30% of rendered history (`llm.compactKeepPercent`, default `0.3`).
 - Async and awaited modes use the same snapshot/job/result path. Planning mutates a transient session clone; live state changes only during a compatible commit.
+- Awaited planning publishes the existing transient `requesting-model` / `compaction` phase from operation admission through preparation, provider retries, commit, cancellation, failure, or no-op cleanup. Its owned release cannot clear a newer runtime phase. Background planning does not publish or replace a concurrent foreground phase.
 - For async-capable models, an explicit request starts snapshot planning immediately even while the live session is busy; planning is not a session queue item. Only the ready `compact-commit` enters the router queue for safe application. A busy explicit request on a model with `asyncCompact:false` reports background compaction unavailable instead of storing hidden deferred work; idle explicit and normal end-of-turn awaited compaction remain supported.
 
 ### 2. Candidate policy and planning

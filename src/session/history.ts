@@ -124,6 +124,7 @@ export type SessionHistoryDeps = {
   saveSession: (sessionId: string) => Promise<void>;
   enqueueSessionItem?: (sessionId: string, item: QueueItem) => Promise<void>;
   notifyHistoryUpdate?: (sessionId: string, message: Message) => void;
+  beginCompactionRuntimeState?: (sessionId: string) => () => void;
 };
 
 type CompactionRunOptions = {
@@ -1355,22 +1356,24 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
   if (!session) return false;
   const operation = beginCompactOperation(sessionId, owner);
   if (!operation) return false;
-
-  logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
-  if (session.broadcast && options.startBroadcastMessage) {
-    session.broadcast(options.startBroadcastMessage);
-  }
-
-  await ensureCompactPromptCacheKeyPersisted(deps, session);
-
-  const snapshot = buildCompactJobSnapshot(session, options);
-  if (!snapshot) {
-    logger.info({ sessionId }, 'Compaction skipped because there is no compactable snapshot');
-    finishCompactOperation(sessionId, operation);
-    return false;
-  }
+  const releaseRuntimeState = owner === 'background'
+    ? undefined
+    : deps.beginCompactionRuntimeState?.(sessionId);
 
   try {
+    logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
+    if (session.broadcast && options.startBroadcastMessage) {
+      session.broadcast(options.startBroadcastMessage);
+    }
+
+    await ensureCompactPromptCacheKeyPersisted(deps, session);
+
+    const snapshot = buildCompactJobSnapshot(session, options);
+    if (!snapshot) {
+      logger.info({ sessionId }, 'Compaction skipped because there is no compactable snapshot');
+      return false;
+    }
+
     const result = await runCompactJob(deps, snapshot, operation);
     operation.phase = 'committing';
     return await applyCompactJobResult(deps, sessionId, result, operation);
@@ -1383,6 +1386,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
     throw e;
   } finally {
     compactPreviewLastTimestamp.delete(sessionId);
+    releaseRuntimeState?.();
     finishCompactOperation(sessionId, operation);
   }
 }

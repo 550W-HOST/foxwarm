@@ -10,6 +10,7 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 
 - `SessionRuntimeState` / related type aliases — shared backend payload shape for runtime state.
 - `setActiveSessionRuntimeState(sessionId, state)` — records transient active `requesting-model` or `running-tool` state and notifies session-list listeners.
+- `beginCompactionSessionRuntimeState(sessionId)` — publishes the existing `requesting-model` / `compaction` phase and returns an ownership-checked release callback.
 - `clearActiveSessionRuntimeState(sessionId)` — clears transient active state when a session leaves active processing.
 - `markSessionCatalogStub()` / `clearSessionCatalogStub()` /
   `getEffectiveSessionQueueLength()` — one non-persisted queue-count boundary
@@ -25,6 +26,7 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 | `deriveWaitingDetails(session)` | Builds wait details from `session.meta.wait`, including wait-all, timeout, and wait-exec metadata. |
 | `setSessionRuntimeStateUpdateCallback(callback)` | Registers the session-list update callback used by `sessionManager`. |
 | `setActiveSessionRuntimeState(sessionId, state)` | Sets transient active runtime state. |
+| `beginCompactionSessionRuntimeState(sessionId)` | Starts an owned compaction phase whose release cannot clear a newer active state. |
 | `clearActiveSessionRuntimeState(sessionId)` | Removes transient active runtime state. |
 | `markSessionCatalogStub(session, queueLength)` / `clearSessionCatalogStub(session)` | Marks or clears the lightweight catalog-stub count. |
 | `getEffectiveSessionQueueLength(session)` | Selects catalog count for a marked stub and actual queue length for a hydrated owner. |
@@ -39,6 +41,7 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 ## Behavior
 
 - Active `requesting-model` / `running-tool` state is transient and never persisted.
+- Awaited compaction replaces stale prior tool/model presentation with `requesting-model` / `compaction`; its release clears only the exact state instance it published, so a newer normal provider or tool phase wins.
 - Active tool argument previews are presentation-only and are normalized to bounded strings at the runtime-state setter, so an invalid caller value cannot escape into a strict Session-worker projection.
 - Persisted `session.meta.wait` drives `waiting` after the active turn has ended only when the wait has an explicit UI-visible target/reason.
 - `waitAll.sessions` derives `waitingFor: 'sessions'` with satisfied and pending lists, and takes display precedence if combined with advisory exec ids.

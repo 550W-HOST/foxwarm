@@ -66,6 +66,7 @@ export function getRuntimeStateSummary(runtimeState?: SessionRuntimeState | null
   }
 
   if (runtimeState.state === 'requesting-model') {
+    if (runtimeState.active?.phase === 'compaction') return 'compacting'
     return runtimeState.active?.phase && runtimeState.active.phase !== 'normal-turn'
       ? `thinking · ${runtimeState.active.phase}`
       : 'thinking'

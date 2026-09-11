@@ -196,6 +196,24 @@ export function setActiveSessionRuntimeState(sessionId: string, state: ActiveSes
   updateCallback?.(sessionId);
 }
 
+export function beginCompactionSessionRuntimeState(sessionId: string): () => void {
+  if (!sessionId) return () => {};
+
+  const state: ActiveSessionRuntimeStateInput = {
+    state: 'requesting-model',
+    since: Date.now(),
+    active: { phase: 'compaction' },
+  };
+  activeRuntimeStates.set(sessionId, state);
+  updateCallback?.(sessionId);
+
+  return () => {
+    if (activeRuntimeStates.get(sessionId) !== state) return;
+    activeRuntimeStates.delete(sessionId);
+    updateCallback?.(sessionId);
+  };
+}
+
 export function clearActiveSessionRuntimeState(sessionId: string): void {
   if (!sessionId || !activeRuntimeStates.delete(sessionId)) {
     return;
@@ -260,6 +278,7 @@ export function formatSessionRuntimeStateSummary(runtimeState: SessionRuntimeSta
   }
 
   if (runtimeState.state === 'requesting-model') {
+    if (runtimeState.active?.phase === 'compaction') return 'compacting';
     const phase = runtimeState.active?.phase && runtimeState.active.phase !== 'normal-turn'
       ? `:${runtimeState.active.phase}`
       : '';

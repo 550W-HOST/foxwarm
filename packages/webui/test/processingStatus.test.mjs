@@ -54,7 +54,7 @@ const activeRuntimeState = (state, extra = {}) => ({
   ...extra,
 })
 
-test('thinking status is blue and animated, with active queue continuation and controls', () => {
+test('compacting status is blue and animated, with compaction queue continuation and controls', () => {
   const html = render({
     sessionBusy: true,
     sessionQueueLength: 2,
@@ -63,7 +63,7 @@ test('thinking status is blue and animated, with active queue continuation and c
 
   assert.match(html, /data-processing-runtime-state="requesting-model"/)
   assert.match(html, /bg-fw-accent-surface/)
-  assert.match(html, /Thinking\.\.\. · compaction • 2 queued messages will be inserted after this model response/)
+  assert.match(html, /Compacting\.\.\. • 2 queued messages will be inserted when this session resumes after compaction/)
   assert.equal((html.match(/animate-bounce/g) || []).length, 3)
   assert.match(html, />Stop<\/button>/)
   assert.match(html, />Run queued<\/button>/)

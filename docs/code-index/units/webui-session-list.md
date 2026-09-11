@@ -20,7 +20,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 |----------|----------------|-------------|
 | `getSessionFilterFields(session)` | ~55 | Collects searchable session fields (display name, id, aliases, agent/node/cwd/model metadata) |
 | `sessionMatchesFilter(session, normalizedQuery)` | ~70 | Case-insensitive predicate for session-list search |
-| `getRuntimeStateSummary(runtimeState)` (sessionRuntimeState.ts) | helper | Formats runtime-state badges such as `thinking`, `tool: exec`, `waiting: sessions`, or `idle`. |
+| `getRuntimeStateSummary(runtimeState)` (sessionRuntimeState.ts) | helper | Formats runtime-state badges such as `thinking`, `compacting`, `tool: exec`, `waiting: sessions`, or `idle`. |
 | `isSessionRuntimeActive(session)` (sessionRuntimeState.ts) | helper | Treats `requesting-model` and `running-tool` as active, falling back to legacy `busy`. |
 | `useSessionIdleNotifications(sessions)` (sessionIdleNotifications.ts) | hook | Owns browser-local idle-notification modes and observes accepted global session-list snapshots once per list-data root. |
 | `SessionIdleNotificationTracker` (sessionIdleNotifications.ts) | helper | Tracks a session's observed busy cycle until its later canonical idle state. |
