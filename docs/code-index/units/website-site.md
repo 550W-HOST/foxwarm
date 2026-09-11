@@ -14,7 +14,7 @@ Builds and validates the public Foxwarm project website and focused user documen
 - `src/content/docs/docs/` owns nine initial user pages: documentation index, install, model setup, concepts/memory, tools/Skills/MCP, Nodes, Channels, data/upgrades/backups, and FAQ.
 - `scripts/sync-assets.mjs` copies both repository-root installers and the existing WebUI favicon assets into ignored `website/public/` build inputs before development or production build.
 - The test suite validates required routes, canonical URLs, indexability, local links/assets, installer byte parity and file identity, robots/sitemap output, Pagefind search output, and absence of unresolved installer-host placeholders.
-- The Pages workflow uses immutable revisions of official checkout, Astro artifact-build, and deploy actions. It checks pull requests but deploys only a successful `main` push or a manual run explicitly selected on `main`, with job-scoped least permissions and serialized deployment.
+- The Pages workflow uses immutable revisions of official checkout, Node setup, Pages artifact upload, and deploy actions. It installs the website with `npm ci`, runs the standalone check, and uploads `website/dist`. Pull requests are checked but only a successful `main` push or a manual run explicitly selected on `main` can deploy; permissions are job-scoped and deployment is serialized.
 
 ## Tests
 
