@@ -1,11 +1,11 @@
 ---
 title: FAQ
-description: Common Foxwarm installation, WebUI, model, data, Node, and documentation questions.
+description: Answers to common questions about installing, configuring, and running Foxwarm.
 ---
 
 ## Is foxwarm.550w.host a hosted Foxwarm service?
 
-No. It is the static project website, documentation site, and installer download host. Your WebUI, API, data, model credentials, and Agents run on the machine where you install Foxwarm.
+No. The domain serves the static project site, documentation, and installer files. Your WebUI, API, data, model credentials, and Agents stay on the machine where you install Foxwarm.
 
 ## Where is my login token?
 
@@ -17,27 +17,27 @@ http://localhost:3001/#token=<token>
 
 ## Why is Setup locked open?
 
-Foxwarm requires a valid model configuration. When `state/models.yaml` is absent, first-run Setup remains open until you save and validate a model provider.
+Foxwarm needs a valid model configuration before it can open the rest of WebUI. First-run Setup stays open while `state/models.yaml` is absent.
 
 ## Do I need an OpenAI account?
 
-No specific vendor is mandatory. Foxwarm supports configured OpenAI-compatible and Anthropic-compatible providers. You need a reachable endpoint, an exact model ID, and any credentials required by that endpoint.
+Foxwarm supports OpenAI-compatible and Anthropic-compatible providers. You need a reachable endpoint, an exact model ID, and any credentials that endpoint requires.
 
 ## Do I need a Node?
 
-No. `master` is the default local Node. Pair another Node only when tools should run in a different environment or you want a specific remote/browser/interactive capability.
+No. `master` is the default local Node. Pair another Node when tools need a different environment or a remote, browser, or interactive capability.
 
 ## Do I need a messaging Channel?
 
-No. WebUI is enough for a complete local workflow. Telegram, Matrix, WeWork, Weixin, and QQ Bot are optional adapters.
+No. WebUI supports the local workflow by itself. Telegram, Matrix, WeWork, Weixin, and QQ Bot are optional adapters.
 
 ## Is Agent memory the same as chat history?
 
-No. Agent memory is curated long-lived Markdown. Session history is the conversation and tool record. Optional Vector memory is a derived semantic index over archived context.
+They serve different purposes. Agent memory is curated long-lived Markdown, Session history is the active conversation and tool record, and optional Vector memory is a derived semantic index over archived context.
 
 ## Why does a local model URL fail in Docker?
 
-Inside a container, `localhost` points to the container itself. Use an address that reaches the host model service, such as `host.docker.internal` where supported, and ensure the service accepts that connection.
+Inside a container, `localhost` points back to the container. Use an address that reaches the model service on the host, such as `host.docker.internal` where supported, and make sure the service accepts the connection.
 
 ## How do I change the WebUI port?
 
@@ -51,4 +51,4 @@ Set `bot.httpPort` in `foxwarm-data/state/config.yaml`. For Docker Compose, upda
 
 ## Where are the deeper technical docs?
 
-The project repository keeps architecture and reference guides under [`docs/`](https://github.com/550W-HOST/foxwarm/tree/main/docs). Contributors and coding agents should start with the [Code Index](https://github.com/550W-HOST/foxwarm/tree/main/docs/code-index).
+Architecture and reference guides live in the repository under [`docs/`](https://github.com/550W-HOST/foxwarm/tree/main/docs). Contributors and coding agents can use the [Code Index](https://github.com/550W-HOST/foxwarm/tree/main/docs/code-index) to find the relevant source.

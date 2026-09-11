@@ -1,11 +1,11 @@
 ---
-title: Optional Nodes
-description: Add an authenticated execution environment to a Foxwarm instance when local master tools are not enough.
+title: Nodes
+description: Add an authenticated execution environment to a Foxwarm instance for tools and fixed services.
 ---
 
-A **Node** is an execution environment that exposes tools or fixed services to Foxwarm. The built-in `master` Node is the default local environment. Additional Nodes are optional.
+A **Node** is an execution environment that provides tools or fixed services to Foxwarm. Every installation has the local `master` Node; other Nodes are optional.
 
-Use a Node when work must happen on another machine, inside a dedicated environment, or through a browser/interactive client. A Node does not become the authority for Session history or Agent memory.
+Add a Node when tools need to run on another machine, in a dedicated environment, or through a browser or interactive client. Session history and Agent memory remain with the Foxwarm instance.
 
 ## Pair a Node
 
@@ -15,30 +15,30 @@ From a running Foxwarm Session, ask for pairing help:
 /node pair-help
 ```
 
-The response contains bootstrap commands based on the address used to reach your Foxwarm instance. Run the chosen bootstrap on the target environment, then approve the pending identity from Foxwarm:
+Foxwarm returns bootstrap commands based on the address used to reach the instance. Run one on the target environment, then approve the pending identity:
 
 ```text
 /node list
 /node approve <pending-id> <node-id>
 ```
 
-The remote machine must be able to reach the Foxwarm master URL used by the bootstrap. If you downloaded through one address but the Node should connect through another, provide the bootstrap's explicit host override.
+The remote machine must be able to reach the Foxwarm master URL in the bootstrap. If the Node should connect through a different address, use the bootstrap's host override.
 
-## Choose the right Node style
+## Choose a Node client
 
-- **Bare-metal Node:** runs the official Node client directly on Linux, macOS, or Windows.
-- **Interactive CLI Node:** asks for local confirmation before tool calls, useful when a person is supervising the environment.
-- **Docker bootstrap:** creates a containerized Node from the current master's source bundle.
-- **Browser Node:** exposes supported browser operations through the browser extension path.
+- A bare-metal Node runs the official client directly on Linux, macOS, or Windows.
+- An interactive CLI Node asks for local confirmation before tool calls.
+- The Docker bootstrap creates a containerized Node from the current master's source bundle.
+- A Browser Node provides supported browser operations through the extension.
 
-Capabilities vary by Node. A connected identity can still be marked **upgrade required** when its core protocol is incompatible; update it from the current master's bootstrap/source bundle before using it for tools.
+Capabilities vary by Node. Foxwarm marks a connected Node **upgrade required** when its core protocol is incompatible. Update it from the current master's bootstrap or source bundle before using its tools.
 
-## Switch a Session's current Node
+## Choose a Node for a Session
 
-Use `/node` to inspect or select execution Nodes. Tools that resolve against the current Node then run there. Some actions explicitly target a Node instead of using the Session default.
+Use `/node` to inspect or select execution Nodes. Tools that use the current Node will then run there. Some actions accept an explicit Node and do not use the Session default.
 
 :::note
-Authentication establishes Node identity; it is not a claim that every Node is a security sandbox. Choose and configure each environment according to the trust level of the work it will receive.
+Node authentication establishes identity. It does not turn every Node into a security sandbox, so configure the environment for the trust level of its work.
 :::
 
 See the repository [Node client quick start](https://github.com/550W-HOST/foxwarm/blob/main/docs/node-client.md) for bootstrap flags, detached operation, systemd setup, Docker, optional terminal dependencies, and troubleshooting.

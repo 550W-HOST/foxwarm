@@ -1,15 +1,15 @@
 ---
 title: Set up your first model
-description: Complete Foxwarm first-run setup with an OpenAI-compatible or Anthropic model provider.
+description: Configure an OpenAI-compatible or Anthropic model provider in Foxwarm first-run Setup.
 sidebar:
   order: 2
 ---
 
-Foxwarm opens its required first-run Setup screen when `state/models.yaml` is missing from the active data directory. Setup cannot be closed until a valid model configuration is saved.
+When the active data directory has no `state/models.yaml`, Foxwarm opens first-run Setup and keeps it open until you save a valid model configuration.
 
 ## Open the local WebUI
 
-Use the URL printed by the installer. It looks like:
+Open the URL printed by the installer. It looks like:
 
 ```text
 http://localhost:3001/#token=...
@@ -23,15 +23,15 @@ cat foxwarm-data/state/token
 
 ## Add a provider
 
-In **Setup → Models**, enter YAML for one supported provider. **Save models** validates the YAML and resolves the configured model entries, but it does not make a live request to the provider. You need:
+Open **Setup → Models** and enter YAML for one supported provider. **Save models** validates the YAML and resolves the configured model entries. It does not send a live request to the provider. Include:
 
-- a provider type;
-- the provider's API base URL;
-- one or more exact model IDs;
-- an API key when the endpoint requires one;
-- a default model in `provider/model` form.
+- a provider type
+- the provider's API base URL
+- one or more exact model IDs
+- an API key when the endpoint requires one
+- a default model in `provider/model` form
 
-A minimal OpenAI-compatible Chat Completions configuration looks like:
+Here is a minimal OpenAI-compatible Chat Completions configuration:
 
 ```yaml
 default: my-provider/my-model
@@ -50,25 +50,25 @@ Use `openai-responses` for an endpoint implementing the Responses API, or `anthr
 Keep real API keys in your own `foxwarm-data/state/models.yaml`. Do not commit that file or paste credentials into public issues, docs, or screenshots.
 :::
 
-## What Setup writes
+## Files used by Setup
 
 - Model configuration: `foxwarm-data/state/models.yaml`
 - Application and Channel configuration: `foxwarm-data/state/config.yaml`
 - WebUI access token: `foxwarm-data/state/token`
 
-The exact location changes if you chose a custom data directory.
+These paths follow the custom data directory if you chose one.
 
-## Start a first conversation
+## Try a first conversation
 
-After saving a working model, open the default Session and ask a small question that does not require tools. Then try a scoped file or shell task in a directory you are comfortable exposing to the Agent.
+After saving the model configuration, open the default Session and ask a small question that does not require tools. This first reply is also a simple live check of the provider connection. You can then try a scoped file or shell task in a directory you are comfortable giving the Agent access to.
 
 The bundled `about-foxwarm` Skill can explain concepts and point to deeper features after model setup is complete.
 
 ## Troubleshooting
 
-- **Provider test fails:** check provider type, API base URL, model ID, and credentials.
-- **Local gateway fails from Docker:** `localhost` inside a container refers to the container. Use a host-reachable address such as `host.docker.internal` where supported.
-- **Bad manual config blocks setup:** fix or remove `state/models.yaml` in the data directory to return to first-run Setup.
-- **No response:** inspect logs under `foxwarm-data/state/logs/`.
+- If the first prompt fails, check the provider type, API base URL, model ID, and credentials.
+- In Docker, `localhost` refers to the container. Use a host-reachable address such as `host.docker.internal` where supported.
+- If a manually edited config blocks setup, fix or remove `state/models.yaml` in the data directory to return to first-run Setup.
+- If WebUI shows no response, inspect `foxwarm-data/state/logs/`.
 
 For virtual routing and failover, see the repository's [Virtual models guide](https://github.com/550W-HOST/foxwarm/blob/main/docs/virtual-models.md).

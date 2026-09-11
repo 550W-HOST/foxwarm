@@ -1,39 +1,39 @@
 ---
 title: Data, upgrades, and backups
-description: Keep Foxwarm program files separate from runtime data, upgrade safely, and back up one consistent restore set.
+description: Understand Foxwarm data layout, make a consistent backup, and update the program checkout.
 ---
 
-Foxwarm separates replaceable program files from user-owned runtime data.
+Foxwarm keeps the program checkout separate from runtime data.
 
-A default installer layout is:
+The default installer creates:
 
 ```text
 foxwarm/       program checkout and bundled Skills
 foxwarm-data/  configuration, Agents, Sessions, tokens, logs, and databases
 ```
 
-The checkout's `data_dir` pointer records the active external data directory so later starts use the same state.
+The checkout's `data_dir` file points to the active data directory, so later starts return to the same state.
 
 ## What to back up
 
-Back up the **whole data directory as one restore set**. It includes more than YAML configuration:
+Back up the whole data directory as one restore set. Along with YAML configuration, it contains:
 
-- `agents/` memory and workspaces;
-- `state/models.yaml` and `state/config.yaml`;
-- access and Node tokens;
-- Session metadata and archives;
-- SQLite databases, reservation records, and recovery journals;
-- optional derived vector data.
+- `agents/` memory and workspaces
+- `state/models.yaml` and `state/config.yaml`
+- access and Node tokens
+- Session metadata and archives
+- SQLite databases, reservation records, and recovery journals
+- optional derived vector data
 
-Do not treat logs as the only state, and do not restore one database independently from a mismatched data-directory snapshot.
+Logs are only one part of the state. Restore the databases and the rest of the data directory from the same snapshot.
 
 ## SQLite consistency
 
-For a live instance, use a SQLite-consistent online backup process. The simplest conservative procedure is to stop Foxwarm cleanly, verify it is stopped, and then copy the complete data directory. Copying only a `.sqlite` file while its WAL writer is active is not a complete backup.
+A live instance needs a SQLite-consistent online backup. A simpler option is to stop Foxwarm cleanly, confirm that it has stopped, and copy the complete data directory. A `.sqlite` file copied while its WAL writer is active is incomplete.
 
 ## Upgrade
 
-Before an important upgrade:
+Before updating an important instance:
 
 1. Read changes on the public `main` branch.
 2. Stop Foxwarm cleanly.
@@ -52,10 +52,10 @@ npm run build-all
 npm start
 ```
 
-On Windows, use `npm run stop:windows`, update the checkout, and run `npm run start:windows`. The Windows start path installs and builds while the old instance is stopped so loaded native files are not replaced in place.
+On Windows, run `npm run stop:windows`, update the checkout, and then run `npm run start:windows`. The start command installs and builds after the old process stops, which avoids replacing native files that are still loaded.
 
 :::caution
-Do not run `git reset --hard` as an upgrade strategy when the checkout contains local work. Review local changes and preserve them deliberately.
+If the checkout contains local work, review and preserve it before updating. `git reset --hard` will discard those changes.
 :::
 
 For archive storage details and external JSONL export, see [Archive Store](https://github.com/550W-HOST/foxwarm/blob/main/docs/archive-store.md).

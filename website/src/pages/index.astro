@@ -10,16 +10,16 @@ const installCommand = `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`;
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
-    <meta name="description" content="Foxwarm is a self-hosted workspace for persistent AI agents, long-running sessions, tools, and optional Nodes and Channels." />
+    <meta name="description" content="Run persistent AI agents with tools, memory, and optional Nodes and Channels in your own Foxwarm installation." />
     <meta name="theme-color" content="#f36a2f" />
-    <meta property="og:title" content="Foxwarm — persistent AI agents in your own workspace" />
-    <meta property="og:description" content="Run persistent AI agents with tools, memory, optional execution Nodes, and the channels you choose." />
+    <meta property="og:title" content="Foxwarm: persistent AI agents in your own workspace" />
+    <meta property="og:description" content="Run persistent AI agents with tools, memory, and optional execution Nodes and messaging Channels." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content={siteUrl} />
     <link rel="canonical" href={siteUrl + '/'} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon-32x32.png" sizes="32x32" />
-    <title>Foxwarm — persistent AI agents in your own workspace</title>
+    <title>Foxwarm: persistent AI agents in your own workspace</title>
     <script is:inline>
       (() => {
         const saved = localStorage.getItem('foxwarm-site-theme');
@@ -49,7 +49,7 @@ const installCommand = `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`;
         <div class="hero-copy">
           <p class="eyebrow"><span></span> Self-hosted agent workspace</p>
           <h1 id="hero-title">Keep the thread.<br />Own the workspace.</h1>
-          <p class="lede">Foxwarm gives AI agents persistent sessions, practical tools, and memory that lives with your own installation—not inside a disposable chat tab.</p>
+          <p class="lede">Foxwarm keeps each Agent's Sessions, tools, and memory in an installation you control.</p>
           <div class="hero-actions">
             <a class="button primary" href="/docs/installing/">Install Foxwarm</a>
             <a class="button secondary" href="/docs/">Read the docs <span aria-hidden="true">→</span></a>
@@ -88,38 +88,38 @@ const installCommand = `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`;
 
       <section class="principles" aria-labelledby="principles-title">
         <div class="section-intro">
-          <p class="eyebrow"><span></span> Built for work that continues</p>
-          <h2 id="principles-title">More than a prompt box</h2>
-          <p>A compact runtime that connects the parts of an agent workflow without pretending they are the same thing.</p>
+          <p class="eyebrow"><span></span> How Foxwarm is organized</p>
+          <h2 id="principles-title">Agents, Sessions, tools, and models</h2>
+          <p>Foxwarm connects Agent memory, Session history, tools, and model access while keeping their roles clear.</p>
         </div>
         <div class="feature-grid">
           <article>
             <span class="feature-index">01</span>
-            <h3>Persistent by design</h3>
-            <p>Sessions survive restarts. Long conversations are compacted into traceable layers, with archive-backed recall when earlier context matters.</p>
+            <h3>Sessions that carry on</h3>
+            <p>Sessions survive restarts. Foxwarm compacts long conversations into traceable layers and can recall archived source when earlier context matters.</p>
           </article>
           <article>
             <span class="feature-index">02</span>
-            <h3>Agents have a home</h3>
-            <p>An Agent owns a long-lived workspace and memory. Give it several Sessions for separate threads without splitting its identity.</p>
+            <h3>One Agent, several threads</h3>
+            <p>An Agent holds its workspace and long-lived memory. Several Sessions can share that Agent while keeping their conversations separate.</p>
           </article>
           <article>
             <span class="feature-index">03</span>
-            <h3>Tools where work happens</h3>
-            <p>Use built-in file and shell tools, reusable Skills, MCP servers, and optional Nodes for another machine or environment.</p>
+            <h3>Tools close to the work</h3>
+            <p>Use built-in file and shell tools, load reusable Skills, connect MCP servers, or run tools on another environment through a Node.</p>
           </article>
           <article>
             <span class="feature-index">04</span>
-            <h3>Your model, your channels</h3>
-            <p>Connect supported OpenAI-compatible or Anthropic model providers. Start in WebUI, then add messaging Channels only when you need them.</p>
+            <h3>Use your model provider</h3>
+            <p>Connect a supported OpenAI-compatible or Anthropic provider. WebUI works on its own, and messaging Channels are available when your workflow needs them.</p>
           </article>
         </div>
       </section>
 
       <section class="path" aria-labelledby="path-title">
         <div>
-          <p class="eyebrow"><span></span> From zero to first session</p>
-          <h2 id="path-title">A short path to a useful local agent</h2>
+          <p class="eyebrow"><span></span> Your first Session</p>
+          <h2 id="path-title">Install, connect a model, and start a thread</h2>
         </div>
         <ol>
           <li><span>1</span><div><strong>Install</strong><p>Run the installer on Linux, macOS, WSL, or Windows. Program files and runtime data stay separate.</p></div></li>
@@ -130,9 +130,9 @@ const installCommand = `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`;
 
       <section class="final-callout" aria-labelledby="final-title">
         <div>
-          <p class="eyebrow"><span></span> Ready when you are</p>
+          <p class="eyebrow"><span></span> Install locally</p>
           <h2 id="final-title">Run Foxwarm on your machine.</h2>
-          <p>Start with WebUI and one model. The rest is optional.</p>
+          <p>Begin with WebUI and one model. You can add Nodes and Channels later.</p>
         </div>
         <div class="final-actions">
           <a class="button light" href="/docs/installing/">Installation guide</a>
@@ -143,7 +143,7 @@ const installCommand = `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`;
 
     <footer>
       <a class="brand" href="/"><img class="fox-mark" src="/favicon.svg" alt="" width="26" height="26" /><span>Foxwarm</span></a>
-      <p>Self-hosted, open source, and MIT licensed.</p>
+      <p>Self-hosted and MIT licensed.</p>
       <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href={githubUrl}>GitHub</a><a href={`${githubUrl}/blob/main/LICENSE`}>License</a></nav>
     </footer>
 

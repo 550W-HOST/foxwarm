@@ -1,19 +1,19 @@
 ---
 title: Tools, Skills, and MCP
-description: Extend Foxwarm with built-in actions, reusable Skills, and configured MCP servers.
+description: Learn how Foxwarm uses built-in tools, reusable Skills, Nodes, and configured MCP servers.
 ---
 
-Foxwarm uses three separate extension layers.
+Built-in and Node tools perform actions, Skills provide instructions, and MCP servers add external tools.
 
 ## Tools perform actions
 
-Tools are callable operations such as reading and writing files, running commands, searching memory, managing Sessions, or invoking a Node capability. Available tools depend on the current Agent, Node, configuration, and authorization rules.
+Tools are callable operations for work such as reading files, running commands, searching memory, managing Sessions, or using a Node capability. What is available depends on the current Agent, Node, configuration, and authorization rules.
 
-Use the smallest scope that completes the task. Review tool calls before exposing a new workspace, service, or credential-bearing environment.
+Give tools only the scope they need. Review the Agent and its tools before exposing a new workspace, service, or environment that contains credentials.
 
 ## Skills provide reusable process knowledge
 
-A **Skill** is a documented workflow package with a `SKILL.md` file and optional supporting resources. Visible Skills are cataloged automatically for each Session. Loading one gives the Agent its full instructions, but does not grant new operating-system or network access.
+A **Skill** is a documented workflow in a `SKILL.md` file, with optional supporting resources. Foxwarm catalogs visible Skills automatically for each Session. Loading one gives the Agent its full instructions; tool, operating-system, and network access stay unchanged.
 
 List visible Skills or read one in full with:
 
@@ -22,27 +22,27 @@ List visible Skills or read one in full with:
 /skill show <skill>
 ```
 
-An Agent can load the same instructions on demand with:
+An Agent can load the same instructions with:
 
 ```text
 skill({ action: "load", skillName: "<skill>" })
 ```
 
-Foxwarm puts the visible Skill catalog in the Session snapshot and loads full documents only when they are needed.
+The Session snapshot contains the visible Skill catalog. Foxwarm reads the full documents when the Agent loads a Skill.
 
 ## MCP connects external tool servers
 
-Model Context Protocol (MCP) servers can add tools over stdio, Streamable HTTP, or SSE transports. Foxwarm keeps MCP server configuration in its data directory and exposes management tools for listing, adding, updating, disabling, and removing servers.
+Model Context Protocol (MCP) servers add tools over stdio, Streamable HTTP, or SSE. Foxwarm stores MCP server configuration in its data directory and provides tools to list, add, update, disable, or remove servers.
 
-The recommended workflow is to ask the Agent to load the bundled `mcp-management` Skill, then use the MCP configuration tools. Do not manually edit the persisted MCP state while Foxwarm is running.
+Load the bundled `mcp-management` Skill before changing MCP configuration. It walks the Agent through the configuration tools. Avoid editing the persisted MCP state by hand while Foxwarm is running.
 
-After configuration, discover the server's tools before calling one. Confirm the server's trust boundary: an MCP server may reach files, services, or accounts outside Foxwarm according to that server's own configuration.
+After configuring a server, list its tools before calling one. Check what the server can reach, because its own configuration may give it access to files, services, or accounts outside Foxwarm.
 
 :::caution
-Never place real tokens in documentation, chat examples, committed Agent memory, or tool descriptions. Configure credentials only in your private runtime data or the external service's supported secret store.
+Keep real tokens out of documentation, chat examples, committed Agent memory, and tool descriptions. Put credentials in your private runtime data or the external service's supported secret store.
 :::
 
-## How the layers fit
+## From instructions to execution
 
 ```text
 Skill: explains a reliable workflow
@@ -52,4 +52,4 @@ Tool: performs one action
 Source: built-in, MCP server, or current Node
 ```
 
-For automation that coordinates several tool calls, Foxwarm also includes ToolScript. Start with the [ToolScript examples](https://github.com/550W-HOST/foxwarm/tree/main/examples/toolscript) after the basic tool model is familiar.
+ToolScript can coordinate several tool calls in one automation. The repository includes [ToolScript examples](https://github.com/550W-HOST/foxwarm/tree/main/examples/toolscript) for the next step.

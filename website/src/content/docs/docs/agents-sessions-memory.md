@@ -1,9 +1,9 @@
 ---
 title: Agents, Sessions, and memory
-description: Understand Foxwarm's separate Agent identity, Session threads, curated memory, and archived context.
+description: Learn how Foxwarm separates Agent identity, Session threads, curated memory, and archived context.
 ---
 
-Foxwarm separates long-lived identity from runnable conversation threads.
+Foxwarm gives long-lived identity and conversation history different homes.
 
 ## Agent
 
@@ -13,11 +13,11 @@ An **Agent** is a durable workspace and memory container. Its curated Markdown m
 agents/<agent>/memory/
 ```
 
-Use Agent memory for stable instructions, preferences, project facts, and confirmed decisions that should remain useful across Sessions. An Agent can inherit memory from another Agent, but inheritance does not create a parent/child Session relationship.
+Use Agent memory for instructions, preferences, project facts, and confirmed decisions that should carry across Sessions. An Agent can inherit memory from another Agent. That inheritance is separate from parent and child relationships between Sessions.
 
 ## Session
 
-A **Session** is one runnable conversation thread attached to an Agent. It owns its history, queue, selected model, current Node, and other runtime state. One Agent can have several Sessions—for example, a main project thread, a review thread, and an experiment—while sharing the same Agent memory.
+A **Session** is a runnable conversation thread attached to an Agent. It owns its history, queue, selected model, current Node, and other runtime state. One Agent can have a main project Session and separate threads for review or experiments, all using the same Agent memory.
 
 Common commands:
 
@@ -29,7 +29,7 @@ Common commands:
 /model
 ```
 
-## Three kinds of remembered context
+## Where context lives
 
 | Context | Purpose | Ownership |
 | --- | --- | --- |
@@ -38,17 +38,17 @@ Common commands:
 | Archive and recall | Older source context, lineage, and audit history | SQLite archive |
 | Vector memory | Optional semantic retrieval over archived context | Derived index; disabled by default |
 
-These are related but not interchangeable. Do not write routine progress into Agent memory just to preserve a long chat. Foxwarm can compact older Session history into traceable layers and recall archived source when needed.
+Each source has a different job. Keep routine progress in the Session instead of copying it into Agent memory. Foxwarm can compact older Session history into traceable layers and recall archived source when needed.
 
 ## Child Sessions
 
-A child Session is a Session with a parent relationship, useful for a bounded parallel task or review. It is not automatically a new Agent. Parent/child relationships organize coordination; Agent inheritance organizes memory.
+A child Session has a parent Session and is useful for a bounded parallel task or review. It still belongs to an Agent. Session relationships organize coordination, while Agent inheritance controls shared memory.
 
-## Practical organization
+## Choose an Agent or Session
 
-- Create a new **Session** when the identity and durable project knowledge should stay the same but the thread should be separate.
-- Create a new **Agent** when the workspace, long-term instructions, permissions, or role should be distinct.
-- Fork a Session when the new thread should begin with the current thread's visible context and archive lineage up to that point.
-- Archive finished Sessions to remove them from normal navigation without treating archive as physical data deletion.
+- Create a new Session when the Agent and its project knowledge should stay the same, but the conversation needs its own thread.
+- Create a new Agent for a separate workspace, set of long-lived instructions, permission policy, or role.
+- Fork a Session when a new thread should start with the current visible context and archive lineage up to that point.
+- Archive a finished Session to remove it from normal navigation. Archiving does not physically delete its data.
 
 For the complete command surface and persistence details, see [Session Management](https://github.com/550W-HOST/foxwarm/blob/main/docs/session-management.md) and [Multi-Agent Guide](https://github.com/550W-HOST/foxwarm/blob/main/docs/multi-agent.md).

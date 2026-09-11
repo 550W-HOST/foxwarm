@@ -1,11 +1,11 @@
 ---
 title: Channels
-description: Connect a Foxwarm Session to WebUI or an optional messaging platform.
+description: Connect Foxwarm Sessions to WebUI or a supported messaging platform.
 ---
 
-A **Channel** carries messages between an external interface and Foxwarm Sessions. WebUI is the recommended first interface. Add messaging Channels after the local model and Session flow works.
+A **Channel** carries messages between an interface and Foxwarm Sessions. WebUI is the simplest place to begin. Once the local model and Session work, you can add a messaging platform.
 
-Managed Channel adapters on the current public Main source include:
+Foxwarm currently includes managed adapters for:
 
 - Telegram
 - Matrix
@@ -13,13 +13,13 @@ Managed Channel adapters on the current public Main source include:
 - Weixin
 - QQ Bot
 
-## Configure Channels
+## Set up a Channel
 
 Open **Setup → Config** in WebUI. The editor writes `state/config.yaml` in the active data directory. Saving the file also refreshes managed Channels without a full Foxwarm restart.
 
-Each provider has its own credentials, platform setup, conversation identity, and allow-list controls. Follow the provider-specific example in the repository README and begin with the narrowest allowed user or target set.
+Each provider has its own credentials, platform setup, conversation IDs, and allow-list controls. Follow its example in the repository README and start with a narrow user or target allow list.
 
-Runtime commands are available for inspection and manual control:
+Use these commands to inspect or control the runtime:
 
 ```text
 /channel status
@@ -28,17 +28,17 @@ Runtime commands are available for inspection and manual control:
 /channel restart <channel-id>
 ```
 
-## Attach conversations deliberately
+## Keep attachments scoped
 
-An external conversation must resolve to a Foxwarm Session. Keep separate users, groups, and purposes attached to appropriate Sessions or Agents; do not route every source into one high-privilege workspace by default.
+Each external conversation resolves to a Foxwarm Session. Attach different users, groups, and purposes to the Sessions or Agents that fit them. Avoid routing every source into one high-privilege workspace.
 
-Channels can expose the Agent to untrusted text and attachments. Review the Agent's tools, current Node, and external service permissions before enabling a public or group-facing integration.
+A Channel can bring untrusted text and attachments into an Agent. Check the Agent's tools, current Node, and external service permissions before enabling a public or group-facing integration.
 
 ## Troubleshooting
 
-- Save Channel configuration again in Setup and inspect the displayed reload error.
-- Run `/channel status` to see managed runtime state.
+- Save the configuration again in Setup and read any reload error.
+- Run `/channel status` to inspect managed runtime state.
 - Check `foxwarm-data/state/logs/`.
-- Confirm that callback URLs, ports, platform event subscriptions, tokens, and allow lists match the chosen provider.
+- Compare the provider settings with its callback URLs, ports, event subscriptions, tokens, and allow lists.
 
-The root [README Channel section](https://github.com/550W-HOST/foxwarm#channels-stateconfigyaml-and-hot-reload) contains current YAML examples and provider-specific notes. Keep credentials in your private data directory.
+The root [README Channel section](https://github.com/550W-HOST/foxwarm#channels-stateconfigyaml-and-hot-reload) has current YAML examples and provider notes. Keep credentials in your private data directory.

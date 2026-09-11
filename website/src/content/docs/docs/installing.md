@@ -5,23 +5,23 @@ sidebar:
   order: 1
 ---
 
-The installer clones Foxwarm into `./foxwarm`, creates `./foxwarm-data` for runtime state, builds the app, starts it, and prints a local WebUI URL containing the login token.
+The installer creates a program checkout at `./foxwarm` and stores runtime state in `./foxwarm-data`. It then builds Foxwarm, starts it, and prints a local WebUI URL with the login token.
 
 :::note
-The project site hosts the installers, but your Foxwarm WebUI and API run on your own machine. `foxwarm.550w.host` is not a hosted agent service.
+This site hosts the installer files. Your Foxwarm WebUI, API, Agents, and data remain on the machine where you install them.
 :::
 
 ## Linux, macOS, or WSL
 
-### Prerequisites
+### Before you run the installer
 
-Install these before running the script:
+You will need:
 
 - Git
 - Node.js 20 or newer, including npm
 - tmux
 
-The installer checks prerequisites but does not install system packages.
+The installer reports missing prerequisites. Install any system packages yourself, then run it again.
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
@@ -29,7 +29,7 @@ curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
 
 When startup finishes, open the tokenized URL printed by the script, typically on `http://localhost:3001/`.
 
-Useful overrides:
+To choose different locations:
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash -s -- \
@@ -37,7 +37,7 @@ curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash -s -- \
   --data-dir "$PWD/foxwarm-data"
 ```
 
-Environment variables are also supported:
+You can set the same locations and startup options with environment variables:
 
 ```bash
 export FOXWARM_DIR="$PWD/foxwarm"
@@ -51,15 +51,15 @@ Attach to the console with `tmux attach -t foxwarm`. Detach without stopping the
 
 ## Windows PowerShell
 
-### Prerequisites
+### Before you run the installer
 
-Install Git for Windows and Node.js 20 or newer with npm. Then open PowerShell:
+Install Git for Windows and Node.js 20 or newer with npm, then open PowerShell:
 
 ```powershell
 irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
 ```
 
-The Windows installer builds Foxwarm, starts it as a background process, and opens the tokenized local WebUI URL when available. It does not require tmux or WSL.
+The Windows installer builds Foxwarm, starts it in the background, and opens the tokenized local WebUI URL when it becomes available. Windows installs do not require tmux or WSL.
 
 If local script execution is blocked, download the script and run:
 
@@ -67,7 +67,7 @@ If local script execution is blocked, download the script and run:
 powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
 ```
 
-Optional paths and branch:
+To choose paths or a branch:
 
 ```powershell
 .\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data -BranchName main
@@ -101,6 +101,6 @@ npm start
 
 Read the token from `../foxwarm-data/state/token` if the startup output is no longer visible.
 
-## Next step
+## Continue with model setup
 
-Continue to [Set up your first model](/docs/model-setup/).
+When WebUI opens, [set up your first model](/docs/model-setup/).
