@@ -635,7 +635,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                 });
             }
 
-            if (part.text) {
+            if (typeof part.text === 'string' && (role === 'assistant' || part.text.length > 0)) {
                 prepareMessageContent(role, content, part, fallbackPhase);
                 const outputTextPart: any = {
                     type: role === 'assistant' ? 'output_text' : 'input_text',

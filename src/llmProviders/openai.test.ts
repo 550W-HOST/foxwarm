@@ -895,6 +895,37 @@ test('convertToOpenAIResponsesFormat preserves explicit assistant phases and app
   }]);
 });
 
+test('convertToOpenAIResponsesFormat preserves explicit empty assistant text without inventing empty messages', () => {
+  assert.deepEqual(convertToOpenAIResponsesFormat([{
+    role: 'model',
+    parts: [
+      { text: '', phase: 'commentary' },
+      { text: 'Working.', phase: 'commentary' },
+      { functionCall: { id: 'call_empty_text', name: 'read', args: { filePath: 'README.md' } } },
+      { text: '', phase: 'final_answer' },
+    ],
+  }]), [
+    {
+      type: 'message', role: 'assistant', phase: 'commentary',
+      content: [
+        { type: 'output_text', text: '' },
+        { type: 'output_text', text: 'Working.' },
+      ],
+    },
+    { type: 'function_call', call_id: 'call_empty_text', name: 'read', arguments: '{"filePath":"README.md"}' },
+    {
+      type: 'message', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: '' }],
+    },
+  ]);
+
+  assert.deepEqual(convertToOpenAIResponsesFormat([
+    { role: 'user', parts: [{ text: '' }] },
+    { role: 'model', parts: [{}] },
+    { role: 'model', parts: [{ thinking: 'display-only reasoning without replay metadata' }] },
+  ]), []);
+});
+
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {
   const stream = makeStream([
     {
