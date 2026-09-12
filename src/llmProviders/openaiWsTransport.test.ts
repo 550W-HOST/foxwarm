@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import {
   clearOpenAIWsCompletedChains,
   getOpenAIWsCompletedChainCountForTests,
@@ -15,6 +15,7 @@ import type { Message } from '../types';
 import {
   DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from '../llmStreamingTimeout';
 
@@ -22,6 +23,7 @@ class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.CONNECTING;
   sent: any[] = [];
   terminated = 0;
+  closeCalls: Array<{ code?: number; reason?: string }> = [];
   refs = 0;
   unrefs = 0;
   _socket = { ref: () => { this.refs += 1; }, unref: () => { this.unrefs += 1; } };
@@ -37,7 +39,10 @@ class FakeSocket extends EventEmitter {
     this.sent.push(parsed);
     process.nextTick(() => this.responder?.(parsed, this));
   }
-  close() { this.terminate(); }
+  close(code?: number, reason?: string) {
+    this.closeCalls.push({ code, reason });
+    this.readyState = WebSocket.CLOSING;
+  }
   terminate() {
     if (this.readyState === WebSocket.CLOSED) return;
     this.terminated += 1;
@@ -396,7 +401,8 @@ test('openai-ws keeps busy chains outside matching and enforces worker idle limi
   busy.finalize([]);
   parallel.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
-  assert.equal(sockets.filter(socket => socket.terminated > 0).length, 1);
+  assert.equal(sockets.filter(socket => socket.closeCalls.length > 0).length, 1);
+  assert.equal(sockets.filter(socket => socket.terminated > 0).length, 0);
 });
 
 test('openai-ws rotates a completed chain at the sixty-minute boundary', async () => {
@@ -412,7 +418,8 @@ test('openai-ws rotates a completed chain at the sixty-minute boundary', async (
   clock = 60 * 60 * 1000;
   const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 2);
-  assert.equal(sockets[0].terminated, 1);
+  assert.equal(sockets[0].terminated, 0);
+  assert.deepEqual(sockets[0].closeCalls, [{ code: 1000, reason: 'OK' }]);
   second.finalize(false);
 });
 
@@ -431,6 +438,7 @@ test('openai-ws abort, malformed frames, and mid-stream close discard the leased
     if (mode === 'abort') process.nextTick(() => controller.abort());
     await assert.rejects(pending, mode === 'abort' ? /abort/i : /malformed|closed/i);
     assert.equal(socket.terminated, 1);
+    assert.equal(socket.closeCalls.length, 0);
     assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   }
 });
@@ -454,6 +462,7 @@ test('openai-ws failed, error, and incomplete terminal events invalidate the cha
     );
     assert.ok(Date.now() - startedAt < 1000, `${mode} should reject immediately rather than waiting for timeout`);
     assert.equal(socket.terminated, 1);
+    assert.equal(socket.closeCalls.length, 0);
     assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   }
 });
@@ -467,7 +476,11 @@ test('explicit cleanup closes idle sockets and removes process-owned resources',
   const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   pending.finalize([]);
   clearOpenAIWsCompletedChains();
-  assert.equal(socket.terminated, 1);
+  assert.equal(socket.terminated, 0);
+  assert.deepEqual(socket.closeCalls, [{ code: 1000, reason: 'OK' }]);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  assert.doesNotThrow(() => socket.emit('error', new Error('late cleanup error')));
+  assert.doesNotThrow(() => socket.emit('close', 1000, Buffer.alloc(0)));
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
 });
 
@@ -525,6 +538,52 @@ test('aborting an active WS request rejects normally without an uncaught PassThr
   assert.doesNotMatch(result.stderr, /UNCAUGHT:/);
 });
 
+test('aborting a real WebSocket during a held opening handshake has no deferred uncaught error', async () => {
+  const modulePath = path.join(__dirname, 'openaiWsTransport.js');
+  const script = `
+    const net = require('net');
+    const transport = require(${JSON.stringify(modulePath)});
+    const heldSockets = new Set();
+    process.once('uncaughtException', error => { console.error('UNCAUGHT:' + error.stack); process.exit(7); });
+    process.once('unhandledRejection', error => { console.error('UNHANDLED:' + (error && error.stack || error)); process.exit(8); });
+    setTimeout(() => { console.error('TEST_TIMEOUT'); process.exit(10); }, 2000).unref();
+    const server = net.createServer(socket => { heldSockets.add(socket); socket.once('close', () => heldSockets.delete(socket)); });
+    server.listen(0, '127.0.0.1', async () => {
+      const controller = new AbortController();
+      const pending = transport.requestOpenAIResponsesWs({
+        url: 'ws://127.0.0.1:' + server.address().port + '/v1/responses',
+        headers: {}, concreteIdentity: 'held-handshake',
+        data: { model: 'm', input: [], store: false }, placement: 'local', signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 25);
+      try {
+        await pending;
+        process.exit(9);
+      } catch (error) {
+        if (!error || error.name !== 'AbortError') {
+          console.error('WRONG_REJECTION:' + (error && error.stack || error));
+          process.exit(11);
+        }
+        setTimeout(() => {
+          if (transport.getOpenAIWsCompletedChainCountForTests() !== 0) process.exit(12);
+          for (const socket of heldSockets) socket.destroy();
+          server.close();
+          process.exit(0);
+        }, 50);
+      }
+    });
+  `;
+  const result = await new Promise<{ code: number | null; stderr: string }>(resolve => {
+    const child = spawn(process.execPath, ['-e', script], { cwd: path.dirname(__dirname) });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('exit', code => resolve({ code, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /UNCAUGHT:|UNHANDLED:|TEST_TIMEOUT/);
+});
+
 test('active and pending-append sockets stay referenced, idle sockets unref, and reuse refs again', async () => {
   const sockets: FakeSocket[] = [];
   setOpenAIWsTransportTestHooks({ socketFactory: () => {
@@ -554,7 +613,7 @@ test('close after response.completed but before assistant append invalidates the
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
 });
 
-test('openai-ws first-content watchdog covers handshake and ignores response scaffolding', async () => {
+test('openai-ws first-activity watchdog covers handshake and ignores unrelated response scaffolding', async () => {
   for (const mode of ['handshake', 'scaffolding'] as const) {
     const timers = new FakeIdleTimers();
     setStreamingTimeoutTestHooks(timers.hooks);
@@ -563,7 +622,7 @@ test('openai-ws first-content watchdog covers handshake and ignores response sca
       socket = new FakeSocket(mode === 'scaffolding' ? (_request, current) => {
         current.frame({ type: 'response.created', response: { id: 'r1', status: 'in_progress' } });
         current.frame({ type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } });
-        current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } });
+        current.frame({ type: 'response.output_item.added', output_index: 0 });
         current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' });
       } : undefined, mode !== 'handshake');
       return socket as any;
@@ -573,7 +632,7 @@ test('openai-ws first-content watchdog covers handshake and ignores response sca
     assert.equal(timers.entries.length, 1);
     assert.equal(timers.entries[0].delayMs, DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS);
     timers.entries[0].callback();
-    await assert.rejects(pending, /before first meaningful generated content/);
+    await assert.rejects(pending, /before the first model output activity/);
     assert.equal(socket.terminated, 1);
   }
 });
@@ -602,11 +661,151 @@ test('openai-ws meaningful deltas switch to and reset the one-minute inactivity 
   timers.entries[1].callback();
   assert.equal(socket.terminated, 0);
   timers.entries[2].callback();
-  await assert.rejects(pending, /between meaningful generated content increments/);
+  await assert.rejects(pending, /while waiting for further model output activity after 60000ms/);
   assert.equal(socket.terminated, 1);
 });
 
-test('completed idle chains actively expire and close after one minute without another request', async () => {
+test('openai-ws reasoning-summary-only deltas reset inactivity without a presentation subscriber', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: 'first' });
+      current.frame({ type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: 'first' });
+      current.frame({ type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: ' second' });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a',
+    data: baseData([]), placement: 'local', signal: signal(),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  timers.entries[1].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[2].callback();
+  await assert.rejects(pending, /while waiting for further model output activity after 60000ms/);
+  assert.equal(socket.terminated, 1);
+});
+
+test('openai-ws valid output-item added and done events reset inactivity while invalid scaffolding does not', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.created', response: { id: 'r1', status: 'in_progress' } });
+      current.frame({ type: 'response.output_item.added', output_index: 0 });
+      current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } });
+      current.frame({ type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: '' });
+      current.frame({ type: 'response.metadata', response_id: 'r1', sequence_number: 4, metadata: { type: 'ordinary_status' } });
+      current.frame({ type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a',
+    data: baseData([]), placement: 'local', signal: signal(),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  timers.entries[1].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[2].callback();
+  await assert.rejects(pending, /while waiting for further model output activity after 60000ms/);
+  assert.equal(socket.terminated, 1);
+});
+
+test('openai-ws safety buffering warns, enters ten-minute inactivity, and appends metadata on timeout', async () => {
+  const timers = new FakeIdleTimers();
+  const diagnostics = captureDiagnostics();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ diagnosticLogger: diagnostics.logger, socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({
+        type: 'response.metadata', sequence_number: 1,
+        metadata: { type: 'safety_buffering', use_cases: ['fixture'], reasons: ['review'], retry_model: 'fixture-model' },
+      });
+      current.frame({
+        type: 'response.metadata', sequence_number: 2,
+        metadata: { type: 'safety_buffering', use_cases: ['fixture-2'], reasons: ['updated'], retry_model: 'fixture-model-2' },
+      });
+      current.frame({
+        type: 'response.output_item.added', output_index: 0,
+        item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' },
+      });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+    placement: 'local', signal: signal(),
+    diagnostics: { sessionId: 'fixture-session', purpose: 'normal-turn', llmRequestId: 'fixture-request', iteration: 2, attempt: 3 },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+    SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+    SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  assert.equal(timers.entries[2].cleared, true);
+  timers.entries[0].callback();
+  timers.entries[1].callback();
+  timers.entries[2].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[3].callback();
+  await assert.rejects(pending, /after 600000ms\. Safety buffering metadata: \{"type":"safety_buffering","use_cases":\["fixture-2"\],"reasons":\["updated"\],"retry_model":"fixture-model-2"\}/);
+  const warnings = diagnostics.entries.filter(entry => entry.message === 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every(warning => warning.level === 'warn'));
+  assert.equal(warnings[1].fields.sessionId, 'fixture-session');
+  assert.equal(warnings[1].fields.llmRequestId, 'fixture-request');
+  assert.deepEqual(warnings[1].fields.metadata, {
+    type: 'safety_buffering', use_cases: ['fixture-2'], reasons: ['updated'], retry_model: 'fixture-model-2',
+  });
+});
+
+test('user abort after safety buffering remains AbortError rather than a metadata timeout', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => current.frame({
+      type: 'response.metadata', metadata: { type: 'safety_buffering', reasons: ['fixture'] },
+    }));
+    return socket as any;
+  }});
+  const controller = new AbortController();
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+    placement: 'local', signal: controller.signal,
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(timers.entries.at(-1)?.delayMs, SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS);
+  controller.abort();
+  await assert.rejects(pending, (error: any) => error?.name === 'AbortError' && !error.message.includes('Safety buffering metadata'));
+  assert.equal(socket.terminated, 1);
+});
+
+test('completed idle chains actively expire and close after ten minutes without another request', async () => {
   const timers = new FakeIdleTimers();
   const diagnostics = captureDiagnostics();
   let socket!: FakeSocket;
@@ -618,16 +817,49 @@ test('completed idle chains actively expire and close after one minute without a
   assert.equal(timers.entries.length, 0);
   pending.finalize([]);
   assert.equal(timers.entries.length, 1);
-  assert.equal(timers.entries[0].delayMs, 60 * 1000);
+  assert.equal(timers.entries[0].delayMs, 10 * 60 * 1000);
   assert.equal(timers.entries[0].unrefs, 1);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   timers.entries[0].callback();
-  assert.equal(socket.terminated, 1);
+  assert.equal(socket.terminated, 0);
+  assert.deepEqual(socket.closeCalls, [{ code: 1000, reason: 'OK' }]);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  assert.doesNotThrow(() => socket.emit('error', new Error('late close-handshake error')));
+  assert.equal(socket.terminated, 0);
+  assert.doesNotThrow(() => socket.emit('close', 1000, Buffer.alloc(0)));
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   const close = diagnostics.entries.find(entry => entry.message === 'OpenAI Responses WebSocket closed locally');
   assert.equal(close?.fields.closeCause, 'idle-timeout');
   assert.equal(close?.fields.closePhase, 'idle');
   assert.equal(typeof close?.fields.idleDurationMs, 'number');
+});
+
+test('completed-idle recycling completes a real WebSocket close handshake with code 1000', async () => {
+  const timers = new FakeIdleTimers();
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const serverClose = new Promise<{ code: number; reason: string }>(resolve => {
+    server.once('connection', socket => {
+      socket.once('message', () => socket.send(JSON.stringify(completed('real-close'))));
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString('utf8') }));
+    });
+  });
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks });
+  try {
+    const pending = await requestOpenAIResponsesWs({
+      url: `ws://127.0.0.1:${address.port}/v1/responses`, headers: {}, concreteIdentity: 'real-close',
+      data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000,
+    });
+    pending.finalize([]);
+    assert.equal(timers.entries.length, 1);
+    timers.entries[0].callback();
+    assert.deepEqual(await serverClose, { code: 1000, reason: 'OK' });
+    assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test('reuse cancels the old idle timer and successful release starts a fresh idle period', async () => {
@@ -646,13 +878,15 @@ test('reuse cancels the old idle timer and successful release starts a fresh idl
   assert.equal(timers.entries.length, 1);
   oldTimer.callback();
   assert.equal(socket.terminated, 0);
+  assert.equal(socket.closeCalls.length, 0);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   second.finalize([]);
   assert.equal(timers.entries.length, 2);
   assert.equal(timers.entries[1].cleared, false);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   timers.entries[1].callback();
-  assert.equal(socket.terminated, 1);
+  assert.equal(socket.terminated, 0);
+  assert.equal(socket.closeCalls.length, 1);
 });
 
 test('LRU eviction and pool clear cancel every affected idle timer', async () => {
@@ -671,12 +905,14 @@ test('LRU eviction and pool clear cancel every affected idle timer', async () =>
   }
   assert.equal(timers.entries.length, 6);
   assert.equal(timers.entries[0].cleared, true);
-  assert.equal(sockets[0].terminated, 1);
+  assert.equal(sockets[0].terminated, 0);
+  assert.deepEqual(sockets[0].closeCalls, [{ code: 1000, reason: 'OK' }]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 5);
   clearOpenAIWsCompletedChains();
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   assert.ok(timers.entries.every(entry => entry.cleared));
-  assert.ok(sockets.every(socket => socket.terminated === 1));
+  assert.ok(sockets.every(socket => socket.terminated === 0));
+  assert.ok(sockets.every(socket => socket.closeCalls.length === 1));
   const closeCauses = diagnostics.entries
     .filter(entry => entry.message === 'OpenAI Responses WebSocket closed locally')
     .map(entry => entry.fields.closeCause);

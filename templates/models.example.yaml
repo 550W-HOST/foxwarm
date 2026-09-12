@@ -19,6 +19,9 @@ providers:
     # asyncCompact: false
     # Optional: enable compressed request bodies for this provider entry.
     # requestCompression: gzip  # or: br
+    # Optional: treat a completed response with no content and no tool calls as
+    # a retryable failure. Default (unset/false) accepts it as a normal turn end.
+    # disallowEmptyResponse: true
     # Optional provider-level defaults for all models in this entry.
     # contextLimit: 200000
     # First-class effort defaults to all six levels with `high` selected when omitted.

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import WebSocket, { RawData } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { logger } from '../common';
@@ -13,7 +14,7 @@ const RECONNECT_DELAY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const MAX_LATEST_MESSAGE_CONTEXTS = 1_000;
 const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_RECENT_INBOUND_EVENTS = 10_000;
-const MAX_REPLY_SEQUENCES = 10_000;
+const MAX_OUTBOUND_MESSAGE_SEQUENCE = 0xffff_ffff;
 const RATE_LIMIT_RECONNECT_DELAY_MS = 60_000;
 const PASSIVE_REPLY_TTL_MS = 3 * 60 * 1_000;
 const MAX_PASSIVE_TEXT_REPLIES = 4;
@@ -107,6 +108,14 @@ type GroupAccumulator = {
 type PlatformGroupHistoryItem = {
   content: string;
 };
+
+let qqBotOutboundMessageSequence = randomBytes(4).readUInt32BE(0) || 1;
+
+function allocateQQBotOutboundMessageSequence(): number {
+  const sequence = qqBotOutboundMessageSequence;
+  qqBotOutboundMessageSequence = sequence === MAX_OUTBOUND_MESSAGE_SEQUENCE ? 1 : sequence + 1;
+  return sequence;
+}
 
 function isQQBotGroupMention(eventType: string, event: unknown): boolean {
   if (eventType === 'GROUP_AT_MESSAGE_CREATE') return true;
@@ -379,7 +388,6 @@ export class QQBotChannel implements Channel {
   private accessTokenRequest?: Promise<string>;
   private latestMessageIds = new Map<string, string>();
   private recentInboundEvents = new Map<string, true>();
-  private replySequences = new Map<string, number>();
   private passiveReplyContexts = new Map<string, PassiveReplyContext>();
   private passiveReplyChains = new Map<string, PassiveReplyChain>();
   private groupAccumulators = new Map<string, GroupAccumulator>();
@@ -432,7 +440,6 @@ export class QQBotChannel implements Channel {
     this.stopHeartbeat();
     this.latestMessageIds.clear();
     this.recentInboundEvents.clear();
-    this.replySequences.clear();
     this.passiveReplyContexts.clear();
     this.passiveReplyChains.clear();
     this.clearAllGroupAccumulators();
@@ -477,14 +484,15 @@ export class QQBotChannel implements Channel {
     const send = async (): Promise<void> => {
       const useProactiveFallback = sourceBoundPassiveReply && this.shouldUseProactiveReply(replyToId!);
       let passiveReplyId = useProactiveFallback ? undefined : replyToId;
-      const messageSequence = passiveReplyId && (target.kind === 'c2c' || target.kind === 'group')
-        ? this.allocateReplySequence(passiveReplyId)
+      const messageSequence = target.kind === 'c2c' || target.kind === 'group'
+        ? allocateQQBotOutboundMessageSequence()
         : undefined;
       const body = target.kind === 'c2c' || target.kind === 'group'
         ? {
             content,
             msg_type: 0,
-            ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : {}),
+            ...(passiveReplyId ? { msg_id: passiveReplyId } : {}),
+            msg_seq: messageSequence,
           }
         : {
             content,
@@ -509,6 +517,7 @@ export class QQBotChannel implements Channel {
             await this.apiRequest(messagePath, 'POST', {
               content,
               msg_type: 0,
+              msg_seq: messageSequence,
             });
           } catch (proactiveError) {
             if (options?.turnFinal) {
@@ -527,9 +536,6 @@ export class QQBotChannel implements Channel {
       }
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
         this.recordPassiveSuccessfulReply(passiveReplyId);
-      }
-      if (replyToId && options?.turnFinal && this.isCurrentReplyGeneration(replyGeneration)) {
-        this.replySequences.delete(replyToId);
       }
     };
 
@@ -573,6 +579,7 @@ export class QQBotChannel implements Channel {
       if (!this.isCurrentReplyGeneration(replyGeneration)) {
         throw new Error('QQ Bot media send was invalidated before upload');
       }
+      const messageSequence = allocateQQBotOutboundMessageSequence();
       const useProactiveFallback = sourceBoundPassiveReply && this.shouldUseProactiveReply(replyToId!);
       let passiveReplyId = useProactiveFallback ? undefined : replyToId;
       const uploaded = await uploadQQBotFile(
@@ -589,12 +596,12 @@ export class QQBotChannel implements Channel {
       if (!this.isCurrentReplyGeneration(replyGeneration)) {
         throw new Error('QQ Bot media send was invalidated before final delivery');
       }
-      const messageSequence = passiveReplyId ? this.allocateReplySequence(passiveReplyId) : undefined;
       const messageBody = {
         ...(caption ? { content: caption } : {}),
         msg_type: 7,
         media: { file_info: uploaded.fileInfo },
-        ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : { msg_seq: 1 }),
+        ...(passiveReplyId ? { msg_id: passiveReplyId } : {}),
+        msg_seq: messageSequence,
       };
       try {
         await this.apiRequest(messagePath, 'POST', messageBody);
@@ -615,14 +622,11 @@ export class QQBotChannel implements Channel {
           ...(caption ? { content: caption } : {}),
           msg_type: 7,
           media: { file_info: uploaded.fileInfo },
-          msg_seq: 1,
+          msg_seq: messageSequence,
         });
       }
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
         this.recordPassiveSuccessfulReply(passiveReplyId);
-      }
-      if (replyToId && options?.turnFinal && this.isCurrentReplyGeneration(replyGeneration)) {
-        this.replySequences.delete(replyToId);
       }
     };
 
@@ -654,7 +658,7 @@ export class QQBotChannel implements Channel {
       msg_type: 6,
       input_notify: { input_type: 1, input_second: 10 },
       msg_id: messageId,
-      msg_seq: this.allocateReplySequence(messageId),
+      msg_seq: allocateQQBotOutboundMessageSequence(),
     });
   }
 
@@ -1287,19 +1291,6 @@ export class QQBotChannel implements Channel {
       }
     }
     this.latestMessageIds.set(conversationId, messageId);
-  }
-
-  private allocateReplySequence(messageId: string): number {
-    const previous = this.replySequences.get(messageId) || 0;
-    if (!this.replySequences.has(messageId) && this.replySequences.size >= MAX_REPLY_SEQUENCES) {
-      const oldest = this.replySequences.keys().next().value;
-      if (oldest) {
-        this.replySequences.delete(oldest);
-      }
-    }
-    const next = previous + 1;
-    this.replySequences.set(messageId, next);
-    return next;
   }
 
   private rememberPassiveReplyContext(messageId: string): PassiveReplyContext {

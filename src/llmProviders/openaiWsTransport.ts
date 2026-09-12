@@ -2,7 +2,7 @@ import { PassThrough } from 'stream';
 import WebSocket, { RawData } from 'ws';
 import { logger } from '../common';
 import { hashJournalValue } from '../llmRequestJournal';
-import { createStreamingAttemptWatchdog } from '../llmStreamingTimeout';
+import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from '../llmStreamingTimeout';
 import { collectOpenAIResponsesStream, OpenAIStreamProgressSnapshot } from './openai';
 import {
     extendOpenAIWsPrefix,
@@ -12,7 +12,7 @@ import {
 } from './openaiWsState';
 
 const OPENAI_WS_MAX_CHAIN_AGE_MS = 60 * 60 * 1000;
-const OPENAI_WS_IDLE_TIMEOUT_MS = 60 * 1000;
+const OPENAI_WS_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const OPENAI_WS_LOCAL_IDLE_LIMIT = 5;
 const OPENAI_WS_WORKER_IDLE_LIMIT = 1;
 
@@ -32,6 +32,8 @@ type OpenAIWsResource = {
     };
     closeRecorded?: boolean;
     removeIdleListeners?: () => void;
+    removeGracefulCloseListeners?: () => void;
+    connectingAbortGuardInstalled?: boolean;
 };
 
 export type OpenAIWsAttemptDiagnostics = {
@@ -140,7 +142,11 @@ function recordSocketClose(resource: OpenAIWsResource, options: {
 function closeResource(
     resource: OpenAIWsResource,
     cause = 'transport-cleanup',
-    options?: { phase?: string; chain?: OpenAIWsCompletedChain<OpenAIWsResource> },
+    options?: {
+        phase?: string;
+        chain?: OpenAIWsCompletedChain<OpenAIWsResource>;
+        graceful?: boolean;
+    },
 ): void {
     try {
         recordSocketClose(resource, {
@@ -151,14 +157,57 @@ function closeResource(
         });
         resource.removeIdleListeners?.();
         resource.removeIdleListeners = undefined;
-        if (resource.socket.readyState === WebSocket.OPEN || resource.socket.readyState === WebSocket.CONNECTING) {
+        resource.removeGracefulCloseListeners?.();
+        resource.removeGracefulCloseListeners = undefined;
+        if (options?.graceful && resource.socket.readyState === WebSocket.OPEN) {
+            const cleanup = () => {
+                resource.socket.off('close', onClose);
+                resource.socket.off('error', onError);
+                resource.removeGracefulCloseListeners = undefined;
+            };
+            const onClose = () => cleanup();
+            const onError = () => {
+                cleanup();
+                try {
+                    if (resource.socket.readyState === WebSocket.OPEN
+                        || resource.socket.readyState === WebSocket.CONNECTING) {
+                        resource.socket.terminate();
+                    }
+                } catch {}
+            };
+            resource.socket.once('close', onClose);
+            resource.socket.once('error', onError);
+            resource.removeGracefulCloseListeners = cleanup;
+            resource.socket.close(1000, 'OK');
+            return;
+        }
+        if (resource.socket.readyState === WebSocket.CONNECTING) {
+            if (!resource.connectingAbortGuardInstalled) {
+                const onError = () => {
+                    // ws emits this asynchronously after terminate() aborts a
+                    // still-pending client handshake. The request promise has
+                    // already rejected, so this listener only owns that late
+                    // transport event until the matching close arrives.
+                };
+                const onClose = () => {
+                    resource.socket.off('error', onError);
+                    resource.connectingAbortGuardInstalled = false;
+                };
+                resource.connectingAbortGuardInstalled = true;
+                resource.socket.on('error', onError);
+                resource.socket.once('close', onClose);
+            }
+            resource.socket.terminate();
+            return;
+        }
+        if (resource.socket.readyState === WebSocket.OPEN) {
             resource.socket.terminate();
         }
     } catch {}
 }
 
 const completedPool = new OpenAIWsCompletedChainPool<OpenAIWsResource>((resource, cause, chain) => {
-    closeResource(resource, cause, { phase: 'idle', chain });
+    closeResource(resource, cause, { phase: 'idle', chain, graceful: true });
 });
 
 function makeAbortError(message = 'The operation was aborted'): Error & { code: string } {
@@ -298,7 +347,9 @@ function installIdleRemoval(chain: OpenAIWsCompletedChain<OpenAIWsResource>): vo
     };
     idleTimer = idleTimers.set(() => {
         idleTimer = undefined;
-        if (completedPool.remove(chain.id)) closeResource(chain.resource, 'idle-timeout', { phase: 'idle', chain });
+        if (completedPool.remove(chain.id)) {
+            closeResource(chain.resource, 'idle-timeout', { phase: 'idle', chain, graceful: true });
+        }
     }, OPENAI_WS_IDLE_TIMEOUT_MS);
     idleTimer.unref?.();
     chain.resource.socket._socket?.unref?.();
@@ -325,6 +376,15 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
             attemptAbortController.abort();
         },
     });
+    const handleSafetyBuffering = (metadata: Record<string, unknown>) => {
+        const boundedMetadata = boundSafetyBufferingMetadata(metadata);
+        watchdog.enterSafetyBuffering(boundedMetadata);
+        emitDiagnostic('warn', {
+            providerType: 'openai-ws',
+            ...options.diagnostics,
+            metadata: boundedMetadata,
+        }, 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+    };
     const attemptSignal = attemptAbortController.signal;
     matched?.chain.resource.removeIdleListeners?.();
     if (matched) matched.chain.resource.removeIdleListeners = undefined;
@@ -541,6 +601,7 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         }, 'OpenAI Responses WebSocket request dispatched');
         const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
+            onSafetyBuffering: handleSafetyBuffering,
             onMeaningfulProgress: () => {
                 if (firstContentAt === undefined) firstContentAt = now();
                 watchdog.markMeaningfulProgress();

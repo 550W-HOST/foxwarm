@@ -109,6 +109,11 @@ function body(call: Call): any {
   return JSON.parse(String(call.init?.body || '{}'));
 }
 
+function assertOutboundSequence(value: unknown): asserts value is number {
+  assert.equal(Number.isInteger(value), true);
+  assert.equal(Number(value) >= 1 && Number(value) <= 0xffff_ffff, true);
+}
+
 test('QQ Bot sendFile uses latest C2C passive ID and direct-small image/file upload', async () => {
   await withTempFiles(async paths => {
     const transport = createFetchTransport();
@@ -128,11 +133,12 @@ test('QQ Bot sendFile uses latest C2C passive ID and direct-small image/file upl
     assert.equal(body(messages[0]).media.file_info, 'file-info-c2c');
     assert.equal(body(messages[0]).srv_send_msg, undefined);
     assert.equal(body(messages[0]).msg_id, 'latest-c2c-message');
-    assert.equal(body(messages[0]).msg_seq, 1);
+    assertOutboundSequence(body(messages[0]).msg_seq);
     assert.equal(body(messages[0]).content.length, 2_000);
     assert.equal(body(messages[1]).media.file_info, 'file-info-c2c');
     assert.equal(body(messages[1]).msg_id, 'latest-c2c-message');
-    assert.equal(body(messages[1]).msg_seq, 2);
+    assertOutboundSequence(body(messages[1]).msg_seq);
+    assert.notEqual(body(messages[0]).msg_seq, body(messages[1]).msg_seq);
     const directFiles = apiCalls(transport, '/files');
     assert.equal(directFiles.length, 2);
     assert.equal(body(directFiles[0]).file_type, 1);
@@ -165,12 +171,14 @@ test('QQ Bot sendFile uses the image rich-media flow for byte-probed GIF input',
       file_data: (await fs.readFile(paths.gif)).toString('base64'),
     });
     const message = apiCalls(transport, '/messages')[0];
-    assert.deepEqual(body(message), {
+    const messageBody = body(message);
+    assert.deepEqual({ ...messageBody, msg_seq: undefined }, {
       msg_type: 7,
       media: { file_info: 'file-info-group' },
       content: 'gif caption',
-      msg_seq: 1,
+      msg_seq: undefined,
     });
+    assertOutboundSequence(messageBody.msg_seq);
   });
 });
 
@@ -195,7 +203,7 @@ test('QQ Bot sendFile uses Group direct-small/message routes and a persisted pas
     assert.equal(transport.calls.filter(call => call.url.startsWith(COS_PREFIX)).length, 0);
     assert.equal(message.url, `${API_PREFIX}/v2/groups/group-openid/messages`);
     assert.equal(body(message).msg_id, 'persisted-group-message');
-    assert.equal(body(message).msg_seq, 1);
+    assertOutboundSequence(body(message).msg_seq);
   });
 });
 
@@ -213,14 +221,22 @@ test('QQ Bot media passive state and opaque file_info stay isolated per adapter 
     await (second as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
       id: 'instance-two-message', content: 'two', author: { user_openid: 'same-openid' },
     });
+    await first.sendMessage('c2c:same-openid', 'instance-one text', { replyToId: 'instance-one-message', qqbotSourceBound: true });
     await first.sendFile('c2c:same-openid', file(paths.generic, 'one.txt', 'text/plain', false));
     await second.sendFile('c2c:same-openid', file(paths.generic, 'two.txt', 'text/plain', false));
-    const firstMessage = apiCalls(firstTransport, '/messages')[0];
+    const firstMessages = apiCalls(firstTransport, '/messages');
+    const firstText = firstMessages[0];
+    const firstMessage = firstMessages[1];
     const secondMessage = apiCalls(secondTransport, '/messages')[0];
+    assert.equal(body(firstText).content, 'instance-one text');
     assert.equal(body(firstMessage).msg_id, 'instance-one-message');
     assert.equal(body(secondMessage).msg_id, 'instance-two-message');
     assert.equal(body(firstMessage).media.file_info, 'file-info-c2c');
     assert.equal(body(secondMessage).media.file_info, 'file-info-c2c');
+    assertOutboundSequence(body(firstText).msg_seq);
+    assertOutboundSequence(body(firstMessage).msg_seq);
+    assertOutboundSequence(body(secondMessage).msg_seq);
+    assert.equal(new Set([body(firstText).msg_seq, body(firstMessage).msg_seq, body(secondMessage).msg_seq]).size, 3);
     assert.equal(apiCalls(firstTransport, '/files').length, 1);
     assert.equal(apiCalls(secondTransport, '/files').length, 1);
     assert.equal(apiCalls(firstTransport, '/upload_prepare').length, 0);
@@ -243,10 +259,10 @@ test('QQ Bot media counts toward passive quota and the fifth operation makes exa
     const messages = apiCalls(transport, '/messages').map(body);
     assert.equal(messages.length, 5);
     assert.equal(messages.slice(0, 4).every(item => item.msg_id === 'latest-group-message'), true);
-    assert.equal(messages.slice(0, 4).map(item => item.msg_seq).join(','), '1,2,3,4');
+    messages.forEach(item => assertOutboundSequence(item.msg_seq));
+    assert.equal(new Set(messages.map(item => item.msg_seq)).size, messages.length);
     assert.equal(messages[4].msg_type, 7);
     assert.equal(messages[4].msg_id, undefined);
-    assert.equal(messages[4].msg_seq, 1);
   });
 });
 
@@ -284,9 +300,9 @@ test('QQ Bot media expiration retries the final message proactively without re-u
     assert.equal(apiCalls(transport, '/upload_prepare').length, 0);
     assert.equal(messages.length, 2);
     assert.equal(messages[0].msg_id, 'media-expired-message');
-    assert.equal(messages[0].msg_seq, 1);
+    assertOutboundSequence(messages[0].msg_seq);
     assert.equal(messages[1].msg_id, undefined);
-    assert.equal(messages[1].msg_seq, 1);
+    assert.equal(messages[1].msg_seq, messages[0].msg_seq);
     assert.equal(messages[1].media.file_info, messages[0].media.file_info);
   });
 });
@@ -358,10 +374,11 @@ test('tool_send_file carries only matching current-turn QQ metadata for restart 
     const messages = apiCalls(transport, '/messages').map(body);
     assert.equal(messages.length, 2);
     assert.equal(messages[0].msg_id, 'persisted-tool-message');
-    assert.equal(messages[0].msg_seq, 1);
+    assertOutboundSequence(messages[0].msg_seq);
     assert.equal(messages[0].content, 'restart fallback');
     assert.equal(messages[1].msg_id, undefined);
-    assert.equal(messages[1].msg_seq, 1);
+    assertOutboundSequence(messages[1].msg_seq);
+    assert.notEqual(messages[0].msg_seq, messages[1].msg_seq);
     assert.equal(messages[1].content, 'mismatched target');
   });
 });

@@ -85,10 +85,11 @@ test('only file source/target node arguments select builtin placement', async ()
     .filter(definition => Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node'))
     .map(definition => definition.name)
     .sort();
-  assert.deepEqual(rootNodeSchemas, ['create_child_session', 'image_write_to_file', 'send_file']);
+  assert.deepEqual(rootNodeSchemas, ['create_child_session', 'create_session', 'image_write_to_file', 'send_file']);
   assert.equal(builtinNodeArgumentSelectsPlacement('image_write_to_file'), true);
   assert.equal(builtinNodeArgumentSelectsPlacement('send_file'), true);
   assert.equal(builtinNodeArgumentSelectsPlacement('create_child_session'), false);
+  assert.equal(builtinNodeArgumentSelectsPlacement('create_session'), false);
 
   const session = { id: 'placement-parent', agent: 'main', currentNode: 'parent-node' };
   const child = await resolveDirectTool('create_child_session', {
@@ -98,6 +99,14 @@ test('only file source/target node arguments select builtin placement', async ()
   assert.equal(child.permissionNode, 'master');
   assert.equal(child.targetNode, undefined);
   assert.equal(child.args.node, 'child-node');
+
+  const created = await resolveDirectTool('create_session', {
+    agentName: 'main', sessionName: 'created', node: 'session-node',
+  }, { sessionId: session.id, session });
+  assert.equal(created.executionNode, 'master');
+  assert.equal(created.permissionNode, 'master');
+  assert.equal(created.targetNode, undefined);
+  assert.equal(created.args.node, 'session-node');
 
   for (const name of ['image_write_to_file', 'send_file']) {
     const resolved = await resolveDirectTool(name, { node: 'file-node' }, { sessionId: session.id, session });

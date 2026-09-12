@@ -15,7 +15,8 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
-import { appendOptimisticAttachmentTag } from '../utils/attachmentPreview'
+import { buildReferencedAttachmentParts } from '../attachmentRefs'
+import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import { webUiRealtime } from '../realtime'
@@ -1435,7 +1436,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setShowDebugInfo(false)
   }, [])
 
-  const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: File[] }) => {
+  const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: Array<{ ref: string; file: File }> }) => {
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
 
     setLoading(true)
@@ -1451,43 +1452,29 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const parts: any[] = []
     let messageText = userMessage
     let requestText = userMessage
-    const uploadedFiles: Array<{ path: string; filename: string; mimeType: string; size?: number }> = []
-
-    for (const file of files) {
-      try {
-        const formData = new FormData()
-        formData.append('file', file)
-
-        const uploadRes = await fetch(`${API_BASE_PATH}/upload`, {
-          method: 'POST',
-          body: formData,
-        })
-
-        if (!uploadRes.ok) {
-          throw new Error('Upload failed')
-        }
-
-        const uploadData = await uploadRes.json()
-        const uploadedFile = {
-          path: uploadData.path,
-          filename: uploadData.filename || file.name,
-          mimeType: uploadData.mimeType || file.type || 'application/octet-stream',
-          size: uploadData.size,
-        }
-        uploadedFiles.push(uploadedFile)
-
-        messageText = appendOptimisticAttachmentTag(messageText, uploadedFile)
-      } catch (err) {
-        console.error('File upload failed:', err)
-        messageText += `\n\n[Failed to upload: ${file.name}]`
-      }
+    let uploadedFiles
+    try {
+      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`)
+    } catch (err) {
+      console.error('File upload failed:', err)
+      setLoading(false)
+      setMessages(prev => [...prev, { role: 'model', parts: [{ text: `Error: ${err instanceof Error ? err.message : 'Failed to upload attachment'}` }], __meta: { temporary: true, timestamp: Date.now() } }])
+      return false
     }
+
+    const attachmentDisplays = uploadedFiles.map(file => ({
+      ref: file.ref,
+      name: file.filename,
+      mimeType: file.mimeType,
+      size: file.size,
+      kind: file.mimeType.startsWith('image/') ? 'image' : 'file',
+    } as const))
 
     if (requestText) {
       parts.push({ text: requestText })
     }
 
-    const previewParts = messageText ? [{ text: messageText }] : parts
+    const previewParts = buildReferencedAttachmentParts(messageText, attachmentDisplays)
 
     const appendOptimistic = !isSlashCommand
       && shouldAppendOptimisticMessage(sessionBusyRef.current, sessionQueueLengthRef.current)
@@ -1500,28 +1487,20 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       })])
     }
 
-    void fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+    try {
+      await postReferencedMessage(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
           parts,
-          uploadedFiles,
+          uploadedFiles: toLegacyUploadedFiles(uploadedFiles),
           ...(!isSlashCommand ? { clientMessageId } : {}),
-        }),
       })
-      .then(response => {
-        if (!response.ok) throw new Error(`Failed to send message (${response.status})`)
-        if (!appendOptimistic && !isSlashCommand) {
-          queueRefreshNeededRef.current = true
-          scheduleHistoryRefresh()
-        }
-      })
-      .catch(e => {
-        console.error('Failed to send message:', e)
-        pendingSentMessageIdsRef.current.delete(clientMessageId)
-        setMessages(prev => {
+      if (!appendOptimistic && !isSlashCommand) {
+        queueRefreshNeededRef.current = true
+        scheduleHistoryRefresh()
+      }
+    } catch (e) {
+      console.error('Failed to send message:', e)
+      pendingSentMessageIdsRef.current.delete(clientMessageId)
+      setMessages(prev => {
           const hasReconciledRow = prev.some(message => (
             !message.__meta?.optimistic
             && getClientMessageId(message) === clientMessageId
@@ -1538,8 +1517,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             )),
             { role: 'model', parts: [{ text: 'Error: Failed to send message' }], __meta: { temporary: true, timestamp: Date.now() } },
           ]
-        })
       })
+      setLoading(false)
+      return false
+    }
 
     setLoading(false)
     return true

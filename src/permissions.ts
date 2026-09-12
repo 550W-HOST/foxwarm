@@ -90,6 +90,9 @@ export function normalizeAgentToolRules(value: unknown): AgentToolRule[] {
     if (source === 'builtin') {
       assertExactKeys(raw, ['effect', 'source', 'tool'], index);
       const tool = exactString(raw.tool, 'tool', index);
+      if (tool === 'update_session_snapshot') {
+        throw new Error(`toolRules[${index}].tool uses obsolete builtin \`update_session_snapshot\`; migrate it to \`refresh_session_snapshot\`.`);
+      }
       if (isPermissionNeutralBuiltinDispatcher(tool)) {
         throw new Error(`toolRules[${index}].tool cannot target dispatcher/container builtin \`${tool}\`; authorize its resolved concrete capability instead.`);
       }

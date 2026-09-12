@@ -1,5 +1,6 @@
 export const DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 60 * 1000;
+export const SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
 export type StreamingTimeoutKind = 'first-content' | 'content-inactivity' | 'hard-deadline';
 
@@ -20,16 +21,38 @@ let timerHooks: TimerHooks = defaultTimerHooks;
 
 export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
+  enterSafetyBuffering(metadata: Record<string, unknown>): void;
   finish(): void;
 };
 
-function timeoutError(kind: StreamingTimeoutKind, timeoutMs: number): Error {
+export function boundSafetyBufferingMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  try {
+    if (JSON.stringify(metadata).length <= 2048) return metadata;
+  } catch {}
+  const boundedList = (value: unknown) => Array.isArray(value)
+    ? value.filter(item => typeof item === 'string').slice(0, 5).map(item => item.slice(0, 120))
+    : undefined;
+  const useCases = boundedList(metadata.use_cases);
+  const reasons = boundedList(metadata.reasons);
+  return {
+    type: typeof metadata.type === 'string' ? metadata.type.slice(0, 80) : 'safety_buffering',
+    ...(useCases ? { use_cases: useCases } : {}),
+    ...(reasons ? { reasons } : {}),
+    ...(typeof metadata.retry_model === 'string' ? { retry_model: metadata.retry_model.slice(0, 200) } : {}),
+    truncated: true,
+  };
+}
+
+function timeoutError(kind: StreamingTimeoutKind, timeoutMs: number, safetyBufferingMetadata?: Record<string, unknown>): Error {
   const label = kind === 'first-content'
-    ? 'before first meaningful generated content'
+    ? 'before the first model output activity'
     : kind === 'content-inactivity'
-      ? 'between meaningful generated content increments'
+      ? 'while waiting for further model output activity'
       : 'at the explicit caller deadline';
-  const error: any = new Error(`Streaming LLM request timed out ${label} after ${timeoutMs}ms.`);
+  const metadataSuffix = safetyBufferingMetadata
+    ? ` Safety buffering metadata: ${JSON.stringify(safetyBufferingMetadata)}`
+    : '';
+  const error: any = new Error(`Streaming LLM request timed out ${label} after ${timeoutMs}ms.${metadataSuffix}`);
   error.code = 'LLM_STREAM_TIMEOUT';
   error.timeoutKind = kind;
   return error;
@@ -43,6 +66,8 @@ export function createStreamingAttemptWatchdog(options: {
   let phaseTimer: TimerHandle | undefined;
   let hardTimer: TimerHandle | undefined;
   let phaseGeneration = 0;
+  let inactivityTimeoutMs = DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
+  let safetyBufferingMetadata: Record<string, unknown> | undefined;
 
   const clearPhase = () => {
     if (!phaseTimer) return;
@@ -57,7 +82,7 @@ export function createStreamingAttemptWatchdog(options: {
       timerHooks.clear(hardTimer);
       hardTimer = undefined;
     }
-    options.onTimeout(timeoutError(kind, timeoutMs), kind);
+    options.onTimeout(timeoutError(kind, timeoutMs, safetyBufferingMetadata), kind);
   };
   const schedulePhase = (kind: 'first-content' | 'content-inactivity', timeoutMs: number) => {
     clearPhase();
@@ -80,7 +105,13 @@ export function createStreamingAttemptWatchdog(options: {
   return {
     markMeaningfulProgress() {
       if (finished) return;
-      schedulePhase('content-inactivity', DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS);
+      schedulePhase('content-inactivity', inactivityTimeoutMs);
+    },
+    enterSafetyBuffering(metadata) {
+      if (finished) return;
+      safetyBufferingMetadata = boundSafetyBufferingMetadata(metadata);
+      inactivityTimeoutMs = SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS;
+      schedulePhase('content-inactivity', inactivityTimeoutMs);
     },
     finish() {
       if (finished) return;

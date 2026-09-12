@@ -90,7 +90,7 @@ export function showSessionIdleNotification(session: SessionIdleNotificationSess
 
 /** Owns only the page-created Notification handles registered by one live WebUI root. */
 export class SessionIdleNotificationRegistry {
-  private notifications = new Map<string, Set<SessionIdleNotificationHandle>>()
+  private notifications = new Map<string, SessionIdleNotificationHandle>()
 
   constructor(private readonly focusPage: () => void = () => {
     window.focus()
@@ -98,9 +98,8 @@ export class SessionIdleNotificationRegistry {
   }) {}
 
   retain(sessionId: string, notification: SessionIdleNotificationHandle, openSession: OpenSessionFromNotification): void {
-    const owned = this.notifications.get(sessionId) || new Set<SessionIdleNotificationHandle>()
-    owned.add(notification)
-    this.notifications.set(sessionId, owned)
+    const previous = this.notifications.get(sessionId)
+    this.notifications.set(sessionId, notification)
 
     notification.onclick = () => {
       this.remove(sessionId, notification)
@@ -113,15 +112,19 @@ export class SessionIdleNotificationRegistry {
       }
     }
     notification.onclose = () => this.remove(sessionId, notification)
+
+    if (previous && previous !== notification) {
+      try { previous.onclick = null } catch { /* Ignore host-object assignment failures. */ }
+      try { previous.onclose = null } catch { /* Ignore host-object assignment failures. */ }
+      try { previous.close() } catch { /* Best-effort browser/OS cleanup. */ }
+    }
   }
 
   closeSession(sessionId: string): void {
-    const owned = this.notifications.get(sessionId)
-    if (!owned) return
-    for (const notification of [...owned]) {
-      this.remove(sessionId, notification)
-      try { notification.close() } catch { /* Best-effort browser/OS cleanup. */ }
-    }
+    const notification = this.notifications.get(sessionId)
+    if (!notification) return
+    this.remove(sessionId, notification)
+    try { notification.close() } catch { /* Best-effort browser/OS cleanup. */ }
   }
 
   closeSessions(sessionIds: Iterable<string>): void {
@@ -139,14 +142,13 @@ export class SessionIdleNotificationRegistry {
   }
 
   count(sessionId?: string): number {
-    if (sessionId) return this.notifications.get(sessionId)?.size || 0
-    return [...this.notifications.values()].reduce((total, owned) => total + owned.size, 0)
+    if (sessionId) return this.notifications.has(sessionId) ? 1 : 0
+    return this.notifications.size
   }
 
   private remove(sessionId: string, notification: SessionIdleNotificationHandle): void {
-    const owned = this.notifications.get(sessionId)
-    if (!owned?.delete(notification)) return
-    if (owned.size === 0) this.notifications.delete(sessionId)
+    if (this.notifications.get(sessionId) !== notification) return
+    this.notifications.delete(sessionId)
     try { notification.onclick = null } catch { /* Ignore host-object assignment failures. */ }
     try { notification.onclose = null } catch { /* Ignore host-object assignment failures. */ }
   }

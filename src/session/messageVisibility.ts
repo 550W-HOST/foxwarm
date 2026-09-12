@@ -30,5 +30,5 @@ export function redactDisplayOnlyMessageForModel(message: Message): Message {
 }
 
 export function formatModelVisibilitySuffix(message: Pick<Message, 'modelVisible'>): string {
-  return isModelVisibleMessage(message) ? '' : ' [display-only]';
+  return isModelVisibleMessage(message) ? '' : ' [non-context]';
 }

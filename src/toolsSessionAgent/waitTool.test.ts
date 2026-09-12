@@ -116,16 +116,11 @@ test('buildWaitTimeoutMessage uses fixed text and no custom timeout message', ()
 test('wait tool schema requires declared progress and distinguishes all/any/exec/input/fallback sources', () => {
   const waitDefinition = definitions.find(definition => definition.name === 'wait');
   assert.ok(waitDefinition);
-  assert.match(waitDefinition.description, /pause .* until new activity arrives/i);
-  assert.match(waitDefinition.description, /declare at least one progress source or fallback/i);
-  assert.match(waitDefinition.description, /one-shot liveness wake/i);
-  assert.doesNotMatch(waitDefinition.description, /event-driven/i);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.uniqueItems, true);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.minItems, 2);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.type, 'string');
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.pattern, '.*\\S.*');
-  assert.match(waitDefinition.parameters.properties.waitAllSessions?.description || '', /every listed Session must report/i);
   assert.equal(waitDefinition.parameters.properties.waitAnySessions?.minItems, 1);
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.items?.type, 'string');

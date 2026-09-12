@@ -8,11 +8,13 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 
 ### 1. Trigger and snapshot
 
+- Compact planning snapshots preserve custom memory sources and mutate prompt state only on the detached clone; commit refreshes live memory using its recorded concrete snapshot identity. Canonical prompt behavior: [conditional memory snapshots](./conditional-memory-snapshots.md).
 - `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
 - At that automatic trigger, Foxwarm first dry-runs one historical function-response pruning pass against the complete authoritative history. It uses the ordinary oldest/compactable split and atomic tool boundary, keeps recent/current activity untouched, and never prunes function-call arguments.
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The default compact request keeps the newest 30% of rendered history (`llm.compactKeepPercent`, default `0.3`).
 - Async and awaited modes use the same snapshot/job/result path. Planning mutates a transient session clone; live state changes only during a compatible commit.
+- Awaited planning publishes the existing transient `requesting-model` / `compaction` phase from operation admission through preparation, provider retries, commit, cancellation, failure, or no-op cleanup. Its owned release cannot clear a newer runtime phase. Background planning does not publish or replace a concurrent foreground phase.
 - For async-capable models, an explicit request starts snapshot planning immediately even while the live session is busy; planning is not a session queue item. Only the ready `compact-commit` enters the router queue for safe application. A busy explicit request on a model with `asyncCompact:false` reports background compaction unavailable instead of storing hidden deferred work; idle explicit and normal end-of-turn awaited compaction remain supported.
 
 ### 2. Candidate policy and planning
@@ -66,6 +68,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 - `previewLength` is one total output budget, clamped to 1,000–20,000. Tool details are folded unless explicitly expanded.
 - Filtering notices remain visible when every item is excluded or the preview is truncated.
 - `get_session_messages` uses the same preview renderer and filter vocabulary for selected session-history messages.
+- Explicit session-message and recalled raw-message previews mark `modelVisible:false` rows as `[non-context]` and render their stored content under the same filters, tool folding, and total preview budget. This inspection boundary does not make those rows model-visible or add them to semantic indexing.
 
 ### 7. WebUI expansion
 

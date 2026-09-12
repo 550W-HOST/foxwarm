@@ -936,14 +936,18 @@ test('idle worker BTW snapshots exact owner state, persists cache lineage, and a
 
 test('bound worker host closes reminders, awaits automatic compaction, and rejects background commits', async () => {
   const compactSession = baseSession('exact-worker-compact'); compactSession.compactThresholdTokens = 10;
-  await withLocalHost(compactSession, async ({ turnHost, session, readDurable }) => {
+  const compactRuntimePhases: Array<string | undefined> = [];
+  await withLocalHost(compactSession, async ({ host, turnHost, session, readDurable }) => {
     await turnHost.checkAndCompactIfNeeded(session.id, undefined);
     await turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 10 });
     await turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 11 });
     await turnHost.processSessionCompactionRequest(session.id, {});
+    await (host as any).transientPublishTail;
     await assert.rejects(() => turnHost.applyCompletedCompactJob(session.id), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
     assert.equal(readDurable().history.length, 0);
-  });
+  }, false, async projection => { compactRuntimePhases.push(projection.runtimeState.active?.phase); });
+  assert(compactRuntimePhases.includes('compaction'));
+  assert.equal(compactRuntimePhases.at(-1), undefined);
 
   const initial = baseSession('exact-worker-child'); initial.parentSessionId = 'parent-session';
   const sessionsFileBefore = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;

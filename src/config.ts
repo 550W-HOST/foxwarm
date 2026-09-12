@@ -969,6 +969,7 @@ export type ProviderConfigEntry = {
   historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
+  disallowEmptyResponse?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
@@ -1003,6 +1004,7 @@ export type ModelConfigEntry = {
   historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
+  disallowEmptyResponse?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: NormalizedOpenAIWebSearchConfig;
@@ -1246,6 +1248,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     ...(historyReasoningField ? { historyReasoningField } : {}),
     asyncCompact: resolvedProviderEntry.asyncCompact,
     requestCompression: resolvedProviderEntry.requestCompression,
+    disallowEmptyResponse: resolvedProviderEntry.disallowEmptyResponse,
     extraHeaders: {
       ...(resolvedProviderEntry.extraHeaders || {}),
       ...(modelOverride?.extraHeaders || {}),
@@ -1336,6 +1339,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'effort',
     'historyReasoningField',
     'asyncCompact',
+    'disallowEmptyResponse',
     'webSearch',
   ];
 
@@ -1425,6 +1429,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           requestCompression: entry.requestCompression || null,
           contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
           asyncCompact: entry.asyncCompact !== false,
+          disallowEmptyResponse: entry.disallowEmptyResponse === true,
           effort: getConcreteModelEffortConfig(entry),
           historyReasoningField: entry.historyReasoningField || null,
           apiKeyHash: hashConfigValue(entry.apiKey || ''),

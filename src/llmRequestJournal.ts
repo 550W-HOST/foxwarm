@@ -60,14 +60,14 @@ type RequestRecord = {
   promptCacheKeyHash: string; messageCount: number; checkpointMessageObjectIds?: string[];
   baseRequestId?: string; commonPrefixLength?: number; appendedMessageObjectIds?: string[]; deltaDepth: number;
 };
-type AttemptStartRecord = { v: 1; kind: 'attempt-start'; eventId: string; requestId: string; attempt: number; startedAt: number; concreteModelId: string; virtualModelKey?: string; providerType: string; semanticPayloadSha256: string };
+type AttemptStartRecord = { v: 1; kind: 'attempt-start'; eventId: string; requestId: string; attempt: number; startedAt: number; concreteModelId: string; virtualModelKey?: string; providerType: string; semanticPayloadSha256: string; promptObjectId?: string };
 type AttemptResultRecord = { v: 1; kind: 'attempt-result'; eventId: string; requestId: string; attempt: number; completedAt: number; outcome: 'success' | 'failure' | 'abort'; result?: ChatResult; error?: Record<string, unknown> };
 type JournalRecord = ObjectRecord | RequestRecord | AttemptStartRecord | AttemptResultRecord;
 
 export type ReconstructedLlmRequest = {
   requestId: string; sessionId?: string; purpose: LlmRequestPurpose; iteration: number; createdAt: number;
   systemPrompt: string; toolDefinitions: ToolDefinition[]; messages: Message[]; requestedModelKey: string;
-  promptCacheKeyHash: string; attempts: Array<{ start: AttemptStartRecord; result?: AttemptResultRecord }>;
+  promptCacheKeyHash: string; attempts: Array<{ start: AttemptStartRecord; systemPrompt: string; result?: AttemptResultRecord }>;
   completeness: 'complete';
 };
 
@@ -90,6 +90,10 @@ export function canonicalJournalJson(value: unknown): string { return JSON.strin
 function sha256(value: string): string { return `sha256:${crypto.createHash('sha256').update(value).digest('hex')}`; }
 export function hashJournalValue(value: unknown): string { return sha256(canonicalJournalJson(value)); }
 
+function journalObjectId(objectKind: ObjectKind, value: unknown): string {
+  return sha256(`${objectKind}\0${canonicalJournalJson(value)}`);
+}
+
 function getDb(): DatabaseSync {
   if (!db) throw new Error('LLM request journal is not initialized');
   return db;
@@ -99,7 +103,10 @@ function openStore(): void {
   if (db) return;
   fs.ensureDirSync(path.dirname(LLM_REQUEST_JOURNAL_DB_PATH));
   db = new DatabaseSync(LLM_REQUEST_JOURNAL_DB_PATH);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000');
+  // Install the lock wait before WAL/schema setup so concurrent server/CLI
+  // owners can serialize an additive initialization migration.
+  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON');
   db.exec(`
     CREATE TABLE IF NOT EXISTS llm_journal_metadata (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -116,7 +123,8 @@ function openStore(): void {
     CREATE INDEX IF NOT EXISTS idx_llm_journal_requests_session_created ON llm_journal_requests(session_id, created_at, request_id);
     CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts (
       event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL,
-      concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL
+      concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL,
+      prompt_object_id TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_journal_attempt_results (
       event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt INTEGER NOT NULL, completed_at INTEGER NOT NULL,
@@ -126,6 +134,7 @@ function openStore(): void {
       source_path TEXT PRIMARY KEY, imported_size INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
   `);
+  ensureAttemptPromptObjectColumn();
 }
 
 function runInTransaction(fn: () => void): void {
@@ -133,6 +142,15 @@ function runInTransaction(fn: () => void): void {
   database.exec('BEGIN IMMEDIATE');
   try { fn(); database.exec('COMMIT'); }
   catch (error) { try { database.exec('ROLLBACK'); } catch {} throw error; }
+}
+
+function ensureAttemptPromptObjectColumn(): void {
+  runInTransaction(() => {
+    const columns = getDb().prepare('PRAGMA table_info(llm_journal_attempt_starts)').all() as any[];
+    if (!columns.some(column => column.name === 'prompt_object_id')) {
+      getDb().exec('ALTER TABLE llm_journal_attempt_starts ADD COLUMN prompt_object_id TEXT');
+    }
+  });
 }
 
 function insertRecord(record: JournalRecord): void {
@@ -153,8 +171,8 @@ function insertRecord(record: JournalRecord): void {
     ); return;
   }
   if (record.kind === 'attempt-start') {
-    database.prepare('INSERT OR IGNORE INTO llm_journal_attempt_starts(event_id,request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256) VALUES(?,?,?,?,?,?,?,?)')
-      .run(record.eventId, record.requestId, record.attempt, record.startedAt, record.concreteModelId, record.virtualModelKey || null, record.providerType, record.semanticPayloadSha256); return;
+    database.prepare('INSERT OR IGNORE INTO llm_journal_attempt_starts(event_id,request_id,attempt,started_at,concrete_model_id,virtual_model_key,provider_type,semantic_payload_sha256,prompt_object_id) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(record.eventId, record.requestId, record.attempt, record.startedAt, record.concreteModelId, record.virtualModelKey || null, record.providerType, record.semanticPayloadSha256, record.promptObjectId || null); return;
   }
   database.prepare('INSERT OR IGNORE INTO llm_journal_attempt_results(event_id,request_id,attempt,completed_at,outcome,result_json,error_json) VALUES(?,?,?,?,?,?,?)')
     .run(record.eventId, record.requestId, record.attempt, record.completedAt, record.outcome, record.result ? canonicalJournalJson(record.result) : null, record.error ? canonicalJournalJson(record.error) : null);
@@ -186,6 +204,7 @@ function assertAttemptStartRecord(record: AttemptStartRecord): void {
   if (typeof record.eventId !== 'string' || typeof record.requestId !== 'string' || !Number.isInteger(record.attempt) || record.attempt < 1
     || !Number.isFinite(record.startedAt) || typeof record.concreteModelId !== 'string' || typeof record.providerType !== 'string'
     || (record.virtualModelKey !== undefined && typeof record.virtualModelKey !== 'string')
+    || (record.promptObjectId !== undefined && !/^sha256:[a-f0-9]{64}$/.test(record.promptObjectId))
     || !/^sha256:[a-f0-9]{64}$/.test(record.semanticPayloadSha256)) throw new Error('Invalid LLM journal attempt-start record');
 }
 
@@ -208,7 +227,8 @@ function requestRecordFromRow(row: any): RequestRecord {
 
 function attemptStartRecordFromRow(row: any): AttemptStartRecord {
   return { v: 1, kind: 'attempt-start', eventId: row.event_id, requestId: row.request_id, attempt: row.attempt, startedAt: row.started_at,
-    concreteModelId: row.concrete_model_id, virtualModelKey: row.virtual_model_key || undefined, providerType: row.provider_type, semanticPayloadSha256: row.semantic_payload_sha256 };
+    concreteModelId: row.concrete_model_id, virtualModelKey: row.virtual_model_key || undefined, providerType: row.provider_type, semanticPayloadSha256: row.semantic_payload_sha256,
+    ...(row.prompt_object_id !== null && row.prompt_object_id !== undefined ? { promptObjectId: row.prompt_object_id } : {}) };
 }
 
 function attemptResultRecordFromRow(row: any): AttemptResultRecord {
@@ -297,7 +317,7 @@ async function appendRecord(record: JournalRecord): Promise<void> {
 
 async function ensureObject(objectKind: ObjectKind, value: unknown): Promise<string> {
   const payload = canonicalJournalJson(value);
-  const objectId = sha256(`${objectKind}\0${payload}`);
+  const objectId = journalObjectId(objectKind, value);
   await initLlmRequestJournal();
   const exists = getDb().prepare('SELECT 1 FROM llm_journal_objects WHERE object_id=?').get(objectId);
   if (!exists) await appendRecord({ v: 1, kind: 'object', objectId, objectKind, payload, createdAt: Date.now() });
@@ -334,14 +354,14 @@ function reconstructMessageIdsSync(requestId: string, seen = new Set<string>()):
 
 export async function beginLlmRequestJournal(args: {
   sessionId?: string; purpose?: LlmRequestPurpose; iteration?: number; systemPrompt: string; toolDefinitions: ToolDefinition[];
-  messages: Message[]; requestedModelKey: string; promptCacheKey: string;
+  messages: Message[]; requestedModelKey: string; promptCacheKey: string; requestId?: string;
 }): Promise<{ requestId: string }> {
   await initLlmRequestJournal();
   const promptObjectId = await ensureObject('prompt', args.systemPrompt);
   const toolSchemaObjectId = await ensureObject('tool-schema', args.toolDefinitions);
   const messageObjectIds: string[] = [];
   for (const message of args.messages) messageObjectIds.push(await ensureObject('message', message));
-  const requestId = randomUUID();
+  const requestId = args.requestId || randomUUID();
   let baseRequestId: string | undefined;
   let commonPrefixLength = 0;
   let deltaDepth = 0;
@@ -364,9 +384,23 @@ export async function beginLlmRequestJournal(args: {
   return { requestId };
 }
 
-export async function appendLlmAttemptStart(args: Omit<AttemptStartRecord, 'v'|'kind'|'eventId'|'startedAt'|'semanticPayloadSha256'> & { startedAt?: number; semanticPayload: unknown }): Promise<void> {
-  const { semanticPayload, ...rest } = args;
-  await appendRecord({ v: 1, kind: 'attempt-start', eventId: randomUUID(), startedAt: args.startedAt || Date.now(), ...rest, semanticPayloadSha256: hashJournalValue(semanticPayload) });
+export async function appendLlmAttemptStart(args: Omit<AttemptStartRecord, 'v'|'kind'|'eventId'|'startedAt'|'semanticPayloadSha256'|'promptObjectId'> & { startedAt?: number; semanticPayload: unknown; systemPrompt?: string }): Promise<void> {
+  const { semanticPayload, systemPrompt, ...rest } = args;
+  let promptObjectId: string | undefined;
+  if (systemPrompt !== undefined) {
+    await initLlmRequestJournal();
+    const request: any = getDb().prepare('SELECT prompt_object_id FROM llm_journal_requests WHERE request_id=?').get(args.requestId);
+    if (!request) throw new Error(`LLM request journal request ${args.requestId} not found`);
+    const effectivePromptObjectId = journalObjectId('prompt', systemPrompt);
+    if (args.attempt === 1 && effectivePromptObjectId !== request.prompt_object_id) {
+      throw new Error('LLM request journal attempt 1 must use the request system prompt');
+    }
+    if (effectivePromptObjectId !== request.prompt_object_id) {
+      promptObjectId = await ensureObject('prompt', systemPrompt);
+    }
+  }
+  await appendRecord({ v: 1, kind: 'attempt-start', eventId: randomUUID(), startedAt: args.startedAt || Date.now(), ...rest,
+    semanticPayloadSha256: hashJournalValue(semanticPayload), ...(promptObjectId ? { promptObjectId } : {}) });
 }
 export async function appendLlmAttemptResult(args: Omit<AttemptResultRecord, 'v'|'kind'|'eventId'|'completedAt'> & { completedAt?: number }): Promise<void> {
   await appendRecord({ v: 1, kind: 'attempt-result', eventId: randomUUID(), completedAt: args.completedAt || Date.now(), ...args });
@@ -399,6 +433,9 @@ export async function reconstructLlmRequest(requestId: string): Promise<Reconstr
     for (const start of starts) {
       assertAttemptStartRecord(start);
       if (start.requestId !== requestId || startsByAttempt.has(start.attempt)) throw new Error(`Invalid or duplicate LLM journal attempt start for ${requestId}`);
+      if (start.attempt === 1 && start.promptObjectId !== undefined && start.promptObjectId !== requestRecord.promptObjectId) {
+        throw new Error(`LLM journal attempt 1 prompt differs from request prompt for ${requestId}`);
+      }
       startsByAttempt.set(start.attempt, start);
     }
     for (const result of results) {
@@ -406,11 +443,16 @@ export async function reconstructLlmRequest(requestId: string): Promise<Reconstr
       if (result.requestId !== requestId || !startsByAttempt.has(result.attempt) || resultsByAttempt.has(result.attempt)) throw new Error(`Invalid, orphaned, or duplicate LLM journal attempt result for ${requestId}`);
       resultsByAttempt.set(result.attempt, result);
     }
+    const systemPrompt = objectValue<string>(requestRecord.promptObjectId, 'prompt');
     return {
       requestId, sessionId: requestRecord.sessionId, purpose: requestRecord.purpose, iteration: requestRecord.iteration, createdAt: requestRecord.createdAt,
-      systemPrompt: objectValue<string>(requestRecord.promptObjectId, 'prompt'), toolDefinitions: objectValue<ToolDefinition[]>(requestRecord.toolSchemaObjectId, 'tool-schema'),
+      systemPrompt, toolDefinitions: objectValue<ToolDefinition[]>(requestRecord.toolSchemaObjectId, 'tool-schema'),
       messages: ids.map(id => objectValue<Message>(id, 'message')), requestedModelKey: requestRecord.requestedModelKey, promptCacheKeyHash: requestRecord.promptCacheKeyHash,
-      attempts: starts.map(start => ({ start, result: resultsByAttempt.get(start.attempt) })), completeness: 'complete',
+      attempts: starts.map(start => ({
+        start,
+        systemPrompt: start.promptObjectId !== undefined ? objectValue<string>(start.promptObjectId, 'prompt') : systemPrompt,
+        result: resultsByAttempt.get(start.attempt),
+      })), completeness: 'complete',
     };
   } catch (error: any) {
     return { requestId, completeness: 'corrupt', errors: [error?.message || String(error)] };
@@ -589,6 +631,19 @@ export async function replaceLlmJournalAttemptStartHashForTests(requestId: strin
   if (!row) throw new Error(`Attempt start for ${requestId} not found`);
   getDb().prepare('UPDATE llm_journal_attempt_starts SET semantic_payload_sha256=? WHERE event_id=?').run(hash, row.event_id);
   return row.semantic_payload_sha256;
+}
+export async function getLlmJournalRequestObjectIdsForTests(requestId: string): Promise<{ promptObjectId: string; toolSchemaObjectId: string }> {
+  await initLlmRequestJournal();
+  const row: any = getDb().prepare('SELECT prompt_object_id,tool_schema_object_id FROM llm_journal_requests WHERE request_id=?').get(requestId);
+  if (!row) throw new Error(`Request ${requestId} not found`);
+  return { promptObjectId: row.prompt_object_id, toolSchemaObjectId: row.tool_schema_object_id };
+}
+export async function replaceLlmJournalAttemptPromptObjectIdForTests(requestId: string, attempt: number, promptObjectId: string | null): Promise<string | null> {
+  await initLlmRequestJournal();
+  const row: any = getDb().prepare('SELECT event_id,prompt_object_id FROM llm_journal_attempt_starts WHERE request_id=? AND attempt=?').get(requestId, attempt);
+  if (!row) throw new Error(`Attempt ${attempt} for ${requestId} not found`);
+  getDb().prepare('UPDATE llm_journal_attempt_starts SET prompt_object_id=? WHERE event_id=?').run(promptObjectId, row.event_id);
+  return row.prompt_object_id || null;
 }
 export async function replaceLlmJournalAttemptResultOutcomeForTests(requestId: string, outcome: string): Promise<string> {
   await initLlmRequestJournal();

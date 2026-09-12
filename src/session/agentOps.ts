@@ -480,12 +480,15 @@ export async function createSessionInAgent(options: {
     ? agentMeta.isolatedNode.trim()
     : undefined;
 
-  const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles });
   const modelEffort = normalizeProspectiveSessionModelEffortSettings(
     { model, effort },
     effort === undefined ? {} : { effort },
     modelsConfig,
   );
+  const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(modelEffort.model, modelsConfig);
+  const snapshot = snapshotModelId
+    ? await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles, modelId: snapshotModelId })
+    : '';
   deps.assertSessionMutationAllowed([parentSessionId], 'receive a new child session');
   await deps.createSession(sessionId, {
     id: sessionId,
@@ -624,11 +627,14 @@ export async function createAgentWithMainSession(options: {
   }
 
   try {
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId });
     const modelEffort = normalizeProspectiveSessionModelEffortSettings(
       { model: model ?? sourceSession?.model, effort: effort ?? sourceSession?.effort },
       effort === undefined ? {} : { effort },
     );
+    const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(modelEffort.model);
+    const snapshot = snapshotModelId
+      ? await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId, modelId: snapshotModelId })
+      : '';
     await deps.createSession(mainSessionId, {
       id: mainSessionId,
       agent: agentName,

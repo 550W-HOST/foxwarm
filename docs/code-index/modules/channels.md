@@ -49,6 +49,7 @@ Persisted conversation attachments and broadcast selection are owned by [session
 ## Adapter-specific invariants
 
 - WeWork stream aggregation is opt-in and routes ongoing progress/final delivery to the latest card in one configured instance and conversation. WebSocket mode is separately configured.
+- WeWork proactive text and file delivery prefer configured AIBot WebSocket over a configured legacy webhook, while an explicit per-call webhook URL remains a deliberate legacy-route override.
 - Conversation-latest passive context advances at valid adapter ingress before Router authorization. In a shared multi-sender conversation, a rejected inbound may therefore advance the passive reply/card association even though its content does not enter the session queue or model history; no per-sender card recovery state is maintained.
 - Weixin context tokens are in-memory per user; a new inbound message is required after token loss. QR login sessions expire after five minutes.
 - WebUI `sendFile` is intentionally a no-op because the browser uses authenticated downloads/tool metadata.
@@ -58,7 +59,9 @@ Persisted conversation attachments and broadcast selection are owned by [session
   fixed 10 MiB attachment cap. Direct video/voice are generic saved
   descriptors and nested attachments remain deferred. C2C/group `sendFile`
   uses the destination-specific direct-small or streamed-large official upload
-  flow. Guild/DM media and remote URL send remain unsupported.
+  flow. C2C/group text, media, and typing share one process-local outbound
+  sequence allocator across configured instances; lifecycle changes do not
+  reset it. Guild/DM media and remote URL send remain unsupported.
 
 ## Compatibility
 
@@ -104,6 +107,31 @@ text while removing transient thinking/tool status, and finishes it before
 routing ongoing updates to the latest card. Different instances or
 conversations never share passive context. This policy adds no delivery ledger,
 outbox, or persisted adapter state.
+
+### D-channel-wework-aibot-proactive-delivery
+
+[2026-09-08] When WeWork AIBot WebSocket mode is enabled, ordinary proactive
+`sendMessage` and `sendFile` delivery use the existing long connection even if
+the same channel also has a legacy group webhook URL. An explicit per-call
+`webhookUrl` remains on the legacy text/image/file path, including inbound
+replies already bound to a native webhook URL; legacy-only configuration is
+unchanged. Source-bound stream-card replies and HTTP `response_url` replies
+retain their dedicated routes before this proactive selection. A selected
+WebSocket route never falls back to the webhook after an error, because timeout
+and disconnect outcomes can be ambiguous. Proactive WebSocket text uses the
+supported Markdown message body and preserves target/chat-type routing.
+
+WebSocket media uses the official `aibot_upload_media_init` → zero-based
+`aibot_upload_media_chunk` sequence → `aibot_upload_media_finish` commands,
+with raw 512 KiB chunks and at most 100 chunks. Zero-based indices follow the
+official SDK's executable upload loop; its contradictory type comment is not
+the wire behavior used here. The adapter hashes and reads sequential chunks,
+requires valid `upload_id` and `media_id` ACK fields, then sends the resulting
+image/file through proactive `aibot_send_msg` to the resolved conversation.
+An optional caption is a separate proactive Markdown message on that same route
+after local validation/upload, never a generic text fallback or an update to
+an existing callback stream card. There is no retry, outbox, resume, receipt,
+or cross-route duplicate-delivery mechanism.
 
 ### D-channel-file-descriptor
 

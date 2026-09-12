@@ -13,7 +13,7 @@ Typical cases:
 - creating a new agent cleanly
 - deciding where to put long-term instructions or project memory
 - bootstrapping collaboration rules and starter memory for agents that use child sessions
-- editing an agent's memory and knowing when snapshots must be refreshed
+- editing an agent's memory and choosing when a snapshot refresh is worth its cache cost
 - binding or unbinding an agent to an isolated node
 - moving work from one agent/session layout to another
 - cleaning up an old agent safely
@@ -32,7 +32,7 @@ These are the things an agent can normally use directly when they are in the too
 - `move_session`
 - `set_agent_inherit`
 - `set_agent_isolated`
-- `update_session_snapshot`
+- `refresh_session_snapshot`
 - `list_agents`
 - `session` (status by default, list with `action: "list"`)
 - `read_memory` / `write_memory` / `edit_memory` / `apply_patch_memory` for the **current** agent
@@ -276,34 +276,33 @@ Typical target location would be:
 
 Be careful not to over-assume permissions. Some isolated or restricted contexts may not allow this.
 
-## Common workflow: refresh snapshots after memory changes
+## Common workflow: memory edits and snapshot refresh
 
-A session does not always re-read memory files instantly just because a file changed on disk.
+Do not automatically refresh a snapshot after editing memory. Foxwarm keeps a composed system-prompt snapshot per Session; changing that prefix can lose prompt-cache reuse and make the next request substantially more expensive.
 
-Foxwarm stores a composed prompt snapshot for each session.
+### Changes made in this Session
 
-So after editing another agent's memory, inherit settings, or visible skills, an already-existing session may need a snapshot refresh to pick up the latest state immediately.
+The edit and its explanation are already in this conversation. Use that context to continue; normally leave the current snapshot alone. An explicit refresh is appropriate when the user requests it or when testing snapshot assembly/filtering itself, not as routine cleanup after an edit. New or normally refreshed snapshots will incorporate the saved file.
 
-### Agent-facing path
+### Changes another Session needs immediately
 
-Use the tool:
+Prefer sending that Session a concise change summary with `send_to_session`, including the affected file, the new rule, and any action it needs to take. This adds the information to its conversation without replacing the cached system-prompt prefix. Notify only relevant Sessions and preserve ordinary messaging permissions.
 
-- `update_session_snapshot`
-
-### User-facing path
-
-Tell the user to run:
+If the target must immediately use the complete rebuilt snapshot or updated skill catalog, refresh that exact Session explicitly:
 
 ```text
-/session update-snapshot [session-id]
+refresh_session_snapshot({ sessionId: "target-agent/target-session" })
 ```
 
-### When snapshot refresh is especially important
+Do not omit `sessionId` when intending to refresh another Session: omission targets the caller. A message communicates the change; it does not itself rebuild the snapshot or alter runtime authorization.
 
-- one session edits another agent's memory files
-- you changed inheritance with `set_agent_inherit`
-- you changed isolation and want existing sessions to rebuild prompt/runtime state cleanly
-- skill visibility changed and an already-open session should see the updated catalog now
+The equivalent user-facing command is:
+
+```text
+/session refresh-snapshot target-agent/target-session
+```
+
+Inheritance changes leave existing Session snapshots unchanged by default. Isolation changes still update affected Sessions. Check the operation result before adding another refresh, and do not broadcast refreshes merely because a shared memory file changed.
 
 ## Common workflow: set or clear agent inheritance
 
@@ -312,6 +311,8 @@ Tell the user to run:
 Use:
 
 - `set_agent_inherit`
+
+By default this changes only Agent metadata, so existing Session snapshots keep their current cached prefix. `refreshSnapshots:true` immediately refreshes affected Sessions that have not been inactive for more than one hour; older Sessions are skipped because their next ordinary turn performs the existing automatic refresh. To refresh one exact Session immediately regardless of inactivity, use `refresh_session_snapshot`. New Sessions and later normal refreshes use the new inheritance automatically.
 
 ### User-facing path
 
@@ -386,7 +387,7 @@ Preferred migration flow:
 2. copy or rewrite the important memory files
 3. move/recreate the sessions you still want
 4. set inherit/isolation on the replacement agent as needed
-5. refresh snapshots for surviving sessions that should immediately see the new state
+5. notify relevant surviving sessions; refresh specific snapshots only when the rebuilt prefix is needed immediately
 6. only then consider deleting the old agent
 
 ## Why there is no simple direct agent rename
@@ -448,7 +449,7 @@ Avoid ad-hoc manual mutation such as:
 - creating per-agent `00_SYSTEM.md` and assuming it will be loaded by default
 - deleting agent folders without going through the intended flow
 - editing persistent state files blindly to "fake" a rename
-- assuming an already-open session will instantly consume memory edits without refreshing its snapshot
+- assuming another Session knows about a file edit without a change message or a snapshot refresh
 - treating user-facing `/agent` or `/node` commands as if you can casually execute them yourself
 
 ## Quick scenario checklist for ordinary agent work
@@ -466,9 +467,9 @@ Covered path:
 
 Covered path:
 
-- snapshot caching explanation
-- `update_session_snapshot`
-- `/session update-snapshot` user command fallback
+- distinguish changed files from the target Session's existing snapshot
+- prefer a concise change message to that Session
+- use an explicitly targeted snapshot refresh only when the rebuilt prefix is needed immediately
 
 ### Scenario C: "The agent name was bad; should I rename it?"
 
@@ -509,7 +510,7 @@ Before telling the user to delete an old agent:
 1. confirm the needed memory files were migrated
 2. confirm any wanted sessions were moved/recreated
 3. confirm isolation/inherit settings on the replacement agent are correct
-4. refresh snapshots for important surviving sessions
+4. notify important surviving sessions of the change, or explicitly refresh their snapshots if needed immediately
 5. only then suggest `/agent delete <name> --confirm`
 
 ## Related skill

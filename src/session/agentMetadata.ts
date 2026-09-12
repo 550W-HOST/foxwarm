@@ -5,13 +5,13 @@ import { AGENTS_FILE, getAgentDir } from '../config';
 import { Session } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 import { AgentToolRule, normalizeAgentToolRules } from '../permissions';
+import { shouldAutoRefreshSessionSnapshot } from './snapshotRefresh';
 
-function getSessionSystemPromptOptions(session: Session): { agentName: string; sessionId: string; systemPromptFiles?: string[] } {
-  return {
-    agentName: session.agent || 'main',
-    sessionId: session.id,
-    systemPromptFiles: session.systemPromptFiles,
-  };
+async function rebuildSessionSnapshotIfMaterialized(session: Session): Promise<boolean> {
+  const snapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
+  if (snapshot === undefined) return false;
+  session.persistentMemorySnapshot = snapshot;
+  return true;
 }
 
 export interface AgentMetadata {
@@ -175,8 +175,7 @@ export async function refreshSessionSnapshotForSession(
   persistSession: () => Promise<void>,
 ): Promise<{ sessionId: string; agentName: string }> {
   const agentName = session.agent || 'main';
-  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-  await persistSession();
+  if (await rebuildSessionSnapshotIfMaterialized(session)) await persistSession();
 
   return { sessionId: session.id, agentName };
 }
@@ -200,7 +199,12 @@ export function getAgentInheritanceChain(agentName: string): string[] {
   return chain;
 }
 
-export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
+export async function setAgentInherit(
+  deps: AgentMetadataDeps,
+  agentName: string,
+  inheritAgentName?: string,
+  refreshSnapshots: boolean = false,
+): Promise<{ affectedSessions: string[] }> {
   deps.validateAgentName(agentName);
 
   const agentDir = getAgentDir(agentName);
@@ -236,13 +240,15 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
   await setAgentMetadata(agentName, nextMeta);
 
   const affectedSessions: string[] = [];
+  if (!refreshSnapshots) return { affectedSessions };
+  const refreshStartedAt = Date.now();
   for (const [sessionId, sessionMeta] of deps.getSessionsMap().entries()) {
     const sessionAgent = sessionMeta.agent || 'main';
     if (!getAgentInheritanceChain(sessionAgent).includes(agentName)) continue;
+    if (shouldAutoRefreshSessionSnapshot(sessionMeta, refreshStartedAt)) continue;
 
     const session = await deps.getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-    await deps.saveSession(sessionId);
+    if (await rebuildSessionSnapshotIfMaterialized(session)) await deps.saveSession(sessionId);
     affectedSessions.push(sessionId);
   }
 
@@ -291,7 +297,7 @@ export async function setAgentIsolation(
     if (normalizedNode) {
       session.currentNode = normalizedNode;
     }
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
+    await rebuildSessionSnapshotIfMaterialized(session);
     await deps.saveSession(session.id);
     affectedSessions.push(session.id);
   }

@@ -25,7 +25,7 @@ import {
 } from './llmProviders/openai';
 import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
 import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
-import { createStreamingAttemptWatchdog } from './llmStreamingTimeout';
+import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -61,6 +61,12 @@ import {
     LlmRequestPurpose,
 } from './llmRequestJournal';
 import { toPersistedLlmRequestTiming } from './llmRequestTiming';
+import {
+    buildCurrentModelSnapshot,
+    filterConditionalMemorySource,
+    readCurrentModelSnapshotId,
+} from './conditionalMemory';
+import { isSessionAuthorityPostCommitError } from './session/stateFile';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -198,6 +204,7 @@ type RequestLlmOnceOptions = {
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
     purpose?: LlmRequestPurpose;
     currentSessionEffects?: CurrentSessionEffects;
+    resolveSystemPromptForModel?: (modelId: string) => Promise<string>;
 };
 
 type InternalLlmResult = {
@@ -229,6 +236,7 @@ export interface CurrentSessionEffects {
     placement: 'local' | 'session-worker';
     appendMessage(session: Session, message: Message): Promise<void>;
     persistSession(session: Session): Promise<void>;
+    persistSessionStrict?(session: Session): Promise<void>;
     notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
     registerAbortController(sessionId: string, controller: AbortController): void;
     clearAbortController(sessionId: string, controller: AbortController): void;
@@ -252,11 +260,17 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
             await sessionManager.saveSession(session);
         }
     };
+    const persistSessionStrict = async (session: Session) => {
+        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+            await sessionManager.saveSessionForSessionCritical(session);
+        }
+    };
     return {
         placement: 'local',
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
         persistSession,
+        persistSessionStrict,
         updateBusy: (session, busy) => {
             if (busy) sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'start new work');
             return sessionManager.updateSessionBusyStateForSession(
@@ -704,6 +718,42 @@ function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbac
     return fallbackModelKey;
 }
 
+/**
+ * Resolves a truthful concrete snapshot identity without selecting a virtual
+ * route. Virtual sessions without a recorded generation identity defer until
+ * an actual provider attempt selects a leaf.
+ */
+export function resolveSessionSnapshotModelId(session: Pick<Session, 'model' | 'persistentMemorySnapshot'>): string | undefined {
+    const recordedModelId = readCurrentModelSnapshotId(session.persistentMemorySnapshot || '');
+    if (recordedModelId) return recordedModelId;
+
+    return resolveConcreteModelIdForSnapshot(session.model);
+}
+
+export function resolveConcreteModelIdForSnapshot(model?: string, modelsConfigOverride?: ModelsConfig): string | undefined {
+    const resolved = modelsConfigOverride
+        ? (() => {
+            const currentKey = model && modelsConfigOverride.models[model] ? model : modelsConfigOverride.default;
+            return { currentKey, modelEntry: modelsConfigOverride.models[currentKey] };
+        })()
+        : resolveModelConfig(model);
+    if (!resolved.modelEntry || isVirtualModelConfigEntry(resolved.modelEntry)) return undefined;
+    return getModelIdForMetadata(resolved.modelEntry, resolved.currentKey);
+}
+
+export async function buildSessionSystemPromptSnapshotForSession(
+    session: Pick<Session, 'agent' | 'id' | 'model' | 'persistentMemorySnapshot' | 'systemPromptFiles'>,
+): Promise<string | undefined> {
+    const modelId = resolveSessionSnapshotModelId(session);
+    if (!modelId) return undefined;
+    return buildSessionSystemPromptSnapshot({
+        agentName: session.agent || 'main',
+        sessionId: session.id,
+        systemPromptFiles: session.systemPromptFiles,
+        modelId,
+    });
+}
+
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
     if (signal.aborted) {
         return Promise.reject(makeAbortError());
@@ -921,13 +971,15 @@ function shouldInjectMemoryFileForSession(metadata: MemoryFileFrontMatter, fileP
     return true;
 }
 
-async function readSessionFilteredMemoryFile(filePath: string, sessionId?: string): Promise<string | null> {
+async function readSessionFilteredMemoryFile(filePath: string, sessionId: string | undefined, modelId: string): Promise<string | null> {
     const content = await fs.readFile(filePath, 'utf8');
     const { metadata, body } = parseMemoryFileFrontMatter(content, filePath);
-    return shouldInjectMemoryFileForSession(metadata, filePath, sessionId) ? body : null;
+    return shouldInjectMemoryFileForSession(metadata, filePath, sessionId)
+        ? filterConditionalMemorySource(body, modelId)
+        : null;
 }
 
-async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[], sessionId?: string): Promise<string> {
+async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[], modelId: string, sessionId?: string): Promise<string> {
     let combined = '';
     const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
 
@@ -945,7 +997,7 @@ async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles:
             throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
         }
 
-        const content = await readSessionFilteredMemoryFile(filePath, sessionId);
+        const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
         if (content !== null) {
             combined += formatMemoryBlock(filePath, agentName, 'self', content);
         }
@@ -979,17 +1031,17 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
     return combined;
 }
 
-async function appendDefaultMemoryFiles(agentName: string, sessionId?: string): Promise<string> {
+async function appendDefaultMemoryFiles(agentName: string, modelId: string, sessionId?: string): Promise<string> {
     const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
     let combined = '';
 
     if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
-        const content = await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8');
+        const content = filterConditionalMemorySource(await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8'), modelId);
         combined += formatMemoryBlock(AGENTS_SYSTEM_PROMPT_PATH, 'framework', 'inherited', content);
     } else {
         const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
         if (await fs.pathExists(mainSystemPath)) {
-            const content = await fs.readFile(mainSystemPath, 'utf8');
+            const content = filterConditionalMemorySource(await fs.readFile(mainSystemPath, 'utf8'), modelId);
             const kind = agentName === 'main' ? 'self' : 'inherited';
             combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
         }
@@ -998,7 +1050,7 @@ async function appendDefaultMemoryFiles(agentName: string, sessionId?: string): 
     const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
     for (const inheritedAgentName of inheritChain) {
         const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind, sessionId);
+        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind, modelId, sessionId);
     }
 
     return combined;
@@ -1008,15 +1060,16 @@ export async function buildSessionSystemPromptSnapshot(options: {
     agentName?: string;
     sessionId?: string;
     systemPromptFiles?: string[] | string;
-} = {}): Promise<string> {
+    modelId: string;
+}): Promise<string> {
     const agentName = options.agentName || 'main';
     const sessionId = options.sessionId;
     const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
     const hasCustomMemorySources = options.systemPromptFiles !== undefined;
 
     const memoryBlocks = hasCustomMemorySources
-        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [], sessionId)
-        : await appendDefaultMemoryFiles(agentName, sessionId);
+        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [], options.modelId, sessionId)
+        : await appendDefaultMemoryFiles(agentName, options.modelId, sessionId);
     const skillCatalog = await appendSkillCatalogForAgent(agentName);
     const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_folder: ' + getAgentDir(agentName) + '\n';
     const archiveInfo = [
@@ -1032,9 +1085,10 @@ export async function buildSessionSystemPromptSnapshot(options: {
         '- If you need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.',
         '',
     ].join('\n');
-    return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
+    const body = [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
         .filter(Boolean)
         .join('\n\n');
+    return buildCurrentModelSnapshot(options.modelId, body);
 }
 
 function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string } } {
@@ -1048,7 +1102,7 @@ function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string
     };
 }
 
-async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', sessionId?: string): Promise<string> {
+async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', modelId: string, sessionId?: string): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
         return '';
@@ -1061,7 +1115,7 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     for (const file of mdFiles) {
         if (file.toLowerCase() === 'onboot.md') continue;
         const filePath = path.join(agentMemoryDir, file);
-        const content = await readSessionFilteredMemoryFile(filePath, sessionId);
+        const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
         if (content !== null) {
             combined += formatMemoryBlock(filePath, agentName, kind, content);
         }
@@ -2004,6 +2058,7 @@ export async function chat(
         purpose?: LlmRequestPurpose;
         turnId?: string;
         currentSessionEffects?: CurrentSessionEffects;
+        snapshotAuthority?: 'authoritative' | 'detached';
     },
 ): Promise<ChatResult> {
     const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
@@ -2015,13 +2070,39 @@ export async function chat(
         await currentSessionEffects.appendMessage(session, message);
     };
 
-    // Get persistent context
     const agentName = session.agent || 'main';
-    const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({
-        agentName,
-        sessionId: session.id,
-        systemPromptFiles: session.systemPromptFiles,
-    });
+    const resolveSystemPromptForModel = async (modelId: string): Promise<string> => {
+        const currentSnapshot = session.persistentMemorySnapshot || '';
+        if (readCurrentModelSnapshotId(currentSnapshot) === modelId) return currentSnapshot;
+
+        const rebuiltSnapshot = await buildSessionSystemPromptSnapshot({
+            agentName,
+            sessionId: session.id,
+            systemPromptFiles: session.systemPromptFiles,
+            modelId,
+        });
+        if (options?.snapshotAuthority === 'detached') {
+            session.persistentMemorySnapshot = rebuiltSnapshot;
+            return rebuiltSnapshot;
+        }
+
+        session.persistentMemorySnapshot = rebuiltSnapshot;
+        try {
+            if (currentSessionEffects.persistSessionStrict) {
+                await currentSessionEffects.persistSessionStrict(session);
+            } else {
+                await currentSessionEffects.persistSession(session);
+            }
+        } catch (error) {
+            // A failed authoritative persistence must not leave a matching hot
+            // marker that suppresses the required write on the next attempt.
+            if (!isSessionAuthorityPostCommitError(error) && session.persistentMemorySnapshot === rebuiltSnapshot) {
+                session.persistentMemorySnapshot = currentSnapshot;
+            }
+            throw error;
+        }
+        return rebuiltSnapshot;
+    };
 
     // Add user message if provided
     if (parts) {
@@ -2047,7 +2128,7 @@ export async function chat(
     }
     const completion = await requestLlmOnceInternal({
         contents: contentsForLlm,
-        systemPrompt,
+        systemPrompt: session.persistentMemorySnapshot || '',
         model: session.model,
         effort: session.effort,
         sessionId: session.id,
@@ -2061,6 +2142,7 @@ export async function chat(
         onRetry: options?.onRetry,
         purpose: options?.purpose || 'normal-turn',
         currentSessionEffects: options?.currentSessionEffects,
+        resolveSystemPromptForModel,
     });
     const result = completion.result;
 
@@ -2662,11 +2744,18 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
 
     const toolCalls = allParts.filter(part => !!part.functionCall).map(part => part.functionCall!);
     if (!responseText.trim() && toolCalls.length === 0) {
-        throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
-            kind: 'response-error',
-            retryable: true,
-            countable: true,
-        });
+        if (plan.modelEntry.disallowEmptyResponse === true) {
+            throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
+                kind: 'response-error',
+                retryable: true,
+                countable: true,
+            });
+        }
+        logger.warn({
+            providerType: plan.providerType,
+            modelKey: plan.modelKey,
+            modelId: plan.modelId,
+        }, 'Model completed with no non-whitespace content or tool call; accepting the empty completion.');
     }
 
     const getReportedReasoningTokens = (value: unknown): number | undefined =>
@@ -2765,18 +2854,11 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     // request. Each physical concrete attempt may fall back independently to
     // its leaf default when the selected leaf does not allow that request.
     const requestedEffort = normalizeRequestedEffort(options.effort);
-    // Completeness boundary: all content-addressed canonical inputs and the
-    // request manifest are durable before any provider attempt can be sent.
-    const { requestId } = await beginLlmRequestJournal({
-        sessionId: options.sessionId,
-        purpose: options.purpose || 'low-level',
-        iteration: options.iteration || 0,
-        systemPrompt: options.systemPrompt || '',
-        toolDefinitions: options.toolDefinitions || [],
-        messages: canonicalContents,
-        requestedModelKey: routeKey,
-        promptCacheKey,
-    });
+    // Allocate the stable outer-request identity before streaming setup. The
+    // manifest is written after attempt 1 selects its concrete model and
+    // resolves the exact effective prompt, but still before provider send.
+    const requestId = randomUUID();
+    let requestJournalStarted = false;
     const requestedMaxAttempts = options.maxRetries ?? DEFAULT_LLM_MAX_ATTEMPTS;
     const maxAttempts = Number.isFinite(requestedMaxAttempts)
         ? Math.max(1, Math.floor(requestedMaxAttempts))
@@ -2838,8 +2920,15 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 modelEntry = concreteEntry;
             }
 
+            const concreteModelId = getModelIdForMetadata(modelEntry, modelKey);
+            const effectiveSystemPrompt = options.resolveSystemPromptForModel
+                ? await options.resolveSystemPromptForModel(concreteModelId)
+                : options.systemPrompt || '';
+            const attemptRequest = effectiveSystemPrompt === options.systemPrompt
+                ? options
+                : { ...options, systemPrompt: effectiveSystemPrompt };
             const plan = buildConcreteRequestPlan({
-                request: options,
+                request: attemptRequest,
                 fixedContents,
                 modelEntry,
                 modelKey,
@@ -2848,6 +2937,20 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 attempt,
                 requestedEffort,
             });
+            if (!requestJournalStarted) {
+                await beginLlmRequestJournal({
+                    requestId,
+                    sessionId: options.sessionId,
+                    purpose: options.purpose || 'low-level',
+                    iteration: options.iteration || 0,
+                    systemPrompt: effectiveSystemPrompt,
+                    toolDefinitions: options.toolDefinitions || [],
+                    messages: canonicalContents,
+                    requestedModelKey: routeKey,
+                    promptCacheKey,
+                });
+                requestJournalStarted = true;
+            }
             await appendLlmAttemptStart({
                 requestId,
                 attempt,
@@ -2855,6 +2958,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                 providerType: plan.providerType,
                 semanticPayload: plan.data,
+                systemPrompt: effectiveSystemPrompt,
             });
             logger.info({
                 modelKey,
@@ -2909,6 +3013,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     : null;
                 let attemptSignal = abortController.signal;
                 let markMeaningfulProgress: (() => void) | undefined;
+                let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
                 if (plan.useStreamingApi) {
                     const attemptAbortController = new AbortController();
                     const abortAttemptFromOuter = () => attemptAbortController.abort();
@@ -2923,6 +3028,18 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     });
                     attemptSignal = attemptAbortController.signal;
                     markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
+                    handleSafetyBuffering = metadata => {
+                        const boundedMetadata = boundSafetyBufferingMetadata(metadata);
+                        watchdog.enterSafetyBuffering(boundedMetadata);
+                        logger.warn({
+                            sessionId: options.sessionId,
+                            purpose: options.purpose || 'low-level',
+                            llmRequestId: requestId,
+                            iteration,
+                            attempt,
+                            metadata: boundedMetadata,
+                        }, 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+                    };
                     cleanupStreamingAttempt = () => {
                         watchdog.finish();
                         abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
@@ -2933,6 +3050,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
                         : undefined,
                     onMeaningfulProgress: markMeaningfulProgress,
+                    onSafetyBuffering: handleSafetyBuffering,
                     onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                     onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
                 };

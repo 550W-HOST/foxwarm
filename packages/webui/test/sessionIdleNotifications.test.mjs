@@ -198,35 +198,86 @@ function notificationHandle({ closeThrows = false } = {}) {
   }
 }
 
-test('page notification registry retains multiple handles and closes only the acknowledged session', () => {
+test('page notification registry retains the latest successful handle before closing its same-session predecessor', () => {
   const registry = new notifications.SessionIdleNotificationRegistry(() => {})
+  const closeOrder = []
   const first = notificationHandle()
-  const second = notificationHandle({ closeThrows: true })
+  first.close = function () {
+    this.closeCalls += 1
+    closeOrder.push(['close-first', registry.count('agent/task')])
+    throw new Error('close failed')
+  }
+  const second = notificationHandle()
   const other = notificationHandle()
   registry.retain('agent/task', first, () => {})
-  registry.retain('agent/task', second, () => {})
   registry.retain('agent/other', other, () => {})
+  registry.retain('agent/task', second, () => {})
 
-  assert.equal(registry.count('agent/task'), 2)
-  registry.closeSession('agent/task')
+  assert.deepEqual(closeOrder, [['close-first', 1]])
   assert.equal(first.closeCalls, 1)
+  assert.equal(registry.count('agent/task'), 1)
+  assert.equal(registry.count('agent/other'), 1)
+  registry.closeSession('agent/task')
   assert.equal(second.closeCalls, 1)
   assert.equal(registry.count('agent/task'), 0)
   assert.equal(registry.count('agent/other'), 1)
 })
 
-test('OS close removes only that page notification handle', () => {
+test('same-session replacement leaves other sessions independent', () => {
+  const registry = new notifications.SessionIdleNotificationRegistry(() => {})
+  const first = notificationHandle()
+  const second = notificationHandle()
+  const other = notificationHandle()
+  registry.retain('agent/task', first, () => {})
+  registry.retain('agent/other', other, () => {})
+  registry.retain('agent/task', second, () => {})
+
+  assert.equal(first.closeCalls, 1)
+  assert.equal(registry.count('agent/task'), 1)
+  assert.equal(registry.count('agent/other'), 1)
+  other.onclose(new Event('close'))
+  assert.equal(registry.count('agent/task'), 1)
+  assert.equal(registry.count('agent/other'), 0)
+})
+
+test('failed new notification delivery preserves the prior same-session handle', () => {
+  const previousNotification = globalThis.Notification
+  const registry = new notifications.SessionIdleNotificationRegistry(() => {})
+  const prior = notificationHandle()
+  registry.retain('agent/task', prior, () => {})
+
+  class FailingNotification {
+    static permission = 'granted'
+    constructor() {
+      throw new Error('delivery failed')
+    }
+  }
+
+  try {
+    globalThis.Notification = FailingNotification
+    const replacement = notifications.showSessionIdleNotification(session('task'))
+    assert.equal(replacement, null)
+    if (replacement) registry.retain('agent/task', replacement, () => {})
+    assert.equal(prior.closeCalls, 0)
+    assert.equal(registry.count('agent/task'), 1)
+  } finally {
+    globalThis.Notification = previousNotification
+  }
+})
+
+test('a replaced notification close callback cannot discard the newly retained handle', () => {
   const registry = new notifications.SessionIdleNotificationRegistry(() => {})
   const first = notificationHandle()
   const second = notificationHandle()
   registry.retain('agent/task', first, () => {})
-  registry.retain('agent/task', second, () => {})
+  const oldOnClose = first.onclose
 
-  first.onclose(new Event('close'))
+  registry.retain('agent/task', second, () => {})
+  oldOnClose(new Event('close'))
+
   assert.equal(registry.count('agent/task'), 1)
-  registry.closeSession('agent/task')
-  assert.equal(first.closeCalls, 0)
-  assert.equal(second.closeCalls, 1)
+  second.onclose(new Event('close'))
+  assert.equal(registry.count('agent/task'), 0)
 })
 
 test('notification click closes/removes, focuses, and opens the exact canonical session', async () => {

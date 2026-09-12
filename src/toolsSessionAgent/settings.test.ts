@@ -6,7 +6,7 @@ import type { Session } from '../types';
 import {
   tool_set_session_child_model,
   tool_set_session_compact_threshold,
-  tool_update_session_snapshot,
+  tool_refresh_session_snapshot,
 } from './settings';
 
 const sessionManagerModule = require('../sessionManager') as typeof import('../sessionManager');
@@ -103,8 +103,8 @@ test('own-session settings and snapshot use the detached owner and one persist h
     assert.equal(session.childModelDefault, undefined);
     assert.equal(persistCount, 7);
 
-    assert.equal(await tool_update_session_snapshot({}, ctx),
-      `Session \`${session.id}\` snapshot updated.\nAgent: \`main\``);
+    assert.equal(await tool_refresh_session_snapshot({}, ctx),
+      `Session \`${session.id}\` snapshot refreshed.\nAgent: \`main\``);
     assert.notEqual(session.persistentMemorySnapshot, 'stale snapshot');
     assert.equal(persistCount, 8);
   } finally {
@@ -181,6 +181,7 @@ test('other, no-hook, and mismatched settings targets retain legacy service rout
   const targetId = `${owner.id}_target`;
   const target = await sessionManager.getSession(targetId);
   Object.assign(target, createDetachedSession(targetId));
+  target.meta = { ...(target.meta || {}), lastMessageTime: Date.now() - (2 * 60 * 60 * 1000) };
   await sessionManager.saveSession(targetId);
   let persistCount = 0;
   const { currentKey } = resolveModelConfig(target.model);
@@ -205,11 +206,11 @@ test('other, no-hook, and mismatched settings targets retain legacy service rout
     assert.equal((await sessionManager.getSession(targetId)).compactThresholdTokens, 22222);
 
     const beforeSnapshot = owner.persistentMemorySnapshot;
-    assert.equal(await tool_update_session_snapshot({ sessionId: targetId }, {
+    assert.equal(await tool_refresh_session_snapshot({ sessionId: targetId }, {
       sessionId: targetId,
       session: owner,
       persistCurrentSession: async () => { persistCount += 1; },
-    } as any), `Session \`${targetId}\` snapshot updated.\nAgent: \`main\``);
+    } as any), `Session \`${targetId}\` snapshot refreshed.\nAgent: \`main\``);
     assert.equal(owner.persistentMemorySnapshot, beforeSnapshot);
     assert.notEqual((await sessionManager.getSession(targetId)).persistentMemorySnapshot, 'stale snapshot');
     assert.equal(persistCount, 0);

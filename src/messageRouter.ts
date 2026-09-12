@@ -116,6 +116,12 @@ export class MessageRouter {
     const conversationId = source.conversationId || source.channelUserId;
     const channelTargetId = `${channelInstanceId}:${conversationId}`;
     const inputTime = formatCurrentTimeForPrompt(new Date());
+    const channelConfig = conversationId
+      ? sessionManager.getChannelConfig(channelInstanceId, conversationId)
+      : undefined;
+    const sourceHint = channelType !== 'webui' && conversationId && channelConfig?.mode !== 'send-only'
+      ? 'direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need to call send_to_channel to reply here.'
+      : 'direct user message via channel';
     const sourceAttrs = channelType === 'webui'
       ? {
         type: 'channel',
@@ -131,12 +137,11 @@ export class MessageRouter {
         channelTargetId,
         sender: source.username,
         time: inputTime,
-        hint: 'direct user message via channel',
+        hint: sourceHint,
       };
 
     // Send-only channel notice
     if (conversationId) {
-      const channelConfig = sessionManager.getChannelConfig(channelInstanceId, conversationId);
       logger.debug({ channelInstanceId, channelType, conversationId, channelConfig }, 'Channel config check for send-only');
       if (channelConfig?.mode === 'send-only') {
         systemParts.unshift({

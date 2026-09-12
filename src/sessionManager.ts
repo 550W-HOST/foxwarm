@@ -40,6 +40,7 @@ import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, fo
 import { runStartupMigrations } from './migrations';
 import {
   buildSessionRuntimeState,
+  beginCompactionSessionRuntimeState,
   clearSessionCatalogStub,
   clearActiveSessionRuntimeState,
   formatSessionRuntimeStateSummary,
@@ -1007,11 +1008,9 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
     }
   }
   session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
-  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
-    agentName: session.agent,
-    sessionId: realId,
-    systemPromptFiles: session.systemPromptFiles,
-  });
+  if (!session.persistentMemorySnapshot) {
+    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session) || '';
+  }
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
@@ -1249,6 +1248,7 @@ function getSessionHistoryDeps() {
     saveSession: saveSessionCritical,
     enqueueSessionItem,
     notifyHistoryUpdate,
+    beginCompactionRuntimeState: beginCompactionSessionRuntimeState,
   };
 }
 
@@ -1324,9 +1324,9 @@ export function getAgentToolRules(agentName: string) {
   return sessionAgentMetadata.getAgentToolRules(agentName);
 }
 
-export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
+export async function setAgentInherit(agentName: string, inheritAgentName?: string, refreshSnapshots: boolean = false): Promise<{ affectedSessions: string[] }> {
   assertAgentMetadataMutationAllowed('Agent inheritance changes');
-  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
+  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName, refreshSnapshots);
 }
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string, toolRules?: unknown): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
@@ -1459,6 +1459,9 @@ export async function createAgentWithMainSession(options: {
     }
     if (normalizedInherit !== undefined) {
       await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
+      if (result.createdMainSession) {
+        await sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(true), result.mainSessionId);
+      }
     }
     return result;
   });
@@ -1891,34 +1894,55 @@ export function resolveSpawnedSessionModelEffort(
   return { model: normalized.model, effort: normalized.effort };
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
   assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
+  const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
+  const realParentSessionId = parentSession.id || parentSessionId;
+  const parentAgentName = parentSession.agent || 'main';
+  const targetAgentName = options?.agentName ?? parentAgentName;
+  validateAgentName(targetAgentName);
+  const crossAgent = targetAgentName !== parentAgentName;
+  if (crossAgent && !await fs.pathExists(getAgentDir(targetAgentName))) {
+    throw new Error(`Agent "${targetAgentName}" does not exist.`);
+  }
   if (fork) {
+    if (crossAgent) {
+      throw new Error('create_child_session cannot fork across agents. Omit fork or target the parent session\'s agent.');
+    }
     // Fork from parent (inherit context)
     return await forkSessionUnlocked(parentSessionId, suffix, true, options);
   } else {
     // Create new empty session
-    const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
-    const realParentSessionId = parentSession.id || parentSessionId;
-    const childSessionId = await allocateChildSessionId(realParentSessionId, suffix);
+    const childSessionId = await allocateChildSessionId(
+      crossAgent ? buildAgentMainSessionId(targetAgentName) : realParentSessionId,
+      suffix,
+    );
     const spawnedSettings = resolveSpawnedSessionModelEffort(parentSession, options?.model, options?.effort);
 
-    const agentName = parentSession.agent || 'main';
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({
-      agentName,
-      sessionId: childSessionId,
-      systemPromptFiles: parentSession.systemPromptFiles,
-    });
+    const inheritedSystemPromptFiles = crossAgent ? undefined : parentSession.systemPromptFiles;
+    const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(spawnedSettings.model);
+    const snapshot = snapshotModelId
+      ? await llm.buildSessionSystemPromptSnapshot({
+          agentName: targetAgentName,
+          sessionId: childSessionId,
+          systemPromptFiles: inheritedSystemPromptFiles,
+          modelId: snapshotModelId,
+        })
+      : '';
+    const targetAgentMeta = getAgentMetadata(targetAgentName);
+    const isolatedNode = targetAgentMeta.isolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
+      ? targetAgentMeta.isolatedNode.trim()
+      : undefined;
     const newSession: Session = {
       id: childSessionId,
-      agent: agentName,
+      agent: targetAgentName,
       history: [],
-      systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
+      systemPromptFiles: inheritedSystemPromptFiles ? [...inheritedSystemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
       // Non-fork children start a fresh model-facing prefix, so they should not
       // share the parent's prompt-cache routing key. Forked children do share it
@@ -1936,7 +1960,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       vectorIndexPosition: 0,
       nextMessageSeq: 1,
       parentSessionId: realParentSessionId,
-      currentNode: options?.node || parentSession.currentNode || 'master',
+      currentNode: isolatedNode || options?.node || parentSession.currentNode || 'master',
       model: spawnedSettings.model,
       effort: spawnedSettings.effort,
     };
@@ -2100,7 +2124,7 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
   await saveSessionForSessionCritical(session);
 }
 
-async function saveSessionForSessionCritical(session: Session): Promise<void> {
+export async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await withSessionAuthoritySaveLane(session.id, () => saveSessionForSessionCriticalUnlocked(session));
 }
 

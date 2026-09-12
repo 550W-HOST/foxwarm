@@ -1,22 +1,34 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Copy, FileText, X } from 'lucide-react'
+import { Check, Copy, FileText, RotateCcw, X } from 'lucide-react'
 import { copyTextToClipboard } from './chatShared'
-import { countPastedTextCharacters, getPastedTextPreview } from '../pastedText'
+import { countPastedTextCharacters, getPastedTextPreview, PASTED_TEXT_CLOSE } from '../pastedText'
 
-function PastedTextModal({ text, onClose }: { text: string; onClose: () => void }) {
+export interface PastedTextModalProps {
+  text: string
+  onClose: () => void
+  onSave?: (text: string) => void
+  onRestoreToText?: (text: string) => void
+}
+
+export function PastedTextModal({ text, onClose, onSave, onRestoreToText }: PastedTextModalProps) {
+  const editable = !!onSave
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [draftText, setDraftText] = useState(text)
   const [copied, setCopied] = useState(false)
   const resetTimerRef = useRef<number | null>(null)
-  const count = useMemo(() => countPastedTextCharacters(text), [text])
+  const count = useMemo(() => countPastedTextCharacters(draftText), [draftText])
+  const delimiterCollision = editable && draftText.includes(PASTED_TEXT_CLOSE)
 
   useEffect(() => {
-    closeButtonRef.current?.focus()
+    if (editable) textareaRef.current?.focus()
+    else closeButtonRef.current?.focus()
     return () => {
       if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
     }
-  }, [])
+  }, [editable])
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -39,11 +51,11 @@ function PastedTextModal({ text, onClose }: { text: string; onClose: () => void 
   }, [onClose])
 
   const handleCopy = useCallback(async () => {
-    await copyTextToClipboard(text)
+    await copyTextToClipboard(draftText)
     setCopied(true)
     if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
     resetTimerRef.current = window.setTimeout(() => setCopied(false), 1500)
-  }, [text])
+  }, [draftText])
 
   return createPortal(
     <div
@@ -58,13 +70,14 @@ function PastedTextModal({ text, onClose }: { text: string; onClose: () => void 
         aria-modal="true"
         aria-labelledby="foxwarm-pasted-text-title"
         onKeyDown={handleKeyDown}
-        className="flex max-h-[min(80vh,48rem)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
+        style={{ width: 'min(80vw, calc(100vw - 2rem))', height: 'min(80dvh, calc(100dvh - 2rem))' }}
+        className="flex h-[80dvh] max-h-[calc(100dvh-2rem)] w-[80vw] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
       >
         <div className="flex items-center gap-3 border-b border-fw-border px-4 py-3 dark:border-fw-border">
           <FileText size={17} className="shrink-0 text-fw-accent" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <h2 id="foxwarm-pasted-text-title" className="font-semibold text-fw-text-strong">Pasted text</h2>
-            <div className="text-xs text-fw-text-muted">{count.toLocaleString()} {count === 1 ? 'character' : 'characters'} · Read only</div>
+            <div className="text-xs text-fw-text-muted">{count.toLocaleString()} {count === 1 ? 'character' : 'characters'} · {editable ? 'Editable draft' : 'Read only'}</div>
           </div>
           <button
             type="button"
@@ -86,11 +99,37 @@ function PastedTextModal({ text, onClose }: { text: string; onClose: () => void 
           </button>
         </div>
         <textarea
-          readOnly
-          value={text}
+          ref={textareaRef}
+          readOnly={!editable}
+          value={draftText}
+          onChange={editable ? event => setDraftText(event.target.value) : undefined}
           aria-label="Full pasted text"
-          className="min-h-0 flex-1 resize-none overflow-auto whitespace-pre-wrap border-0 bg-fw-surface-sunken p-4 font-mono text-sm leading-6 text-fw-text-strong outline-none dark:bg-fw-canvas-edge"
+          className="min-h-0 flex-1 resize-none overflow-auto whitespace-pre-wrap border-0 bg-fw-surface-sunken p-4 font-mono text-sm leading-6 text-fw-text-strong outline-none focus:ring-2 focus:ring-inset focus:ring-fw-focus-ring dark:bg-fw-canvas-edge"
         />
+        {editable && (
+          <div className="border-t border-fw-border px-4 py-3 dark:border-fw-border">
+            {delimiterCollision && (
+              <div className="mb-2 text-sm text-fw-danger" role="alert">Pasted text cannot contain the closing &lt;/pasted-text&gt; delimiter. Restore it to ordinary text or remove the delimiter.</div>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              {onRestoreToText && (
+                <button type="button" onClick={() => onRestoreToText(draftText)} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm text-fw-text hover:bg-fw-hover">
+                  <RotateCcw size={15} aria-hidden="true" />
+                  Restore to text
+                </button>
+              )}
+              <button type="button" onClick={onClose} className="h-9 rounded-lg px-3 text-sm text-fw-text hover:bg-fw-hover">Cancel</button>
+              <button
+                type="button"
+                disabled={delimiterCollision}
+                onClick={() => onSave?.(draftText)}
+                className="h-9 rounded-lg bg-fw-accent px-3 text-sm font-medium text-fw-text-inverse disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body,

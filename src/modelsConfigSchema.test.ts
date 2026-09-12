@@ -103,6 +103,30 @@ test('new providers root + models object list applies model overrides and merge 
   });
 });
 
+test('disallowEmptyResponse is provider-scoped and propagates to concrete model entries', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'strict/model-a',
+    providers: {
+      strict: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'key',
+        disallowEmptyResponse: true,
+        models: ['model-a'],
+      },
+      permissive: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'key',
+        models: ['model-b'],
+      },
+    },
+  });
+
+  assert.equal(parsed.models['strict/model-a']?.disallowEmptyResponse, true);
+  assert.equal(parsed.models['permissive/model-b']?.disallowEmptyResponse, undefined);
+});
+
 test('Chat Completions history reasoning field defaults, inherits, and overrides per model', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'chat/default-model',
@@ -603,6 +627,7 @@ test('route fingerprint deterministically covers resolved concrete request plans
     (() => { const value = structuredClone(raw); value.providers.leaf.extraFields.nested.a = 9; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).disallowEmptyResponse = true; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).effort = { allowed: ['low', 'high'], default: 'low' }; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).historyReasoningField = 'reasoning'; return fingerprint(value); })(),
@@ -669,7 +694,7 @@ test('provider entries and concrete/virtual routing fields are strictly separate
     default: 'virtual',
     providers: { concrete, virtual: entry },
   });
-  for (const field of ['contextLimit', 'asyncCompact', 'webSearch']) {
+  for (const field of ['contextLimit', 'asyncCompact', 'webSearch', 'disallowEmptyResponse']) {
     assert.throws(
       () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: field === 'contextLimit' ? 1000 : true }),
       new RegExp(`forbids field .*${field}`),

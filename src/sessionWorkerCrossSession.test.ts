@@ -14,7 +14,7 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
 import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
 import * as nodeTools from './tools/nodeTools';
-import { getAgentDir, resolveModelConfig } from './config';
+import { getAgentDir, getAgentMemoryDir, resolveModelConfig } from './config';
 import { sessionCatalogStore } from './session/catalogStore';
 import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
 
@@ -129,6 +129,8 @@ test('main-management facade forks read-only, rejects stale generations, and val
   const forkChildId = `${parentId}_mp-fork`;
   const inheritedChildId = `${parentId}_mp-new`;
   const dtoChildId = `${parentId}_dto-child`;
+  const targetAgent = `mc_target_${Date.now()}`;
+  const targetChildId = `${targetAgent}/worker-child`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-facade-fork-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const registry = new RpcServiceRegistry();
@@ -137,8 +139,10 @@ test('main-management facade forks read-only, rejects stale generations, and val
   }));
   const transport = new LocalRpcTransport(registry, { maxPendingRequests: 32 });
   const client = new RpcClient(mainManagementToolServiceDescriptor, transport);
-  const createdSessions = [parentId, forkChildId, inheritedChildId, dtoChildId];
+  const createdSessions = [parentId, forkChildId, inheritedChildId, dtoChildId, targetChildId];
   try {
+    await fs.ensureDir(getAgentMemoryDir(targetAgent));
+    await fs.writeFile(path.join(getAgentMemoryDir(targetAgent), 'MEMORY.md'), 'WORKER_TARGET_MEMORY', 'utf8');
     const parent = await sessionManager.getSession(parentId);
     delete parent.model;
     delete parent.effort;
@@ -235,6 +239,25 @@ test('main-management facade forks read-only, rejects stale generations, and val
     assert.equal(dtoChild.childModelDefault, undefined);
     assert.equal(dtoChild.childEffortDefault, undefined);
 
+    const crossAgentResult: any = await client.call('execute', {
+      sourceSessionId: parentId,
+      operation: 'create_child_session',
+      args: { agentName: targetAgent, suffix: 'worker-child', fork: false, confirmation: TEST_CONFIRMATION },
+    });
+    assert.ok(String(crossAgentResult?.result).includes(targetChildId));
+    const targetChild = await sessionManager.getSession(targetChildId);
+    assert.equal(targetChild.agent, targetAgent);
+    assert.equal(targetChild.parentSessionId, parentId);
+    assert.match(targetChild.persistentMemorySnapshot, /WORKER_TARGET_MEMORY/);
+    await assert.rejects(
+      () => client.call('execute', {
+        sourceSessionId: parentId,
+        operation: 'create_child_session',
+        args: { agentName: targetAgent, suffix: 'worker-fork', fork: true, confirmation: TEST_CONFIRMATION },
+      }),
+      /cannot fork across agents/,
+    );
+
     parent.model = 'model-from-parent';
     parent.childModelDefault = 'model-for-child';
     parent.childEffortDefault = 'max';
@@ -268,6 +291,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
   } finally {
     transport.close();
     for (const id of createdSessions) await sessionManager.deleteSession(id).catch(() => {});
+    await fs.remove(getAgentDir(targetAgent)).catch(() => {});
     store.close();
     await fs.remove(root);
   }

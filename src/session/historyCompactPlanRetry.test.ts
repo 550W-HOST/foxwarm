@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 
 import type { ChatResult, Message, MessagePart, Session } from '../types';
+import type { SessionHistoryDeps } from './history';
 import { SessionAuthorityPostCommitError } from './stateFile';
 
 process.env.FOXWARM_SYNC_FILE_LOG = '1';
@@ -82,7 +83,7 @@ async function makeCompactableSession(archive: LoadedDeps['archive'], sessionId:
   return session;
 }
 
-function makeDepsForSession(session: Session, saveCounter: { count: number }) {
+function makeDepsForSession(session: Session, saveCounter: { count: number }): SessionHistoryDeps {
   return {
     getSessionById: (sessionId: string) => sessionId === session.id ? session : undefined,
     getExistingSession: async (sessionId: string) => sessionId === session.id ? session : null,
@@ -92,6 +93,60 @@ function makeDepsForSession(session: Session, saveCounter: { count: number }) {
   };
 }
 
+function trackCompactionRuntime(deps: ReturnType<typeof makeDepsForSession>, initial = 'running-tool:create_child_session') {
+  let current = initial;
+  const events: string[] = [];
+  deps.beginCompactionRuntimeState = (_sessionId: string) => {
+    current = 'requesting-model:compaction';
+    events.push(current);
+    return () => {
+      if (current !== 'requesting-model:compaction') return;
+      current = 'idle';
+      events.push(current);
+    };
+  };
+  return { get current() { return current; }, events };
+}
+
+test('awaited compaction replaces a completed tool phase while its provider is held, then releases it', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_runtime_held'));
+  const deps = makeDepsForSession(session, { count: 0 });
+  const runtime = trackCompactionRuntime(deps);
+  const originalChat = llm.chat;
+  let providerEntered!: () => void; let releaseProvider!: () => void;
+  const entered = new Promise<void>(resolve => { providerEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseProvider = resolve; });
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      providerEntered();
+      await release;
+      const toolCall = { id: 'held-runtime', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'held provider runtime summary',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await');
+    await entered;
+    assert.equal(runtime.current, 'requesting-model:compaction');
+    releaseProvider();
+    await running;
+    assert.equal(runtime.current, 'idle');
+    assert.deepEqual(runtime.events, ['requesting-model:compaction', 'idle']);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('awaited no-op compaction releases its transient runtime phase', async () => {
+  const { sessionHistory } = await loadDeps();
+  const session = { ...await makeCompactableSession((await loadDeps()).archive, makeSessionId('compact_runtime_noop')), history: [] } as Session;
+  const deps = makeDepsForSession(session, { count: 0 });
+  const runtime = trackCompactionRuntime(deps);
+  await sessionHistory.processSessionCompactionRequest(deps, session.id, {}, 'await');
+  assert.equal(runtime.current, 'idle');
+  assert.deepEqual(runtime.events, ['requesting-model:compaction', 'idle']);
+});
+
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_retry_plain_text_success'));
@@ -99,19 +154,24 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
   const prompts: string[] = [];
   const purposes: Array<string | undefined> = [];
   const originalChat = llm.chat;
+  const originalBuild = llm.buildSessionSystemPromptSnapshotForSession;
   session.effort = 'none';
   session.childEffortDefault = 'max';
+  session.systemPromptFiles = ['custom-memory.md'];
 
   try {
+    (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
     (llm as any).chat = async (
       parts: MessagePart[] | null,
       activeSession: Session,
       _iteration: number,
-      options?: { appendMessage?: (message: Message) => Promise<void> | void; purpose?: string },
+      options?: { appendMessage?: (message: Message) => Promise<void> | void; purpose?: string; snapshotAuthority?: string },
     ): Promise<ChatResult> => {
       assert.equal((activeSession as any).__compactJob, true);
       assert.equal(activeSession.effort, 'none');
       assert.equal(activeSession.childEffortDefault, 'max');
+      assert.deepEqual(activeSession.systemPromptFiles, ['custom-memory.md']);
+      assert.equal(options?.snapshotAuthority, 'detached');
       prompts.push(flattenPrompt(parts));
       purposes.push(options?.purpose);
 
@@ -156,6 +216,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert.equal(session.history[0]?.__meta?.contextBlock?.level, 1);
   } finally {
     (llm as any).chat = originalChat;
+    (llm as any).buildSessionSystemPromptSnapshotForSession = originalBuild;
     if (!SAVE_GENERATED_SESSION_LOGS) {
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.jsonl`)).catch(() => {});
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
@@ -168,6 +229,8 @@ test('awaited compact cancellation aborts its provider signal without changing h
   const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_awaited'));
   const before = structuredClone(session.history);
   const saveCounter = { count: 0 };
+  const deps = makeDepsForSession(session, saveCounter);
+  const runtime = trackCompactionRuntime(deps);
   const originalChat = llm.chat;
   let providerStarted!: () => void;
   const started = new Promise<void>(resolve => { providerStarted = resolve; });
@@ -181,14 +244,15 @@ test('awaited compact cancellation aborts its provider signal without changing h
       throw new Error('unreachable');
     };
     const running = sessionHistory.processSessionCompactionRequest(
-      makeDepsForSession(session, saveCounter), session.id, { keepPercent: 0.5 }, 'await', 'standalone',
+      deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone',
     );
     await started;
-    const cancelled = await sessionHistory.cancelSessionCompaction(makeDepsForSession(session, saveCounter), session.id);
+    const cancelled = await sessionHistory.cancelSessionCompaction(deps, session.id);
     await running;
     assert.deepEqual(cancelled, { outcome: 'cancelled', phase: 'planning' });
     assert.deepEqual(session.history, before);
     assert.equal(sessionHistory.getCompactOperationOwner(session.id), undefined);
+    assert.equal(runtime.current, 'idle');
   } finally { (llm as any).chat = originalChat; }
 });
 
@@ -209,6 +273,8 @@ test('ready background compact cancellation durably removes only compact commits
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
     const deps = makeDepsForSession(session, saves);
+    let foregroundRuntimePublications = 0;
+    deps.beginCompactionRuntimeState = () => { foregroundRuntimePublications += 1; return () => {}; };
     deps.enqueueSessionItem = async (_id: string, item: any) => { session.queue.push(item); };
     await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background', 'background');
     for (let index = 0; index < 100 && !session.queue.some(item => item.type === 'compact-commit'); index += 1) {
@@ -221,6 +287,7 @@ test('ready background compact cancellation durably removes only compact commits
     assert.deepEqual(session.history, before);
     assert.equal((await sessionHistory.cancelSessionCompaction(deps, session.id)).outcome, 'none');
     assert(saves.count > 0);
+    assert.equal(foregroundRuntimePublications, 0);
   } finally { (llm as any).chat = originalChat; }
 });
 
@@ -347,7 +414,7 @@ test('cancellation during final system-prompt snapshot build rolls back before a
   const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_snapshot_boundary'));
   const before = structuredClone(session.history);
   const originalChat = llm.chat;
-  const originalBuild = llm.buildSessionSystemPromptSnapshot;
+  const originalBuild = llm.buildSessionSystemPromptSnapshotForSession;
   let boundaryEntered!: () => void; let releaseBoundary!: () => void;
   const entered = new Promise<void>(resolve => { boundaryEntered = resolve; });
   const release = new Promise<void>(resolve => { releaseBoundary = resolve; });
@@ -359,7 +426,7 @@ test('cancellation during final system-prompt snapshot build rolls back before a
       await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
-    (llm as any).buildSessionSystemPromptSnapshot = async () => { boundaryEntered(); await release; return 'new snapshot'; };
+    (llm as any).buildSessionSystemPromptSnapshotForSession = async () => { boundaryEntered(); await release; return 'new snapshot'; };
     const deps = makeDepsForSession(session, { count: 0 });
     const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone');
     await entered;
@@ -369,7 +436,7 @@ test('cancellation during final system-prompt snapshot build rolls back before a
     await running;
     assert.deepEqual(session.history, before);
     assert.equal((await layeredContext.readArchiveBlocksByIdRange(session.id)).length, 0);
-  } finally { (llm as any).chat = originalChat; (llm as any).buildSessionSystemPromptSnapshot = originalBuild; }
+  } finally { (llm as any).chat = originalChat; (llm as any).buildSessionSystemPromptSnapshotForSession = originalBuild; }
 });
 
 test('cancellation during completion-message Archive append rolls back blocks and completion rows', async () => {
@@ -1140,6 +1207,8 @@ test('compact authority persistence failure restores active state and removes un
   const originalHistory = structuredClone(session.history);
   const originalNextBlockId = session.nextBlockId;
   const originalHistoryVersion = session.historyVersion;
+  const deps = makeDepsForSession(session, { count: 0 });
+  const runtime = trackCompactionRuntime(deps);
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
       const toolCall = { id: 'authority-failure', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
@@ -1149,7 +1218,7 @@ test('compact authority persistence failure restores active state and removes un
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
     await assert.rejects(() => sessionHistory.processSessionCompactionRequest({
-      ...makeDepsForSession(session, { count: 0 }),
+      ...deps,
       saveSession: async () => { throw new Error('injected compact authority persistence failure'); },
     }, session.id, { keepPercent: 0.5 }, 'await'), /injected compact authority persistence failure/);
     assert.deepEqual(session.history, originalHistory);
@@ -1157,6 +1226,7 @@ test('compact authority persistence failure restores active state and removes un
     assert.equal(session.historyVersion, originalHistoryVersion);
     assert.equal((await layeredContext.readLocalArchiveBlocks(session.id)).length, 0);
     assert.equal((await archive.readArchiveMessages(session.id)).length, originalHistory.length);
+    assert.equal(runtime.current, 'idle');
   } finally { (llm as any).chat = originalChat; }
 });
 

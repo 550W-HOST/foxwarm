@@ -70,8 +70,8 @@ export const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
     usage: '/session rename <name>',
     children: [placeholderNode('<name>', 'New display name')],
   }),
-  literalNode('update-snapshot', 'Refresh a session prompt snapshot', {
-    usage: '/session update-snapshot [session-id]',
+  literalNode('refresh-snapshot', 'Refresh session prompt snapshot now', {
+    usage: '/session refresh-snapshot [session-id]',
     children: [placeholderNode('[session-id]', 'Defaults to the current session')],
   }),
   literalNode('compact-threshold', 'Get/set the auto-compact threshold override for the current session', {

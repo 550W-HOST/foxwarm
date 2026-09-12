@@ -715,12 +715,17 @@ test('collectOpenAIResponsesStream rejects official incomplete and top-level err
   );
 });
 
-test('OpenAI collectors report only genuinely new generated content as timeout activity', async () => {
+test('OpenAI collectors report only approved output-item lifecycle and generated deltas as timeout activity', async () => {
   let responsesMeaningful = 0;
+  const safetyStatuses: Record<string, unknown>[] = [];
   await collectOpenAIResponsesStream(makeStream([
     { type: 'response.created', response: { id: 'r1', status: 'in_progress' } },
     { type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } },
     { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.output_item.added', output_index: 2 },
+    { type: 'response.output_item.added', output_index: 2, item: 'not-an-item-object' },
+    { type: 'response.output_item.added', output_index: 2, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } },
+    { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'fc1', call_id: 'call1', name: 'read', arguments: '' } },
     { type: 'response.output_item.added', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'in_progress' } },
     { type: 'response.output_item.done', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'completed' } },
     { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' },
@@ -729,9 +734,15 @@ test('OpenAI collectors report only genuinely new generated content as timeout a
     { type: 'response.reasoning_summary_text.delta', output_index: 1, summary_index: 0, delta: 'r' },
     { type: 'response.function_call_arguments.delta', output_index: 2, delta: '{' },
     { type: 'response.refusal.delta', output_index: 3, content_index: 0, delta: 'n' },
+    { type: 'response.metadata', metadata: { type: 'ordinary_status', value: 'ignored' } },
+    { type: 'response.metadata', metadata: { type: 'safety_buffering', use_cases: ['fixture'] } },
     { type: 'response.completed', response: { id: 'r1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
-  ]), new AbortController().signal, { onMeaningfulProgress: () => { responsesMeaningful += 1; } });
-  assert.equal(responsesMeaningful, 4);
+  ]), new AbortController().signal, {
+    onMeaningfulProgress: () => { responsesMeaningful += 1; },
+    onSafetyBuffering: metadata => { safetyStatuses.push(metadata); },
+  });
+  assert.equal(responsesMeaningful, 9);
+  assert.deepEqual(safetyStatuses, [{ type: 'safety_buffering', use_cases: ['fixture'] }]);
 
   let chatMeaningful = 0;
   await collectOpenAIChatCompletionsStream(makeStream([
@@ -882,6 +893,37 @@ test('convertToOpenAIResponsesFormat preserves explicit assistant phases and app
     type: 'message', role: 'assistant',
     content: [{ type: 'output_text', text: 'Unknown phase stays absent.' }],
   }]);
+});
+
+test('convertToOpenAIResponsesFormat preserves explicit empty assistant text without inventing empty messages', () => {
+  assert.deepEqual(convertToOpenAIResponsesFormat([{
+    role: 'model',
+    parts: [
+      { text: '', phase: 'commentary' },
+      { text: 'Working.', phase: 'commentary' },
+      { functionCall: { id: 'call_empty_text', name: 'read', args: { filePath: 'README.md' } } },
+      { text: '', phase: 'final_answer' },
+    ],
+  }]), [
+    {
+      type: 'message', role: 'assistant', phase: 'commentary',
+      content: [
+        { type: 'output_text', text: '' },
+        { type: 'output_text', text: 'Working.' },
+      ],
+    },
+    { type: 'function_call', call_id: 'call_empty_text', name: 'read', arguments: '{"filePath":"README.md"}' },
+    {
+      type: 'message', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: '' }],
+    },
+  ]);
+
+  assert.deepEqual(convertToOpenAIResponsesFormat([
+    { role: 'user', parts: [{ text: '' }] },
+    { role: 'model', parts: [{}] },
+    { role: 'model', parts: [{ thinking: 'display-only reasoning without replay metadata' }] },
+  ]), []);
 });
 
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {

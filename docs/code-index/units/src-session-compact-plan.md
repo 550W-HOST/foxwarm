@@ -55,6 +55,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 ## Integration
 
 - `COMPACT_PLAN_TOOL_DEFINITION` requires `replaceAsBlocks` and exposes an explicit direct-array-or-JSON-string union. The direct-array branch describes required block fields and nested optional `memoryFacts`; there is no top-level fact argument.
+- Its caller-facing copy explains plan submission, candidate-only ranges, preservation/removal, and per-block durable facts; schema tests assert the union and required fields rather than editorial wording.
 - The dedicated compact runtime accepts the plan tool and rejects other calls with feedback.
 - The supported block input is `replaceAsBlocks`, preferably a direct array or alternatively a JSON string encoding that array. `preserveMessages` / `removePreservedMessages` remain direct arrays. Obsolete top-level `createBlocksJson` and `createBlocks` are rejected.
 - Validated resolved operations are consumed by [src-session-history](./src-session-history.md).

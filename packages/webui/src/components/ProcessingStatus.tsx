@@ -31,7 +31,10 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const runtimeStateName = runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')
   const showRuntimeStatus = runtimeStateName !== 'idle' && !loading
   const runtimeSummary = getRuntimeStateSummary(runtimeState, sessionBusy)
-  const visibleRuntimeSummary = runtimeStateName === 'requesting-model'
+  const isCompacting = runtimeStateName === 'requesting-model' && runtimeState?.active?.phase === 'compaction'
+  const visibleRuntimeSummary = isCompacting
+    ? 'Compacting...'
+    : runtimeStateName === 'requesting-model'
     ? runtimeSummary.replace(/^thinking\b/, 'Thinking...')
     : runtimeSummary
   const isActive = runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool'
@@ -56,7 +59,9 @@ const ProcessingStatus = memo(function ProcessingStatus({
           dot: 'bg-fw-accent dark:bg-fw-accent',
         }
   const queuedContinuation = sessionQueueLength > 0
-    ? runtimeStateName === 'running-tool'
+    ? isCompacting
+      ? `${queuedLabel} will be inserted when this session resumes after compaction`
+      : runtimeStateName === 'running-tool'
       ? `${queuedLabel} will be inserted after this tool call`
       : runtimeStateName === 'waiting'
         ? `${queuedLabel} will be inserted when this session resumes`

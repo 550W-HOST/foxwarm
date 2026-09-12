@@ -23,7 +23,7 @@ import {
     tool_set_goal,
     tool_set_session_child_model,
     tool_set_session_compact_threshold,
-    tool_update_session_snapshot,
+    tool_refresh_session_snapshot,
     tool_stop_session,
     tool_compact_session,
     tool_create_agent,
@@ -101,7 +101,7 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
     }
     if (toolName === 'stop_session' && !isCurrent(literalTarget)) workerUnavailable(toolName);
     if (['set_session_child_model',
-        'set_session_compact_threshold', 'update_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
+        'set_session_compact_threshold', 'refresh_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
 }
 
 // --- callTool dispatcher ---
@@ -160,7 +160,7 @@ export const delete_session = tool_delete_session;
 export const set_goal = tool_set_goal;
 export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
-export const update_session_snapshot = tool_update_session_snapshot;
+export const refresh_session_snapshot = tool_refresh_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
 export const create_timer: typeof tool_create_timer = (args, ctx) => tool_create_timer(args, ctx);

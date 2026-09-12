@@ -138,6 +138,9 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       placement: effects.placement || 'local',
       appendMessage: bind(effects.appendMessage),
       persistSession: bind(effects.persistSession),
+      persistSessionStrict: effects.persistSessionStrict
+        ? bind(effects.persistSessionStrict)
+        : bind(effects.persistSession),
       notifySessionEvent: bind(effects.notifySessionEvent),
       registerAbortController: bind(effects.registerAbortController),
       clearAbortController: bind(effects.clearAbortController),

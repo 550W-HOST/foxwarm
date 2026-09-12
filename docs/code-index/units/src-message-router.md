@@ -41,6 +41,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 
 - Authorization and command dispatch complete before ordinary session queue insertion. Deferred channel media is materialized only after the original ingress is canonically authorized and its session is resolved; unauthorized and first-message guest fallback paths remain metadata-only and perform no media fetch/write.
 - Source wrappers are created once at ingress. Queue processing receives prompt-ready parts and does not reconstruct channel metadata.
+- Current non-WebUI channel ingress with a conversation identity includes normal-mode guidance in the existing source-wrapper hint when its attachment is not `send-only`; WebUI keeps the base source hint, while `send-only` keeps its separate explicit-tool notice unchanged.
 - Slash-command detection reads the original message parts before ephemeral
   ingress metadata is inserted. Non-command metadata is placed inside the same
   canonical channel wrapper and thereafter survives as ordinary serializable

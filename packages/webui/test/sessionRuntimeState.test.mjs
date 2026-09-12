@@ -34,10 +34,10 @@ const runtimeState = (state, extra = {}) => ({
   ...extra,
 })
 
-test('runtime summaries call requesting-model thinking and retain non-normal phase detail', () => {
+test('runtime summaries distinguish compaction from ordinary requesting-model work', () => {
   assert.equal(getRuntimeStateSummary(runtimeState('requesting-model')), 'thinking')
   assert.equal(getRuntimeStateSummary(runtimeState('requesting-model', { active: { phase: 'normal-turn' } })), 'thinking')
-  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model', { active: { phase: 'compaction' } })), 'thinking · compaction')
+  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model', { active: { phase: 'compaction' } })), 'compacting')
   assert.equal(getRuntimeStateSummary(undefined, true), 'thinking')
   assert.equal(getSessionRuntimeSummary({ busy: true }), 'thinking')
 })

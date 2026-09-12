@@ -75,6 +75,7 @@ export type OpenAIStreamProgressSnapshot = {
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     onMeaningfulProgress?: () => void;
+    onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -634,7 +635,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                 });
             }
 
-            if (part.text) {
+            if (typeof part.text === 'string' && (role === 'assistant' || part.text.length > 0)) {
                 prepareMessageContent(role, content, part, fallbackPhase);
                 const outputTextPart: any = {
                     type: role === 'assistant' ? 'output_text' : 'input_text',
@@ -879,7 +880,9 @@ export async function collectOpenAIResponsesStream(
             switch (event.type) {
                 case 'response.output_item.added':
                 case 'response.output_item.done':
-                    if (typeof event.output_index === 'number' && event.item) {
+                    if (typeof event.output_index === 'number' && event.item
+                        && typeof event.item === 'object' && !Array.isArray(event.item)) {
+                        options?.onMeaningfulProgress?.();
                         ensureOutputItem(event.output_index, event.item);
                         emitProgressUpdate();
                     }
@@ -986,6 +989,12 @@ export async function collectOpenAIResponsesStream(
                 case 'response.reasoning_summary_text.done':
                     summaryParts.set(key, event.text || summaryParts.get(key) || '');
                     emitSummaryUpdate();
+                    return;
+                case 'response.metadata':
+                    if (event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+                        && event.metadata.type === 'safety_buffering') {
+                        options?.onSafetyBuffering?.(event.metadata);
+                    }
                     return;
                 case 'response.completed':
                     completedResponse = event.response;

@@ -13,7 +13,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_create_timer`, `tool_list_timers`, `tool_update_timer`, `tool_delete_timer` — timer management
 - `tool_create_agent`, `tool_list_agents`, `tool_set_agent_inherit`, `tool_set_agent_isolated`, `tool_move_session`, `tool_create_session` — agent/session management
 - `tool_skill` — skill list/load actions
-- `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_update_session_snapshot` — settings
+- `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_refresh_session_snapshot` — settings
 
 `tool_set_goal`, compact-threshold settings, child-model settings, snapshot refresh, and current stop can mutate the exact passed current Session when `session`, `sessionId`, target identity, and the local-only `persistCurrentSession` hook agree. Display-name updates are Main-owned catalog metadata: a Worker routes them through the fixed Main Management operation, and Main applies the SessionRuntime catalog update without persisting Worker authority. Compact/child settings normalize the passed owner exactly like SessionRuntime and persist only when the normalized settings view changes; canonical in-memory assign/delete still occurs for no-ops. Worker status formatting uses only that owner and marks remote node connectivity unknown instead of consulting a child catalog. Current archived-message/block permission checks also use the exact owner. Recall trims explicit session/agent selectors; current aliases and the exact owner's current-agent vector scope remain local/reverse-safe without a global Session lookup. Explicit other-session Worker targets are pre-handler fenced; local legacy/direct callers retain their existing SessionRuntime/SessionManager paths. Snapshot refresh delegates to the shared passed-Session prompt builder rather than looking the owner up again.
 - `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/display-name update and lifecycle
@@ -75,7 +75,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | Function | Description |
 |----------|-------------|
 | `normalizeContextPreviewBudget` | Treats `previewLength` as a total budget, clamps to 1000-20000, and returns warning strings |
-| `createMessageContextPreviewItem` | Converts a message into searchable/renderable preview data with configurable tool folding |
+| `createMessageContextPreviewItem` | Converts a message into searchable/renderable preview data with configurable tool folding; explicit read callers render stored display-only content while retaining the heading visibility marker |
 | `createArchivedBlockContextPreviewItem` | Converts an archive block into searchable/renderable preview data |
 | `renderContextPreviewItems` | Applies staged literal/regex post-filters, collects bounded priority notices only from selected items plus caller notices, reserves an exact empty result or meaningful item body, clips lower-priority title text first, optionally caps the filtered item set with a truthful selection notice, and enforces an exact UTF-16 code-unit total budget without splitting grapheme clusters |
 | `selectVectorRawMessageWindow` | Selects a bounded contiguous authoritative raw window from query/chunk and explicit-positive-filter locators, bilingual/identifier overlap, substantive-content preference, and unique-ID complete atomic tool exchanges; reports exact omitted positive-filter source IDs |
@@ -97,7 +97,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 |----------|-------------|
 | `tool_create_agent` | Creates a new agent with optional main session and optional exact agent tool-rule replacement |
 | `tool_list_agents` | Lists all agents with session counts, isolation, inheritance, and exact tool-rule count |
-| `tool_set_agent_inherit` | Configures agent shared memory inheritance |
+| `tool_set_agent_inherit` | Configures agent shared memory inheritance, with optional explicit transitive snapshot refresh |
 | `tool_set_agent_isolated` | Sets or clears agent node isolation and optionally replaces exact tool rules (`[]` clears); rules without `nodeId` preserve the current binding |
 | `tool_move_session` | Moves a session to a new ID or agent, preserving its incoming parent unless an optional existing `parentSessionId` intentionally reparents it |
 | `tool_create_session` | Creates a new session under an agent |
@@ -113,7 +113,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `tool_set_goal` | Sets or clears the session goal |
 | `tool_set_session_compact_threshold` | Reads or updates the trusted passed owner's compaction threshold, with the existing SessionRuntime path for other/legacy targets |
 | `tool_set_session_child_model` | Reads or atomically updates the trusted passed owner's future-child model/effort defaults, with the existing SessionRuntime path for other/legacy targets |
-| `tool_update_session_snapshot` | Refreshes a trusted passed owner's prompt snapshot directly, or uses the existing ID-based path for other/legacy targets |
+| `tool_refresh_session_snapshot` | Refreshes a trusted passed owner's prompt snapshot directly, or uses the existing ID-based path for other/legacy targets |
 
 ### toolsSessionAgent/sessionCrud.ts — Session lifecycle
 | Function | Description |

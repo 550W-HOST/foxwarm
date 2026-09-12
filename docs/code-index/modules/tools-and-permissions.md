@@ -57,6 +57,7 @@ Tool resolution across builtin, MCP, and generic Node sources is documented in [
 - Free-form object arguments may provide JSON-string fallbacks where provider schemas cannot express arbitrary nested objects reliably.
 - `read` and `read_memory` treat optional `startLine`/`endLine` values of `0` as omitted.
 - Persisted or external compatibility aliases are retained only where source readers still support them. Removed internal tool names are not documented as active interfaces.
+- Persisted authorization rules that still name removed `update_session_snapshot` fail validation with an explicit migration error instead of silently ceasing to deny the renamed `refresh_session_snapshot` capability.
 
 ## Design decisions
 

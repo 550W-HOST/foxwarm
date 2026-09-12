@@ -5,6 +5,7 @@ import * as sessionManager from './sessionManager';
 import * as sessionHistory from './session/history';
 import * as llm from './llm';
 import type { Message, MessagePart, Session } from './types';
+import { parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 const GROUP_MENTIONED_METADATA = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
 const GROUP_ORDINARY_METADATA = '<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />';
@@ -422,6 +423,54 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   assert.equal(queueItem.clientMessageId, 'webui-client-message-1');
 });
 
+test('MessageRouter adds normal channel delivery guidance only to non-WebUI normal-mode ingress', () => {
+  const router = new MessageRouter() as any;
+  const originalGetChannelConfig = sessionManager.getChannelConfig;
+  const baseContext = {
+    channelUserId: 'conversation-a', conversationId: 'conversation-a',
+    channelId: 'channel-a', channelType: 'test', platform: 'test',
+    username: 'member-a', senderId: 'member-a',
+    reply: async () => {}, sendTyping: async () => {},
+  };
+
+  try {
+    (sessionManager as any).getChannelConfig = () => ({ sessionId: 'session-a' });
+    const normalItem = router.buildChannelUserQueueItem(baseContext, {
+      parts: [{ text: 'normal input' }],
+      channelUserId: 'conversation-a', conversationId: 'conversation-a',
+    });
+    const normalTag = parseFoxwarmOpeningTag(normalItem.parts[0].system);
+    assert.equal(normalTag?.attrs.hint.startsWith('direct user message via channel;'), true);
+    assert.match(normalTag?.attrs.hint || '', /normal mode/);
+    assert.match(normalTag?.attrs.hint || '', /automatically delivered to this channel/);
+    assert.match(normalTag?.attrs.hint || '', /do not need to call send_to_channel/);
+
+    (sessionManager as any).getChannelConfig = () => ({ sessionId: 'session-a', mode: 'send-only' });
+    const sendOnlyItem = router.buildChannelUserQueueItem(baseContext, {
+      parts: [{ text: 'send-only input' }],
+      channelUserId: 'conversation-a', conversationId: 'conversation-a',
+    });
+    assert.equal(sendOnlyItem.parts.length, 2);
+    assert.match(sendOnlyItem.parts[0].system || '', /kind="channel-mode"/);
+    assert.match(sendOnlyItem.parts[0].system || '', /call send_to_channel/);
+    const sendOnlyTag = parseFoxwarmOpeningTag(sendOnlyItem.parts[1].system);
+    assert.equal(sendOnlyTag?.attrs.hint, 'direct user message via channel');
+
+    (sessionManager as any).getChannelConfig = () => ({ sessionId: 'session-a' });
+    const webuiItem = router.buildChannelUserQueueItem({
+      ...baseContext,
+      channelId: 'webui', channelType: 'webui', platform: 'webui',
+    }, {
+      parts: [{ text: 'web input' }],
+      channelUserId: 'conversation-a', conversationId: 'conversation-a',
+    });
+    const webuiTag = parseFoxwarmOpeningTag(webuiItem.parts[0].system);
+    assert.equal(webuiTag?.attrs.hint, 'direct user message via channel');
+  } finally {
+    (sessionManager as any).getChannelConfig = originalGetChannelConfig;
+  }
+});
+
 test('MessageRouter keeps channel ingress metadata in one serializable queued/history user message', async () => {
   const router = new MessageRouter() as any;
   const ctx = {
@@ -438,6 +487,8 @@ test('MessageRouter keeps channel ingress metadata in one serializable queued/hi
   const roundTrip = JSON.parse(JSON.stringify(queueItem));
   assert.equal(roundTrip.parts.length, 4);
   assert.match(roundTrip.parts[0].system, /^<foxwarm-message /);
+  const wrapperTag = parseFoxwarmOpeningTag(roundTrip.parts[0].system);
+  assert.match(wrapperTag?.attrs.hint || '', /automatically delivered to this channel/);
   assert.equal(roundTrip.parts[1].system, GROUP_MENTIONED_METADATA);
   assert.equal(roundTrip.parts[2].text, 'current group text');
   assert.equal(roundTrip.parts[3].system, '</foxwarm-message>');

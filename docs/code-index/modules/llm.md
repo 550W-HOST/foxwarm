@@ -7,6 +7,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 ## Units
 
 - [src-llm](../units/src-llm.md) — routing, Anthropic path, prompt snapshots, retries, logs, tool batches, and one-shot/session requests.
+- [src-conditional-memory](../units/src-conditional-memory.md) — pure conditional memory-source filtering and current-model snapshot header helpers.
 - [src-llm-request-journal](../units/src-llm-request-journal.md) — content-addressed canonical request inputs, bounded manifests, attempts, and reconstruction.
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
@@ -38,13 +39,15 @@ Canonical image messages remain blob-reference-only until the provider request b
 - Provider responses normalize to one `ChatResult`/`MessagePart` model.
 - Anthropic and OpenAI serialization share one tool-response formatter.
 - Prompt snapshots use deterministic framework/memory/skill precedence.
+- Memory-backed snapshots filter per-source conditions for one canonical concrete model and carry a first-line generation marker. Canonical ownership: [conditional memory snapshots](../threads/conditional-memory-snapshots.md).
 - Outbound payloads replace lone surrogates.
 - Terminal failures throw `LlmRequestError` and never become fake model-visible assistant text.
 - Prompt-cache keys follow model-facing prefix lineage.
 - MCP summaries do not expose secret values.
 - One-shot CLI/ToolScript model requests reuse production provider code.
 - Every production provider-request path enters the canonical request journal before send; exact wire capture remains outside that contract.
-- Empty, whitespace-only, and reasoning-only responses without tool calls are retryable failures; successful virtual results attribute the concrete leaf. Canonical contract: [model routing](../threads/model-routing.md).
+- A selected retry leaf may resolve a different memory-backed prompt; the request keeps the first attempt prompt and later attempts reference their effective prompt. Canonical interaction: [conditional memory snapshots](../threads/conditional-memory-snapshots.md) and [canonical LLM request journal](../threads/llm-request-journal.md).
+- Completed responses without non-whitespace content and without tool calls are accepted as normal turn ends by default; a concrete provider may set `disallowEmptyResponse` to make them retryable failures. Successful virtual results attribute the concrete leaf. Canonical contract: [model routing](../threads/model-routing.md).
 
 ## Prompt-cache lineage
 
