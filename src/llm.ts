@@ -2744,11 +2744,18 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
 
     const toolCalls = allParts.filter(part => !!part.functionCall).map(part => part.functionCall!);
     if (!responseText.trim() && toolCalls.length === 0) {
-        throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
-            kind: 'response-error',
-            retryable: true,
-            countable: true,
-        });
+        if (plan.modelEntry.disallowEmptyResponse === true) {
+            throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
+                kind: 'response-error',
+                retryable: true,
+                countable: true,
+            });
+        }
+        logger.warn({
+            providerType: plan.providerType,
+            modelKey: plan.modelKey,
+            modelId: plan.modelId,
+        }, 'Model completed with no non-whitespace content or tool call; accepting the empty completion.');
     }
 
     const getReportedReasoningTokens = (value: unknown): number | undefined =>

@@ -47,7 +47,7 @@ Canonical image messages remain blob-reference-only until the provider request b
 - One-shot CLI/ToolScript model requests reuse production provider code.
 - Every production provider-request path enters the canonical request journal before send; exact wire capture remains outside that contract.
 - A selected retry leaf may resolve a different memory-backed prompt; the request keeps the first attempt prompt and later attempts reference their effective prompt. Canonical interaction: [conditional memory snapshots](../threads/conditional-memory-snapshots.md) and [canonical LLM request journal](../threads/llm-request-journal.md).
-- Empty, whitespace-only, and reasoning-only responses without tool calls are retryable failures; successful virtual results attribute the concrete leaf. Canonical contract: [model routing](../threads/model-routing.md).
+- Completed responses without non-whitespace content and without tool calls are accepted as normal turn ends by default; a concrete provider may set `disallowEmptyResponse` to make them retryable failures. Successful virtual results attribute the concrete leaf. Canonical contract: [model routing](../threads/model-routing.md).
 
 ## Prompt-cache lineage
 

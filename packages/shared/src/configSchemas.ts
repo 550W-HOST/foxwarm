@@ -145,6 +145,7 @@ const providerObjectEntry = {
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
+    disallowEmptyResponse: { type: 'boolean', description: 'Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end.' },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
     webSearch: modelOverrideProperties.webSearch,
@@ -158,7 +159,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -166,7 +167,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
       },
     },
     {

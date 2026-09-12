@@ -72,12 +72,14 @@ const testModelsConfig = loadModelsConfigFromObject({
       providerType: 'openai-completions',
       baseUrl: 'https://openai-leaf.test/v1',
       apiKey: 'openai-secret',
+      disallowEmptyResponse: true,
       models: ['chat-model'],
     },
     responsesLeaf: {
       providerType: 'openai',
       baseUrl: 'https://responses-leaf.test/v1',
       apiKey: 'responses-secret',
+      disallowEmptyResponse: true,
       models: ['responses-model'],
     },
     anthropicLeaf: {
@@ -85,6 +87,7 @@ const testModelsConfig = loadModelsConfigFromObject({
       baseUrl: 'https://anthropic-leaf.test',
       apiKey: 'anthropic-secret',
       requestCompression: 'gzip',
+      disallowEmptyResponse: true,
       models: ['claude-model'],
     },
     fallback: {
@@ -495,7 +498,7 @@ test('a keyless request generates one request-scoped routing key reused by every
   }
 });
 
-test('empty 2xx response counts toward failover health', async () => {
+test('disallowEmptyResponse empty 2xx response counts toward failover health', async () => {
   const originalPost = axios.post;
   let calls = 0;
   (axios as any).post = async () => {
@@ -507,6 +510,50 @@ test('empty 2xx response counts toward failover health', async () => {
     const result = await withImmediateRetryTimers(() => requestLlmOnce(baseRequest('fastFallback')));
     assert.equal(calls, 2);
     assert.equal(result.modelId, 'anthropicLeaf/claude-model');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('a default permissive failover leaf accepts an empty completion without failover', async () => {
+  const permissiveConfig = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      aLeaf: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://a-leaf.test/v1',
+        apiKey: 'a-secret',
+        models: ['a-model'],
+      },
+      bLeaf: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://b-leaf.test/v1',
+        apiKey: 'b-secret',
+        models: ['b-model'],
+      },
+      route: {
+        providerType: 'failover',
+        targets: ['aLeaf/a-model', 'bLeaf/b-model'],
+        failureThreshold: 1,
+        cooldownMs: 600000,
+      },
+    },
+  });
+  const originalPost = axios.post;
+  let calls = 0;
+  (axios as any).post = async () => {
+    calls += 1;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('') };
+  };
+  try {
+    const result = await withImmediateRetryTimers(() => requestLlmOnce({
+      ...baseRequest('route'),
+      modelsConfigOverride: permissiveConfig,
+    }));
+    assert.equal(calls, 1);
+    assert.equal(result.text, '');
+    assert.equal(result.modelId, 'aLeaf/a-model');
+    assert.equal(result.virtualModelKey, 'route');
   } finally {
     (axios as any).post = originalPost;
   }
@@ -625,7 +672,7 @@ test('abort terminates without counting route health', async () => {
   }
 });
 
-test('empty, whitespace-only, and reasoning-only responses retry while tool calls succeed', async t => {
+test('disallowEmptyResponse leaves retry empty, whitespace-only, and reasoning-only responses while tool calls succeed', async t => {
   const originalPost = axios.post;
   try {
     await t.test('OpenAI Chat retries whitespace and reasoning-only responses', async () => {

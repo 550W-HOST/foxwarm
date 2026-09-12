@@ -953,6 +953,71 @@ test('a post-response journal failure never retries a successful provider genera
   }
 });
 
+test('empty completions are accepted by default and become retryable failures only with disallowEmptyResponse', async () => {
+  const originalPost = axios.post;
+  let callCount = 0;
+  (axios as any).post = async (url: string) => {
+    callCount += 1;
+    if (url.endsWith('/responses')) {
+      const stream = new PassThrough();
+      process.nextTick(() => {
+        stream.write(`data: ${JSON.stringify({
+          type: 'response.completed',
+          response: {
+            status: 'completed',
+            output: [{
+              type: 'message',
+              role: 'assistant',
+              status: 'completed',
+              phase: 'final_answer',
+              content: [{ type: 'output_text', text: '' }],
+            }],
+            usage: { input_tokens: 1, output_tokens: 4 },
+          },
+        })}\n\n`);
+        stream.write('data: [DONE]\n\n');
+        stream.end();
+      });
+      return { status: 200, statusText: 'OK', headers: {}, data: stream };
+    }
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('') };
+  };
+  const entry = (providerType: string, disallowEmptyResponse?: boolean) => ({
+    providerKey: 'fixture', providerType, baseUrl: 'https://fixture.example/v1', model: 'model',
+    ...(disallowEmptyResponse === undefined ? {} : { disallowEmptyResponse }),
+  }) as any;
+  const request = (modelEntryOverride: any, maxRetries: number) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'ack' }] }], systemPrompt: '', modelEntryOverride,
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries,
+  });
+
+  try {
+    const accepted = await request(entry('openai-responses'), 6);
+    assert.equal(accepted.text, '');
+    assert.deepEqual(accepted.toolCalls, []);
+    assert.equal(callCount, 1);
+
+    const acceptedChat = await request(entry('openai-completions'), 6);
+    assert.equal(acceptedChat.text, '');
+    assert.equal(acceptedChat.toolCalls?.length ?? 0, 0);
+    assert.equal(callCount, 2);
+
+    const failures = await Promise.allSettled([
+      request(entry('openai-responses', true), 1),
+      request(entry('openai-completions', true), 1),
+    ]);
+    for (const failure of failures) {
+      assert.equal(failure.status, 'rejected');
+      const error = (failure as PromiseRejectedResult).reason;
+      assert.ok(error instanceof LlmRequestError);
+      assert.match(error.message, /API request failed after 1 attempts: Model response contained no non-whitespace content or tool call/);
+      assert.equal(error.kind, 'response-error');
+    }
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('all provider protocols hydrate canonical image refs only in outbound payloads and diagnostics redact them', async t => {
   const originalPost = axios.post;
   const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';

@@ -82,7 +82,7 @@ HTTP 400, 413, and 422 are terminal and do not affect route health unless the bo
 
 Abort, stop, and cancellation terminate immediately and do not count as target health failures.
 
-Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible concrete providers, a successful model turn must contain non-whitespace assistant content or at least one tool call. Thinking/reasoning alone is not content. A tool-call-only response is valid. An empty, whitespace-only, or reasoning-only response is a retryable `response-error` and never creates fake model-visible `Error:` history.
+Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible concrete providers, a completed response without non-whitespace assistant content and without a tool call is accepted by default as a normal turn end. Thinking/reasoning alone is not content. A tool-call-only response is valid. A concrete provider that sets `disallowEmptyResponse: true` instead treats an empty, whitespace-only, or reasoning-only response as a retryable `response-error`. Accepted empty completions never create fake model-visible `Error:` history.
 
 ## Surfaces and attribution
 
@@ -144,7 +144,7 @@ Failover health is process-local, configuration-fingerprinted, generation-scoped
 
 ### D-model-routing-usable-response
 
-A provider success requires non-whitespace assistant content or a tool call. Reasoning-only and empty responses are retryable response failures across all provider protocols.
+[2026-09-12] Provider success no longer requires content by default: a completed response without non-whitespace assistant content and without a tool call is accepted across all provider protocols, and the empty completion ends the turn without fake `Error:` history. The concrete provider field `disallowEmptyResponse` restores the previous strict contract, making empty, whitespace-only, or reasoning-only responses retryable `response-error`s. The field is provider-scoped, is rejected on virtual entries, participates in the route fingerprint, and is removed when structured setup converts a concrete provider into a virtual entry.
 
 ### D-model-routing-concrete-attribution
 
