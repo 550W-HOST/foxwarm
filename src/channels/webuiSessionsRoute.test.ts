@@ -475,10 +475,10 @@ test('restart catalog stubs preserve sanitized timer, waitAll, and exec presenta
   try {
     const initial = await list();
     const timerStub = initial.find(item => item.id === ids.timer);
-    assert.equal(timerStub.runtimeState.state, 'waiting'); assert.equal(timerStub.runtimeState.waiting.waitingFor, 'timer');
+    assert.equal(timerStub.runtimeState.state, 'waiting'); assert.equal(timerStub.runtimeState.waiting.waitingFor, 'fallback');
     assert.equal(timerStub.runtimeState.waiting.timeoutSeconds, 30);
     const waitAllStub = initial.find(item => item.id === ids.waitAll);
-    assert.equal(waitAllStub.runtimeState.waiting.waitingFor, 'sessions');
+    assert.equal(waitAllStub.runtimeState.waiting.waitingFor, 'all-sessions');
     assert.deepEqual(waitAllStub.runtimeState.waiting.waitAllSessions, ['child-a', 'child-b']);
     assert.deepEqual(waitAllStub.runtimeState.waiting.satisfiedSessions, ['child-a']);
     const execStub = initial.find(item => item.id === ids.exec);
@@ -1011,7 +1011,7 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(initial.type, 'session-state');
     assert.equal(initial.session.id, sessionId, 'alias subscriptions must use the canonical session id');
     assert.equal(initial.session.runtimeState.state, 'waiting');
-    assert.equal(initial.session.runtimeState.waiting.waitingFor, 'timer');
+    assert.equal(initial.session.runtimeState.waiting.waitingFor, 'fallback');
     assert.equal(initial.session.busy, false);
     assert.equal(initial.session.messageCount, session.history.length);
     assert.equal(initial.session.historyVersion, session.historyVersion || 0);

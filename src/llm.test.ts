@@ -1,11 +1,12 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import path from 'path';
 
 import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
-import { LOGS_DIR, MAX_OUTPUT } from './config';
+import { loadModelsConfigFromObject, LOGS_DIR, MAX_OUTPUT } from './config';
+import * as configModule from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
 import { containsLoneSurrogate } from './utils/unicode';
@@ -21,6 +22,38 @@ import { nodesManager } from './nodes/manager';
 import { getModelStreamDraft } from './modelStreamDraft';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const TEST_MODELS_CONFIG = loadModelsConfigFromObject({
+  default: 'openai/gpt-5.2-codex',
+  providers: {
+    openai: {
+      providerType: 'openai-completions',
+      baseUrl: 'https://openai.test/v1',
+      apiKey: 'test-key',
+      models: ['gpt-5.2-codex', 'gpt-5.6-sol'],
+    },
+    anthropic: {
+      providerType: 'anthropic',
+      baseUrl: 'https://anthropic.test',
+      apiKey: 'test-key',
+      models: ['claude-sonnet-4-5'],
+    },
+    'responses-fixture': {
+      providerType: 'openai-responses',
+      baseUrl: 'https://responses.test/v1',
+      apiKey: 'test-key',
+      models: ['model'],
+    },
+  },
+});
+const originalResolveModelConfig = configModule.resolveModelConfig;
+(configModule as any).resolveModelConfig = (sessionModel?: string) => {
+  const defaultKey = TEST_MODELS_CONFIG.default;
+  const currentKey = sessionModel && TEST_MODELS_CONFIG.models[sessionModel] ? sessionModel : defaultKey;
+  const modelEntry = TEST_MODELS_CONFIG.models[currentKey];
+  return { modelsConfig: TEST_MODELS_CONFIG, defaultKey, currentKey, modelEntry, contextLimit: modelEntry.contextLimit };
+};
+after(() => { (configModule as any).resolveModelConfig = originalResolveModelConfig; });
 
 test('default maximum provider output is 32768 tokens', () => {
   assert.equal(MAX_OUTPUT, 32768);
@@ -386,7 +419,7 @@ function createOpenAITestSession(id: string): Session {
   return {
     id,
     history: [],
-    persistentMemorySnapshot: 'system prompt',
+    persistentMemorySnapshot: '<foxwarm-current-model model-id="openai/gpt-5.2-codex" />\n\nsystem prompt',
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false,
     queue: [],

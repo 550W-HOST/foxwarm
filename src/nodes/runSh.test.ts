@@ -279,10 +279,15 @@ test('run.sh --install selects a user service for non-root and starts foreground
     assert.equal(await fs.pathExists(generated), true);
     assert.equal(await fs.pathExists(installed), true);
     const unit = await fs.readFile(generated, 'utf8');
+    const systemdPath = (value: string) => value
+      .replace(/ /g, '\\x20')
+      .replace(/\$/g, '\\x24')
+      .replace(/%/g, '\\x25')
+      .replace(/'/g, '\\x27');
     assert.match(unit, /^Type=simple$/m);
-    assert.match(unit, /^WorkingDirectory=\/tmp\/.*\\x20.*$/m);
+    assert.match(unit, new RegExp(`^WorkingDirectory=${systemdPath(path.join(installDir, 'foxwarm-node')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
     assert.match(unit, /^ExecStart=\/bin\/sh ".*service \$\$ %% install's\/run-node-client\.sh"$/m);
-    assert.match(unit, /^StandardOutput=append:\/tmp\/.*\\x20.*$/m);
+    assert.match(unit, new RegExp(`^StandardOutput=append:${systemdPath(path.join(installDir, 'data', 'logs', 'node.log')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
     assert.match(unit, /\\x24/);
     assert.match(unit, /\\x27/);
     assert.match(unit, /^Restart=always$/m);

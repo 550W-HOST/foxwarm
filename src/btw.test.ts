@@ -1,7 +1,10 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
+import { PassThrough } from 'node:stream';
 import * as llm from './llm';
+import { loadModelsConfigFromObject } from './config';
+import * as configModule from './config';
 import { cloneSessionForBtw, runBtwRequest, BTW_USAGE } from './btw';
 import { COMMANDS } from './commands';
 import * as sessionManager from './sessionManager';
@@ -14,6 +17,37 @@ import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { estimateSessionSummary } from './tokenCount';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import type { Message, MessagePart, Session } from './types';
+
+const TEST_MODELS_CONFIG = loadModelsConfigFromObject({
+  default: 'fixture/chat',
+  providers: {
+    fixture: {
+      providerType: 'openai-completions',
+      baseUrl: 'https://fixture.test/v1',
+      apiKey: 'test-key',
+      models: ['chat'],
+    },
+  },
+});
+const originalResolveModelConfig = configModule.resolveModelConfig;
+(configModule as any).resolveModelConfig = (sessionModel?: string) => {
+  const defaultKey = TEST_MODELS_CONFIG.default;
+  const currentKey = sessionModel && TEST_MODELS_CONFIG.models[sessionModel] ? sessionModel : defaultKey;
+  const modelEntry = TEST_MODELS_CONFIG.models[currentKey];
+  return { modelsConfig: TEST_MODELS_CONFIG, defaultKey, currentKey, modelEntry, contextLimit: modelEntry.contextLimit };
+};
+after(() => { (configModule as any).resolveModelConfig = originalResolveModelConfig; });
+
+function makeChatCompletionStream(text: string): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] })}\n\n`);
+    stream.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 0 } } })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -262,10 +296,7 @@ test('display-only messages persist in history but are omitted from model-facing
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
-        content: [{ type: 'text', text: 'ok' }],
-        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
-      },
+      data: makeChatCompletionStream('ok'),
     };
   };
 
@@ -277,12 +308,12 @@ test('display-only messages persist in history but are omitted from model-facing
       id: makeId('btw_visibility'),
       agent: 'main',
       history: [ordinaryUser, displayOnly, ordinaryModel],
-      persistentMemorySnapshot: 'system prompt',
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
       meta: { lastMessageTime: Date.now() },
-      model: 'anthropic/claude-sonnet-4-5',
+      model: 'fixture/chat',
+      persistentMemorySnapshot: '<foxwarm-current-model model-id="fixture/chat" />\n\nsystem prompt',
     } as Session;
 
     await llm.chat(null, session, 0, {

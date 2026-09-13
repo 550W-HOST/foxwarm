@@ -124,7 +124,9 @@ test('Docker worktree provider owns exact lifecycle, safe mounts, shared file to
     assert.equal(docker.calls.filter(call => call.args[0] === 'run').length, 1);
     await assert.rejects(() => provider.createNode({ sourceSessionId: 'source', nodeId: 'other', parameters: { worktreePath: repo }, context: { agent: 'main' } }), /already assigned/);
     assert.equal(await provider.getDefaultCwd({ sourceSessionId: 'source', nodeId: 'sandbox-dev', context: { agent: 'main' } }), repo);
-    assert.equal(await invokeProviderTool(provider, { sourceSessionId: 'source', nodeId: 'sandbox-dev', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'sandbox-dev', cwd: repo } }), 'fixture-content');
+    const readResult = String(await invokeProviderTool(provider, { sourceSessionId: 'source', nodeId: 'sandbox-dev', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'sandbox-dev', cwd: repo } }));
+    assert.equal(readResult.split('\n---\n', 1)[0], 'fixture-content');
+    assert.match(readResult, /\n---\n/);
     const inspected = await provider.inspectNode({ sourceSessionId: 'source', nodeId: 'sandbox-dev', parameters: {}, context: { agent: 'main' } });
     assert.equal((inspected.details as any).branch, 'test-branch');
     assert.match(String(inspected.dataRetention), /read-only/);
@@ -163,7 +165,9 @@ test('Docker lifecycle readiness is consistent and ensure restarts or unpauses t
     const registry = new NodeProviderRegistry([provider]); await assert.rejects(() => registry.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not available/);
     await assert.rejects(() => invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not available/i);
     const restarted = await provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.match(String(restarted.effect), /Restarted/); assert.equal((restarted.details as any).containerId, id); assert.equal((restarted.details as any).generation, generation); assert.equal(restarted.node?.availability, 'ready'); assert.equal((restarted.details as any).status, 'running'); assert.ok(docker.calls.some(call => call.args[0] === 'start' && call.args[1] === id)); assert.equal(docker.calls.filter(call => call.args[0] === 'run').length, 1);
-    assert.equal(await invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), 'fixture-content');
+    const readResult = String(await invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }));
+    assert.equal(readResult.split('\n---\n', 1)[0], 'fixture-content');
+    assert.match(readResult, /\n---\n/);
 
     docker.container.State = { Running: true, Paused: true, Restarting: false, Dead: false, Status: 'running' }; const paused = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(paused.node?.availability, 'offline'); assert.equal((paused.details as any).status, 'paused');
     const unpaused = await provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.match(String(unpaused.effect), /Unpaused/); assert.equal((unpaused.details as any).containerId, id); assert.equal((unpaused.details as any).generation, generation); assert.ok(docker.calls.some(call => call.args[0] === 'unpause' && call.args[1] === id));
@@ -524,7 +528,7 @@ test('stopped exact container is terminal for restart fallback while running top
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), `foxwarm-docker-top-${suffix}-`)); const repo = await makeRepo(dir); const docker = new FakeDocker(); const events: string[] = [];
     const config = { id: `docker-top-${suffix}`, type: 'docker-worktree' as const, command: 'docker-launcher', args: [] as string[], image: 'fixture', allowedWorktreeRoots: [dir], networkModes: ['none'] as Array<'none'>, stateDir: path.join(dir, 'state'), memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' }; const first = new DockerWorktreeNodeProvider(config, docker, undefined, localDockerExecLauncher, async () => {});
     const created = await first.createNode({ sourceSessionId: 'top-session', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); const artifact = (created.details as any).artifactDir; const dateDir = path.join(artifact, 'fixture'); await fs.ensureDir(dateDir); const scriptPath = path.join(dateDir, 'exec_top.command.sh'); const logPath = path.join(dateDir, 'top.log'); const statusPath = `${logPath}.status.json`; const cwdPath = `${logPath}.cwd.txt`; await fs.writeFile(scriptPath, '#!/bin/bash\n'); await fs.writeFile(logPath, 'partial\n');
-    await fs.writeJson(path.join(artifact, 'running-exec.json'), { execs: [{ id: 'exec_top', pid: process.pid, sessionId: 'top-session', agentName: 'main', nodeId: 'n', command: 'sleep 20', initialCwd: repo, logPath, statusPath, cwdPath, scriptPath, startedAt: Date.now() - 10_000, notifyOnCompletion: true }] }); await first.shutdown();
+    await fs.writeJson(path.join(artifact, 'running-exec.json'), { execs: [{ id: 'exec_top_fixture', pid: process.pid, sessionId: 'top-session', agentName: 'main', nodeId: 'n', command: 'sleep 20', initialCwd: repo, logPath, statusPath, cwdPath, scriptPath, startedAt: Date.now() - 10_000, notifyOnCompletion: true }] }); await first.shutdown();
     return { dir, repo, docker, events, config, first, artifact, scriptPath, statusPath };
   };
 

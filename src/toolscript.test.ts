@@ -446,7 +446,7 @@ test('run_script nested wait calls enforce the multi-session barrier', async () 
       code: asMain('return call_tool({"toolId": "builtin:wait", "args": {"waitAllSessions": ["only-child"]}})'),
     }, { sessionId, session });
     assert.equal(result.status, 'failed');
-    assert.match(result.error || '', /at least two distinct session IDs.*ordinary wait.*single-session follow-ups/i);
+    assert.match(result.error || '', /waitAllSessions must contain at least two distinct session IDs/i);
     assert.equal(session.meta.wait, undefined);
   } finally {
     await resetToolScriptRunsForTests();

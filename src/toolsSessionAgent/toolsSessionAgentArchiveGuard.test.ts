@@ -205,7 +205,7 @@ test('get_session_messages reports canonical execution state for populated, filt
       sessionId,
       contentFilter: 'does not match',
     }, {}));
-    assert.match(filteredResult, /Session execution state: waiting:sessions 1\/2\./);
+    assert.match(filteredResult, /Session execution state: waiting:all 1\/2\./);
     assert.equal((filteredResult.match(/Session execution state:/g) || []).length, 1);
     assert.match(filteredResult, /No messages matched the requested filters/);
 

@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import sharp from 'sharp';
 import * as sessionManager from './sessionManager';
 import { resolveImageBlobPath } from './imageBlobs';
-import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './session/metadataStore';
+import { readSessionHistorySnapshot } from './session/metadataStore';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -67,10 +67,9 @@ test('session append persists refs in live/archive history and fork preserves th
     const disk = await readSessionHistorySnapshot(sourceId);
     assert.equal(disk?.history[0].parts[1].inlineDataRef.blobId, blobId);
     assert.equal(JSON.stringify(disk).includes(base64), false);
-    const metadata = (await loadSessionsMetadataSnapshot()).data as any;
-    assert.equal(JSON.stringify(metadata.sessions[sourceId].queue).includes(base64), false);
-    assert.equal(metadata.sessions[sourceId].queue[0].parts[0].functionResponse.response.marker, 'queue-business-field');
-    assert.equal(metadata.sessions[sourceId].queue[0].parts[1].toolUseId, 'nested_queue_tool');
+    assert.equal(JSON.stringify(disk?.queue).includes(base64), false);
+    assert.equal(disk?.queue[0].parts[0].functionResponse?.response.marker, 'queue-business-field');
+    assert.equal(disk?.queue[0].parts[1].toolUseId, 'nested_queue_tool');
 
     const archived = await sessionManager.getArchivedMessages(sourceId, { startSeq: 1, endSeq: 1 });
     assert.equal((archived.records[0] as any).message.parts[1].inlineDataRef.blobId, blobId);

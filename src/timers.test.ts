@@ -110,7 +110,7 @@ test('buildTimerTriggeredMessage wraps timer content in foxwarm-message metadata
   assert.match(message, /timerId="timer-1"/);
   assert.match(message, /mode="cron"/);
   assert.match(message, /hint="Scheduled timer fired"/);
-  assert.match(message, new RegExp(`localTime="[^"]*${offset.replace('+', '\\+')}"`));
+  assert.match(message, new RegExp(`time="[^"]*${offset.replace('+', '\\+')}"`));
   assert.match(message, /\nrun nightly sync\n<\/foxwarm-message>$/);
   assert.doesNotMatch(message, /Asia\/Shanghai/);
 });

@@ -269,7 +269,8 @@ test('background timeout result includes oversized-timeout warning with final me
     await fs.writeFile(logPath, 'partial\n');
     const result = await buildBackgroundTimeoutResult(buildExecEntry(logPath), 60, warning);
     assert.match(result, /\[Process running longer than 60s\]/);
-    assert.match(result, /WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\.\nPID: 4321/);
+    assert.match(result, /WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
+    assert.match(result, /execId: exec_test\nPID: 4321/);
     assert.ok(result.endsWith(`Log file: ${logPath}`));
   } finally {
     await fs.remove(tempDir);

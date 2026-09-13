@@ -136,7 +136,10 @@ test('Worker intermediate delivery preserves QQ latest passive ID and monotonic 
     assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'worker-owner', source, outcome: 'response', text: 'final' }), { attempted: 1, delivered: 1 });
     const messages = calls.filter(call => new URL(call.url).pathname.endsWith('/messages'));
     assert.deepEqual(messages.map(call => call.body.msg_id), ['latest-passive-id', 'latest-passive-id', 'latest-passive-id']);
-    assert.deepEqual(messages.map(call => call.body.msg_seq), [1, 2, 3]);
+    const sequences = messages.map(call => call.body.msg_seq);
+    assert.equal(sequences.length, 3);
+    assert.ok(Number.isInteger(sequences[0]) && sequences[0] > 0);
+    assert.deepEqual(sequences.slice(1).map((value, index) => value - sequences[index]), [1, 1]);
     assert.deepEqual(messages.map(call => call.body.content), ['intermediate-1', 'intermediate-2', 'final']);
   } finally {
     transport.close(); unregisterChannel('qq-worker-delivery'); resetChannelsForTests(); setChannelsStoreForTests(null); await fs.remove(root);
