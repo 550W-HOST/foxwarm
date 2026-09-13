@@ -137,6 +137,7 @@ type CompactionRunOptions = {
 };
 
 type CompactExecutionMode = 'auto' | 'await' | 'background';
+type CompactPlanExecution = 'awaited' | 'background';
 export type CompactOperationOwner = 'background' | 'standalone' | 'turn' | 'worker';
 
 export type CompactCancellationResult = {
@@ -598,9 +599,10 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[])
     parentSessionId: session.parentSessionId,
     goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,
-    // Compact jobs are transient sessions, but their LLM requests should share
-    // the real session's prompt-cache routing key so compaction can reuse the
-    // same cached system/history prefix as ordinary turns.
+    // Compact jobs are transient sessions, but preserve the real Session's
+    // stored prefix-lineage key for virtual routing and non-WS cache reuse.
+    // A selected openai-ws leaf derives its provider-facing key later from the
+    // actual awaited/background execution scope.
     promptCacheKey: llm.ensurePromptCacheKey(session),
   };
   (cloned as any).__compactJob = true;
@@ -1080,7 +1082,12 @@ export function formatCompactionCompletionMarker(sessionId: string, completionMa
   });
 }
 
-async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot, operation: CompactOperation): Promise<CompactJobResult> {
+async function runCompactJob(
+  deps: SessionHistoryDeps,
+  snapshot: CompactJobSnapshot,
+  operation: CompactOperation,
+  execution: CompactPlanExecution,
+): Promise<CompactJobResult> {
   const { sessionId, transientSession, historySnapshot, keepPercent, compactGuidance, completionMarker, completionBroadcastMessage } = snapshot;
   const splitIndex = resolveCompactionSplitIndex(historySnapshot, keepPercent);
   if (splitIndex <= 0) {
@@ -1160,6 +1167,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       registerAbortController: false,
       abortSignal: operation.controller.signal,
       purpose: 'compact-plan',
+      ...(execution === 'background' ? { compactPlanBackground: true } : {}),
       snapshotAuthority: 'detached',
     });
 
@@ -1374,7 +1382,7 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
       return false;
     }
 
-    const result = await runCompactJob(deps, snapshot, operation);
+    const result = await runCompactJob(deps, snapshot, operation, 'awaited');
     operation.phase = 'committing';
     return await applyCompactJobResult(deps, sessionId, result, operation);
   } catch (e) {
@@ -1436,7 +1444,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
 
   void (async () => {
     try {
-      const result = await runCompactJob(deps, snapshot, operation);
+      const result = await runCompactJob(deps, snapshot, operation, 'background');
       if (isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) throw new CompactCancelledError();
       operation.phase = 'enqueueing';
       compactJobStates.set(sessionId, {

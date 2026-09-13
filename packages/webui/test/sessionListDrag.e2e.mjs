@@ -122,3 +122,57 @@ test('desktop mouse drag still starts and can be cancelled without changing plac
     await page.close()
   }
 })
+test('clear search stays vertically centered during theme press feedback and still clears the query', async () => {
+  const page = await openSessionList({ width: 1440, height: 900 })
+  const clearSelector = 'button[aria-label="Clear session search"]'
+  const measure = () => page.$eval(clearSelector, (button) => {
+    const input = button.parentElement.querySelector('input')
+    const buttonRect = button.getBoundingClientRect()
+    const inputRect = input.getBoundingClientRect()
+    return {
+      centerOffset: buttonRect.top + buttonRect.height / 2 - inputRect.top - inputRect.height / 2,
+      active: button.matches(':active'),
+    }
+  })
+  const settle = () => page.$eval(clearSelector, async (button) => {
+    await Promise.all(button.getAnimations().map(animation => animation.finished.catch(() => {})))
+  })
+  try {
+    for (const { treatment, offset } of [
+      { treatment: 'default', offset: 0 },
+      { treatment: 'console', offset: 0 },
+      { treatment: 'console', offset: 1 },
+    ]) {
+      await page.evaluate(({ treatment, offset }) => {
+        document.documentElement.setAttribute('data-foxwarm-component-treatment', treatment)
+        document.documentElement.style.setProperty('--foxwarm-press-transform', `translateY(${offset}px)`)
+      }, { treatment, offset })
+      await page.type('input[aria-label="Search sessions"]', 'clear-button-fixture')
+      const clear = await page.waitForSelector(clearSelector)
+      const before = await measure()
+      assert.ok(Math.abs(before.centerOffset) < 0.5, `${treatment}: initial centering ${before.centerOffset}`)
+      const box = await clear.boundingBox()
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await page.mouse.down()
+      await settle()
+      const pressed = await measure()
+      assert.equal(pressed.active, true)
+      assert.ok(Math.abs(pressed.centerOffset - offset) < 0.5,
+        `${treatment}: expected only ${offset}px press feedback, got ${pressed.centerOffset}px`)
+
+      // Releasing outside cancels the click, so the query and button remain.
+      await page.mouse.move(box.x - 40, box.y + box.height / 2)
+      await page.mouse.up()
+      await settle()
+      assert.ok(Math.abs((await measure()).centerOffset) < 0.5)
+      assert.equal(await page.$eval('input[aria-label="Search sessions"]', input => input.value), 'clear-button-fixture')
+
+      await clear.click()
+      await page.waitForFunction(() => document.querySelector('input[aria-label="Search sessions"]')?.value === '')
+      assert.equal(await page.$(clearSelector), null)
+    }
+  } finally {
+    await page.mouse.up().catch(() => {})
+    await page.close()
+  }
+})

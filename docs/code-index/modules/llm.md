@@ -42,7 +42,7 @@ Canonical image messages remain blob-reference-only until the provider request b
 - Memory-backed snapshots filter per-source conditions for one canonical concrete model and carry a first-line generation marker. Canonical ownership: [conditional memory snapshots](../threads/conditional-memory-snapshots.md).
 - Outbound payloads replace lone surrogates.
 - Terminal failures throw `LlmRequestError` and never become fake model-visible assistant text.
-- Prompt-cache keys follow model-facing prefix lineage.
+- Persisted and routing prompt-cache keys follow model-facing prefix lineage; only a selected `openai-ws` concrete plan derives its provider-facing key from Session identity and the confirmed request scope. Canonical contract: [D-model-routing-openai-ws-prompt-cache-key](../threads/model-routing.md#d-model-routing-openai-ws-prompt-cache-key).
 - MCP summaries do not expose secret values.
 - One-shot CLI/ToolScript model requests reuse production provider code.
 - Every production provider-request path enters the canonical request journal before send; exact wire capture remains outside that contract.

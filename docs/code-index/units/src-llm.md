@@ -47,7 +47,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Visible skills are listed as compact metadata; full skill docs remain on-demand.
 - Dynamic hints include agent folder and layered-context recall guidance.
 - Prompt-cache keys are random UUIDs tied to model-facing prefix lineage and persisted by normal session callers. Canonical lineage: [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
-- Provider `extraFields` and `extraHeaders` expand `${SESSION_CACHE_KEY}` from the resolved prompt-cache key and `${TURN_ID}` from the request's ephemeral turn identity. A low-level request generates one fallback identity for its retry set; the normal SessionTurnRunner supplies one identity for the whole session turn.
+- Provider `extraFields` and `extraHeaders` expand `${SESSION_CACHE_KEY}` from the concrete plan's effective provider key and `${TURN_ID}` from the request's ephemeral turn identity. This normally remains the resolved persisted/request key; only `openai-ws` applies the Session/scoped derivation in [D-model-routing-openai-ws-prompt-cache-key](../threads/model-routing.md#d-model-routing-openai-ws-prompt-cache-key). A low-level request without a Session ID generates one fallback identity for its retry set; the normal SessionTurnRunner supplies one turn identity for the whole session turn.
 - A provider-neutral optional request effort is resolved once per outer request. Each physical concrete attempt uses the requested value when its leaf allows it, otherwise that leaf's configured default. Requests without an explicit value use the selected leaf default.
 
 ## Request behavior

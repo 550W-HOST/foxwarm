@@ -203,9 +203,23 @@ type RequestLlmOnceOptions = {
     timeoutMs?: number;
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
     purpose?: LlmRequestPurpose;
+    compactPlanBackground?: boolean;
     currentSessionEffects?: CurrentSessionEffects;
     resolveSystemPromptForModel?: (modelId: string) => Promise<string>;
 };
+
+function resolveProviderPromptCacheKey(
+    providerType: string,
+    request: Pick<RequestLlmOnceOptions, 'sessionId' | 'purpose' | 'compactPlanBackground'>,
+    promptCacheKey: string,
+): string {
+    if (providerType !== 'openai-ws' || !request.sessionId) return promptCacheKey;
+
+    let source = request.sessionId;
+    if (request.purpose === 'btw') source += '--btw';
+    else if (request.purpose === 'compact-plan' && request.compactPlanBackground) source += '--compact-plan';
+    return crypto.createHash('sha256').update(source).digest('hex');
+}
 
 type InternalLlmResult = {
     result: ChatResult;
@@ -2056,6 +2070,7 @@ export async function chat(
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         purpose?: LlmRequestPurpose;
+        compactPlanBackground?: boolean;
         turnId?: string;
         currentSessionEffects?: CurrentSessionEffects;
         snapshotAuthority?: 'authoritative' | 'detached';
@@ -2141,6 +2156,7 @@ export async function chat(
         abortSignal: options?.abortSignal,
         onRetry: options?.onRetry,
         purpose: options?.purpose || 'normal-turn',
+        compactPlanBackground: options?.compactPlanBackground,
         currentSessionEffects: options?.currentSessionEffects,
         resolveSystemPromptForModel,
     });
@@ -2428,6 +2444,7 @@ function buildConcreteRequestPlan(options: {
     const useOpenAIResponsesWs = providerType === 'openai-ws';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
     const useStreamingApi = !useOpenAIResponsesWs && (useOpenAIResponsesApi || useOpenAIChatCompletionsApi);
+    const providerPromptCacheKey = resolveProviderPromptCacheKey(providerType, request, promptCacheKey);
     if (useOpenAIResponsesWs && modelEntry.requestCompression) {
         throw new Error('requestCompression is not supported for openai-ws providers.');
     }
@@ -2492,7 +2509,7 @@ function buildConcreteRequestPlan(options: {
             max_output_tokens: MAX_OUTPUT,
             store: false,
             include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
-            prompt_cache_key: promptCacheKey,
+            prompt_cache_key: providerPromptCacheKey,
             ...(!useOpenAIResponsesWs ? { stream: true } : {}),
         };
     } else if (useOpenAIChatCompletionsApi) {
@@ -2553,7 +2570,7 @@ function buildConcreteRequestPlan(options: {
     }
 
     const templateVars: Record<string, string> = {
-        SESSION_CACHE_KEY: promptCacheKey,
+        SESSION_CACHE_KEY: providerPromptCacheKey,
         TURN_ID: turnId,
     };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
@@ -2844,7 +2861,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
 
     // Resolve once per outer request. Every retry attempt, including virtual
-    // failover attempts, shares this prefix-lineage routing key.
+    // failover attempts, shares this prefix-lineage routing key. A selected
+    // openai-ws leaf derives its provider-facing cache key later, inside the
+    // complete concrete request plan, without changing this routing lineage.
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
     // A low-level caller may omit the turn identity. Keep one generated value
     // for this whole request so retries expand `${TURN_ID}` consistently;

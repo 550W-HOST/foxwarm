@@ -1,5 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs-extra';
 import os from 'os';
@@ -13,7 +14,7 @@ import {
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-openai-ws-chat-'));
 fs.ensureDirSync(path.join(dataRoot, 'state'));
-fs.writeFileSync(path.join(dataRoot, 'state', 'models.yaml'), `default: socket/model\nproviders:\n  socket:\n    providerType: openai-ws\n    baseUrl: https://example.test/v1\n    apiKey: test-key\n    models: [model]\n`);
+fs.writeFileSync(path.join(dataRoot, 'state', 'models.yaml'), `default: socket/model\nproviders:\n  socket:\n    providerType: openai-ws\n    baseUrl: https://example.test/v1\n    apiKey: test-key\n    extraFields:\n      cache_key_echo: \${SESSION_CACHE_KEY}\n    extraHeaders:\n      x-cache-key-echo: \${SESSION_CACHE_KEY}\n    models: [model]\n`);
 process.env.FOXWARM_DATA_DIR = dataRoot;
 
 class FakeSocket extends EventEmitter {
@@ -42,10 +43,14 @@ class FakeSocket extends EventEmitter {
 
 function session(id: string): Session {
   return {
-    id, history: [], persistentMemorySnapshot: 'system', promptCacheKey: 'cache-key', model: 'socket/model',
+    id, history: [], persistentMemorySnapshot: 'system', promptCacheKey: '11111111-2222-4333-8444-555555555555', model: 'socket/model',
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: Date.now() },
   } as Session;
+}
+
+function wsPromptCacheKey(sessionId: string, suffix = ''): string {
+  return createHash('sha256').update(`${sessionId}${suffix}`).digest('hex');
 }
 
 const llmPromise = import('./llm');
@@ -119,26 +124,36 @@ test('normal chat commits provider replay once and the next turn sends only the 
   const { chat } = await llmPromise;
   const transport = await transportPromise;
   const sockets: FakeSocket[] = [];
+  const socketHeaders: Array<Record<string, string>> = [];
   const diagnostics: Array<{ fields: any; message: string }> = [];
   transport.setOpenAIWsTransportTestHooks({
     diagnosticLogger: {
       info(fields: any, message: string) { diagnostics.push({ fields, message }); },
       warn(fields: any, message: string) { diagnostics.push({ fields, message }); },
     } as any,
-    socketFactory: () => {
-    const socket = new FakeSocket(() => ({
-      id: `response-${sockets.length}-${socket.sent.length}`,
-      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] }],
-      usage: { input_tokens: 2, output_tokens: 1 },
-    }));
-    sockets.push(socket);
-    return socket as any;
-  }});
+    socketFactory: (_url, headers) => {
+      socketHeaders.push(headers as Record<string, string>);
+      const socket = new FakeSocket(() => ({
+        id: `response-${sockets.length}-${socket.sent.length}`,
+        output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] }],
+        usage: { input_tokens: 2, output_tokens: 1 },
+      }));
+      sockets.push(socket);
+      return socket as any;
+    },
+  });
   const current = session('normal');
   const append = async (message: Message) => { current.history.push(message); };
   await chat([{ text: 'first' }], current, 0, { appendMessage: append, notifySessionEvents: false, registerAbortController: false, toolDefinitions: [] });
   await chat([{ text: 'second' }], current, 1, { appendMessage: append, notifySessionEvents: false, registerAbortController: false, toolDefinitions: [] });
   assert.equal(sockets.length, 1);
+  const expectedCacheKey = wsPromptCacheKey(current.id);
+  assert.equal(sockets[0].sent[0].prompt_cache_key, expectedCacheKey);
+  assert.equal(sockets[0].sent[0].cache_key_echo, expectedCacheKey);
+  assert.equal(sockets[0].sent[1].prompt_cache_key, expectedCacheKey);
+  assert.equal(sockets[0].sent[1].cache_key_echo, expectedCacheKey);
+  assert.equal(socketHeaders[0]['x-cache-key-echo'], expectedCacheKey);
+  assert.equal(current.promptCacheKey, '11111111-2222-4333-8444-555555555555');
   const secondWire = sockets[0].sent[1];
   assert.equal(secondWire.previous_response_id, 'response-1-1');
   assert.deepEqual(secondWire.input, [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'second' }] }]);
@@ -152,6 +167,142 @@ test('normal chat commits provider replay once and the next turn sends only the 
   assert.match(dispatches[0].fields.llmRequestId, /^[0-9a-f-]{36}$/);
   assert.notEqual(dispatches[0].fields.llmRequestId, dispatches[1].fields.llmRequestId);
   transport.clearOpenAIWsCompletedChains();
+});
+
+test('openai-ws uses distinct session identities even when a fork shares persisted cache lineage', async () => {
+  const { chat } = await llmPromise;
+  const transport = await transportPromise;
+  const sockets: FakeSocket[] = [];
+  const headers: Array<Record<string, string>> = [];
+  transport.setOpenAIWsTransportTestHooks({ socketFactory: (_url, requestHeaders) => {
+    headers.push(requestHeaders as Record<string, string>);
+    const socket = new FakeSocket(() => ({
+      id: `response-${sockets.length}`,
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] }],
+    }));
+    sockets.push(socket);
+    return socket as any;
+  }});
+  const parent = session('parent/session');
+  const fork = session('parent/session-fork');
+  fork.promptCacheKey = parent.promptCacheKey;
+  const appendParent = async (message: Message) => { parent.history.push(message); };
+  const appendFork = async (message: Message) => { fork.history.push(message); };
+
+  await chat([{ text: 'parent request' }], parent, 0, {
+    appendMessage: appendParent, notifySessionEvents: false, registerAbortController: false, toolDefinitions: [],
+  });
+  await chat([{ text: 'fork request' }], fork, 0, {
+    appendMessage: appendFork, notifySessionEvents: false, registerAbortController: false, toolDefinitions: [],
+  });
+
+  assert.equal(sockets.length, 2);
+  const parentKey = wsPromptCacheKey(parent.id);
+  const forkKey = wsPromptCacheKey(fork.id);
+  assert.notEqual(parentKey, forkKey);
+  assert.equal(sockets[0].sent[0].prompt_cache_key, parentKey);
+  assert.equal(sockets[0].sent[0].cache_key_echo, parentKey);
+  assert.equal(headers[0]['x-cache-key-echo'], parentKey);
+  assert.equal(sockets[1].sent[0].prompt_cache_key, forkKey);
+  assert.equal(sockets[1].sent[0].cache_key_echo, forkKey);
+  assert.equal(headers[1]['x-cache-key-echo'], forkKey);
+  assert.equal(parent.promptCacheKey, fork.promptCacheKey);
+  transport.clearOpenAIWsCompletedChains();
+});
+
+test('openai-ws scopes background compact and BTW keys while awaited compact shares the normal key', async () => {
+  const { requestLlmOnce } = await llmPromise;
+  const { executeBtwRequest } = await import('./btw');
+  const transport = await transportPromise;
+  const sockets: FakeSocket[] = [];
+  const headers: Array<Record<string, string>> = [];
+  transport.setOpenAIWsTransportTestHooks({ socketFactory: (_url, requestHeaders) => {
+    headers.push(requestHeaders as Record<string, string>);
+    const socket = new FakeSocket(() => ({
+      id: `response-${sockets.length}`,
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] }],
+    }));
+    sockets.push(socket);
+    return socket as any;
+  }});
+  const sessionId = 'scope/session';
+  const logicalKey = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const request = (purpose: 'normal-turn' | 'compact-plan', compactPlanBackground?: boolean) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: purpose }] }],
+    systemPrompt: '', model: 'socket/model', sessionId, promptCacheKey: logicalKey,
+    purpose, ...(compactPlanBackground ? { compactPlanBackground: true } : {}),
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+  });
+
+  await request('normal-turn');
+  await request('compact-plan');
+  await request('compact-plan', true);
+  const btwSession = session(sessionId);
+  btwSession.promptCacheKey = logicalKey;
+  await executeBtwRequest(btwSession, 'side request');
+
+  assert.equal(sockets.length, 4);
+  const expected = [
+    wsPromptCacheKey(sessionId),
+    wsPromptCacheKey(sessionId),
+    wsPromptCacheKey(sessionId, '--compact-plan'),
+    wsPromptCacheKey(sessionId, '--btw'),
+  ];
+  assert.deepEqual(sockets.map(socket => socket.sent[0].prompt_cache_key), expected);
+  assert.deepEqual(sockets.map(socket => socket.sent[0].cache_key_echo), expected);
+  assert.deepEqual(headers.map(value => value['x-cache-key-echo']), expected);
+  assert.equal(btwSession.promptCacheKey, logicalKey);
+  transport.clearOpenAIWsCompletedChains();
+});
+
+test('openai-ws retries retain the same derived session cache key', async () => {
+  const { requestLlmOnce } = await llmPromise;
+  const transport = await transportPromise;
+  const sentKeys: string[] = [];
+  let socketCount = 0;
+  const originalSetTimeout = global.setTimeout;
+  (global as any).setTimeout = (callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+    if (delay === 2000) return originalSetTimeout(callback, 0, ...args);
+    return originalSetTimeout(callback, delay, ...args);
+  };
+  transport.setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socketCount += 1;
+    const current = socketCount;
+    const socket = new FakeSocket((request) => {
+      sentKeys.push(request.prompt_cache_key);
+      if (current === 1) return { __failed: true };
+      return {
+        id: 'retry-success', status: 'completed',
+        output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] }],
+      };
+    });
+    if (current === 1) {
+      socket.send = (raw: string) => {
+        const request = JSON.parse(raw);
+        socket.sent.push(request);
+        sentKeys.push(request.prompt_cache_key);
+        process.nextTick(() => socket.emit('message', Buffer.from(JSON.stringify({
+          type: 'response.failed', response: { error: { message: 'retry once' } },
+        }))));
+      };
+    }
+    return socket as any;
+  }});
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'retry' }] }], systemPrompt: '', model: 'socket/model',
+      sessionId: 'retry/session', promptCacheKey: 'logical-retry-key', maxRetries: 2,
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+    });
+    assert.equal(socketCount, 2);
+    assert.deepEqual(sentKeys, [wsPromptCacheKey('retry/session'), wsPromptCacheKey('retry/session')]);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    transport.clearOpenAIWsCompletedChains();
+  }
 });
 
 test('assistant append failure and direct low-level requests discard completed sockets', async () => {
@@ -180,6 +331,8 @@ test('assistant append failure and direct low-level requests discard completed s
     contents: [{ role: 'user', parts: [{ text: 'direct' }] }], systemPrompt: 'system', model: 'socket/model',
     promptCacheKey: 'direct-key', toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
   });
+  assert.equal(sockets[1].sent[0].prompt_cache_key, 'direct-key');
+  assert.equal(sockets[1].sent[0].cache_key_echo, 'direct-key');
   assert.equal(sockets[1].terminated, 1);
   assert.equal(transport.getOpenAIWsCompletedChainCountForTests(), 0);
 });

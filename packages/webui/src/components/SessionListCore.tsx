@@ -1435,7 +1435,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 <button
                   type="button"
                   onClick={() => setFilterText('')}
-                  className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
+                  className="absolute inset-y-0 right-1.5 my-auto inline-flex h-6 w-6 items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
                   aria-label="Clear session search"
                   title="Clear search"
                 >

@@ -44,7 +44,7 @@ Provides a "BTW" (by-the-way) side-request feature that lets users ask a quick b
 
 ## Behavior
 
-- Clones the session (history, snapshot, raw current/child model-effort settings, metadata, and promptCacheKey) so the BTW LLM call cannot mutate live state while following [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
+- Clones the session (history, snapshot, raw current/child model-effort settings, metadata, and promptCacheKey) so the BTW LLM call cannot mutate live state while following [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage). A selected `openai-ws` leaf derives the stable `SHA256(session.id + '--btw')` outbound key without changing that copied lineage; canonical ownership is [D-model-routing-openai-ws-prompt-cache-key](../threads/model-routing.md#d-model-routing-openai-ws-prompt-cache-key).
 - Injects a system prompt instructing the model not to use tools.
 - If the model returns tool calls anyway, the request is denied and a warning is appended instead of executing tools.
 - On success or failure, a display-only (`modelVisible: false`) message is appended to the real session history and broadcast to connected clients (excluding webui).
