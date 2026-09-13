@@ -416,7 +416,7 @@ function ModelSelector({
             data-model-effort-footer="true"
           >
             <div className="flex items-center px-3 py-1.5">Effort</div>
-            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-1.5 py-1 dark:border-fw-border/80">
+            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-0.5 py-1 dark:border-fw-border/80">
               <select
                 aria-label="Current effort"
                 aria-describedby={`${effortDescriptionId}-current`}
@@ -432,7 +432,7 @@ function ModelSelector({
               </select>
               <span id={`${effortDescriptionId}-current`} className="sr-only">Current effort: {currentStaleFullLabel || (effort || currentDefaultFullLabel)}</span>
             </label>
-            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-1.5 py-1 dark:border-fw-border/80">
+            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-0.5 py-1 dark:border-fw-border/80">
               <select
                 aria-label="Child effort"
                 aria-describedby={`${effortDescriptionId}-child`}
