@@ -4,7 +4,7 @@ import { createSessionHistoryStore, getSessionHistoryFilePath, writeSessionHisto
 import { readSessionAuthorityMailboxCursor } from './session/stateValidation';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
-import { clearSessionCatalogStub } from './sessionRuntimeState';
+import { markSessionCatalogStub } from './sessionRuntimeState';
 
 export type SessionWorkerHandbackIdentity = { sessionId: string; generation: number; incarnationId: string };
 
@@ -85,7 +85,11 @@ export async function performSessionWorkerHandback(
   stub.busy = raw.busy === true;
   stub.busyStartedAt = typeof raw.busyStartedAt === 'number' ? raw.busyStartedAt : undefined;
   stub.queue = Array.isArray(raw.queue) ? raw.queue : [];
-  clearSessionCatalogStub(stub);
+  // Handback leaves only a bounded presentation mirror in Main. Keep the
+  // lightweight-stub marker so any later semantic read hydrates the exact
+  // per-session JSON authority instead of treating this empty-history mirror
+  // as a fully loaded owner.
+  markSessionCatalogStub(stub, stub.queue.length);
   delete (stub as any).managedPendingCount;
   for (const key of AUTHORITY_SETTING_KEYS) {
     if (raw[key] === undefined || raw[key] === null) delete (stub as any)[key];

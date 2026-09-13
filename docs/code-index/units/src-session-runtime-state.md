@@ -48,17 +48,21 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 - Runtime-state waiting details distinguish `all-sessions`, `any-session`, `exec`, `input`, and `fallback`; the corresponding bounded target/source fields remain presentation-only projections of authoritative per-Session wait state.
 - Legacy bare/reason-only waits remain readable and derive no current waiting detail. Current model-facing calls cannot create them.
 - If a legacy/stale session is `busy` but no active transient state exists, the builder falls back to `requesting-model` with `active.phase: 'unknown'` so old payloads do not appear idle.
-- A lightweight startup stub uses its catalog queue count in both the top-level
-  DTO and derived state. A hydrated owner always uses its actual queue; clearing
-  the stub marker prevents stale synthetic counts from overriding authority.
+- A lightweight startup or post-Worker-handback stub uses its mirrored queue
+  count in both the top-level DTO and derived state. A hydrated owner always
+  uses its actual queue; authority hydration clears the marker so stale
+  synthetic counts cannot override the loaded owner.
   Queued work without another active phase remains canonical `idle` with
   `busy:false` while retaining the positive queue count. Queue presence alone
   does not imply that a provider request or tool is executing.
 - Lightweight startup stubs also carry only the catalog's sanitized wait
   presentation, which is sufficient to render timer, wait-all, and exec waits.
-  Authority hydration and Worker handback replace `meta.wait` with exact
-  authority state while clearing the shared catalog-stub marker; Worker
-  projections overlay their exact runtime state directly.
+  Authority hydration replaces `meta.wait` with exact authority state and
+  clears the shared catalog-stub marker. Worker handback also mirrors exact
+  wait/queue presentation from JSON, but keeps the marker because Main still
+  owns only a bounded empty-history presentation stub; the next semantic read
+  must rehydrate the per-session JSON authority. Worker projections overlay
+  their exact runtime state directly.
 
 ## Integration
 

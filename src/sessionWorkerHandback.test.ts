@@ -13,6 +13,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
 import { SessionCatalogStore, sessionCatalogStore } from './session/catalogStore';
+import { getEffectiveSessionQueueLength, isSessionCatalogStub } from './sessionRuntimeState';
 
 test.before(async () => {
   if (!sessionCatalogStore.exists()) sessionCatalogStore.initializeEmpty();
@@ -193,6 +194,44 @@ test('no-write Worker load and idle handback preserve catalog-owned agent in mem
     assert.equal(persisted.stats.totalInputTokens, 2);
     assert.deepEqual(await fs.readFile(fixture.statePath), authorityBefore, 'load-to-idle handback performs no semantic authority write');
   } finally { await fixture.close(); }
+});
+
+test('handback keeps a nonempty queue as bounded stub presentation without rewriting authority', async () => {
+  const sessionId = `worker-handback-queued-stub-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-handback-queued-'));
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite'));
+  store.open();
+  const authority = baseSession(sessionId);
+  authority.queue = [{ type: 'background', parts: [{ text: 'queued authority work' }] }];
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
+  const authorityBefore = await fs.readFile(statePath);
+  const stub = baseSession(sessionId);
+  stub.history = [{ role: 'user', parts: [{ text: 'stale hydrated history' }] }];
+  const catalog = new Map([[sessionId, stub]]);
+  const incarnationId = 'queued-stub-incarnation';
+  const candidate = store.beginGeneration(sessionId, incarnationId);
+  store.registerCandidate(sessionId, candidate.generation, incarnationId, process.pid, 'queued-stub-process');
+  store.activateCandidate(sessionId, candidate.generation, incarnationId, process.pid, 'queued-stub-process');
+  store.markDraining(sessionId, candidate.generation, incarnationId);
+  try {
+    await performSessionWorkerHandback({
+      store,
+      getCatalogSession: id => catalog.get(id),
+      upsertCatalogSession: session => catalog.set(session.id, session),
+      saveCatalog: async () => {},
+      stateFilePath: () => statePath,
+    }, { sessionId, generation: candidate.generation, incarnationId });
+
+    assert.equal(isSessionCatalogStub(stub), true);
+    assert.equal(getEffectiveSessionQueueLength(stub), 1);
+    assert.equal(stub.queue.length, 1);
+    assert.equal(stub.history.length, 0);
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore, 'current v1 handback is read-only for semantic authority');
+  } finally {
+    store.close();
+    await fs.remove(root);
+  }
 });
 
 test('loaded idle release canonicalizes a missing v1 mailbox cursor before releasing ownership', async () => {
@@ -403,6 +442,8 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
     // Handback cleared the hydrated copy; the stub is a pure presentation mirror again.
     const stub = sessionManager.getAllSessions().get(sessionId)!;
     assert.equal(stub.history.length, 0, 'handback clears the hydrated stub history');
+    assert.equal(isSessionCatalogStub(stub), true, 'handback keeps the empty-history presentation mirror eligible for authority hydration');
+    assert.equal(getEffectiveSessionQueueLength(stub), 0);
     assert.ok(stub.meta!.lastMessageTime! > 1, 'presentation fields still mirror the authority');
 
     // Bridge the split test state root; later reads lazily rehydrate the fresh authority.
