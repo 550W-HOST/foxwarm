@@ -599,9 +599,10 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[])
     parentSessionId: session.parentSessionId,
     goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,
-    // Compact jobs are transient sessions, but their LLM requests should share
-    // the real session's prompt-cache routing key so compaction can reuse the
-    // same cached system/history prefix as ordinary turns.
+    // Compact jobs are transient sessions, but preserve the real Session's
+    // stored prefix-lineage key for virtual routing and non-WS cache reuse.
+    // A selected openai-ws leaf derives its provider-facing key later from the
+    // actual awaited/background execution scope.
     promptCacheKey: llm.ensurePromptCacheKey(session),
   };
   (cloned as any).__compactJob = true;
