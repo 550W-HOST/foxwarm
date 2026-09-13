@@ -102,7 +102,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 ### D-lifecycle-prefix-lineage
 
-Prompt-cache keys follow the model-facing prefix, not session identity. Forks and same-prefix side/compact-planning requests reuse the key; fresh non-fork sessions and clear operations use a fresh key; successful compaction preserves it.
+Persisted prompt-cache keys follow the model-facing prefix, not session identity. Forks and same-prefix side/compact-planning requests reuse the stored key; fresh non-fork sessions and clear operations use a fresh key; successful compaction preserves it. Only the final provider-facing `openai-ws` request key has the Session-identity/scoped derivation defined by [D-model-routing-openai-ws-prompt-cache-key](./model-routing.md#d-model-routing-openai-ws-prompt-cache-key); it does not change this persisted lineage.
 
 ### D-lifecycle-model-effort-inheritance
 

@@ -36,7 +36,7 @@ The resolved virtual model reports:
 
 ## Request flow
 
-1. `requestLlmOnce` resolves one models-config snapshot and one prompt-cache routing key for the entire outer request.
+1. `requestLlmOnce` resolves one models-config snapshot and one logical prompt-cache routing key for the entire outer request. Virtual selection and request-journal lineage use that unchanged key; a selected `openai-ws` leaf derives its provider-facing key only inside the final concrete plan under [D-model-routing-openai-ws-prompt-cache-key](#d-model-routing-openai-ws-prompt-cache-key).
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
 3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination, then Chat Completions emits it under that leaf's resolved `historyReasoningField`.
    For `openai-ws`, the rebuilt complete plan is matched against process-local completed chains only after this boundary; a match changes only the transport wire suffix, not the semantic request or journal.
@@ -123,6 +123,12 @@ Version 1 virtual targets are strict concrete leaves. Canonical identity is the 
 ### D-model-routing-prefix-hash
 
 Session hashing uses stable SHA-256 rendezvous hashing namespaced by the virtual key and driven by prompt-cache prefix lineage. Target ordering does not affect hash selection.
+
+### D-model-routing-openai-ws-prompt-cache-key
+
+[2026-09-13] Only a selected concrete `openai-ws` request derives its provider-facing `prompt_cache_key` from Session identity. Normal turns and synchronous/awaited compact planning use lowercase-hex `SHA256(session.id)`. Actual background compact planning uses `SHA256(session.id + '--compact-plan')`, and BTW uses `SHA256(session.id + '--btw')`; the separator is the literal two-character string `--`. Retries recompute the same value. A request without a Session ID keeps the existing request-stable low-level fallback rather than hashing a shared default.
+
+Derivation occurs after virtual/concrete selection inside the complete request-plan boundary. The same effective value supplies the normal body field and `${SESSION_CACHE_KEY}` expansion in provider `extraFields`/`extraHeaders`, while established explicit override ordering remains unchanged. Persisted `Session.promptCacheKey`, fork/clear/compaction lineage, virtual session-hash selection, request-journal logical lineage metadata, and every non-WebSocket provider path keep their existing semantics; the attempt semantic payload naturally records the concrete wire plan.
 
 ### D-model-routing-outer-attempts
 

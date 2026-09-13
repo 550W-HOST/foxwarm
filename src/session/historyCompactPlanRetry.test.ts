@@ -165,13 +165,14 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
       parts: MessagePart[] | null,
       activeSession: Session,
       _iteration: number,
-      options?: { appendMessage?: (message: Message) => Promise<void> | void; purpose?: string; snapshotAuthority?: string },
+      options?: { appendMessage?: (message: Message) => Promise<void> | void; purpose?: string; compactPlanBackground?: boolean; snapshotAuthority?: string },
     ): Promise<ChatResult> => {
       assert.equal((activeSession as any).__compactJob, true);
       assert.equal(activeSession.effort, 'none');
       assert.equal(activeSession.childEffortDefault, 'max');
       assert.deepEqual(activeSession.systemPromptFiles, ['custom-memory.md']);
       assert.equal(options?.snapshotAuthority, 'detached');
+      assert.equal(options?.compactPlanBackground, undefined);
       prompts.push(flattenPrompt(parts));
       purposes.push(options?.purpose);
 
@@ -266,6 +267,7 @@ test('ready background compact cancellation durably removes only compact commits
   session.queue.push(ordinary);
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      assert.equal(options.compactPlanBackground, true);
       const toolCall = { id: 'cancel-ready', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'ready but cancelled',
       }] } };
@@ -288,6 +290,31 @@ test('ready background compact cancellation durably removes only compact commits
     assert.equal((await sessionHistory.cancelSessionCompaction(deps, session.id)).outcome, 'none');
     assert(saves.count > 0);
     assert.equal(foregroundRuntimePublications, 0);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('background request without an enqueue dependency uses awaited compact-plan scope', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_background_sync_fallback'));
+  const originalChat = llm.chat;
+  let calls = 0;
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      calls += 1;
+      assert.equal(options.compactPlanBackground, undefined);
+      const toolCall = { id: 'sync-fallback', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'synchronous fallback summary',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const deps = makeDepsForSession(session, { count: 0 });
+    delete deps.enqueueSessionItem;
+    await sessionHistory.processSessionCompactionRequest(
+      deps, session.id, { keepPercent: 0.5 }, 'background', 'background',
+    );
+    assert.equal(calls, 1);
+    assert.equal(session.history[0]?.__meta?.contextBlock?.level, 1);
   } finally { (llm as any).chat = originalChat; }
 });
 
