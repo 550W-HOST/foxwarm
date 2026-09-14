@@ -35,6 +35,10 @@ await fs.mkdir(screenshotsRoot, { recursive: true })
 
 const appendProviderLog = text => fs.appendFile(path.join(logsRoot, 'provider.log'), text)
 
+function throwIfCancelled() {
+  if (receivedSignal) throw new Error(`Full-application E2E cancelled by ${receivedSignal}`)
+}
+
 function sessionHistory(id, count, offset) {
   const repeated = 'synthetic content '.repeat(id.startsWith('core-compact-') ? 42 : 18)
   return Array.from({ length: count }, (_, index) => ({
@@ -94,12 +98,29 @@ function reservePort() {
 
 async function startApplication() {
   await seedData()
+  throwIfCancelled()
   appPort = await reservePort()
+  throwIfCancelled()
   baseUrl = `http://127.0.0.1:${appPort}`
-  provider = await startMockProvider({ toolFile, log: appendProviderLog })
+  const providerDelayMs = process.env.FOXWARM_APP_E2E_PROVIDER_ALLOCATION_DELAY === '1' ? 2000 : 0
+  if (providerDelayMs) console.log('APP_E2E_PROVIDER_ALLOCATION_PENDING')
+  const createdProvider = await startMockProvider({ toolFile, log: appendProviderLog, readyDelayMs: providerDelayMs })
+  if (receivedSignal) {
+    await createdProvider.close()
+    throwIfCancelled()
+  }
+  provider = createdProvider
   await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
+  throwIfCancelled()
   await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n`)
-  appLog = await fs.open(path.join(logsRoot, 'app.log'), 'w')
+  throwIfCancelled()
+  const createdAppLog = await fs.open(path.join(logsRoot, 'app.log'), 'w')
+  if (receivedSignal) {
+    await createdAppLog.close()
+    throwIfCancelled()
+  }
+  appLog = createdAppLog
+  throwIfCancelled()
   app = spawn(process.execPath, ['lib/index.js'], {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
@@ -113,6 +134,10 @@ async function startApplication() {
     },
     stdio: ['ignore', appLog.fd, appLog.fd],
   })
+  if (receivedSignal) {
+    await stopOwnedProcess(app)
+    throwIfCancelled()
+  }
 }
 
 function stopProcess(child, signal = 'SIGTERM') {
@@ -150,7 +175,7 @@ function cleanup() {
     if (diagnosticBrowser) await diagnosticBrowser.close().catch(() => {})
     if (appLog) await appLog.close().catch(() => {})
     if (provider) await Promise.race([provider.close(), new Promise(resolve => setTimeout(resolve, 5000))]).catch(() => {})
-  })()
+  })().finally(() => { cleanupPromise = undefined })
   return cleanupPromise
 }
 
@@ -181,7 +206,22 @@ async function waitForReady(baseUrl) {
 }
 
 async function diagnosticScreenshot(baseUrl, label) {
-  const browser = await puppeteer.launch({ executablePath: chromium, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  const pendingBrowser = puppeteer.launch({ executablePath: chromium, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+    .then(browser => ({ browser }), error => ({ error }))
+  if (process.env.FOXWARM_APP_E2E_DIAGNOSTIC_ALLOCATION_DELAY === '1') {
+    console.log('APP_E2E_DIAGNOSTIC_ALLOCATION_PENDING')
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  }
+  const launched = await pendingBrowser
+  if (launched.error) {
+    throwIfCancelled()
+    throw launched.error
+  }
+  const browser = launched.browser
+  if (receivedSignal) {
+    await browser.close()
+    throwIfCancelled()
+  }
   diagnosticBrowser = browser
   const page = await browser.newPage()
   const consoleLines = []
@@ -235,6 +275,9 @@ async function runTestFile(file, baseUrl) {
 try {
   await startApplication()
   await waitForReady(baseUrl)
+  if (process.env.FOXWARM_APP_E2E_DIAGNOSTIC_ALLOCATION_DELAY === '1') {
+    await diagnosticScreenshot(baseUrl, 'allocation-probe')
+  }
   const files = process.env.FOXWARM_APP_E2E_CORE_ONLY === '1'
     ? ['test/app-e2e/core.e2e.mjs']
     : [

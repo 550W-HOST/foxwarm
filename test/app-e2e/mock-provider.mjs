@@ -74,7 +74,7 @@ function chatTool(id, callId, name, args) {
   ]
 }
 
-export async function startMockProvider({ toolFile, log }) {
+export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
   const expectedSequence = [
     'responses:INCREMENTAL',
     'responses:TOOL', 'responses:TOOL', 'responses:TOOL',
@@ -302,6 +302,10 @@ export async function startMockProvider({ toolFile, log }) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   const address = server.address()
+  if (readyDelayMs > 0) {
+    await log('provider allocation listening\n')
+    await new Promise(resolve => setTimeout(resolve, readyDelayMs))
+  }
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
