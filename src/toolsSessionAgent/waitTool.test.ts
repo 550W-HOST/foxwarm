@@ -959,6 +959,7 @@ test('waitAllSessions waits for every listed session before triggering one turn'
   const router = new MessageRouter();
   const originalChat = llm.chat;
   const observedTurns: string[] = [];
+  const triggeredRuns: Promise<void>[] = [];
   let triggerCount = 0;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
@@ -972,7 +973,7 @@ test('waitAllSessions waits for every listed session before triggering one turn'
   sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
     if (triggeredSessionId === parentId) {
       triggerCount += 1;
-      void router.processSessionQueue(triggeredSessionId);
+      triggeredRuns.push(router.processSessionQueue(triggeredSessionId));
     }
   });
 
@@ -994,6 +995,7 @@ test('waitAllSessions waits for every listed session before triggering one turn'
 
     await sessionManager.sendToSession(parentId, 'B report', childBId);
     await waitFor(() => observedTurns.length === 1);
+    await Promise.all(triggeredRuns);
     await waitForSessionIdle(parentId);
     assert.equal(observedTurns.length, 1);
     reloaded = await sessionManager.getSession(parentId);
@@ -1003,11 +1005,14 @@ test('waitAllSessions waits for every listed session before triggering one turn'
     assert.match(observedTurns[0], /B report/);
     assert(observedTurns[0].indexOf('A report') < observedTurns[0].indexOf('B report'));
   } finally {
-    (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
-    await cleanupSession(parentId);
-    await cleanupSession(childAId);
-    await cleanupSession(childBId);
+    try { await Promise.all(triggeredRuns); }
+    finally {
+      (llm as any).chat = originalChat;
+      await cleanupSession(parentId);
+      await cleanupSession(childAId);
+      await cleanupSession(childBId);
+    }
   }
 });
 
@@ -1018,6 +1023,7 @@ test('waitAllSessions duplicate reports from one listed session do not complete 
   const router = new MessageRouter();
   const originalChat = llm.chat;
   const observedTurns: string[] = [];
+  const triggeredRuns: Promise<void>[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     const text = flattenTurnText(parts, activeSession);
@@ -1029,7 +1035,7 @@ test('waitAllSessions duplicate reports from one listed session do not complete 
 
   sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
     if (triggeredSessionId === parentId) {
-      void router.processSessionQueue(triggeredSessionId);
+      triggeredRuns.push(router.processSessionQueue(triggeredSessionId));
     }
   });
 
@@ -1050,6 +1056,7 @@ test('waitAllSessions duplicate reports from one listed session do not complete 
 
     await sessionManager.sendToSession(parentId, 'B final report', childBId);
     await waitFor(() => observedTurns.length === 1);
+    await Promise.all(triggeredRuns);
     await waitForSessionIdle(parentId);
     assert.equal(observedTurns.length, 1);
     reloaded = await sessionManager.getSession(parentId);
@@ -1058,11 +1065,14 @@ test('waitAllSessions duplicate reports from one listed session do not complete 
     assert.match(observedTurns[0], /A report 2/);
     assert.match(observedTurns[0], /B final report/);
   } finally {
-    (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
-    await cleanupSession(parentId);
-    await cleanupSession(childAId);
-    await cleanupSession(childBId);
+    try { await Promise.all(triggeredRuns); }
+    finally {
+      (llm as any).chat = originalChat;
+      await cleanupSession(parentId);
+      await cleanupSession(childAId);
+      await cleanupSession(childBId);
+    }
   }
 });
 
@@ -1074,6 +1084,7 @@ test('waitAllSessions unrelated intersession wake flushes deferred reports with 
   const router = new MessageRouter();
   const originalChat = llm.chat;
   const observedTurns: string[] = [];
+  const triggeredRuns: Promise<void>[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     const text = flattenTurnText(parts, activeSession);
@@ -1085,7 +1096,7 @@ test('waitAllSessions unrelated intersession wake flushes deferred reports with 
 
   sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
     if (triggeredSessionId === parentId) {
-      void router.processSessionQueue(triggeredSessionId);
+      triggeredRuns.push(router.processSessionQueue(triggeredSessionId));
     }
   });
 
@@ -1102,6 +1113,7 @@ test('waitAllSessions unrelated intersession wake flushes deferred reports with 
 
     await sessionManager.sendToSession(parentId, 'C unrelated wake', childCId);
     await waitFor(() => observedTurns.length === 1);
+    await Promise.all(triggeredRuns);
     await waitForSessionIdle(parentId);
     assert.equal(observedTurns.length, 1);
     const reloaded = await sessionManager.getSession(parentId);
@@ -1111,12 +1123,15 @@ test('waitAllSessions unrelated intersession wake flushes deferred reports with 
     assert.match(observedTurns[0], /waitAllSessions is still pending/);
     assert.match(observedTurns[0], new RegExp(childBId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   } finally {
-    (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
-    await cleanupSession(parentId);
-    await cleanupSession(childAId);
-    await cleanupSession(childBId);
-    await cleanupSession(childCId);
+    try { await Promise.all(triggeredRuns); }
+    finally {
+      (llm as any).chat = originalChat;
+      await cleanupSession(parentId);
+      await cleanupSession(childAId);
+      await cleanupSession(childBId);
+      await cleanupSession(childCId);
+    }
   }
 });
 
@@ -1128,7 +1143,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
   const router = new MessageRouter();
   const originalChat = llm.chat;
   const observedTurns: string[] = [];
-  let triggeredRun: Promise<void> | null = null;
+  const triggeredRuns: Promise<void>[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     const text = flattenTurnText(parts, activeSession);
@@ -1140,7 +1155,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
 
   sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
     if (triggeredSessionId === parentId) {
-      triggeredRun = router.processSessionQueue(triggeredSessionId);
+      triggeredRuns.push(router.processSessionQueue(triggeredSessionId));
     }
   });
 
@@ -1172,7 +1187,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
     });
 
     await waitFor(() => observedTurns.length === 1);
-    await triggeredRun;
+    await Promise.all(triggeredRuns);
     await waitForSessionIdle(parentId);
     assert.equal(observedTurns.length, 1);
     assert.match(observedTurns[0], /A before direct user/);
@@ -1182,11 +1197,14 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
     const reloaded = await sessionManager.getSession(parentId);
     assert.equal(reloaded.meta.wait, undefined);
   } finally {
-    (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
-    await cleanupSession(parentId);
-    await cleanupSession(childAId);
-    await cleanupSession(childBId);
+    try { await Promise.all(triggeredRuns); }
+    finally {
+      (llm as any).chat = originalChat;
+      await cleanupSession(parentId);
+      await cleanupSession(childAId);
+      await cleanupSession(childBId);
+    }
   }
 });
 
