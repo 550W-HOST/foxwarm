@@ -8,6 +8,8 @@ import { parseFunctionCallArgs } from './toolCallArgs';
 import * as sessionManager from './sessionManager';
 import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
 
+process.env.TZ = 'Asia/Shanghai';
+
 const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis test handoff was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 function makeSessionId(prefix: string): string {

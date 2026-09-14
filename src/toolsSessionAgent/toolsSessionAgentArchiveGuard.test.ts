@@ -5,6 +5,8 @@ import os from 'os';
 import path from 'path';
 import type { Session } from '../types';
 
+process.env.TZ = 'Asia/Shanghai';
+
 type LoadedDeps = {
   tempRoot: string;
   sessionManager: typeof import('../sessionManager');

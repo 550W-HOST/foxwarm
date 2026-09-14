@@ -267,11 +267,17 @@ test('cancellation is fenced before effects and active Docker start/helper waits
 });
 
 test('native Docker runner rejects cancellation only after its direct child closes', async () => {
-  const runner = new NativeDockerCommandRunner(process.execPath, ['-e', `process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),40));setInterval(()=>{},1000)`]);
-  const controller = new AbortController(); const started = Date.now(); const call = runner.run([], { signal: controller.signal, timeoutMs: 5_000 });
-  setTimeout(() => controller.abort(), 30);
-  await assert.rejects(() => call, /cancelled/);
-  assert.ok(Date.now() - started >= 55);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-native-docker-cancel-')); const ready = path.join(dir, 'ready'); const closing = path.join(dir, 'closing');
+  const runner = new NativeDockerCommandRunner(process.execPath, ['-e', `const fs=require('fs');process.on('SIGTERM',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(closing)},'closed');process.exit(0)},40));fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000)`]);
+  const controller = new AbortController(); const call = runner.run([], { signal: controller.signal, timeoutMs: 5_000 });
+  void call.catch(() => {});
+  try {
+    const deadline = Date.now() + 5000;
+    while (!await fs.pathExists(ready)) { if (Date.now() >= deadline) throw new Error('Timed out waiting for native Docker runner child readiness'); await new Promise(resolve => setTimeout(resolve, 1)); }
+    controller.abort();
+    await assert.rejects(() => call, /cancelled/);
+    assert.equal(await fs.readFile(closing, 'utf8'), 'closed');
+  } finally { controller.abort(); await call.catch(() => {}); await fs.remove(dir); }
 });
 
 test('deterministic Docker names distinguish full Node identity despite prefix and punctuation collisions', async () => {
