@@ -433,89 +433,99 @@ after(async () => {
 })
 
 test('Setup uses accessible Models, Config, and Appearance tabs with status icons and product copy', async () => {
-  const bodyText = await page.$eval('body', (body) => body.textContent || '')
-  assert.equal(bodyText.includes('Test selected provider'), false)
-  assert.equal(bodyText.includes('Provider 1'), false)
-  assert.equal(bodyText.includes('OOBE mode is active'), false)
-  assert.equal(bodyText.includes('raw config editor below preserves'), false)
-  assert.equal(bodyText.includes('Models path:'), false)
-  assert.equal(bodyText.includes('Config path:'), false)
-  assert.equal(await page.$('button::-p-text(Form)'), null)
-  assert.equal(await page.$('::-p-text(Setup checklist)'), null)
+  const setupPage = await browser.newPage()
+  await setupPage.setBypassServiceWorker(true)
+  await attachRequestMocks(setupPage)
+  try {
+    await setupPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await setupPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
+    await setupPage.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
+    const bodyText = await setupPage.$eval('body', (body) => body.textContent || '')
+    assert.equal(bodyText.includes('Test selected provider'), false)
+    assert.equal(bodyText.includes('Provider 1'), false)
+    assert.equal(bodyText.includes('OOBE mode is active'), false)
+    assert.equal(bodyText.includes('raw config editor below preserves'), false)
+    assert.equal(bodyText.includes('Models path:'), false)
+    assert.equal(bodyText.includes('Config path:'), false)
+    assert.equal(await setupPage.$('button::-p-text(Form)'), null)
+    assert.equal(await setupPage.$('::-p-text(Setup checklist)'), null)
 
-  const tabs = await page.$$eval('[role="tab"]', (elements) => elements.map((element) => ({
-    tab: element.getAttribute('data-setup-tab'),
-    selected: element.getAttribute('aria-selected'),
-    status: element.querySelector('[data-setup-tab-status]')?.getAttribute('data-setup-tab-status') || null,
-  })))
-  assert.deepEqual(tabs, [
-    { tab: 'appearance', selected: 'true', status: null },
-    { tab: 'models', selected: 'false', status: 'complete' },
-    { tab: 'config', selected: 'false', status: null },
-  ])
-  assert.deepEqual(await page.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
-    'inmemory://foxwarm/setup/foxwarm-models.yaml',
-    'inmemory://foxwarm/setup/foxwarm-config.yaml',
-  ])
-  assert.equal(await page.$eval('[data-setup-section="appearance"]', (panel) => panel.hidden), false)
-  assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
-  assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.hidden), true)
+    const tabs = await setupPage.$$eval('[role="tab"]', (elements) => elements.map((element) => ({
+      tab: element.getAttribute('data-setup-tab'),
+      selected: element.getAttribute('aria-selected'),
+      status: element.querySelector('[data-setup-tab-status]')?.getAttribute('data-setup-tab-status') || null,
+    })))
+    assert.deepEqual(tabs, [
+      { tab: 'appearance', selected: 'true', status: null },
+      { tab: 'models', selected: 'false', status: 'complete' },
+      { tab: 'config', selected: 'false', status: null },
+    ])
+    assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
+      'inmemory://foxwarm/setup/foxwarm-models.yaml',
+      'inmemory://foxwarm/setup/foxwarm-config.yaml',
+    ])
+    assert.equal(await setupPage.$eval('[data-setup-section="appearance"]', (panel) => panel.hidden), false)
+    assert.equal(await setupPage.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
+    assert.equal(await setupPage.$eval('[data-setup-section="config"]', (panel) => panel.hidden), true)
 
-  await page.focus('[data-setup-tab="appearance"]')
-  await page.keyboard.press('ArrowRight')
-  await page.waitForSelector('[data-setup-tab="models"][aria-selected="true"]')
-  await page.click('[data-setup-tab="config"]')
-  await page.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
-  await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
-  assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
-  assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.hidden), false)
-  assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.lastElementChild?.getAttribute('data-setup-config-last')), 'weixin')
-  assert.ok((await page.$eval('[data-setup-config-last="weixin"]', (element) => element.textContent || '')).includes('Connect Weixin by scanning a QR code.'))
-  assert.equal((await page.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('sessionKey'), false)
-  assert.equal((await page.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('pairing URL'), false)
-  await page.click('button::-p-text(Start Weixin login)')
-  await page.waitForFunction(() => {
-    const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Check login'))
-    return button instanceof HTMLButtonElement && !button.disabled
-  })
-  await page.click('button::-p-text(Check login)')
-  await page.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
+    await setupPage.focus('[data-setup-tab="appearance"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]')
+    await setupPage.click('[data-setup-tab="config"]')
+    await setupPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+    await setupPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+    assert.equal(await setupPage.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
+    assert.equal(await setupPage.$eval('[data-setup-section="config"]', (panel) => panel.hidden), false)
+    assert.equal(await setupPage.$eval('[data-setup-section="config"]', (panel) => panel.lastElementChild?.getAttribute('data-setup-config-last')), 'weixin')
+    assert.ok((await setupPage.$eval('[data-setup-config-last="weixin"]', (element) => element.textContent || '')).includes('Connect Weixin by scanning a QR code.'))
+    assert.equal((await setupPage.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('sessionKey'), false)
+    assert.equal((await setupPage.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('pairing URL'), false)
+    await setupPage.click('button::-p-text(Start Weixin login)')
+    await setupPage.waitForFunction(() => {
+      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Check login'))
+      return button instanceof HTMLButtonElement && !button.disabled
+    })
+    await setupPage.click('button::-p-text(Check login)')
+    await setupPage.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
-  await page.focus('[data-setup-tab="config"]')
-  await page.keyboard.press('ArrowRight')
-  await page.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
-  assert.equal(await page.$eval('[data-theme-manager]', element => element.textContent?.includes('WebUI theme')), true)
-  assert.equal(await page.$$eval('[data-theme-color-mode]', buttons => buttons.length), 3)
-  await page.click('[data-theme-color-mode="dark"]')
-  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'dark')
-  await page.click('[data-theme-color-mode="auto"]')
-  await page.waitForSelector('[data-theme-color-mode="auto"][aria-pressed="true"]')
-  await page.click('[data-theme-color-mode="light"]')
-  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'light')
-  await page.click('button[data-theme-option="foxwarm.550a"]')
-  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'console')
-  const builtinConsoleTokens = await page.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()))
-  await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Clone')?.click())
-  await page.click('input[aria-label="Cloned theme ID"]', { clickCount: 3 })
-  await page.type('input[aria-label="Cloned theme ID"]', 'custom.setup-e2e')
-  await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Create theme')?.click())
-  await page.waitForSelector('button[data-theme-option="custom.setup-e2e"][aria-pressed="true"]')
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v2')).themes[0].id), 'custom.setup-e2e')
-  assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-foxwarm-component-treatment')), 'console')
-  assert.deepEqual(await page.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim())), builtinConsoleTokens)
-  const deleteDialog = new Promise(resolve => page.once('dialog', async dialog => { await dialog.accept(); resolve() }))
-  await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Delete')?.click())
-  await deleteDialog
-  await page.waitForFunction(() => !document.querySelector('button[data-theme-option="custom.setup-e2e"]'))
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v2')).themeId), 'foxwarm.default')
-  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'standard')
+    await setupPage.focus('[data-setup-tab="config"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('WebUI theme')), true)
+    assert.equal(await setupPage.$$eval('[data-theme-color-mode]', buttons => buttons.length), 3)
+    await setupPage.click('[data-theme-color-mode="dark"]')
+    await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'dark')
+    await setupPage.click('[data-theme-color-mode="auto"]')
+    await setupPage.waitForSelector('[data-theme-color-mode="auto"][aria-pressed="true"]')
+    await setupPage.click('[data-theme-color-mode="light"]')
+    await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'light')
+    await setupPage.click('button[data-theme-option="foxwarm.550a"]')
+    await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'console')
+    const builtinConsoleTokens = await setupPage.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()))
+    await setupPage.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Clone')?.click())
+    await setupPage.click('input[aria-label="Cloned theme ID"]', { clickCount: 3 })
+    await setupPage.type('input[aria-label="Cloned theme ID"]', 'custom.setup-e2e')
+    await setupPage.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Create theme')?.click())
+    await setupPage.waitForSelector('button[data-theme-option="custom.setup-e2e"][aria-pressed="true"]')
+    assert.equal(await setupPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v2')).themes[0].id), 'custom.setup-e2e')
+    assert.equal(await setupPage.evaluate(() => document.documentElement.getAttribute('data-foxwarm-component-treatment')), 'console')
+    assert.deepEqual(await setupPage.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim())), builtinConsoleTokens)
+    const deleteDialog = new Promise(resolve => setupPage.once('dialog', async dialog => { await dialog.accept(); resolve() }))
+    await setupPage.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Delete')?.click())
+    await deleteDialog
+    await setupPage.waitForFunction(() => !document.querySelector('button[data-theme-option="custom.setup-e2e"]'))
+    assert.equal(await setupPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v2')).themeId), 'foxwarm.default')
+    await setupPage.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'standard')
 
-  await page.focus('[data-setup-tab="appearance"]')
-  await page.keyboard.press('Home')
-  await page.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
-  await page.click('[data-setup-tab="models"]')
-  await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
-  assert.ok(requestPaths.includes('/preview/api/setup/status'))
+    await setupPage.focus('[data-setup-tab="appearance"]')
+    await setupPage.keyboard.press('Home')
+    await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    await setupPage.click('[data-setup-tab="models"]')
+    await setupPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+    assert.ok(requestPaths.includes('/preview/api/setup/status'))
+  } finally {
+    await setupPage.close()
+  }
 })
 
 test('Appearance owns browser name and tab icon editing with save, cancel, and server errors', async () => {

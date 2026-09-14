@@ -47,6 +47,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 ## Integration
 
 - Normal App owns singleton `system:setup`; a missing active models file forces this tab and rejects close.
+- The browser fixture runs the ordinary top-level Setup accessibility, product-copy, tab/keyboard, Config/Weixin, and theme scenario, plus the primary browser-name/icon scenario, against the built production preview. Its Vite development page remains for specialized editor-action, lazy-import-failure, embedded-host, and deployment-relative `/preview` probes, so cold dependency optimization cannot replace the document underneath ordinary product interactions.
 - The active file is the data-directory models path; diagnostics and writes do not follow the removed generic override. Canonical path contract: [D-config-models-data-path](./src-config.md#d-config-models-data-path).
 - Chat's model popup opens/activates this singleton and requests Models focus through App.
 - Code's Setup custom editor mounts the same non-forced leaf view, accepts only the nonce-bound fixed Models-focus signal, and lets the extension own close/restore identity.
