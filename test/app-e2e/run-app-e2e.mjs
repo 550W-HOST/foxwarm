@@ -19,12 +19,21 @@ const logsRoot = path.join(runRoot, 'logs')
 const screenshotsRoot = path.join(runRoot, 'screenshots')
 const token = 'synthetic-app-e2e-token'
 const toolFile = path.join(runRoot, 'tool-work', 'roundtrip.txt')
+let provider
+let appPort
+let baseUrl
+let appLog
+let app
+let currentTest
+let diagnosticBrowser
+let cleanupPromise
+let receivedSignal
+let failed = false
 await fs.mkdir(path.dirname(toolFile), { recursive: true })
 await fs.mkdir(logsRoot, { recursive: true })
 await fs.mkdir(screenshotsRoot, { recursive: true })
 
 const appendProviderLog = text => fs.appendFile(path.join(logsRoot, 'provider.log'), text)
-const provider = await startMockProvider({ toolFile, log: appendProviderLog })
 
 function sessionHistory(id, count, offset) {
   const repeated = 'synthetic content '.repeat(id.startsWith('core-compact-') ? 42 : 18)
@@ -83,29 +92,79 @@ function reservePort() {
   })
 }
 
-await seedData()
-const appPort = await reservePort()
-await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
-await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n`)
-
-const appLog = await fs.open(path.join(logsRoot, 'app.log'), 'w')
-const app = spawn(process.execPath, ['lib/index.js'], {
-  cwd: repoRoot,
-  detached: process.platform !== 'win32',
-  env: {
-    ...process.env,
-    FOXWARM_DATA_DIR: dataRoot,
-    FOXWARM_CONFIG_PATH: path.join(stateRoot, 'config.yaml'),
-    MCP_CONFIG_PATH: path.join(stateRoot, 'mcp.json'),
-    OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', GOOGLE_API_KEY: '', GEMINI_API_KEY: '',
-    HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', NO_PROXY: 'localhost,127.0.0.1,::1',
-  },
-  stdio: ['ignore', appLog.fd, appLog.fd],
-})
+async function startApplication() {
+  await seedData()
+  appPort = await reservePort()
+  baseUrl = `http://127.0.0.1:${appPort}`
+  provider = await startMockProvider({ toolFile, log: appendProviderLog })
+  await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
+  await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n`)
+  appLog = await fs.open(path.join(logsRoot, 'app.log'), 'w')
+  app = spawn(process.execPath, ['lib/index.js'], {
+    cwd: repoRoot,
+    detached: process.platform !== 'win32',
+    env: {
+      ...process.env,
+      FOXWARM_DATA_DIR: dataRoot,
+      FOXWARM_CONFIG_PATH: path.join(stateRoot, 'config.yaml'),
+      MCP_CONFIG_PATH: path.join(stateRoot, 'mcp.json'),
+      OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', GOOGLE_API_KEY: '', GEMINI_API_KEY: '',
+      HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', NO_PROXY: 'localhost,127.0.0.1,::1',
+    },
+    stdio: ['ignore', appLog.fd, appLog.fd],
+  })
+}
 
 function stopProcess(child, signal = 'SIGTERM') {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return
-  try { process.platform === 'win32' ? child.kill(signal) : process.kill(-child.pid, signal) } catch {}
+  if (!child) return
+  try {
+    if (process.platform === 'win32') {
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal)
+    } else process.kill(-child.pid, signal)
+  } catch {}
+}
+
+async function stopOwnedProcess(child) {
+  if (!child) return
+  stopProcess(child)
+  if (child.exitCode === null && child.signalCode === null) {
+    await Promise.race([
+      new Promise(resolve => child.once('exit', resolve)),
+      new Promise(resolve => setTimeout(resolve, 3000)),
+    ])
+  }
+  stopProcess(child, 'SIGKILL')
+  if (child.exitCode === null && child.signalCode === null) {
+    await Promise.race([
+      new Promise(resolve => child.once('exit', resolve)),
+      new Promise(resolve => setTimeout(resolve, 3000)),
+    ])
+  }
+}
+
+function cleanup() {
+  if (cleanupPromise) return cleanupPromise
+  cleanupPromise = (async () => {
+    await stopOwnedProcess(currentTest)
+    await stopOwnedProcess(app)
+    if (diagnosticBrowser) await diagnosticBrowser.close().catch(() => {})
+    if (appLog) await appLog.close().catch(() => {})
+    if (provider) await Promise.race([provider.close(), new Promise(resolve => setTimeout(resolve, 5000))]).catch(() => {})
+  })()
+  return cleanupPromise
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    if (!receivedSignal) {
+      receivedSignal = signal
+      failed = true
+      void cleanup()
+      return
+    }
+    stopProcess(currentTest, 'SIGKILL')
+    stopProcess(app, 'SIGKILL')
+  })
 }
 
 async function waitForReady(baseUrl) {
@@ -123,6 +182,7 @@ async function waitForReady(baseUrl) {
 
 async function diagnosticScreenshot(baseUrl, label) {
   const browser = await puppeteer.launch({ executablePath: chromium, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  diagnosticBrowser = browser
   const page = await browser.newPage()
   const consoleLines = []
   page.on('console', message => consoleLines.push(`${message.type()}: ${message.text()}`))
@@ -133,6 +193,7 @@ async function diagnosticScreenshot(baseUrl, label) {
   } finally {
     await fs.writeFile(path.join(logsRoot, `${label}-browser-console.log`), consoleLines.join('\n'))
     await browser.close()
+    if (diagnosticBrowser === browser) diagnosticBrowser = undefined
   }
 }
 
@@ -155,6 +216,7 @@ async function runTestFile(file, baseUrl) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  currentTest = child
   child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr)
   child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false })
   const result = await new Promise(resolve => {
@@ -163,15 +225,15 @@ async function runTestFile(file, baseUrl) {
     child.once('error', error => { clearTimeout(timer); resolve({ code: 1, error }) })
   })
   await new Promise(resolve => log.end(resolve))
+  if (currentTest === child) currentTest = undefined
   if (result.code !== 0) {
-    await diagnosticScreenshot(baseUrl, `failure-${label}`).catch(() => {})
+    if (!receivedSignal) await diagnosticScreenshot(baseUrl, `failure-${label}`).catch(() => {})
     throw new Error(`${file} failed with code ${result.code}${result.signal ? ` signal ${result.signal}` : ''}`)
   }
 }
 
-const baseUrl = `http://127.0.0.1:${appPort}`
-let failed = false
 try {
+  await startApplication()
   await waitForReady(baseUrl)
   const files = process.env.FOXWARM_APP_E2E_CORE_ONLY === '1'
     ? ['test/app-e2e/core.e2e.mjs']
@@ -184,21 +246,19 @@ try {
       'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
       'packages/webui/test/systemTabs.e2e.mjs',
     ]
-  for (const file of files) await runTestFile(file, baseUrl)
+  for (const file of files) {
+    if (receivedSignal) throw new Error(`Full-application E2E cancelled by ${receivedSignal}`)
+    await runTestFile(file, baseUrl)
+  }
   provider.assertConsumed()
   assert.equal(app.exitCode, null, 'Foxwarm app exited before tests completed')
 } catch (error) {
   failed = true
-  console.error(error?.stack || error)
+  if (!receivedSignal) console.error(error?.stack || error)
 } finally {
-  stopProcess(app)
-  await Promise.race([
-    new Promise(resolve => app.once('exit', resolve)),
-    new Promise(resolve => setTimeout(() => { stopProcess(app, 'SIGKILL'); resolve() }, 10_000)),
-  ])
-  await appLog.close()
-  await provider.close()
+  await cleanup()
 }
 
 console.log(`Full-application E2E artifacts: ${path.relative(repoRoot, runRoot)}`)
-if (failed) process.exitCode = 1
+if (receivedSignal) process.exitCode = receivedSignal === 'SIGINT' ? 130 : 143
+else if (failed) process.exitCode = 1

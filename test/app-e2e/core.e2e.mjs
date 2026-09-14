@@ -84,6 +84,23 @@ async function waitForAuthority(sessionId, predicate, timeout = 20_000) {
   throw new Error(`Timed out waiting for ${sessionId} authority`)
 }
 
+function assertCommittedCompaction(authority, before, summary) {
+  const blockMessage = authority.history[0]
+  assert.equal(blockMessage.role, 'model')
+  assert.match(blockMessage.parts?.[0]?.text || '', new RegExp(`^\\[CTX-BLOCK L1 B#1 raw#1-#4 time .+\\] ${summary}$`))
+  assert.deepEqual({
+    level: blockMessage.__meta?.contextBlock?.level,
+    sourceKind: blockMessage.__meta?.contextBlock?.sourceKind,
+    sourceStart: blockMessage.__meta?.contextBlock?.sourceStart,
+    sourceEnd: blockMessage.__meta?.contextBlock?.sourceEnd,
+    rawStartSeq: blockMessage.__meta?.contextBlock?.rawStartSeq,
+    rawEndSeq: blockMessage.__meta?.contextBlock?.rawEndSeq,
+  }, { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, rawStartSeq: 1, rawEndSeq: 4 })
+  assert.equal(authority.history.some(message => Number.isInteger(message.__meta?.seq) && message.__meta.seq <= 4), false)
+  assert.deepEqual(authority.history.slice(1, -1), before.history.slice(4))
+  assert.match(authority.history.at(-1)?.parts?.[0]?.system || '', /kind="session-boundary" event="compact-completed"/)
+}
+
 async function scenario(name, run) {
   try { await run() }
   catch (error) {
@@ -113,6 +130,10 @@ test('browser send streams incrementally, commits exactly once, and survives rel
   await sendMessage('APP_E2E_INCREMENTAL')
   await page.waitForFunction(() => document.body.textContent?.includes('streamed '), { timeout: 15_000 })
   assert.equal(await page.evaluate(() => document.body.textContent?.includes('streamed answer')), false)
+  if (process.env.FOXWARM_APP_E2E_INTERRUPT_HOLD === '1') {
+    console.log('APP_E2E_INTERRUPT_READY')
+    await new Promise(resolve => setTimeout(resolve, 300_000))
+  }
   const release = await fetch(`${providerUrl}/__control/release-incremental`, { method: 'POST' })
   assert.equal(release.status, 204)
   await page.waitForFunction(() => document.body.textContent?.includes('streamed answer'), { timeout: 15_000 })
@@ -240,10 +261,28 @@ test('Responses WebSocket reuses one completed prefix, reconnects with full repl
   const two = wsRequests.find(entry => entry.marker === 'WS_TWO')
   const three = wsRequests.find(entry => entry.marker === 'WS_THREE')
   const child = wsRequests.find(entry => entry.marker === 'FORK_CHILD')
+  const semanticInput = item => ({
+    type: item.type,
+    role: item.role,
+    text: Array.isArray(item.content) ? item.content.map(part => part.text || '').join('') : '',
+  })
   assert.equal(one.connectionId, two.connectionId)
   assert.notEqual(two.connectionId, three.connectionId)
   assert.equal(two.body.previous_response_id, 'ws-resp-one')
+  assert.equal(two.body.input.length, 1)
+  const secondInput = semanticInput(two.body.input[0])
+  assert.equal(secondInput.type, 'message')
+  assert.equal(secondInput.role, 'user')
+  assert.match(secondInput.text, /APP_E2E_WS_TWO/)
+  assert.doesNotMatch(JSON.stringify(two.body.input), /APP_E2E_WS_ONE|ws answer one/)
   assert.equal(three.body.previous_response_id, undefined)
+  assert.equal(three.body.input.length, 5)
+  const replay = three.body.input.map(semanticInput)
+  assert.match(replay[0].text, /APP_E2E_WS_ONE/)
+  assert.deepEqual(replay[1], { type: 'message', role: 'assistant', text: 'ws answer one' })
+  assert.match(replay[2].text, /APP_E2E_WS_TWO/)
+  assert.deepEqual(replay[3], { type: 'message', role: 'assistant', text: 'ws answer two' })
+  assert.match(replay[4].text, /APP_E2E_WS_THREE/)
   assert.equal(child.body.previous_response_id, undefined)
   assert.equal(one.body.prompt_cache_key, crypto.createHash('sha256').update(sessionId).digest('hex'))
   assert.equal(child.body.prompt_cache_key, crypto.createHash('sha256').update(childId).digest('hex'))
@@ -251,17 +290,18 @@ test('Responses WebSocket reuses one completed prefix, reconnects with full repl
 }))
 
 test('browser attachment upload and long pasted text reach the provider, persist canonically, and clear accepted drafts', async () => scenario('attachment-longpaste', async () => {
+  const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nEAAAAAASUVORK5CYII='
   const attachmentSession = await createSession('core-attachment')
   await openSession(attachmentSession)
   await page.type('[role="textbox"][aria-label="Message"]', 'APP_E2E_ATTACHMENT ')
-  await page.$eval('#file-upload', input => {
+  await page.$eval('#file-upload', (input, encodedPng) => {
     const transfer = new DataTransfer()
     transfer.items.add(new File(['synthetic attachment body'], 'fixture-note.txt', { type: 'text/plain' }))
-    const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nEAAAAAASUVORK5CYII='), character => character.charCodeAt(0))
+    const png = Uint8Array.from(atob(encodedPng), character => character.charCodeAt(0))
     transfer.items.add(new File([png], 'fixture-pixel.png', { type: 'image/png' }))
     Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
     input.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  }, pngBase64)
   await page.waitForSelector('.foxwarm-composer-attachment-chip')
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => document.body.textContent?.includes('attachment accepted'), { timeout: 20_000 })
@@ -274,7 +314,15 @@ test('browser attachment upload and long pasted text reach the provider, persist
   assert.match(attachmentWire, /fixture-note\.txt/)
   assert.match(attachmentWire, /fixture-pixel\.png/)
   assert.match(attachmentWire, /attachment-ref|foxwarm-attachment/)
-  assert.match(attachmentWire, /inlineDataRef|blobId/)
+  const imageParts = attachmentAuthority.history.flatMap(message => message.parts || []).filter(part => part.inlineDataRef)
+  assert.equal(imageParts.length, 1)
+  const imageRef = imageParts[0].inlineDataRef
+  assert.deepEqual({ format: imageRef.format, mimeType: imageRef.mimeType, byteLength: imageRef.byteLength }, { format: 'png', mimeType: 'image/png', byteLength: 68 })
+  assert.equal(attachmentWire.includes('"inlineData":'), false)
+  assert.equal(attachmentWire.includes(pngBase64), false)
+  const blob = await fs.readFile(path.join(dataRoot, 'state', 'image-blobs', imageRef.blobId.slice(0, 2), imageRef.blobId))
+  assert.deepEqual(blob, Buffer.from(pngBase64, 'base64'))
+  assert.equal(crypto.createHash('sha256').update(blob).digest('hex'), imageRef.sha256)
   await page.reload({ waitUntil: 'networkidle2' })
   await page.waitForFunction(() => document.body.textContent?.includes('attachment accepted'), { timeout: 15_000 })
 
@@ -302,22 +350,24 @@ test('browser attachment upload and long pasted text reach the provider, persist
 
 test('WS compact planning and BTW use purpose-scoped request keys without replacing persisted cache identity', async () => scenario('compact-btw', async () => {
   const syncId = 'core-compact-sync'
-  const syncBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${syncId}.json`), 'utf8')).promptCacheKey
+  const syncBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${syncId}.json`), 'utf8'))
   await openSession(syncId)
   await sendMessage('/compact 20')
   await waitForProvider(state => state.wsRequests.some(entry => entry.marker === 'COMPACT_SYNC'))
   const syncAuthority = await waitForAuthority(syncId, authority => JSON.stringify(authority.history).includes('compact_sync summary'))
   const syncStoredKey = syncAuthority.promptCacheKey
-  assert.equal(syncStoredKey, syncBefore)
+  assert.equal(syncStoredKey, syncBefore.promptCacheKey)
+  assertCommittedCompaction(syncAuthority, syncBefore, 'compact_sync summary')
 
   const backgroundId = 'core-compact-background'
-  const backgroundBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${backgroundId}.json`), 'utf8')).promptCacheKey
+  const backgroundBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${backgroundId}.json`), 'utf8'))
   await openSession(backgroundId)
   await sendMessage('/compact 20')
   await waitForProvider(state => state.wsRequests.some(entry => entry.marker === 'COMPACT_BACKGROUND'))
   const backgroundAuthority = await waitForAuthority(backgroundId, authority => JSON.stringify(authority.history).includes('compact_background summary'))
   const backgroundStoredKey = backgroundAuthority.promptCacheKey
-  assert.equal(backgroundStoredKey, backgroundBefore)
+  assert.equal(backgroundStoredKey, backgroundBefore.promptCacheKey)
+  assertCommittedCompaction(backgroundAuthority, backgroundBefore, 'compact_background summary')
 
   const btwId = 'core-btw'
   const btwBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${btwId}.json`), 'utf8')).promptCacheKey

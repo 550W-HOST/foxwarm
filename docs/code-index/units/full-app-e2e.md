@@ -16,8 +16,8 @@ Owns deterministic end-to-end coverage through a real compiled Foxwarm server, b
 - Covers Responses WebSocket same-socket suffix reuse, forced-close full replay, ordinary Session fork isolation, synchronous versus real background compact planning, BTW request scope, and stable persisted prompt-cache identity with purpose-specific provider keys.
 - Uploads owned text and image files plus an opaque long-paste block through the real composer, verifies provider-visible serialization and canonical references, and checks accepted draft clearing and reload.
 - Runs the six former developer-runtime browser files against only the generated Session set. Their mutations and cleanup cannot select or alter an existing installation.
-- Applies finite child deadlines and exact process-group teardown. Failures retain provider/application/test logs, browser console, and screenshots below the owned run directory.
+- Applies finite child deadlines and idempotent bounded cleanup for the exact owned current test, application, diagnostic browser, and provider on success, startup failure, timeout, SIGINT, or SIGTERM. Cancellation does not launch the next test or a diagnostic browser. Failures retain provider/application/test logs, browser console, and screenshots below the owned run directory.
 
 ## Boundaries
 
-The provider is a scripted protocol peer, not a generic mocking framework or alternate application service. SessionManager, MessageRouter, tool dispatch, JSON authority, catalog migration, HTTP authentication, WebUI realtime, and Chromium rendering remain production implementations. WebSocket-specific model transport and fork/compact/BTW/attachment expansion are deferred follow-up scenarios; existing transport unit tests remain in the routine unit baseline.
+The provider is a scripted protocol peer, not a generic mocking framework or alternate application service. SessionManager, MessageRouter, tool dispatch, JSON authority, catalog migration, HTTP authentication, WebUI realtime, and Chromium rendering remain production implementations. Existing transport and plan-validation unit tests remain in the routine unit baseline.

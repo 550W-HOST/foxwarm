@@ -41,6 +41,16 @@ async function clickContextMenuItem(label) {
   assert.equal(clicked, true, `Expected enabled context-menu item: ${label}`)
 }
 
+async function openModelPopup() {
+  await page.waitForFunction(() => {
+    if (document.querySelector('[data-model-selector-popup="true"]')) return true
+    const button = Array.from(document.querySelectorAll('button[aria-haspopup="dialog"]'))
+      .find((candidate) => candidate.isConnected && candidate.getClientRects().length > 0)
+    button?.click()
+    return false
+  }, { polling: 100, timeout: 15_000 })
+}
+
 before(async () => {
   authToken = (await readFile(tokenFile, 'utf8')).trim()
   browser = await puppeteer.launch({
@@ -110,18 +120,17 @@ test('model popup reuses page models and opens the singleton Setup models editor
   await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
   await page.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
   const previousRequests = modelListRequestCount
-  await page.evaluate(() => document.querySelector('button[aria-haspopup="dialog"]')?.click())
+  await openModelPopup()
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.keyboard.press('Escape')
   await page.waitForFunction(() => document.activeElement?.matches('button[aria-haspopup="dialog"]'))
-  await page.evaluate(() => document.querySelector('button[aria-haspopup="dialog"]')?.click())
+  await openModelPopup()
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
   await new Promise((resolve) => setTimeout(resolve, 150))
-  const configureButton = await page.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
-  assert.equal((await configureButton.evaluate((button) => button.textContent || '')).trim(), '')
-  assert.equal(await configureButton.evaluate((button) => button.title), 'Configure models')
-  await configureButton.click()
+  await page.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
+  assert.deepEqual(await page.$eval('button[aria-label="Configure models"]', button => ({ text: (button.textContent || '').trim(), title: button.title })), { text: '', title: 'Configure models' })
+  await page.evaluate(() => document.querySelector('button[aria-label="Configure models"]')?.click())
 
   await waitForSystemTab('system:setup', 'Foxwarm Setup')
   await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
