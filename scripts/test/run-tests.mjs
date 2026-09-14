@@ -92,6 +92,10 @@ function directStep(name, command, args, timeoutMs = 180_000, env = {}) {
   return { name, command, args, timeoutMs, env }
 }
 
+function chunks(values, size) {
+  return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size))
+}
+
 function unitGroups() {
   const backend = requireFiles(inventory.backend.map(compiledPath), 'backend tests')
   const shared = requireFiles(inventory.shared.map(compiledPath), 'shared tests')
@@ -103,11 +107,15 @@ function unitGroups() {
   const webui = requireFiles(inventory['webui-unit'], 'WebUI unit tests')
   const python = requireFiles(inventory.python, 'Python tests')
   requireFiles(standaloneSelftests, 'standalone selftests')
+  const vectorFailure = backend.find(file => file.endsWith('/vector.indexFailure.test.js'))
+  const backendShards = chunks(backend.filter(file => file !== vectorFailure), 8)
   return [
     {
       name: 'backend',
-      parallel: 8,
-      steps: backend.map(file => nodeTestStep(path.relative(repoRoot, file), [file], { timeoutMs: 600_000 })),
+      steps: [
+        ...backendShards.map((files, index) => nodeTestStep(`backend-${String(index + 1).padStart(2, '0')}`, files, { concurrency: 8, timeoutMs: 600_000 })),
+        ...(vectorFailure ? [nodeTestStep('vector.indexFailure', [vectorFailure], { timeoutMs: 120_000 })] : []),
+      ],
     },
     { name: 'shared', steps: [nodeTestStep('shared', shared, { concurrency: 4, timeoutMs: 240_000 })] },
     { name: 'cli-node', steps: [nodeTestStep('cli-node', cli, { concurrency: 4, timeoutMs: 180_000 })] },
@@ -191,11 +199,11 @@ async function snapshotVscodeDist() {
   }
 }
 
-const activeChildren = new Set()
+let activeChild = null
 let stopping = false
 let interrupted = false
 function stopActive(signal = 'SIGTERM') {
-  for (const child of activeChildren) stopChild(child, signal)
+  stopChild(activeChild, signal)
 }
 function stopChild(child, signal = 'SIGTERM') {
   if (!child?.pid) return
@@ -223,7 +231,7 @@ async function runStep(group, step, log) {
   }
   return await new Promise(resolve => {
     const child = spawn(step.command, step.args, { cwd: repoRoot, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
-    activeChildren.add(child)
+    activeChild = child
     let captured = ''
     const forward = chunk => { captured += chunk; process.stdout.write(chunk); log.write(chunk) }
     child.stdout.on('data', forward)
@@ -240,14 +248,14 @@ async function runStep(group, step, log) {
     child.on('error', error => {
       clearTimeout(timer)
       clearTimeout(killTimer)
-      activeChildren.delete(child)
+      activeChild = null
       log.write(`${error.stack || error}\n`)
       resolve({ code: 1, timedOut, counts: parseTapCounts(captured) })
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       clearTimeout(killTimer)
-      activeChildren.delete(child)
+      activeChild = null
       resolve({ code: code ?? (signal ? 1 : 0), signal, timedOut, counts: parseTapCounts(captured) })
     })
   })
@@ -271,38 +279,16 @@ for (const group of groups) {
   const restore = group.restoreVscodeDist ? await snapshotVscodeDist() : null
   let groupCode = 0
   try {
-    if (group.parallel) {
-      const logDir = path.join(runBase, 'logs', group.name)
-      await fsp.mkdir(logDir, { recursive: true })
-      let nextStep = 0
-      await Promise.all(Array.from({ length: Math.min(group.parallel, group.steps.length) }, async () => {
-        while (!interrupted) {
-          const stepIndex = nextStep++
-          if (stepIndex >= group.steps.length) return
-          const step = group.steps[stepIndex]
-          const safeName = step.name.replace(/[^A-Za-z0-9_.-]+/g, '-')
-          const log = fs.createWriteStream(path.join(logDir, `${String(stepIndex + 1).padStart(3, '0')}-${safeName}.log`), { flags: 'w' })
-          try {
-            const result = await runStep(group, step, log)
-            summary.push({ order: stepIndex, group: group.name, step: step.name, ...result })
-            if (result.code !== 0) groupCode = result.code
-          } finally {
-            await new Promise(resolve => log.end(resolve))
-          }
-        }
-      }))
-    } else {
-      const log = fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
-      try {
-        for (const [stepIndex, step] of group.steps.entries()) {
-          const result = await runStep(group, step, log)
-          summary.push({ order: stepIndex, group: group.name, step: step.name, ...result })
-          if (result.code !== 0) groupCode = result.code
-          if (interrupted) break
-        }
-      } finally {
-        await new Promise(resolve => log.end(resolve))
+    const log = fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
+    try {
+      for (const [stepIndex, step] of group.steps.entries()) {
+        const result = await runStep(group, step, log)
+        summary.push({ order: stepIndex, group: group.name, step: step.name, ...result })
+        if (result.code !== 0) groupCode = result.code
+        if (interrupted) break
       }
+    } finally {
+      await new Promise(resolve => log.end(resolve))
     }
   } finally {
     if (restore) await restore()

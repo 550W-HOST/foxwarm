@@ -1128,6 +1128,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
   const router = new MessageRouter();
   const originalChat = llm.chat;
   const observedTurns: string[] = [];
+  let triggeredRun: Promise<void> | null = null;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     const text = flattenTurnText(parts, activeSession);
@@ -1139,7 +1140,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
 
   sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
     if (triggeredSessionId === parentId) {
-      void router.processSessionQueue(triggeredSessionId);
+      triggeredRun = router.processSessionQueue(triggeredSessionId);
     }
   });
 
@@ -1171,6 +1172,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
     });
 
     await waitFor(() => observedTurns.length === 1);
+    await triggeredRun;
     await waitForSessionIdle(parentId);
     assert.equal(observedTurns.length, 1);
     assert.match(observedTurns[0], /A before direct user/);

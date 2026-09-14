@@ -17,8 +17,8 @@ Owns deterministic local test discovery, classification, data isolation, process
 ## Behavior
 
 - Inventory rules classify tracked source tests and explicitly identify generated duplicates, full-application runtime E2E, asset-dependent VS Code E2E, website-owned tests, standalone smoke/regression scripts, and interactive skill trials.
-- The runner launches backend files in separate bounded child processes. A preload assigns each test process a separate disposable data root and short temporary path before application imports; subprocesses inherit that root unless a fixture explicitly replaces it.
-- Groups and browser files run in sorted order with bounded concurrency and finite file/process timeouts. Output is streamed and saved with inventory, result summaries, screenshots, and disposable data in a fresh child beneath the selected artifact parent.
+- The runner launches backend files in small bounded shards. Node's test runner still gives each file a child process, while a preload assigns that process a separate disposable data root and short temporary path before application imports; subprocesses inherit that root unless a fixture explicitly replaces it.
+- Groups, backend shards, and browser files run in sorted order with bounded concurrency and finite progress/process timeouts. Output is streamed and saved with inventory, result summaries, screenshots, and disposable data in a fresh child beneath the selected artifact parent.
 - Provider credentials are cleared and proxy defaults point to closed loopback endpoints. Timeouts and interrupts terminate the active process group and produce a failing exit status.
 - A caller-supplied artifact path is treated as a parent: the runner does not remove or replace it or unrelated prior artifacts.
 - VS Code Web generated extension files are restored to their exact pre-test contents after the group, preserving pre-existing local bytes and removing only files created by the test command.
