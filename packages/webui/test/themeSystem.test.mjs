@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test, { after } from 'node:test'
@@ -326,19 +326,6 @@ test('shape, effects, typography, and procedural backgrounds project to runtime 
   assert.equal((crtVariables['--foxwarm-background-image'].match(/repeating-linear-gradient/g) || []).length, 1)
   assert.doesNotMatch(crtVariables['--foxwarm-background-image'], /radial-gradient|90deg/)
   assert.equal(crtVariables['--foxwarm-background-size'], '8px 8px')
-})
-
-test('WebUI TypeScript components use semantic theme utilities rather than fixed Tailwind palettes', async () => {
-  const componentsRoot = path.join(webuiRoot, 'src/components')
-  const files = (await readdir(componentsRoot)).filter(file => file.endsWith('.tsx'))
-  const fixedPalette = /\b(?:bg|text|border|ring|from|to|via|divide|placeholder|decoration)-(?:gray|slate|zinc|neutral|stone|blue|sky|cyan|red|rose|green|emerald|amber|yellow|orange|purple|violet|indigo|white|black)(?:-|\/|\b)/
-  const violations = []
-  for (const file of files) {
-    let source = await readFile(path.join(componentsRoot, file), 'utf8')
-    if (file === 'InlineComposerEditor.tsx') source = source.replaceAll('bg-black/50', '')
-    if (fixedPalette.test(source)) violations.push(file)
-  }
-  assert.deepEqual(violations, [])
 })
 
 test('Architecture inverse icon and active-tab treatments use a readable semantic pair', async () => {

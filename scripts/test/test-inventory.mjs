@@ -27,6 +27,7 @@ const manualGroups = new Map([
   ['test/toolscriptPhase1Smoke.js', 'manual-smoke'],
   ['test/llmToolSerializationTest.js', 'manual-regression'],
   ['test/toolscriptSkillAgentTrial.js', 'manual-skill-trial'],
+  ['packages/android-node/test.py', 'manual-hardware-smoke'],
 ])
 
 function normalize(value) {
@@ -44,7 +45,7 @@ function classify(file) {
     || file === 'packages/sandbox-node-runtime/scripts/build-bundle.test.mjs') return 'sandbox-node'
   if (/^packages\/browser-node\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
   if (/^packages\/android-node\/test_[^/]+\.py$/.test(file)) return 'python'
-  if (/^scripts\/.*\.test\.js$/.test(file)) return 'scripts'
+  if (/^scripts\/.*\.test\.(?:js|mjs)$/.test(file)) return 'scripts'
   if (/^skills\/.*\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^skills\/.*\.test\.js$/.test(file)) return 'skill-node'
   if (/^packages\/vscode-web\/.*\/test\/.*\.test\.mjs$/.test(file)
@@ -102,4 +103,5 @@ export const deferredGroups = {
   'manual-smoke': 'Stateful standalone smoke checks; run only with an explicitly assigned disposable environment.',
   'manual-regression': 'Standalone historical regression script; not part of the routine runner.',
   'manual-skill-trial': 'Interactive skill trial; requires an explicitly assigned Agent and runtime.',
+  'manual-hardware-smoke': 'Live-device smoke driver; requires explicitly assigned Android hardware and is never routine CI.',
 }
