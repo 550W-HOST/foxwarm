@@ -19,6 +19,10 @@
     "test:windows-service": "node --test scripts/windowsService.test.js",
     "test:webui-realtime": "node --test lib/channels/webuiRealtime.test.js",
     "test:code-index-generator": "python3 skills/code-index/tests/test_generate_code_index.py",
+    "test:inventory": "node scripts/test/run-tests.mjs inventory",
+    "test:unit": "node scripts/test/run-tests.mjs unit",
+    "test:webui:e2e": "node scripts/test/run-tests.mjs browser",
+    "test:local": "node scripts/test/run-tests.mjs all",
     "build-all": "npm ci && npm run build && npm --prefix packages/webui ci && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",
     "start:notmux": "npm run build && node lib/index.js",
@@ -34,7 +38,7 @@
     "selftest:apply-patch": "npm run build && node lib/selftest/applyPatchSelfTest.js",
     "selftest:goal-reminder": "npm run build && node lib/selftest/goalReminderSelfTest.js",
     "selftest:tool-loop-stall": "npm run build && node lib/selftest/toolLoopStallSelfTest.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run test:unit",
     "cli-node": "npm run build && node packages/cli-node/dist/tui.js"
   },
   "keywords": [
