@@ -27,9 +27,10 @@ const appendProviderLog = text => fs.appendFile(path.join(logsRoot, 'provider.lo
 const provider = await startMockProvider({ toolFile, log: appendProviderLog })
 
 function sessionHistory(id, count, offset) {
+  const repeated = 'synthetic content '.repeat(id.startsWith('core-compact-') ? 42 : 18)
   return Array.from({ length: count }, (_, index) => ({
     role: index % 2 === 0 ? 'user' : 'model',
-    parts: [{ text: `${id} message ${index + 1}\n${'synthetic content '.repeat(18)}` }],
+    parts: [{ text: `${id} message ${index + 1}\n${repeated}` }],
     __meta: { seq: index + 1, timestamp: 1_700_000_000_000 + offset + index },
   }))
 }
@@ -37,16 +38,19 @@ function sessionHistory(id, count, offset) {
 async function seedData() {
   const sessions = {}
   await fs.mkdir(path.join(stateRoot, 'sessions'), { recursive: true })
-  const ids = ['main', 'app-e2e-long-a', 'app-e2e-long-b', ...Array.from({ length: 36 }, (_, index) => `app-e2e-list-${String(index + 1).padStart(2, '0')}`)]
+  const ids = ['main', 'app-e2e-long-a', 'app-e2e-long-b', 'core-compact-sync', 'core-compact-background', 'core-btw', ...Array.from({ length: 36 }, (_, index) => `app-e2e-list-${String(index + 1).padStart(2, '0')}`)]
   for (const [offset, id] of ids.entries()) {
-    const count = id.includes('long') ? 140 : 2
+    const count = id.includes('long') ? 140 : id.startsWith('core-compact-') ? 20 : 2
     const history = sessionHistory(id, count, offset * 1000)
     const cwd = id === 'app-e2e-list-01' ? path.join(runRoot, 'synthetic-cwd') : undefined
     const displayName = id === 'app-e2e-list-01' ? 'Synthetic named session' : undefined
+    const model = id === 'core-compact-background' ? 'wsbg/mock-ws-bg' : id.startsWith('core-') ? 'ws/mock-ws' : undefined
+    const promptCacheKey = id.startsWith('core-') ? `00000000-0000-4000-8000-${String(offset + 1).padStart(12, '0')}` : undefined
     const metadata = {
       id, agent: 'main', busy: false, queue: [], currentNode: 'master',
       ...(cwd ? { cwd } : {}),
       ...(displayName ? { displayName } : {}),
+      ...(model ? { model, effort: 'none', promptCacheKey } : {}),
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       meta: { lastMessageTime: 1_700_000_000_000 + offset * 1000 + count, messageCount: count },
     }
@@ -54,7 +58,8 @@ async function seedData() {
     await fs.writeFile(path.join(stateRoot, 'sessions', `${id}.json`), JSON.stringify({
       sessionStateVersion: 1, history, persistentMemorySnapshot: 'Synthetic app E2E prompt.', queue: [], systemPromptFiles: [],
       historyVersion: 0, stats: metadata.stats, meta: metadata.meta, agent: 'main', busy: false,
-      currentNode: 'master', ...(cwd ? { cwd } : {}), ...(displayName ? { displayName } : {}), nextMessageSeq: count + 1, lastAppliedMailboxId: 0,
+      currentNode: 'master', ...(cwd ? { cwd } : {}), ...(displayName ? { displayName } : {}),
+      ...(model ? { model, effort: 'none', promptCacheKey } : {}), nextMessageSeq: count + 1, lastAppliedMailboxId: 0,
     }, null, 2))
   }
   await fs.writeFile(path.join(stateRoot, 'sessions.json'), JSON.stringify({ sessions }, null, 2))
@@ -81,7 +86,7 @@ function reservePort() {
 await seedData()
 const appPort = await reservePort()
 await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
-await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n`)
+await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n`)
 
 const appLog = await fs.open(path.join(logsRoot, 'app.log'), 'w')
 const app = spawn(process.execPath, ['lib/index.js'], {
@@ -168,15 +173,17 @@ const baseUrl = `http://127.0.0.1:${appPort}`
 let failed = false
 try {
   await waitForReady(baseUrl)
-  const files = [
-    'test/app-e2e/core.e2e.mjs',
-    'packages/webui/test/lazyTimelineRestore.e2e.mjs',
-    'packages/webui/test/scrollState.e2e.mjs',
-    'packages/webui/test/sessionHeader.e2e.mjs',
-    'packages/webui/test/sessionListDrag.e2e.mjs',
-    'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
-    'packages/webui/test/systemTabs.e2e.mjs',
-  ]
+  const files = process.env.FOXWARM_APP_E2E_CORE_ONLY === '1'
+    ? ['test/app-e2e/core.e2e.mjs']
+    : [
+      'test/app-e2e/core.e2e.mjs',
+      'packages/webui/test/lazyTimelineRestore.e2e.mjs',
+      'packages/webui/test/scrollState.e2e.mjs',
+      'packages/webui/test/sessionHeader.e2e.mjs',
+      'packages/webui/test/sessionListDrag.e2e.mjs',
+      'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
+      'packages/webui/test/systemTabs.e2e.mjs',
+    ]
   for (const file of files) await runTestFile(file, baseUrl)
   provider.assertConsumed()
   assert.equal(app.exitCode, null, 'Foxwarm app exited before tests completed')

@@ -26,4 +26,4 @@ Owns deterministic local test discovery, classification, data isolation, process
 
 ## Integration
 
-The runner consumes compiled backend/package tests, source WebUI and browser fixtures, Python tests, standalone self-test executables, and the synthetic full-application harness. Build/install prerequisites remain separate so a single build can feed repeated focused runs. Full-application ownership is documented in [full-application E2E](./full-app-e2e.md).
+The runner consumes compiled backend/package tests, source WebUI and browser fixtures, Python tests, standalone self-test executables, and the synthetic full-application harness. Build/install prerequisites remain separate so a single build can feed repeated focused runs. Full-application ownership, including its exact scripted provider expectations, is documented in [full-application E2E](./full-app-e2e.md).

@@ -1,5 +1,6 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
@@ -62,6 +63,27 @@ async function providerState() {
   return fetch(`${providerUrl}/__control/state`).then(response => response.json())
 }
 
+async function waitForProvider(predicate, timeout = 15_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const state = await providerState()
+    if (predicate(state)) return state
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error('Timed out waiting for scripted provider state')
+}
+
+async function waitForAuthority(sessionId, predicate, timeout = 20_000) {
+  const authorityPath = path.join(dataRoot, 'state', 'sessions', `${sessionId}.json`)
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const authority = JSON.parse(await fs.readFile(authorityPath, 'utf8'))
+    if (predicate(authority)) return authority
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`Timed out waiting for ${sessionId} authority`)
+}
+
 async function scenario(name, run) {
   try { await run() }
   catch (error) {
@@ -91,6 +113,8 @@ test('browser send streams incrementally, commits exactly once, and survives rel
   await sendMessage('APP_E2E_INCREMENTAL')
   await page.waitForFunction(() => document.body.textContent?.includes('streamed '), { timeout: 15_000 })
   assert.equal(await page.evaluate(() => document.body.textContent?.includes('streamed answer')), false)
+  const release = await fetch(`${providerUrl}/__control/release-incremental`, { method: 'POST' })
+  assert.equal(release.status, 204)
   await page.waitForFunction(() => document.body.textContent?.includes('streamed answer'), { timeout: 15_000 })
   await waitForIdle(sessionId)
   const canonical = await history(sessionId)
@@ -112,12 +136,13 @@ test('Responses tool loop writes and reads a safe file before the final model an
   await page.waitForFunction(() => document.body.textContent?.includes('tool roundtrip complete'), { timeout: 20_000 })
   await waitForIdle(sessionId)
   assert.equal(await fs.readFile(toolFile, 'utf8'), 'app e2e tool payload')
-  const canonical = await history(sessionId)
-  const wire = JSON.stringify(canonical.messages)
-  assert.match(wire, /call_app_write/)
-  assert.match(wire, /call_app_read/)
-  assert.match(wire, /app e2e tool payload/)
-  assert.equal(canonical.messages.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'tool roundtrip complete')).length, 1)
+  const authority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${sessionId}.json`), 'utf8'))
+  const calls = authority.history.flatMap(message => message.parts || []).map(part => part.functionCall).filter(Boolean)
+  const results = authority.history.flatMap(message => message.parts || []).map(part => part.functionResponse).filter(Boolean)
+  assert.deepEqual(calls.map(call => [call.id, call.name]), [['call_app_write', 'write'], ['call_app_read', 'read']])
+  assert.deepEqual(results.map(result => [result.tool_use_id, result.name]), [['call_app_write', 'write'], ['call_app_read', 'read']])
+  assert.match(results[1].response.output, /app e2e tool payload/)
+  assert.equal(authority.history.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'tool roundtrip complete')).length, 1)
 }))
 
 test('Stop aborts a held stream and later input can run as a new turn', async () => scenario('stop', async () => {
@@ -125,19 +150,16 @@ test('Stop aborts a held stream and later input can run as a new turn', async ()
   await openSession(sessionId)
   await sendMessage('APP_E2E_STOP')
   await page.waitForFunction(() => document.body.textContent?.includes('held stream'), { timeout: 15_000 })
-  const stopped = await page.evaluate(() => {
-    const button = [...document.querySelectorAll('button')].find(element => element.textContent?.trim() === 'Stop')
-    if (!(button instanceof HTMLButtonElement)) return false
-    button.click(); return true
-  })
-  assert.equal(stopped, true)
+  await page.click('button::-p-text(Stop)')
   await waitForIdle(sessionId)
+  await waitForProvider(state => state.stopAborted === true)
   await sendMessage('APP_E2E_AFTER_STOP')
   await page.waitForFunction(() => document.body.textContent?.includes('after stop complete'), { timeout: 20_000 })
   await waitForIdle(sessionId)
-  const canonical = await history(sessionId)
-  assert.equal(canonical.messages.some(message => message.parts?.some(part => part.text === 'held stream should stop')), false)
-  assert.equal(canonical.messages.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'after stop complete')).length, 1)
+  const authority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${sessionId}.json`), 'utf8'))
+  assert.ok(authority.history.some(message => message.role === 'user' && JSON.stringify(message.parts).includes('APP_E2E_STOP')))
+  assert.equal(authority.history.some(message => message.role === 'model' && message.parts?.some(part => part.text?.includes('held stream'))), false)
+  assert.equal(authority.history.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'after stop complete')).length, 1)
 }))
 
 test('empty Responses output_text completes without another provider request', async () => scenario('empty', async () => {
@@ -166,10 +188,154 @@ test('Chat Completions streaming tool call uses the same real tool and persisten
   await page.waitForFunction(() => document.body.textContent?.includes('chat tool complete'), { timeout: 20_000 })
   await waitForIdle(sessionId)
   assert.equal(await fs.readFile(`${toolFile}.chat`, 'utf8'), 'chat tool payload')
-  const canonical = await history(sessionId)
-  const wire = JSON.stringify(canonical.messages)
-  assert.match(wire, /call_chat_write/)
-  assert.equal(canonical.messages.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'chat tool complete')).length, 1)
+  const authority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${sessionId}.json`), 'utf8'))
+  const call = authority.history.flatMap(message => message.parts || []).map(part => part.functionCall).find(Boolean)
+  const result = authority.history.flatMap(message => message.parts || []).map(part => part.functionResponse).find(Boolean)
+  assert.deepEqual([call.id, call.name], ['call_chat_write', 'write'])
+  assert.deepEqual([result.tool_use_id, result.name], ['call_chat_write', 'write'])
+  assert.match(result.response.output, /File written successfully/)
+  assert.equal(authority.history.filter(message => message.role === 'model' && message.parts?.some(part => part.text === 'chat tool complete')).length, 1)
   const state = await providerState()
   assert.ok(state.requests.filter(entry => entry.marker === 'CHAT').every(entry => entry.protocol === 'chat'))
+}))
+
+test('Responses WebSocket reuses one completed prefix, reconnects with full replay, and forks an independent chain', async () => scenario('ws-fork', async () => {
+  const sessionId = await createSession('core-ws')
+  await api(`/api/sessions/${encodeURIComponent(sessionId)}/model`, { method: 'POST', body: JSON.stringify({ model: 'ws/mock-ws', effort: 'none' }) })
+  await openSession(sessionId)
+
+  await sendMessage('APP_E2E_WS_ONE')
+  await page.waitForFunction(() => document.body.textContent?.includes('ws answer one'), { timeout: 15_000 })
+  await waitForIdle(sessionId)
+  const afterOne = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${sessionId}.json`), 'utf8'))
+  const storedPromptCacheKey = afterOne.promptCacheKey
+  assert.equal(typeof storedPromptCacheKey, 'string')
+
+  await sendMessage('APP_E2E_WS_TWO')
+  await page.waitForFunction(() => document.body.textContent?.includes('ws answer two'), { timeout: 15_000 })
+  await waitForIdle(sessionId)
+  const closeResponse = await fetch(`${providerUrl}/__control/close-ws`, { method: 'POST' })
+  assert.equal(closeResponse.status, 204)
+
+  await sendMessage('APP_E2E_WS_THREE')
+  await page.waitForFunction(() => document.body.textContent?.includes('ws answer three'), { timeout: 15_000 })
+  await waitForIdle(sessionId)
+  const parentAuthority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${sessionId}.json`), 'utf8'))
+  assert.equal(parentAuthority.promptCacheKey, storedPromptCacheKey)
+
+  const fork = await api(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, { method: 'POST', body: JSON.stringify({ suffix: 'child' }) })
+  const childId = fork.newSessionId
+  await openSession(childId)
+  await sendMessage('APP_E2E_FORK_CHILD')
+  await page.waitForFunction(() => document.body.textContent?.includes('fork child answer'), { timeout: 15_000 })
+  await waitForIdle(childId)
+
+  const childAuthority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${childId}.json`), 'utf8'))
+  assert.equal(childAuthority.parentSessionId, sessionId)
+  assert.ok(childAuthority.history.some(message => message.parts?.some(part => part.text === 'ws answer three')))
+  assert.equal(childAuthority.history.filter(message => message.parts?.some(part => part.text === 'fork child answer')).length, 1)
+
+  const wsRequests = (await providerState()).wsRequests
+  const one = wsRequests.find(entry => entry.marker === 'WS_ONE')
+  const two = wsRequests.find(entry => entry.marker === 'WS_TWO')
+  const three = wsRequests.find(entry => entry.marker === 'WS_THREE')
+  const child = wsRequests.find(entry => entry.marker === 'FORK_CHILD')
+  assert.equal(one.connectionId, two.connectionId)
+  assert.notEqual(two.connectionId, three.connectionId)
+  assert.equal(two.body.previous_response_id, 'ws-resp-one')
+  assert.equal(three.body.previous_response_id, undefined)
+  assert.equal(child.body.previous_response_id, undefined)
+  assert.equal(one.body.prompt_cache_key, crypto.createHash('sha256').update(sessionId).digest('hex'))
+  assert.equal(child.body.prompt_cache_key, crypto.createHash('sha256').update(childId).digest('hex'))
+  assert.notEqual(one.body.prompt_cache_key, child.body.prompt_cache_key)
+}))
+
+test('browser attachment upload and long pasted text reach the provider, persist canonically, and clear accepted drafts', async () => scenario('attachment-longpaste', async () => {
+  const attachmentSession = await createSession('core-attachment')
+  await openSession(attachmentSession)
+  await page.type('[role="textbox"][aria-label="Message"]', 'APP_E2E_ATTACHMENT ')
+  await page.$eval('#file-upload', input => {
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['synthetic attachment body'], 'fixture-note.txt', { type: 'text/plain' }))
+    const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nEAAAAAASUVORK5CYII='), character => character.charCodeAt(0))
+    transfer.items.add(new File([png], 'fixture-pixel.png', { type: 'image/png' }))
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await page.waitForSelector('.foxwarm-composer-attachment-chip')
+  await page.click('button[aria-label="Send message"]')
+  await page.waitForFunction(() => document.body.textContent?.includes('attachment accepted'), { timeout: 20_000 })
+  await waitForIdle(attachmentSession)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 0)
+  assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', node => node.textContent), '')
+  assert.equal(await page.evaluate(id => localStorage.getItem(`composer_draft_v1_${id}`), attachmentSession), null)
+  const attachmentAuthority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${attachmentSession}.json`), 'utf8'))
+  const attachmentWire = JSON.stringify(attachmentAuthority.history)
+  assert.match(attachmentWire, /fixture-note\.txt/)
+  assert.match(attachmentWire, /fixture-pixel\.png/)
+  assert.match(attachmentWire, /attachment-ref|foxwarm-attachment/)
+  assert.match(attachmentWire, /inlineDataRef|blobId/)
+  await page.reload({ waitUntil: 'networkidle2' })
+  await page.waitForFunction(() => document.body.textContent?.includes('attachment accepted'), { timeout: 15_000 })
+
+  const pasteSession = await createSession('core-longpaste')
+  await openSession(pasteSession)
+  await page.type('[role="textbox"][aria-label="Message"]', 'APP_E2E_LONGPASTE ')
+  const pasted = `${'synthetic long paste '.repeat(180)}\nlong paste exact tail`
+  await page.$eval('[role="textbox"][aria-label="Message"]', (editor, text) => {
+    const transfer = new DataTransfer()
+    transfer.setData('text/plain', text)
+    editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+  }, pasted)
+  await page.waitForSelector('.foxwarm-composer-pasted-text-chip')
+  await page.click('button[aria-label="Send message"]')
+  await page.waitForFunction(() => document.body.textContent?.includes('long paste accepted'), { timeout: 20_000 })
+  await waitForIdle(pasteSession)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-pasted-text-chip').length === 0)
+  assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', node => node.textContent), '')
+  assert.equal(await page.evaluate(id => localStorage.getItem(`composer_draft_v1_${id}`), pasteSession), null)
+  const pasteAuthority = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${pasteSession}.json`), 'utf8'))
+  assert.match(JSON.stringify(pasteAuthority.history), /<pasted-text>[\s\S]*long paste exact tail/)
+  await page.reload({ waitUntil: 'networkidle2' })
+  await page.waitForFunction(() => document.body.textContent?.includes('long paste accepted'), { timeout: 15_000 })
+}))
+
+test('WS compact planning and BTW use purpose-scoped request keys without replacing persisted cache identity', async () => scenario('compact-btw', async () => {
+  const syncId = 'core-compact-sync'
+  const syncBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${syncId}.json`), 'utf8')).promptCacheKey
+  await openSession(syncId)
+  await sendMessage('/compact 20')
+  await waitForProvider(state => state.wsRequests.some(entry => entry.marker === 'COMPACT_SYNC'))
+  const syncAuthority = await waitForAuthority(syncId, authority => JSON.stringify(authority.history).includes('compact_sync summary'))
+  const syncStoredKey = syncAuthority.promptCacheKey
+  assert.equal(syncStoredKey, syncBefore)
+
+  const backgroundId = 'core-compact-background'
+  const backgroundBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${backgroundId}.json`), 'utf8')).promptCacheKey
+  await openSession(backgroundId)
+  await sendMessage('/compact 20')
+  await waitForProvider(state => state.wsRequests.some(entry => entry.marker === 'COMPACT_BACKGROUND'))
+  const backgroundAuthority = await waitForAuthority(backgroundId, authority => JSON.stringify(authority.history).includes('compact_background summary'))
+  const backgroundStoredKey = backgroundAuthority.promptCacheKey
+  assert.equal(backgroundStoredKey, backgroundBefore)
+
+  const btwId = 'core-btw'
+  const btwBefore = JSON.parse(await fs.readFile(path.join(dataRoot, 'state', 'sessions', `${btwId}.json`), 'utf8')).promptCacheKey
+  await openSession(btwId)
+  await sendMessage('/btw APP_E2E_BTW')
+  await page.waitForFunction(() => document.body.textContent?.includes('btw side answer'), { timeout: 20_000 })
+  const btwAuthority = await waitForAuthority(btwId, authority => JSON.stringify(authority.history).includes('btw side answer'))
+  const btwStoredKey = btwAuthority.promptCacheKey
+  assert.equal(btwStoredKey, btwBefore)
+  assert.match(syncStoredKey, /^[0-9a-f-]{36}$/)
+  assert.match(backgroundStoredKey, /^[0-9a-f-]{36}$/)
+  assert.match(btwStoredKey, /^[0-9a-f-]{36}$/)
+
+  const state = await providerState()
+  const sync = state.wsRequests.find(entry => entry.marker === 'COMPACT_SYNC')
+  const background = state.wsRequests.find(entry => entry.marker === 'COMPACT_BACKGROUND')
+  const btw = state.wsRequests.find(entry => entry.marker === 'BTW')
+  assert.equal(sync.body.prompt_cache_key, crypto.createHash('sha256').update(syncId).digest('hex'))
+  assert.equal(background.body.prompt_cache_key, crypto.createHash('sha256').update(`${backgroundId}--compact-plan`).digest('hex'))
+  assert.equal(btw.body.prompt_cache_key, crypto.createHash('sha256').update(`${btwId}--btw`).digest('hex'))
 }))

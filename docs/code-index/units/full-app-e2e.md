@@ -11,8 +11,10 @@ Owns deterministic end-to-end coverage through a real compiled Foxwarm server, b
 
 - Creates one owned artifact/data root, synthetic token, minimal Agent memory, disabled Vector/workers/external channels, seeded Session authority, and loopback ephemeral application/provider ports.
 - Starts `lib/index.js` in an owned process group and waits for an authenticated readiness route.
-- Serves small expected OpenAI Responses SSE and Chat Completions SSE exchanges. Unknown requests fail immediately; requests and protocol selection remain observable without writing prompts, credentials, or request bodies to logs.
-- Exercises browser send and incremental rendering through one canonical commit/reload, sequential safe write/read tools, Stop of a held stream followed by a later new turn, accepted empty output text without retry, and a Chat Completions streaming tool turn.
+- Serves small expected OpenAI Responses SSE, Chat Completions SSE, and Responses WebSocket exchanges. Exact sequence/count validation rejects extra, reordered, invalid, or missing requests; requests and protocol selection remain observable without writing prompts, credentials, or request bodies to logs.
+- Exercises browser send and control-released incremental rendering through one canonical commit/reload, structurally paired safe write/read tools, provider-observed Stop termination followed by a later new turn, accepted empty output text without retry, and a Chat Completions streaming tool turn.
+- Covers Responses WebSocket same-socket suffix reuse, forced-close full replay, ordinary Session fork isolation, synchronous versus real background compact planning, BTW request scope, and stable persisted prompt-cache identity with purpose-specific provider keys.
+- Uploads owned text and image files plus an opaque long-paste block through the real composer, verifies provider-visible serialization and canonical references, and checks accepted draft clearing and reload.
 - Runs the six former developer-runtime browser files against only the generated Session set. Their mutations and cleanup cannot select or alter an existing installation.
 - Applies finite child deadlines and exact process-group teardown. Failures retain provider/application/test logs, browser console, and screenshots below the owned run directory.
 
