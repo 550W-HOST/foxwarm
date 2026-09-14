@@ -22,6 +22,7 @@
     "test:inventory": "node scripts/test/run-tests.mjs inventory",
     "test:unit": "node scripts/test/run-tests.mjs unit",
     "test:webui:e2e": "node scripts/test/run-tests.mjs browser",
+    "test:app:e2e": "node scripts/test/run-tests.mjs app",
     "test:local": "node scripts/test/run-tests.mjs all",
     "build-all": "npm ci && npm run build && npm --prefix packages/webui ci && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",

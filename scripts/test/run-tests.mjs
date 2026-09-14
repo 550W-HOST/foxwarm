@@ -12,11 +12,12 @@ import {
   routineUnitGroups,
   standaloneSelftests,
 } from './test-inventory.mjs'
+import { parseTestResultCounts } from './test-result-counts.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '../..')
 const target = process.argv[2] || 'unit'
-const validTargets = new Set(['inventory', 'unit', 'browser', 'all'])
+const validTargets = new Set(['inventory', 'unit', 'browser', 'app', 'all'])
 if (!validTargets.has(target)) {
   console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}>`)
   process.exit(2)
@@ -172,6 +173,17 @@ function browserGroup() {
   }
 }
 
+function appGroup() {
+  return {
+    name: 'app-browser',
+    steps: [directStep('full-application', process.execPath, ['test/app-e2e/run-app-e2e.mjs'], 1_200_000, {
+      FOXWARM_APP_E2E_ARTIFACT_DIR: path.join(runBase, 'app-e2e'),
+      FOXWARM_E2E_CHROMIUM: findChromium(),
+      FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
+    })],
+  }
+}
+
 function walkFiles(root) {
   if (!fs.existsSync(root)) return []
   const result = []
@@ -250,37 +262,21 @@ async function runStep(group, step, log) {
       clearTimeout(killTimer)
       activeChild = null
       log.write(`${error.stack || error}\n`)
-      resolve({ code: 1, timedOut, counts: parseTapCounts(captured) })
+      resolve({ code: 1, timedOut, counts: parseTestResultCounts(captured) })
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       clearTimeout(killTimer)
       activeChild = null
-      resolve({ code: code ?? (signal ? 1 : 0), signal, timedOut, counts: parseTapCounts(captured) })
+      resolve({ code: code ?? (signal ? 1 : 0), signal, timedOut, counts: parseTestResultCounts(captured) })
     })
   })
-}
-
-function parseTapCounts(output) {
-  const counts = {}
-  for (const key of ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo']) {
-    const matches = [...output.matchAll(new RegExp(`^ℹ ${key} (\\d+)$`, 'gm'))]
-    if (matches.length) counts[key] = matches.reduce((sum, match) => sum + Number(match[1]), 0)
-  }
-  if (Object.keys(counts).length) return counts
-  const pythonRuns = [...output.matchAll(/^Ran (\d+) tests?/gm)]
-  if (pythonRuns.length) {
-    const tests = pythonRuns.reduce((sum, match) => sum + Number(match[1]), 0)
-    const failed = /^FAILED /m.test(output)
-    return { tests, pass: failed ? 0 : tests, fail: failed ? 1 : 0, cancelled: 0, skipped: 0, todo: 0 }
-  }
-  const passLines = [...output.matchAll(/^PASS /gm)].length
-  return passLines ? { tests: passLines, pass: passLines, fail: 0, cancelled: 0, skipped: 0, todo: 0 } : null
 }
 
 const groups = [
   ...(target === 'unit' || target === 'all' ? unitGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
+  ...(target === 'app' || target === 'all' ? [appGroup()] : []),
 ]
 const summary = []
 for (const group of groups) {

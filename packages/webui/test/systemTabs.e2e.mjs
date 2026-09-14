@@ -108,13 +108,13 @@ test('model popup reuses page models and opens the singleton Setup models editor
   await page.setViewport({ width: 1440, height: 900 })
   const sessionId = 'e2e-model-settings-session'
   await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
-  const modelButton = await page.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+  await page.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
   const previousRequests = modelListRequestCount
-  await modelButton.click()
+  await page.click('button[aria-haspopup="dialog"]')
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.keyboard.press('Escape')
   await page.waitForFunction(() => document.activeElement?.matches('button[aria-haspopup="dialog"]'))
-  await modelButton.click()
+  await page.click('button[aria-haspopup="dialog"]')
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
   await new Promise((resolve) => setTimeout(resolve, 150))

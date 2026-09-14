@@ -53,8 +53,9 @@ function classify(file) {
   if (file === 'packages/vscode-web/test/yamlSchema.e2e.mjs') return 'vscode-assets-e2e'
   if (/^packages\/webui\/test\/.*\.test\.mjs$/.test(file)) return 'webui-unit'
   if (/^packages\/webui\/test\/.*\.e2e\.mjs$/.test(file)) {
-    return appRuntimeE2e.includes(file) ? 'app-runtime-e2e' : 'webui-browser'
+    return appRuntimeE2e.includes(file) ? 'app-browser' : 'webui-browser'
   }
+  if (file === 'test/app-e2e/core.e2e.mjs') return 'app-browser'
   if (/^website\/tests\//.test(file)) return 'website-owned'
   return 'unclassified'
 }
@@ -97,7 +98,6 @@ export const routineUnitGroups = [
 
 export const deferredGroups = {
   'generated-test-artifact': 'Covered through its classified source test.',
-  'app-runtime-e2e': 'Owned by the synthetic full-application harness.',
   'vscode-assets-e2e': 'Requires prepared VS Code and YAML extension assets.',
   'website-owned': 'Owned by the website test workflow.',
   'manual-smoke': 'Stateful standalone smoke checks; run only with an explicitly assigned disposable environment.',
