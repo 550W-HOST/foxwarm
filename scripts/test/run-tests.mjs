@@ -79,11 +79,11 @@ function requireFiles(files, label) {
   return files
 }
 
-function nodeTestStep(name, files, { concurrency = 1, timeoutMs = 180_000 } = {}) {
+function nodeTestStep(name, files, { concurrency, timeoutMs = 180_000 } = {}) {
   return {
     name,
     command: process.execPath,
-    args: ['--test', `--test-concurrency=${concurrency}`, ...files],
+    args: ['--test', ...(concurrency ? [`--test-concurrency=${concurrency}`] : []), ...files],
     timeoutMs,
   }
 }
