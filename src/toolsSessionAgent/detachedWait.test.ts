@@ -107,6 +107,7 @@ test('passed timeout wait persists before local Main scheduling and fires canoni
   setTimersStoreForTests(createTimersStore(path.join(root, 'timers.json')));
   sessionManager.setSessionTriggerCallback(() => {});
   let persists = 0;
+  let persistedWait: any;
   try {
     const owner = await sessionManager.getSession(sessionId);
     const result: any = await tool_wait({ wakeIfNoActivityAfterSeconds: 0.02, reason: ' timeout reason ' }, {
@@ -114,13 +115,14 @@ test('passed timeout wait persists before local Main scheduling and fires canoni
       session: owner,
       persistCurrentSession: async () => {
         persists += 1;
+        persistedWait = structuredClone(owner.meta.wait);
         await sessionManager.saveSession(sessionId);
       },
     } as any);
     const waitId = result.__toolPostAction.explicitWaitId;
     assert.equal(persists, 1);
-    assert.equal(owner.meta.wait?.id, waitId);
-    assert.equal(owner.meta.wait?.reason, 'timeout reason');
+    assert.equal(persistedWait?.id, waitId);
+    assert.equal(persistedWait?.reason, 'timeout reason');
 
     const deadline = Date.now() + 1000;
     while (owner.queue.length === 0 && Date.now() < deadline) {

@@ -103,7 +103,12 @@ test('startup resume eagerly recovers busy sessions without pending intents', as
     await resumeSessionWorkerPendingIntents(fixture.store, fixture.supervisor);
     assert.ok(!fixture.supervisor.getStatus(sessionId), 'no pending intents and no busy candidates spawns nothing');
     await resumeSessionWorkerPendingIntents(fixture.store, fixture.supervisor, () => [sessionId]);
-    await waitFor(async () => JSON.parse(await fs.readFile(rootStatePath, 'utf8')).busy === false);
+    await waitFor(async () => {
+      const authority = JSON.parse(await fs.readFile(rootStatePath, 'utf8'));
+      return authority.busy === false
+        && authority.queue.length === 0
+        && JSON.stringify(authority.history).includes('Session worker restarted after an unconfirmed exit');
+    });
     const recovered = JSON.parse(await fs.readFile(rootStatePath, 'utf8'));
     assert.ok(JSON.stringify(recovered.history).includes('Session worker restarted after an unconfirmed exit'),
       'the eagerly resumed worker recovers the stale busy state inside its own ownership');
