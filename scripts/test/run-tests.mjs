@@ -265,9 +265,17 @@ function parseTapCounts(output) {
   const counts = {}
   for (const key of ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo']) {
     const matches = [...output.matchAll(new RegExp(`^ℹ ${key} (\\d+)$`, 'gm'))]
-    if (matches.length) counts[key] = Number(matches.at(-1)[1])
+    if (matches.length) counts[key] = matches.reduce((sum, match) => sum + Number(match[1]), 0)
   }
-  return Object.keys(counts).length ? counts : null
+  if (Object.keys(counts).length) return counts
+  const pythonRuns = [...output.matchAll(/^Ran (\d+) tests?/gm)]
+  if (pythonRuns.length) {
+    const tests = pythonRuns.reduce((sum, match) => sum + Number(match[1]), 0)
+    const failed = /^FAILED /m.test(output)
+    return { tests, pass: failed ? 0 : tests, fail: failed ? 1 : 0, cancelled: 0, skipped: 0, todo: 0 }
+  }
+  const passLines = [...output.matchAll(/^PASS /gm)].length
+  return passLines ? { tests: passLines, pass: passLines, fail: 0, cancelled: 0, skipped: 0, todo: 0 } : null
 }
 
 const groups = [
