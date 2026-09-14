@@ -1386,6 +1386,7 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'session A\n\ntranscript')
 
   await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste(Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n')) })
+  await page.waitForSelector('.foxwarm-composer-pasted-text-chip')
   const exact = await page.evaluate(() => window.fixtureDraft)
   const copied = await page.evaluate(() => {
     window.fixtureSelectAll()

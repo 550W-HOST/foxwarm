@@ -519,6 +519,9 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
 })
 
 test('Appearance owns browser name and tab icon editing with save, cancel, and server errors', async () => {
+  // A cold Vite run may replace the document after the preceding test first loads Monaco.
+  await page.goto(`${baseUrl}/preview/#setup`, { waitUntil: 'networkidle2' })
+  await page.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
   await page.click('[data-setup-tab="appearance"]')
   await page.waitForSelector('[data-webui-branding-settings]')
   const brandingText = await page.$eval('[data-webui-branding-settings]', section => section.textContent || '')
