@@ -51,3 +51,15 @@ Complete output, the resolved inventory, step results, browser screenshots, and 
 Theme tests validate manifest schema, token/runtime projection, registry behavior, and rendered contrast/treatment fixtures. They intentionally do not scan source text for literal class names: that brittle policy assertion did not establish rendered theme correctness and masked exceptions by rewriting source before inspection.
 
 The backend suite has one expected non-Windows skip for the PowerShell launcher. The image-tools suite also retains one explicitly marked future-phase todo; neither is converted into a passing assertion by the runner.
+
+## GitHub Actions
+
+`.github/workflows/tests.yml` runs the maintained commands in three independent Ubuntu 24.04 jobs:
+
+- **Core, packages, and quality** builds from the root and WebUI lockfiles, runs `npm run test:unit`, then runs the Code Index and unused-code checks.
+- **Chromium fixtures** installs the Chrome for Testing build pinned for the repository's Puppeteer Core version, builds both trees, and runs `npm run test:webui:e2e`.
+- **Real app with mock LLM** uses the same browser/build preparation and runs `npm run test:app:e2e`.
+
+All jobs use Node.js 24.21.0. The workflow runs for pull requests and pushes to `testing` or `main`. Superseded runs for the same workflow and pull request or ref are cancelled. It also declares manual and daily 03:17 UTC triggers; GitHub registers and executes those triggers from the default branch, so pushing the workflow only to `testing` exercises the push event immediately but does not make the scheduled/manual definition available until a later authorized promotion to the default branch.
+
+On failure or cancellation, each job retains seven-day diagnostics from its visible runner-temporary artifact parent: the runner inventory/summary, runner logs, explicit screenshots, and, for full-application E2E, its nested application/provider/test logs and screenshots. The upload patterns do not include disposable data roots, Session state, model/token configuration, request journals, browser profiles, dependencies, or the workspace.

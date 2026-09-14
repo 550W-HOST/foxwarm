@@ -1,6 +1,6 @@
 # Unit: local-test-runner
 
-Files: scripts/test/run-tests.mjs, scripts/test/test-inventory.mjs, scripts/test/test-process-env.mjs, docs/testing.md
+Files: scripts/test/run-tests.mjs, scripts/test/test-inventory.mjs, scripts/test/test-process-env.mjs, .github/workflows/tests.yml, docs/testing.md
 Secondary files: package.json, README.md
 
 ## Purpose
@@ -15,6 +15,8 @@ Owns deterministic local test discovery, classification, data isolation, process
 - `npm run test:app:e2e` runs the real disposable application with a scripted loopback provider and Chromium.
 - `npm run test:local` runs the unit, local-browser, and full-application groups together.
 
+GitHub Actions uses those same public commands in separate core/unit-quality, Chromium-fixture, and real-application jobs. It does not introduce a workflow-only test selector.
+
 ## Behavior
 
 - Inventory rules classify tracked source tests and explicitly identify the full-application browser owner, generated duplicates, asset-dependent VS Code E2E, website-owned tests, standalone smoke/regression scripts, live-hardware smoke drivers, and interactive skill trials.
@@ -23,6 +25,8 @@ Owns deterministic local test discovery, classification, data isolation, process
 - Provider credentials are cleared and proxy defaults point to closed loopback endpoints. Timeouts and interrupts terminate the active process group and produce a failing exit status.
 - A caller-supplied artifact path is treated as a parent: the runner does not remove or replace it or unrelated prior artifacts.
 - VS Code Web generated extension files are restored to their exact pre-test contents after the group, preserving pre-existing local bytes and removing only files created by the test command.
+- The test workflow uses one Ubuntu image, exact Node and Chrome for Testing versions, read-only repository contents, ref/PR-scoped cancellation, and finite job limits. Pull requests and pushes to `testing`/`main` run directly; scheduled and manual registration follows GitHub's default-branch workflow behavior.
+- Failure/cancellation uploads select only top-level runner inventory, summary, logs and screenshots plus the full-application harness's nested logs/screenshots. Disposable process data, persisted Session state, request journals, tokens/models, browser profiles, dependencies and unrelated workspace files are excluded.
 
 ## Integration
 
