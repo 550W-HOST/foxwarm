@@ -21,7 +21,7 @@ let server
 let fixtureUrl
 
 await writeFile(entryPath, `
-  import { useLayoutEffect, useRef, useState } from 'react'
+  import { useEffect, useLayoutEffect, useRef, useState } from 'react'
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
   import InlineComposerEditor from ${JSON.stringify(path.join(webuiRoot, 'src/components/InlineComposerEditor.tsx'))}
@@ -29,6 +29,13 @@ await writeFile(entryPath, `
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [{ name: '/help', description: 'Help' }] }) })
   const noop = async () => {}
   function Fixture() {
+    useEffect(() => {
+      // Let the composer's mount-time draft restoration finish before input.
+      let frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => { window.fixtureReady = true })
+      })
+      return () => cancelAnimationFrame(frame)
+    }, [])
     const [sessionId, setSessionId] = useState('fixture/main')
     const [loading, setLoading] = useState(false)
     const [sendKeyMode, setSendKeyMode] = useState('modEnter')
@@ -145,7 +152,7 @@ async function withBrowser(spec, run) {
     page.setDefaultTimeout(60_000)
     if (!spec.browser) await page.setViewport({ width: 900, height: 760 })
     await page.goto(fixtureUrl, { waitUntil: 'load' })
-    await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+    await page.waitForFunction(() => window.fixtureReady && window.fixtureEditor()?.hasAttribute('data-empty'))
     await run(page)
   } finally {
     await browser.close()
@@ -1445,3 +1452,78 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   assert.equal(await page.$eval(editor, node => node.textContent), 'unsaved but visible')
   await page.evaluate(() => { Storage.prototype.setItem = window.fixtureRealSetItem })
 }))
+
+for (const spec of browsers) {
+  test(`${spec.name} preserves sequential dropped attachments at caret anchors`, async () => withBrowser(spec, async page => {
+    const drop = async name => page.evaluate(name => {
+      const editor = window.fixtureEditor()
+      const box = editor.getBoundingClientRect()
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['pdf'], name, { type: 'application/pdf' }))
+      editor.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer,
+        clientX: box.right - 12, clientY: box.top + 12 }))
+    }, name)
+    await drop('first.pdf')
+    await page.waitForFunction(() => window.fixtureDraft?.includes('<attachment-ref'))
+    await drop('second.pdf')
+    const state = await page.evaluate(() => ({
+      draft: window.fixtureDraft,
+      segments: JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments,
+      chips: window.fixtureEditor().querySelectorAll('[data-composer-attachment-ref]').length,
+    }))
+    assert.equal(state.chips, 2, JSON.stringify(state))
+    assert.deepEqual(state.segments.map(segment => segment.type), ['attachment', 'attachment'])
+    assert.doesNotMatch(state.draft, /application\/pdf|first\.pdf|second\.pdf|×/)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.$$eval('[data-composer-attachment-ref]', chips => chips.length), 1)
+    await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+    assert.equal(await page.$$eval('[data-composer-attachment-ref]', chips => chips.length), 2)
+    await page.evaluate(() => { window.fixtureAccept = true })
+    await page.keyboard.down('Control'); await page.keyboard.press('Enter'); await page.keyboard.up('Control')
+    await page.waitForFunction(() => window.fixtureSends.length === 1)
+    assert.deepEqual(await page.evaluate(() => window.fixtureSends[0].attachments.map(item => item.file.name)), ['first.pdf', 'second.pdf'])
+    assert.equal(await page.evaluate(() => window.fixtureSends[0].text), state.draft)
+  }))
+}
+
+for (const spec of browsers) {
+  test(`${spec.name} inserts structured blocks outside leading caret anchors and chip labels`, async () => withBrowser(spec, async page => {
+    const insertFile = async (name, method) => page.evaluate((name, method) => {
+      const editor = window.fixtureEditor()
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['pdf'], name, { type: 'application/pdf' }))
+      if (method === 'drop') {
+        const label = editor.querySelector('[data-composer-block-open]')
+        const box = label.getBoundingClientRect()
+        label.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer,
+          clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 }))
+      } else {
+        const input = document.querySelector('#file-upload')
+        input.files = transfer.files
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    }, name, method)
+    const selectLeadingAnchor = async () => page.evaluate(() => {
+      const editor = window.fixtureEditor()
+      editor.focus()
+      const anchor = editor.querySelector('[data-composer-caret-anchor]')
+      const range = document.createRange()
+      range.setStart(anchor.firstChild, 1); range.collapse(true)
+      getSelection().removeAllRanges(); getSelection().addRange(range)
+    })
+    await insertFile('first.pdf', 'picker')
+    await selectLeadingAnchor()
+    await insertFile('leading.pdf', 'picker')
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments.map(segment => segment.name)), ['leading.pdf', 'first.pdf'])
+    await selectLeadingAnchor()
+    const pasted = 'large pasted text '.repeat(200)
+    await page.evaluate(text => window.fixturePaste(text), pasted)
+    assert.equal(await page.$$eval('[data-composer-pasted-text-id]', chips => chips.length), 1)
+    await insertFile('over-chip.pdf', 'drop')
+    const segments = await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments)
+    assert.equal(segments.length, 4)
+    assert.equal(segments.filter(segment => segment.type === 'pasted-text')[0].text, pasted)
+    assert.deepEqual(segments.filter(segment => segment.type === 'attachment').map(segment => segment.name).sort(), ['first.pdf', 'leading.pdf', 'over-chip.pdf'])
+    assert.equal(await page.$$eval('[data-composer-caret-anchor] [data-composer-attachment-ref], [data-composer-caret-anchor] [data-composer-pasted-text-id], [data-composer-attachment-ref] [data-composer-attachment-ref], [data-composer-pasted-text-id] [data-composer-attachment-ref]', nodes => nodes.length), 0)
+  }))
+}
