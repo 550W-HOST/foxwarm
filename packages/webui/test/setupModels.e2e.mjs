@@ -519,35 +519,41 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
 })
 
 test('Appearance owns browser name and tab icon editing with save, cancel, and server errors', async () => {
-  // A cold Vite run may replace the document after the preceding test first loads Monaco.
-  await page.goto(`${baseUrl}/preview/#setup`, { waitUntil: 'networkidle2' })
-  await page.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
-  await page.click('[data-setup-tab="appearance"]')
-  await page.waitForSelector('[data-webui-branding-settings]')
-  const brandingText = await page.$eval('[data-webui-branding-settings]', section => section.textContent || '')
-  assert.equal(brandingText.includes('Rename instance'), true)
-  assert.equal(brandingText.includes('Change tab icon'), true)
-  assert.equal(await page.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
-  assert.equal(await page.$eval('#webui-tab-icon', input => input.value), '🧪')
+  const brandingPage = await browser.newPage()
+  await brandingPage.setBypassServiceWorker(true)
+  await attachRequestMocks(brandingPage)
+  try {
+    await brandingPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await brandingPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
+    await brandingPage.click('[data-setup-tab="appearance"]')
+    await brandingPage.waitForSelector('[data-webui-branding-settings]')
+    const brandingText = await brandingPage.$eval('[data-webui-branding-settings]', section => section.textContent || '')
+    assert.equal(brandingText.includes('Rename instance'), true)
+    assert.equal(brandingText.includes('Change tab icon'), true)
+    assert.equal(await brandingPage.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
+    assert.equal(await brandingPage.$eval('#webui-tab-icon', input => input.value), '🧪')
 
-  await page.click('#webui-instance-name', { clickCount: 3 })
-  await page.type('#webui-instance-name', 'Unsaved name')
-  await page.$eval('[data-webui-branding-settings] form:first-of-type', form => [...form.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Cancel')?.click())
-  assert.equal(await page.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
+    await brandingPage.click('#webui-instance-name', { clickCount: 3 })
+    await brandingPage.type('#webui-instance-name', 'Unsaved name')
+    await brandingPage.$eval('[data-webui-branding-settings] form:first-of-type', form => [...form.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Cancel')?.click())
+    assert.equal(await brandingPage.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
 
-  await page.click('#webui-instance-name', { clickCount: 3 })
-  await page.type('#webui-instance-name', 'Renamed fixture')
-  await page.click('button::-p-text(Save name)')
-  await page.waitForFunction(() => document.querySelector('#webui-instance-name')?.value === 'Renamed fixture')
-  assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture' })
+    await brandingPage.click('#webui-instance-name', { clickCount: 3 })
+    await brandingPage.type('#webui-instance-name', 'Renamed fixture')
+    await brandingPage.click('button::-p-text(Save name)')
+    await brandingPage.waitForFunction(() => document.querySelector('#webui-instance-name')?.value === 'Renamed fixture')
+    assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture' })
 
-  webUiSettingsError = 'Tab icon is too long'
-  await page.click('#webui-tab-icon', { clickCount: 3 })
-  await page.type('#webui-tab-icon', 'icon that is too long')
-  await page.click('button::-p-text(Save icon)')
-  await page.waitForFunction(() => document.querySelector('[data-webui-branding-settings] [role="alert"]')?.textContent?.includes('Tab icon is too long'))
-  assert.equal(await page.$eval('#webui-tab-icon', input => input.value), 'icon that is too long')
-  webUiSettingsError = null
+    webUiSettingsError = 'Tab icon is too long'
+    await brandingPage.click('#webui-tab-icon', { clickCount: 3 })
+    await brandingPage.type('#webui-tab-icon', 'icon that is too long')
+    await brandingPage.click('button::-p-text(Save icon)')
+    await brandingPage.waitForFunction(() => document.querySelector('[data-webui-branding-settings] [role="alert"]')?.textContent?.includes('Tab icon is too long'))
+    assert.equal(await brandingPage.$eval('#webui-tab-icon', input => input.value), 'icon that is too long')
+    webUiSettingsError = null
+  } finally {
+    await brandingPage.close()
+  }
 })
 
 test('overlapping browser name and icon saves keep both server and UI fields across reversed responses', async () => {
