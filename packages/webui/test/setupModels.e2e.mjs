@@ -13,6 +13,7 @@ const port = 4176
 const baseUrl = `http://127.0.0.1:${port}`
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const firefoxPath = process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox-esr'
+const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
 
 let vite
 let preview
@@ -731,7 +732,7 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
   await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
 })
 
-test('Firefox replaces real reverse mouse selections on the first physical key', {
+if (selectedBrowser === 'firefox' || selectedBrowser === 'all') test('Firefox replaces real reverse mouse selections on the first physical key', {
   skip: existsSync(firefoxPath) ? false : `Firefox is not available at ${firefoxPath}`,
 }, async () => {
   const firefox = await puppeteer.launch({

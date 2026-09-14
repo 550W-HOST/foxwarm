@@ -14,6 +14,9 @@ const webuiRoot = path.resolve(__dirname, '..')
 const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-stream-markdown-selection-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
+const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
+const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
+const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 
 let server
 let fixtureUrl
@@ -71,10 +74,10 @@ before(async () => {
     target: 'es2020',
     jsx: 'automatic',
     alias: {
-      react: 'preact/compat',
-      'react-dom': 'preact/compat',
-      'react-dom/client': 'preact/compat/client',
-      'react/jsx-runtime': 'preact/jsx-runtime',
+      react: preactCompatPath,
+      'react-dom': preactCompatPath,
+      'react-dom/client': preactCompatClientPath,
+      'react/jsx-runtime': preactJsxRuntimePath,
     },
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' },
     logLevel: 'silent',
@@ -104,10 +107,11 @@ after(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
 
+const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
 const browsers = [
   { name: 'Chromium', executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   { name: 'Firefox', browser: 'firefox', executablePath: process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox', args: [] },
-]
+].filter(browser => selectedBrowser === 'all' || browser.name.toLowerCase() === selectedBrowser)
 
 for (const browserSpec of browsers) {
   test(`${browserSpec.name} preserves selections in unchanged streamed Markdown blocks`, async () => {

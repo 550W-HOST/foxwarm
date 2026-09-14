@@ -202,7 +202,9 @@ test('collapsed tool-group details aggregate calls without attributing them to t
   assert.ok(same.text.includes('Modelvirtual/same → provider/real-model'), same.text)
   assert.ok(same.text.includes('Between3s (3000ms)'), same.text)
   assert.ok(same.text.includes('API3s (3000ms)'), same.text)
-  assert.equal(await page.$$eval('#groupSame .foxwarm-tool-card', cards => cards.length), 0, 'badge click must not expand the tool group')
+  assert.equal(await page.$eval('#groupSame [data-usage-badge]', button => button.getAttribute('aria-expanded')), 'true')
+  assert.equal(await page.$eval('#groupSame button[aria-label="Expand tool group"]', button => button.getAttribute('aria-expanded')), 'false', 'badge click must not expand the tool group')
+  assert.equal(await page.$$eval('#groupSame .foxwarm-tool-card', cards => cards.length), 1, 'the collapsed group keeps its one summary card')
   assert.equal(await page.$$eval('#groupSame [data-usage-badge]', badges => badges.length), 1, 'badge remains the collapsed-group interaction target')
 
   await page.click('#groupDifferent [data-usage-badge]')

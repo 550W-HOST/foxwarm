@@ -166,8 +166,15 @@ test('a tall persistent snapshot has its own ContextScrollbar anchor and keeps a
   const snapshot = await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
   assert.ok(snapshot)
   assert.equal(await snapshot.evaluate(element => element.getAttribute('data-chat-message-anchor-key')), null, 'snapshot remains excluded from generic Chat viewport persistence')
-  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')) })
-  await new Promise(resolve => setTimeout(resolve, 100))
+  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 300; element.dispatchEvent(new Event('scroll')) })
+  await page.waitForSelector('button[aria-label="Scroll to top"]')
+  await page.click('button[aria-label="Scroll to top"]')
+  await page.waitForFunction(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const snapshotAnchor = document.querySelector('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
+    const firstMessage = document.querySelector('[data-chat-message-anchor-key="seq-local-1"]')
+    return container?.scrollTop === 0 && snapshotAnchor?.getBoundingClientRect().height >= 1600 && !!firstMessage
+  })
   const initial = await page.$eval('.foxwarm-context-scrollbar-viewport', element => ({ top: element.getBoundingClientRect().top, height: element.getBoundingClientRect().height }))
   assert.ok(initial.height > 1, 'both viewport edges inside the snapshot still interpolate a positive thumb span')
   await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 200; element.dispatchEvent(new Event('scroll')) })

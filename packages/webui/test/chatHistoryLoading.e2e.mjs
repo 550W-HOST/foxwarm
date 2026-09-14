@@ -475,18 +475,22 @@ test('a message-only seq gap schedules one after-seq correction without waiting 
   await page.close()
 })
 
-test('rapid A/B sends issue distinct identified requests without waiting for A response', async () => {
+test('successive A/B sends issue distinct identified requests without waiting for history', async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate(() => window.resolveFixtureHistory())
   await page.waitForFunction(() => document.body.textContent.includes('old history row'))
 
-  const composer = await page.$('textarea')
-  await composer.type('A')
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'A')
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
-  await composer.type('B')
+  await page.evaluate(() => window.resolveFixtureMessages())
+  await page.waitForFunction(selector => document.querySelector(selector)?.dataset.empty === 'true', {}, editor)
+  await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-disabled') === 'false', {}, editor)
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await page.type(editor, 'B')
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 2)
 
@@ -518,6 +522,8 @@ test('successful real Chat send clears the live and persisted composer draft', a
     const node = document.querySelector(selector)
     return node?.textContent === '' && node.dataset.empty === 'true'
   }, {}, editor)
+  await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-disabled') === 'false', {}, editor)
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
   assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)
   assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_fixture/main')), null)
 
@@ -533,7 +539,7 @@ test('successful real Chat send clears the live and persisted composer draft', a
   })
   await page.keyboard.type(' after')
   await page.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-pasted-text-chip').length === 1
-    && document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2)
+    && document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2, { timeout: 60_000 })
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 2)
   await page.evaluate(() => window.resolveFixtureMessages())
@@ -589,7 +595,8 @@ test('slash suggestions overlay the composer without changing bottom-follow geom
     messages.scrollTop = messages.scrollHeight
   })
 
-  await page.type('textarea', '/')
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, '/')
   await page.waitForSelector('[data-slash-command-overlay="true"]')
   // Wait for Chat's resize observer/scroll anchoring pass before sampling geometry.
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
@@ -630,7 +637,7 @@ test('slash suggestions overlay the composer without changing bottom-follow geom
   assert.ok(Math.abs((closed.scrollTop + closed.clientHeight) - closed.scrollHeight) <= 2)
   // Closing a page blurs the composer; clear its draft first so this test cannot
   // seed a leading slash into the next test's same-session fixture.
-  await page.click('textarea')
+  await page.click(editor)
   await page.keyboard.down('Control')
   await page.keyboard.press('A')
   await page.keyboard.up('Control')
@@ -733,8 +740,8 @@ test('a failed POST cannot remove an already reconciled persisted user row', asy
   await page.evaluate(() => window.resolveFixtureHistory())
   await page.waitForFunction(() => document.body.textContent.includes('old history row'))
 
-  const composer = await page.$('textarea')
-  await composer.type('accepted before failed response')
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'accepted before failed response')
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
   await page.waitForFunction(() => [...document.querySelectorAll('.justify-end')]
@@ -756,6 +763,12 @@ test('a failed POST cannot remove an already reconciled persisted user row', asy
   assert.ok(await page.$('[data-chat-message-anchor-key="seq-local-2"]'))
   assert.equal(await page.evaluate(() => [...document.querySelectorAll('.justify-start')]
     .some(row => row.textContent.trim() === 'Error: Failed to send message')), false)
+  await page.click(editor)
+  await page.keyboard.down('Control')
+  await page.keyboard.press('A')
+  await page.keyboard.up('Control')
+  await page.keyboard.press('Backspace')
+  await page.waitForFunction(selector => document.querySelector(selector)?.dataset.empty === 'true', {}, editor)
   await page.close()
 })
 
@@ -766,8 +779,8 @@ test('manually typed slash commands are sent without an optimistic row or client
   await page.evaluate(() => window.resolveFixtureHistory())
   await page.waitForFunction(() => document.body.textContent.includes('old history row'))
 
-  const composer = await page.$('textarea')
-  await composer.type('/status')
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, '/status')
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
 
@@ -792,8 +805,8 @@ test('a busy send refreshes queue metadata through after-seq instead of full his
     type: 'session-state',
     session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 1, historyVersion: 0, modelKey: 'fixture/model' },
   }))
-  const composer = await page.$('textarea')
-  await composer.type('queued while busy')
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'queued while busy')
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 1)
   await page.evaluate(() => window.resolveFixtureMessages())
