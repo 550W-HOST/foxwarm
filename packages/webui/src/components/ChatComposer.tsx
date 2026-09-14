@@ -638,7 +638,7 @@ const ChatComposer = memo(function ChatComposer({
     setDismissedSlashQuery(null)
     submitInFlightRef.current = false
     const frame = requestAnimationFrame(() => {
-      if (activeSessionIdRef.current === sessionId) editorRef.current?.replaceDraft(savedDraft)
+      if (activeSessionIdRef.current === sessionId && draftRef.current === savedDraft) editorRef.current?.replaceDraft(savedDraft)
     })
     return () => cancelAnimationFrame(frame)
   }, [loadedDraft, sessionId])
