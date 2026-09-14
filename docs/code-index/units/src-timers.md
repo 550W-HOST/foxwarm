@@ -71,7 +71,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 ## Behavior
 
 - Timers are stored in-memory (`Map`) and persisted to a JSON file on every mutation.
-- On `initializeTimers`, past-due one-time timers fire immediately via `setImmediate`; cron timers are re-scheduled.
+- On `initializeTimers`, past-due one-time timers fire immediately via `setImmediate`; cron timers are re-scheduled. A one-time deadline that crosses after the initial due check but before `node-schedule` accepts the job follows the same immediate-fire path; a null job for a still-future deadline remains invalid.
 - `fireTimer` handles two paths: wait-timeout timers deliver via `queueSessionWaitTimeoutEvent` as a pure system event wrapper, while regular timers deliver via `queueSessionSystemEvent` (to existing or newly-created sessions) with the raw timer message wrapped in a single `<foxwarm-message type="timer" ...>...</foxwarm-message>` system part. New-session timers generate/retry names inside the atomic session identity boundary, skipping live and archived candidates.
 - One-time timers are deleted after firing or on delivery failure; cron timers persist and only update `lastTriggeredAt`.
 - Input validation enforces allowed characters in `sessionPrefix`, positive timeout values, and exactly one schedule mode for creates / schedule-changing updates.
