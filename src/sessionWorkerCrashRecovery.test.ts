@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import * as sessionManager from './sessionManager';
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
@@ -40,10 +41,26 @@ function makeFixture(root: string, hangSessionId: string) {
 
 async function crashMidTurn(root: string, fixture: ReturnType<typeof makeFixture>, sessionId: string): Promise<void> {
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const hangStartedPath = path.join(root, 'state', `hang-started-${sessionId}`);
   await fixture.supervisor.reconcileStartupOwnerships();
   // Generation 1's first turn hangs forever, simulating a mid-turn incarnation.
   void fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'user hi' }] }).catch(() => {});
-  await waitFor(async () => JSON.parse(await fs.readFile(statePath, 'utf8')).busy === true);
+  await waitFor(() => fs.pathExists(hangStartedPath));
+  const hanging = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  const ownership = fixture.store.getOwnership(sessionId);
+  assert.equal(hanging.busy, true);
+  assert.equal(hanging.queue.length, 0, 'the queued mailbox input is committed before the provider hang');
+  assert.ok(JSON.stringify(hanging.history).includes('user hi'), 'the user input is committed before the provider hang');
+  assert.ok(hanging.lastAppliedMailboxId > 0);
+  assert.equal(hanging.lastAppliedMailboxId, ownership.mailboxCursor);
+  assert.deepEqual(fixture.store.listSessionsWithPendingIntents(), []);
+  const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
+  try {
+    const row = archive.prepare('SELECT seq,role,message_json FROM archive_messages WHERE session_id=? ORDER BY seq').get(sessionId) as any;
+    assert.equal(row?.seq, 1);
+    assert.equal(row?.role, 'user');
+    assert.ok(String(row?.message_json || '').includes('user hi'), 'archive #1 matches the committed authority input');
+  } finally { archive.close(); }
   const status = fixture.supervisor.getStatus(sessionId);
   assert.ok(status?.ready && status.pid, 'generation 1 worker is live mid-turn');
   process.kill(status.pid!, 'SIGKILL');
@@ -87,15 +104,8 @@ test('startup resume eagerly recovers busy sessions without pending intents', as
     await fs.ensureDir(path.dirname(rootStatePath));
     await fs.copy(getSessionHistoryFilePath(sessionId), rootStatePath);
     await crashMidTurn(root, fixture, sessionId);
-    // Simulate the drain-window acknowledgement the crash raced past (the exact
-    // worker applied the intents and saved before exit): no pending mailbox
-    // intents remain, so the pending-intents resume path alone is a no-op.
-    const ownership = fixture.store.getOwnership(sessionId);
-    const db = (fixture.store as any).getDb();
-    db.prepare('UPDATE session_worker_mailbox SET applied_at=?, applied_generation=?, applied_incarnation_id=? WHERE session_id=? AND applied_at IS NULL')
-      .run(Date.now(), ownership.generation, 'drained-incarnation', sessionId);
-    db.prepare("UPDATE session_worker_ownership SET mailbox_cursor=(SELECT COALESCE(MAX(id),0) FROM session_worker_mailbox WHERE session_id=?) WHERE session_id=?")
-      .run(sessionId, sessionId);
+    // The generation reached its provider request only after committing and
+    // acknowledging the input, so pending-intent resume alone is a no-op.
     assert.deepEqual(fixture.store.listSessionsWithPendingIntents(), []);
     // Bridge the split test state root: the Main-side scan reads the crashed authority.
     await fs.copy(rootStatePath, getSessionHistoryFilePath(sessionId));
