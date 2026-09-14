@@ -174,7 +174,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const editor = editorRef.current
     if (!editor || !target || (target !== editor && !editor.contains(target))) return null
     const targetAnchor = getCaretAnchor(target)
-    const normalizedTarget: Node = targetAnchor || target
+    const targetElement = target instanceof Element ? target : target.parentElement
+    const targetChip = targetElement?.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') || null
+    const normalizedTarget: Node = targetAnchor || targetChip || target
     let traversed = 0
     let result: number | null = null
     const visit = (node: Node) => {
@@ -182,6 +184,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       if (node === normalizedTarget) {
         if (isCaretAnchor(node)) {
           result = traversed
+          return
+        }
+        if (isChip(node)) {
+          result = traversed + (target === node && targetOffset === 0 ? 0 : 1)
           return
         }
         if (node.nodeType === Node.TEXT_NODE) {
@@ -730,27 +736,52 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     return true
   }, [captureEditorState, emitDraft, reconcileCaretAnchors, recordHistory])
 
+  // Caret anchors are editable scaffolding, not content containers. Native
+  // hit-testing and restored selections may land inside them; inserting a block
+  // there would make reconciliation flatten its label via anchor.textContent.
+  const getBlockInsertionRange = useCallback((): Range | null => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount) return null
+    const range = selection.getRangeAt(0).cloneRange()
+    if (!editor.contains(range.commonAncestorContainer)) return null
+    const boundary = (node: Node, offset: number) => {
+      const element = node instanceof Element ? node : node.parentElement
+      const atomic = element?.closest<HTMLElement>('[data-composer-caret-anchor], [data-composer-pasted-text-id], [data-composer-attachment-ref]')
+      if (!atomic?.parentNode || !editor.contains(atomic)) return { node, offset }
+      const afterAtomic = !isCaretAnchor(atomic) && !(node === atomic && offset === 0)
+      return { node: atomic.parentNode, offset: [...atomic.parentNode.childNodes].indexOf(atomic) + (afterAtomic ? 1 : 0) }
+    }
+    const start = boundary(range.startContainer, range.startOffset)
+    const end = boundary(range.endContainer, range.endOffset)
+    range.setStart(start.node, start.offset)
+    range.setEnd(end.node, end.offset)
+    return range
+  }, [])
+
   const insertPastedText = useCallback((text: string) => {
     const editor = editorRef.current
     const selection = window.getSelection()
     if (!editor || !selection?.rangeCount) return
     mutate('paste-block', () => {
-      const range = selection.getRangeAt(0)
+      const range = getBlockInsertionRange()
+      if (!range) return
       range.deleteContents()
       const segment: ComposerPastedTextSegment = { type: 'pasted-text', id: globalThis.crypto?.randomUUID?.() || `paste-${Date.now()}-${Math.random().toString(16).slice(2)}`, text }
       const chip = createChip(segment)
       range.insertNode(chip)
       placeCaret(chip.parentNode || editor, [...(chip.parentNode || editor).childNodes].indexOf(chip) + 1)
     })
-  }, [createChip, mutate, placeCaret])
+  }, [createChip, getBlockInsertionRange, mutate, placeCaret])
 
   const insertAttachments = useCallback((files: File[], point?: { x: number; y: number }) => {
     const editor = editorRef.current
-    if (!editor || files.length === 0) return
+    if (!editor || disabledRef.current || files.length === 0) return
     const currentSelection = window.getSelection()
     const hadEditorSelection = !!currentSelection?.rangeCount && editor.contains(currentSelection.getRangeAt(0).commonAncestorContainer)
     const desiredSelection = hadEditorSelection ? getSelectionOffsets() : lastSelectionRef.current
     editor.focus()
+    if (!restoreSelection(desiredSelection)) focusEnd()
     if (point) {
       const caret = document.caretPositionFromPoint?.(point.x, point.y)
       if (caret?.offsetNode && editor.contains(caret.offsetNode)) placeCaret(caret.offsetNode, caret.offset)
@@ -758,14 +789,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         const rangeAtPoint = document.caretRangeFromPoint?.(point.x, point.y)
         if (rangeAtPoint && editor.contains(rangeAtPoint.startContainer)) placeCaret(rangeAtPoint.startContainer, rangeAtPoint.startOffset)
       }
-    } else {
-      if (!restoreSelection(desiredSelection)) focusEnd()
     }
     const segments = onAttachFiles(files)
     mutate('insert-attachments', () => {
-      const selection = window.getSelection()
-      if (!selection?.rangeCount) return
-      const range = selection.getRangeAt(0)
+      const range = getBlockInsertionRange()
+      if (!range) return
       range.deleteContents()
       const fragment = document.createDocumentFragment()
       let last: HTMLElement | null = null
@@ -776,7 +804,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       range.insertNode(fragment)
       if (last?.parentNode) placeCaret(last.parentNode, [...last.parentNode.childNodes].indexOf(last) + 1)
     })
-  }, [createAttachmentChip, focusEnd, getSelectionOffsets, mutate, onAttachFiles, placeCaret, restoreSelection])
+  }, [createAttachmentChip, focusEnd, getBlockInsertionRange, getSelectionOffsets, mutate, onAttachFiles, placeCaret, restoreSelection])
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => editorRef.current?.focus(),
