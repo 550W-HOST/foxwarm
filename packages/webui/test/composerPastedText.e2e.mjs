@@ -328,7 +328,7 @@ for (const spec of browsers) {
     assert.equal(await page.evaluate(() => window.fixtureDraft), exactBlocks)
 
     const initialAnchors = await page.$$('.foxwarm-composer-caret-anchor')
-    await initialAnchors.at(-1).click()
+    await initialAnchors[0].click()
     await page.keyboard.press('Home')
     await page.keyboard.type('home ')
     assert.equal(await page.evaluate(() => window.fixtureDraft.startsWith('home <pasted-text>')), true)
@@ -1487,6 +1487,98 @@ for (const spec of browsers) {
 }
 
 for (const spec of browsers) {
+  test(`${spec.name} preserves unselected attachments at native paste-selection boundaries`, async () => withBrowser(spec, async page => {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    const insertFile = async name => page.evaluate(name => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['pdf'], name, { type: 'application/pdf' }))
+      const input = document.querySelector('#file-upload')
+      input.files = transfer.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    }, name)
+    const selectWithMouse = async direction => {
+      const boxes = await page.evaluate(() => {
+        const editorNode = window.fixtureEditor()
+        const left = editorNode.firstChild
+        const right = [...editorNode.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.data === 'right')
+        const label = editorNode.querySelector('[data-composer-block-open]')
+        const textBox = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().toJSON() }
+        return { left: textBox(left), right: textBox(right), label: label.getBoundingClientRect().toJSON() }
+      })
+      const from = direction === 'forward'
+        ? { x: boxes.left.x + 10, y: boxes.left.y + boxes.left.height / 2 }
+        : { x: boxes.right.right - 2, y: boxes.right.y + boxes.right.height / 2 }
+      const to = { x: boxes.label.x + boxes.label.width * 0.6, y: boxes.label.y + boxes.label.height / 2 }
+      await page.mouse.move(from.x, from.y)
+      await page.mouse.down()
+      await page.mouse.move(to.x, to.y, { steps: 30 })
+      await page.mouse.up()
+      return page.evaluate(() => ({
+        text: getSelection().toString(),
+        attachmentSelected: !!window.fixtureEditor().querySelector('[data-composer-attachment-ref][data-composer-block-selected]'),
+      }))
+    }
+    const openSession = async id => {
+      await page.evaluate(id => window.fixtureSetSession(id), id)
+      await page.waitForFunction(id => window.fixtureCurrentSession === id, {}, id)
+      await new Promise(resolve => setTimeout(resolve, 50))
+      await page.waitForFunction(() => window.fixtureEditor()?.textContent === '')
+      await page.type(editor, 'left')
+      await insertFile('base.pdf')
+      await page.type(editor, 'right')
+    }
+    const pasted = 'p'.repeat(2000)
+
+    await openSession('fixture/native-forward-boundary')
+    const forwardSelection = await selectWithMouse('forward')
+    assert.ok(forwardSelection.text.length > 0)
+    assert.equal('left'.endsWith(forwardSelection.text), true)
+    assert.equal(forwardSelection.attachmentSelected, false)
+    await page.evaluate(text => window.fixturePaste(text), pasted)
+    const forwardDraft = `${'left'.slice(0, -forwardSelection.text.length)}<pasted-text>${pasted}</pasted-text><attachment-ref ref="attachment1" />right`
+    assert.equal(await page.evaluate(() => window.fixtureDraft), forwardDraft)
+    await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'left<attachment-ref ref="attachment1" />right')
+    await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+    assert.equal(await page.evaluate(() => window.fixtureDraft), forwardDraft)
+    await page.evaluate(() => { window.fixtureAccept = true })
+    await page.keyboard.down('Control'); await page.keyboard.press('Enter'); await page.keyboard.up('Control')
+    await page.waitForFunction(() => window.fixtureSends.length === 1)
+    assert.equal(await page.evaluate(() => window.fixtureSends[0].text), forwardDraft)
+    assert.deepEqual(await page.evaluate(() => window.fixtureSends[0].attachments.map(item => ({ ref: item.ref, name: item.file.name }))), [{ ref: 'attachment1', name: 'base.pdf' }])
+
+    await openSession('fixture/native-backward-boundary')
+    const backwardSelection = await selectWithMouse('backward')
+    assert.ok(backwardSelection.text.length > 0)
+    assert.equal('right'.startsWith(backwardSelection.text), true)
+    assert.equal(backwardSelection.attachmentSelected, false)
+    await page.evaluate(text => window.fixturePaste(text), pasted)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `left<attachment-ref ref="attachment1" /><pasted-text>${pasted}</pasted-text>${'right'.slice(backwardSelection.text.length)}`)
+
+    await openSession('fixture/native-full-chip')
+    const boxes = await page.evaluate(() => {
+      const editorNode = window.fixtureEditor()
+      const left = editorNode.firstChild
+      const right = [...editorNode.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.data === 'right')
+      const textBox = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().toJSON() }
+      return { left: textBox(left), right: textBox(right) }
+    })
+    await page.mouse.move(boxes.left.x + 10, boxes.left.y + boxes.left.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(boxes.right.x + 20, boxes.right.y + boxes.right.height / 2, { steps: 30 })
+    await page.mouse.up()
+    assert.equal(await page.$eval('[data-composer-attachment-ref]', node => node.hasAttribute('data-composer-block-selected')), true)
+    const coveredText = await page.evaluate(() => {
+      const range = getSelection().getRangeAt(0)
+      return { leftOffset: range.startOffset, rightOffset: range.endOffset }
+    })
+    await page.evaluate(text => window.fixturePaste(text), pasted)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `${'left'.slice(0, coveredText.leftOffset)}<pasted-text>${pasted}</pasted-text>${'right'.slice(coveredText.rightOffset)}`)
+    assert.equal(await page.$$eval('[data-composer-attachment-ref]', nodes => nodes.length), 0)
+  }))
+}
+
+for (const spec of browsers) {
   test(`${spec.name} inserts structured blocks outside leading caret anchors and chip labels`, async () => withBrowser(spec, async page => {
     const insertFile = async (name, method) => page.evaluate((name, method) => {
       const editor = window.fixtureEditor()
@@ -1525,5 +1617,14 @@ for (const spec of browsers) {
     assert.equal(segments.filter(segment => segment.type === 'pasted-text')[0].text, pasted)
     assert.deepEqual(segments.filter(segment => segment.type === 'attachment').map(segment => segment.name).sort(), ['first.pdf', 'leading.pdf', 'over-chip.pdf'])
     assert.equal(await page.$$eval('[data-composer-caret-anchor] [data-composer-attachment-ref], [data-composer-caret-anchor] [data-composer-pasted-text-id], [data-composer-attachment-ref] [data-composer-attachment-ref], [data-composer-pasted-text-id] [data-composer-attachment-ref]', nodes => nodes.length), 0)
+    await page.evaluate(() => window.fixtureSetLoading(true))
+    await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'false')
+    await insertFile('blocked.pdf', 'picker')
+    await page.evaluate(() => window.fixtureSetLoading(false))
+    await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true')
+    await insertFile('allowed.pdf', 'picker')
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments.find(segment => segment.type === 'attachment' && segment.name === 'allowed.pdf')), {
+      type: 'attachment', ref: 'attachment4', name: 'allowed.pdf', mimeType: 'application/pdf', size: 3,
+    })
   }))
 }

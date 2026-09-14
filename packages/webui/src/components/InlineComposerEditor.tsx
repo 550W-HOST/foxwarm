@@ -174,7 +174,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     const editor = editorRef.current
     if (!editor || !target || (target !== editor && !editor.contains(target))) return null
     const targetAnchor = getCaretAnchor(target)
-    const normalizedTarget: Node = targetAnchor || target
+    const targetElement = target instanceof Element ? target : target.parentElement
+    const targetChip = targetElement?.closest<HTMLElement>('[data-composer-pasted-text-id], [data-composer-attachment-ref]') || null
+    const normalizedTarget: Node = targetAnchor || targetChip || target
     let traversed = 0
     let result: number | null = null
     const visit = (node: Node) => {
@@ -182,6 +184,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       if (node === normalizedTarget) {
         if (isCaretAnchor(node)) {
           result = traversed
+          return
+        }
+        if (isChip(node)) {
+          result = traversed + (target === node && targetOffset === 0 ? 0 : 1)
           return
         }
         if (node.nodeType === Node.TEXT_NODE) {
@@ -743,7 +749,8 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       const element = node instanceof Element ? node : node.parentElement
       const atomic = element?.closest<HTMLElement>('[data-composer-caret-anchor], [data-composer-pasted-text-id], [data-composer-attachment-ref]')
       if (!atomic?.parentNode || !editor.contains(atomic)) return { node, offset }
-      return { node: atomic.parentNode, offset: [...atomic.parentNode.childNodes].indexOf(atomic) + (isCaretAnchor(atomic) ? 0 : 1) }
+      const afterAtomic = !isCaretAnchor(atomic) && !(node === atomic && offset === 0)
+      return { node: atomic.parentNode, offset: [...atomic.parentNode.childNodes].indexOf(atomic) + (afterAtomic ? 1 : 0) }
     }
     const start = boundary(range.startContainer, range.startOffset)
     const end = boundary(range.endContainer, range.endOffset)
