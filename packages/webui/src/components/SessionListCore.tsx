@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ListCollapse } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ListCollapse, GitBranch } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -1249,7 +1249,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
                   )}
-                  {showRuntimeBadge && (
+                  <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" data-descendant-activity-slot>
+                    {descendantBusyCount > 0 && (
+                      <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex text-fw-accent" data-descendant-activity>
+                        <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+                      </span>
+                    )}
+                  </span>
+                  {showRuntimeBadge ? (
                     <span
                       role="img"
                       aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
@@ -1257,7 +1264,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                       data-session-status={runtimeStateName}
                       className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
                     />
-                  )}
+                  ) : <span className="w-1.5 shrink-0" aria-hidden="true" />}
                 </div>
               ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>

@@ -42,14 +42,25 @@ before(async () => {
         { id: 'demo/archive', displayName: 'Archived notes', archived: true },
       ].map((s, i) => ({ parentSessionId: null, messageCount: 12, lastMessageTime: 100-i, ...s }))
       function Fixture() {
-        const [current, setCurrent] = useState('demo/child')
+        const [current, setCurrent] = useState(location.search === '?descendants' ? 'demo/wait' : 'demo/child')
         const [fixtureSessions, setFixtureSessions] = useState(sessions)
+        const [descendantBusy, setDescendantBusy] = useState(new Map())
+        window.fixtureSetDescendantBusy = entries => setDescendantBusy(new Map(entries))
+        window.fixtureSetSessions = setFixtureSessions
+        const noop = () => {}
+        const bounded = location.search === '?descendants' ? {
+          serverOrdered: true, hasMoreRoots: false,
+          childPages: new Map(fixtureSessions.map(s => [s.id, { ids: fixtureSessions.filter(c => c.parentSessionId === s.id).map(c => c.id), total: fixtureSessions.filter(c => c.parentSessionId === s.id).length, nextCursor: null }])),
+          branchLoadStates: new Map(), descendantBusy, invalidationVersion: 0,
+          onModeChange: noop, onFilterChange: noop, onLoadMoreRoots: noop, onLoadMoreChildren: noop,
+          onExpandBranch: noop, onExpandBranches: noop, onRetryBranch: noop, onCollapseBranch: noop,
+        } : undefined
         window.fixtureSetPinned = (id, pinned) => setFixtureSessions(previous => previous.map(s => s.id === id ? { ...s, pinned } : s))
         const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
         return <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={event => window.fixtureDrops.push(event.over?.data.current)}>
           <div style={{ width: 'min(340px, 100vw)', height: '100vh' }} className="bg-fw-surface border-r border-fw-border">
             <div className="p-4 text-fw-text-strong font-bold border-b border-fw-border">Foxwarm · Demo sessions</div>
-            <div style={{ height: 'calc(100% - 57px)' }}><Core sessions={fixtureSessions} currentSession={current} unreadSessionIds={new Set(['demo/idle', 'demo/wait'])} onSelectSession={id => { window.fixtureSelected = id; setCurrent(id) }} /></div>
+            <div style={{ height: 'calc(100% - 57px)' }}><Core bounded={bounded} sessions={fixtureSessions} currentSession={current} unreadSessionIds={new Set(['demo/idle', 'demo/wait'])} onSelectSession={id => { window.fixtureSelected = id; setCurrent(id) }} /></div>
           </div>
         </DndContext>
       }
@@ -102,8 +113,8 @@ test('compact toggle, persistence, canonical status, theme parity, tree and cont
       return e === e.parentElement.lastElementChild
         && previous.getBoundingClientRect().right <= e.getBoundingClientRect().left
     })), true)
-    assert.equal(await page.$eval(`${row('wait')} [data-session-status]`, e => e.previousElementSibling.getAttribute('aria-label')), 'Unread idle completion')
-    assert.equal(await page.$eval(`${row('legacy')} [data-session-status]`, e => e.previousElementSibling.getAttribute('aria-label')), 'Archived session')
+    assert.equal(await page.$eval(`${row('wait')} [data-session-status]`, e => e.previousElementSibling.previousElementSibling.getAttribute('aria-label')), 'Unread idle completion')
+    assert.equal(await page.$eval(`${row('legacy')} [data-session-status]`, e => e.previousElementSibling.previousElementSibling.getAttribute('aria-label')), 'Archived session')
     const disclosure = `${row('main')} button[aria-expanded]`
     await page.mouse.move(800, 650)
     assert.equal(await page.$eval(disclosure, e => getComputedStyle(e).opacity), '0')
@@ -378,4 +389,57 @@ test('normal rows share right-side pin actions with stable title space and touch
       assert.deepEqual(await bounds(), initialBounds)
     } finally { await page.close() }
   }
+})
+
+
+test('compact descendant activity is separate from own status and persists on collapsed unselected ancestors', async () => {
+  const page = await open()
+  try {
+    await page.goto(url + '?descendants')
+    await page.waitForSelector(toggle)
+    await page.click(toggle)
+    await page.evaluate(() => {
+      window.fixtureSetSessions([
+        { id: 'demo/main', displayName: 'A deliberately very long parent title that must remain readable with ellipsis', parentSessionId: null, runtimeState: { state: 'idle' }, childTotal: 1, messageCount: 1 },
+        { id: 'demo/child', displayName: 'Middle ancestor', parentSessionId: 'demo/main', runtimeState: { state: 'idle' }, childTotal: 1, messageCount: 1 },
+        { id: 'demo/grandchild', displayName: 'Deep active worker', parentSessionId: 'demo/child', runtimeState: { state: 'running-tool' }, messageCount: 1 },
+        { id: 'demo/wait', displayName: 'Selected session', parentSessionId: null, runtimeState: { state: 'idle' }, messageCount: 1 },
+        { id: 'demo/legacy', displayName: 'Own activity only', parentSessionId: null, busy: true, messageCount: 1 },
+      ])
+      window.fixtureSetDescendantBusy([['demo/main', 1], ['demo/child', 1]])
+    })
+    await page.waitForSelector(`${row('main')} [data-descendant-activity]`)
+    await page.mouse.move(800, 650)
+    await page.focus(toggle)
+    assert.equal(await page.$(row('child')), null)
+    assert.equal(await page.$(`${row('main')} [data-session-status]`), null)
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => getComputedStyle(e).opacity), '1')
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.title), '1 active descendant session')
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.textContent), '')
+    const title = `${row('main')} span[title]`
+    const titleBounds = () => page.$eval(title, e => ({ x: e.getBoundingClientRect().x, width: e.getBoundingClientRect().width }))
+    const initialBounds = await titleBounds()
+    assert.equal(await page.$eval(title, e => e.scrollWidth > e.clientWidth && getComputedStyle(e).textOverflow === 'ellipsis'), true)
+    assert.equal(await page.$eval(row('main'), e => e.scrollWidth <= e.clientWidth), true)
+    assert.equal(await page.$(`${row('legacy')} [data-descendant-activity]`), null)
+    assert.ok(await page.$(`${row('legacy')} [data-session-status]`))
+    assert.equal(await page.$(`${row('wait')} [data-descendant-activity]`), null)
+    await page.click(`${row('main')} button[aria-expanded]`)
+    await page.waitForSelector(`${row('child')} [data-descendant-activity]`)
+    assert.equal(await page.$(row('grandchild')), null)
+    await page.evaluate(() => window.fixtureSetDescendantBusy([['demo/main', 0], ['demo/child', 0]]))
+    await page.waitForFunction(() => !document.querySelector('[data-descendant-activity]'))
+    assert.deepEqual(await titleBounds(), initialBounds)
+    await page.evaluate(() => {
+      window.fixtureSetSessions(previous => previous.map(s => s.id === 'demo/main' ? { ...s, runtimeState: { state: 'requesting-model' } } : s))
+      window.fixtureSetDescendantBusy([['demo/main', 2], ['demo/child', 1]])
+    })
+    await page.waitForSelector(`${row('main')} [data-session-status]`)
+    assert.deepEqual(await titleBounds(), initialBounds)
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.title), '2 active descendant sessions')
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity-slot]`, e => e.previousElementSibling.matches('.session-pin') && e.nextElementSibling.matches('[data-session-status]')), true)
+    await page.click(toggle)
+    assert.equal(await page.$('[data-descendant-activity-slot]'), null)
+    assert.ok(await page.$eval(row('main'), e => e.textContent.includes('2 active')))
+  } finally { await page.close() }
 })
