@@ -6,11 +6,12 @@ import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalView
 
 interface GlobalUiSettingsMenuProps {
   menuAlign?: 'start' | 'end'
+  menuSide?: 'top' | 'bottom'
   onOpenSetup?: () => void
   setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
   const [menuOffset, setMenuOffset] = useState(0)
@@ -24,7 +25,10 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, s
       if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) setOpen(false)
     }
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        setOpen(false)
+        rootRef.current?.querySelector('button')?.focus()
+      }
     }
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('keydown', handleEscape)
@@ -50,6 +54,12 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, s
       const maxWidth = Math.max(0, viewport.right - viewport.left - MENU_VIEWPORT_GUTTER * 2)
       menu.style.maxWidth = `${maxWidth}px`
       const anchorRect = anchor.getBoundingClientRect()
+      if (menuSide === 'top') {
+        const viewportTop = window.visualViewport?.offsetTop || 0
+        menu.style.maxHeight = `${Math.max(0, anchorRect.top - viewportTop - MENU_VIEWPORT_GUTTER - 8)}px`
+      } else {
+        menu.style.maxHeight = ''
+      }
       const menuRect = menu.getBoundingClientRect()
       const geometry = [anchorRect.left, anchorRect.right, menuRect.width, viewport.left, viewport.right, menuAlign].join(':')
       if (geometry !== lastGeometry) {
@@ -71,7 +81,7 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, s
     }
     watchGeometry()
     return () => window.cancelAnimationFrame(animationFrame)
-  }, [menuAlign, open])
+  }, [menuAlign, menuSide, open])
 
   const menuButtonClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'
   const menuAlignClass = menuAlign === 'start' ? 'left-0' : 'right-0'
@@ -85,6 +95,7 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, s
         title="UI settings"
         aria-label="Open UI settings"
         aria-pressed={setupActive}
+        aria-expanded={open}
       >
         <Settings className="h-4 w-4" />
       </button>
@@ -93,7 +104,7 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, s
         <div
           ref={menuRef}
           data-global-ui-settings-menu
-          className={`absolute ${menuAlignClass} top-full z-50 mt-2 w-72 rounded-lg border border-fw-border bg-fw-surface shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong`}
+          className={`absolute ${menuAlignClass} ${menuSide === 'top' ? 'bottom-full mb-2 overflow-y-auto' : 'top-full mt-2'} z-50 w-72 rounded-lg border border-fw-border bg-fw-surface shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong`}
           style={{ transform: `translateX(${menuOffset}px)`, visibility: menuPositioned ? 'visible' : 'hidden' }}
         >
           <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
