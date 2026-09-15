@@ -113,8 +113,8 @@ test('compact toggle, persistence, canonical status, theme parity, tree and cont
       return e === e.parentElement.lastElementChild
         && previous.getBoundingClientRect().right <= e.getBoundingClientRect().left
     })), true)
-    assert.equal(await page.$eval(`${row('wait')} [data-session-status]`, e => e.previousElementSibling.previousElementSibling.getAttribute('aria-label')), 'Unread idle completion')
-    assert.equal(await page.$eval(`${row('legacy')} [data-session-status]`, e => e.previousElementSibling.previousElementSibling.getAttribute('aria-label')), 'Archived session')
+    assert.equal(await page.$eval(`${row('wait')} [data-session-status]`, e => e.previousElementSibling.getAttribute('aria-label')), 'Unread idle completion')
+    assert.equal(await page.$eval(`${row('legacy')} [data-session-status]`, e => e.previousElementSibling.getAttribute('aria-label')), 'Archived session')
     const disclosure = `${row('main')} button[aria-expanded]`
     await page.mouse.move(800, 650)
     assert.equal(await page.$eval(disclosure, e => getComputedStyle(e).opacity), '0')
@@ -429,17 +429,58 @@ test('compact descendant activity is separate from own status and persists on co
     assert.equal(await page.$(row('grandchild')), null)
     await page.evaluate(() => window.fixtureSetDescendantBusy([['demo/main', 0], ['demo/child', 0]]))
     await page.waitForFunction(() => !document.querySelector('[data-descendant-activity]'))
-    assert.deepEqual(await titleBounds(), initialBounds)
+    assert.ok((await titleBounds()).width > initialBounds.width)
     await page.evaluate(() => {
       window.fixtureSetSessions(previous => previous.map(s => s.id === 'demo/main' ? { ...s, runtimeState: { state: 'requesting-model' } } : s))
       window.fixtureSetDescendantBusy([['demo/main', 2], ['demo/child', 1]])
     })
     await page.waitForSelector(`${row('main')} [data-session-status]`)
-    assert.deepEqual(await titleBounds(), initialBounds)
+    assert.ok((await titleBounds()).width < initialBounds.width)
     assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.title), '2 active descendant sessions')
-    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity-slot]`, e => e.previousElementSibling.matches('.session-pin') && e.nextElementSibling.matches('[data-session-status]')), true)
+    assert.equal(await page.$eval(`${row('main')} [data-descendant-activity]`, e => e.previousElementSibling.matches('.session-pin') && e.nextElementSibling.matches('[data-session-status]')), true)
     await page.click(toggle)
-    assert.equal(await page.$('[data-descendant-activity-slot]'), null)
+    assert.equal(await page.$('[data-descendant-activity]'), null)
     assert.ok(await page.$eval(row('main'), e => e.textContent.includes('2 active')))
+  } finally { await page.close() }
+})
+
+
+test('compact trailing indicators pack to the right without absent-status slots', async () => {
+  const page = await open()
+  try {
+    await page.goto(url + '?descendants')
+    await page.waitForSelector(toggle)
+    await page.click(toggle)
+    const widths = []
+    for (const [descendants, own] of [[false, false], [true, false], [false, true], [true, true]]) {
+      await page.evaluate(({ descendants, own }) => {
+        window.fixtureSetSessions([{ id: 'demo/main', displayName: 'Very long session title testing all combinations of right packed activity indicators', pinned: true, parentSessionId: null, runtimeState: { state: own ? 'requesting-model' : 'idle' }, messageCount: 1 }])
+        window.fixtureSetDescendantBusy([['demo/main', descendants ? 1 : 0]])
+      }, { descendants, own })
+      await page.waitForFunction(({ descendants, own }) => !!document.querySelector('[data-descendant-activity]') === descendants && !!document.querySelector('[data-session-status]') === own, {}, { descendants, own })
+      const geometry = await page.$eval(row('main'), row => {
+        const pin = row.querySelector('.session-pin')
+        const content = pin.parentElement
+        const title = pin.previousElementSibling
+        const items = [...content.children].slice([...content.children].indexOf(pin))
+        const expectedRight = content.getBoundingClientRect().right - parseFloat(getComputedStyle(content).paddingRight)
+        return {
+          items: items.map(e => e.matches('.session-pin') ? 'pin' : e.hasAttribute('data-descendant-activity') ? 'branch' : e.hasAttribute('data-session-status') ? 'own' : 'unexpected-slot'),
+          right: items.at(-1).getBoundingClientRect().right, expectedRight,
+          gaps: items.slice(1).map((e, i) => e.getBoundingClientRect().left - items[i].getBoundingClientRect().right),
+          width: title.getBoundingClientRect().width,
+          overflow: row.scrollWidth > row.clientWidth,
+          ellipsis: getComputedStyle(title).textOverflow,
+        }
+      })
+      assert.deepEqual(geometry.items, ['pin', ...(descendants ? ['branch'] : []), ...(own ? ['own'] : [])])
+      assert.ok(Math.abs(geometry.right - geometry.expectedRight) < 0.5)
+      assert.ok(geometry.gaps.every(gap => gap === 6))
+      assert.equal(geometry.overflow, false)
+      assert.equal(geometry.ellipsis, 'ellipsis')
+      widths.push(geometry.width)
+    }
+    assert.ok(widths[0] > widths[1] && widths[0] > widths[2])
+    assert.ok(widths[3] < widths[1] && widths[3] < widths[2])
   } finally { await page.close() }
 })

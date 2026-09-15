@@ -1249,14 +1249,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
                   )}
-                  <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" data-descendant-activity-slot>
-                    {descendantBusyCount > 0 && (
-                      <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex text-fw-accent" data-descendant-activity>
-                        <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-                      </span>
-                    )}
-                  </span>
-                  {showRuntimeBadge ? (
+                  {descendantBusyCount > 0 && (
+                    <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
+                      <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+                    </span>
+                  )}
+                  {showRuntimeBadge && (
                     <span
                       role="img"
                       aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
@@ -1264,7 +1262,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                       data-session-status={runtimeStateName}
                       className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
                     />
-                  ) : <span className="w-1.5 shrink-0" aria-hidden="true" />}
+                  )}
                 </div>
               ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
