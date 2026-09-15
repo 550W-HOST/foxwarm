@@ -1,46 +1,24 @@
 ---
 title: Foxwarm documentation
 description: Install Foxwarm, connect a model, and learn how Agents, Sessions, tools, Nodes, Channels, and data fit together.
-template: splash
-hero:
-  tagline: Run AI agents with persistent Sessions, tools, memory, and optional execution Nodes and messaging Channels on your own machine or server.
-  actions:
-    - text: Install Foxwarm
-      link: /docs/installing/
-      icon: right-arrow
-      variant: primary
-    - text: Set up a model
-      link: /docs/model-setup/
-      icon: setting
-      variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+Foxwarm runs on your machine or server. This site provides the installer and the documentation for setting up and using your own instance.
 
-This site hosts Foxwarm documentation and installer downloads. The WebUI and API run on your machine or server.
+## Start here
 
-<CardGrid>
-  <Card title="Install and open WebUI" icon="rocket">
-    Use the Linux/macOS/WSL shell installer or the native Windows PowerShell installer, then open the local token URL it prints.
-  </Card>
-  <Card title="Connect your model" icon="setting">
-    First-run Setup saves your model provider, endpoint, model ID, and API key when the endpoint requires one.
-  </Card>
-  <Card title="Keep work organized" icon="seti:folder">
-    An Agent holds a workspace and long-lived memory. Its Sessions are separate conversation threads.
-  </Card>
-  <Card title="Add what your workflow needs" icon="puzzle">
-    Start with WebUI and built-in tools. Load Skills or add MCP servers, Nodes, and messaging Channels when you need them.
-  </Card>
-</CardGrid>
+1. [Install Foxwarm](/docs/installing/) on Linux, macOS, WSL, or Windows.
+2. [Set up your first model](/docs/model-setup/) in the WebUI.
+3. Read [Agents, Sessions, and memory](/docs/agents-sessions-memory/) to see where identity, conversation history, and long-lived knowledge live.
 
-## Where to start
+The installer keeps the program checkout separate from its data directory. Your WebUI, API, Agents, model credentials, and runtime data stay on the machine where you run Foxwarm.
 
-1. [Install Foxwarm](/docs/installing/) and keep the program checkout separate from its data directory.
-2. [Set up your first model](/docs/model-setup/) in the WebUI first-run screen.
-3. Read [Agents, Sessions, and memory](/docs/agents-sessions-memory/) to see where identity, conversation history, and curated knowledge live.
-4. Learn how Foxwarm uses [Tools, Skills, and MCP](/docs/tools-skills-mcp/).
-5. Add [Nodes](/docs/nodes/) or [Channels](/docs/channels/) when your workflow needs them.
-6. Read [Data, upgrades, and backups](/docs/data-upgrades-backups/) before moving an important instance.
+## Learn the main parts
+
+- [Tools, Skills, and MCP](/docs/tools-skills-mcp/) explains built-in actions, reusable instructions, and external tool servers.
+- [Nodes](/docs/nodes/) covers optional execution environments for another machine, a dedicated environment, or supported browser tools.
+- [Channels](/docs/channels/) shows how to connect Sessions to supported messaging platforms.
+- [Data, upgrades, and backups](/docs/data-upgrades-backups/) describes the data directory and how to update an important instance safely.
+- [FAQ](/docs/faq/) answers common installation and configuration questions.
 
 For implementation details, start with the repository [Code Index](https://github.com/550W-HOST/foxwarm/tree/main/docs/code-index). The source code and tests define current behavior.
