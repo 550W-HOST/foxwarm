@@ -1158,6 +1158,25 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
 
+    const pinButton = (
+      <button
+        type="button"
+        className={`session-pin ${compact ? 'session-compact-pin h-6' : 'h-5'} inline-flex w-4 shrink-0 items-center justify-center rounded focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 ${session.pinned ? 'text-fw-accent' : 'text-fw-text-muted hover:text-fw-text'}`}
+        aria-label={session.pinned ? 'Unpin from top' : 'Pin to top'}
+        aria-pressed={!!session.pinned}
+        title={session.pinned ? 'Unpin from top' : 'Pin to top'}
+        onClick={(e) => {
+          e.stopPropagation()
+          void togglePinned(session.id, !session.pinned)
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        <Pin className="h-3.5 w-3.5 rotate-45" strokeWidth={1.5} aria-hidden="true" />
+      </button>
+    )
+
     const disclosure = (
       hasChildren && (
         <div className={compact ? "session-compact-disclosure w-4 shrink-0 flex items-center" : "mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-fw-text-muted"}>
@@ -1200,7 +1219,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       >
         <DraggableSessionRow
           session={session}
-          className={`group relative flex items-center rounded cursor-pointer active:cursor-grabbing ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${
+          className={`group session-row relative flex items-center rounded cursor-pointer active:cursor-grabbing ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${
             isCurrentSession
               ? 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/30'
               : 'hover:bg-fw-hover dark:hover:bg-fw-hover'
@@ -1220,41 +1239,43 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 allowParentDrop={allowParentDrop}
               />
               {compact ? (
-                <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-8" style={{ paddingLeft: contentPaddingLeft }}>
+                <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
                   {hasChildren ? disclosure : <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" />}
-                  <span
-                    role="img"
-                    aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
-                    title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
-                    data-session-status={runtimeStateName}
-                    className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
-                  />
-                  {session.pinned && <Pin className="h-3 w-3 shrink-0 text-fw-accent" aria-label="Pinned session" />}
                   <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong" title={`${session.displayName || displayId} · ${session.id}`}>
                     {session.displayName || displayId}
                   </span>
+                  {pinButton}
                   {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
+                  )}
+                  {showRuntimeBadge && (
+                    <span
+                      role="img"
+                      aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
+                      title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
+                      data-session-status={runtimeStateName}
+                      className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
+                    />
                   )}
                 </div>
               ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate text-fw-text-strong text-sm">
-                    {session.pinned && (
-                      <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-fw-accent dark:text-fw-accent" aria-label="Pinned session" />
-                    )}
-                    {session.displayName || displayId}
-                    {unreadSessionIds.has(session.id) && (
-                      <span className="ml-1.5 inline-flex items-center align-middle">
-                        <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
-                        <span className="sr-only">Unread idle completion</span>
-                      </span>
-                    )}
-                    {session.archived && (
-                      <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
-                    )}
+                  <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
+                    <span className="min-w-0 flex-1 truncate" data-session-title>
+                      {session.displayName || displayId}
+                      {unreadSessionIds.has(session.id) && (
+                        <span className="ml-1.5 inline-flex items-center align-middle">
+                          <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
+                          <span className="sr-only">Unread idle completion</span>
+                        </span>
+                      )}
+                      {session.archived && (
+                        <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
+                      )}
+                    </span>
+                    {pinButton}
                   </div>
                   {session.displayName && (
                     <div className="text-xs text-fw-text-muted font-mono truncate">
@@ -1497,7 +1518,20 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           <div className={listContainerClassName}>
             {rootSessions.length > 0 ? (
               <>
-                {visibleRootSessions.map(session => renderSession(session))}
+                {[
+                  { label: 'Pinned', pinned: true },
+                  { label: 'Sessions', pinned: false },
+                ].map(({ label, pinned }) => {
+                  // Partition existing visible roots only: pinned descendants are already
+                  // elevated by visibleParentMap, and each root retains its subtree.
+                  const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
+                  return sectionRoots.length > 0 ? (
+                    <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
+                      <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">{label}</h3>
+                      {sectionRoots.map(session => renderSession(session))}
+                    </section>
+                  ) : null
+                })}
                 {hiddenRootCount > 0 && (
                   <button
                     onClick={toggleShowMoreRoots}

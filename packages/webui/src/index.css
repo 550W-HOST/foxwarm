@@ -1850,6 +1850,16 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 
 /* Sidebar density changes presentation only; drag targets remain row-relative. */
+.session-compact-disclosure > button,
+.session-pin[aria-pressed="false"] {
+  opacity: 0;
+}
+.session-row-compact:hover .session-compact-disclosure > button,
+.session-row-compact:focus-within .session-compact-disclosure > button,
+.session-row:hover .session-pin,
+.session-row:focus-within .session-pin {
+  opacity: 1;
+}
 .session-compact-status {
   display: inline-block;
   flex-shrink: 0;
@@ -1870,7 +1880,10 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   .session-compact-status { animation: none !important; }
 }
 @media (pointer: coarse) {
+  .session-compact-disclosure > button,
+  .session-row .session-pin { opacity: 1; }
   .session-row-compact { min-height: 44px; }
   .session-compact-disclosure { width: 32px; }
-  .session-row-compact button { min-height: 40px; min-width: 32px; }
+  .session-row-compact button,
+  .session-pin { min-height: 40px; min-width: 32px; }
 }
