@@ -19,6 +19,11 @@
     "test:windows-service": "node --test scripts/windowsService.test.js",
     "test:webui-realtime": "node --test lib/channels/webuiRealtime.test.js",
     "test:code-index-generator": "python3 skills/code-index/tests/test_generate_code_index.py",
+    "test:inventory": "node scripts/test/run-tests.mjs inventory",
+    "test:unit": "node scripts/test/run-tests.mjs unit",
+    "test:webui:e2e": "node scripts/test/run-tests.mjs browser",
+    "test:app:e2e": "node scripts/test/run-tests.mjs app",
+    "test:local": "node scripts/test/run-tests.mjs all",
     "build-all": "npm ci && npm run build && npm --prefix packages/webui ci && npm --prefix packages/webui run build",
     "start": "./scripts/start.sh",
     "start:notmux": "npm run build && node lib/index.js",
@@ -34,7 +39,7 @@
     "selftest:apply-patch": "npm run build && node lib/selftest/applyPatchSelfTest.js",
     "selftest:goal-reminder": "npm run build && node lib/selftest/goalReminderSelfTest.js",
     "selftest:tool-loop-stall": "npm run build && node lib/selftest/toolLoopStallSelfTest.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run test:unit",
     "cli-node": "npm run build && node packages/cli-node/dist/tui.js"
   },
   "keywords": [
@@ -69,6 +74,7 @@
     "https-proxy-agent": "^7.0.6",
     "js-yaml": "^4.1.0",
     "lancedb": "^0.0.1",
+    "libheif-js": "^1.19.8",
     "matrix-js-sdk": "^41.0.0-rc.0",
     "multer": "^2.0.2",
     "node-pty": "^1.1.0",

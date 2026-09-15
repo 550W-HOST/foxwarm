@@ -1156,7 +1156,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-model-effort-select {
   .foxwarm-model-effort-select,
   html[data-foxwarm-component-treatment="console"] .foxwarm-model-effort-select {
     font-size: 16px !important;
-    padding-inline: 0.25rem 1rem !important;
+    padding-inline: 0.25rem 0.5rem !important;
   }
 }
 

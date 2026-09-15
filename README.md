@@ -124,6 +124,8 @@ cd foxwarm
 npm run build-all
 ```
 
+For local development test prerequisites, commands, suite ownership, and artifacts, see [Local tests](docs/testing.md).
+
 For a clean manual install with an external data directory:
 
 ```bash

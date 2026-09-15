@@ -136,10 +136,11 @@ after(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
 
+const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
 const browsers = [
   { name: 'Chromium', executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   { name: 'Firefox', browser: 'firefox', executablePath: process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox', args: [] },
-]
+].filter(browser => selectedBrowser === 'all' || browser.name.toLowerCase() === selectedBrowser)
 
 for (const browserSpec of browsers) {
   test(`${browserSpec.name} renders complete user pasted-text inline and opens a read-only modal`, async () => {

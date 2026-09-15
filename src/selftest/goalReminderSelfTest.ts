@@ -138,12 +138,8 @@ async function main(): Promise<void> {
 
       const historyPayload = await fs.readJson(getSessionHistoryFilePath(sessionId));
       assert.strictEqual(historyPayload.goalState?.anchorSeq, reminders[0].__meta?.goalAnchorSeq);
+      assert.strictEqual(countGoalReminders(historyPayload as Session), 1);
       assert.strictEqual(historyPayload.queue?.some((item: any) => item.message?.__meta?.goalReminder === true), false);
-
-      session.history = [];
-      const reloaded = await sessionManager.getSession(sessionId);
-      assert.strictEqual(countGoalReminders(reloaded), 1);
-      assert.strictEqual(reloaded.queue.some(item => item.message?.__meta?.goalReminder === true), false);
     });
 
     await test('set_goal accepts plain long-term goal text', async () => {

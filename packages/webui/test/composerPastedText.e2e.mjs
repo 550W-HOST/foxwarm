@@ -28,6 +28,29 @@ await writeFile(entryPath, `
   import { makePlainComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [{ name: '/help', description: 'Help' }] }) })
   const noop = async () => {}
+  const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window)
+  const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window)
+  const heldDraftRestoreFrameId = -7001
+  let heldDraftRestoreFrame = null
+  window.fixtureHoldDraftRestoreFrame = false
+  window.requestAnimationFrame = callback => {
+    if (window.fixtureHoldDraftRestoreFrame && String(callback).includes('editorRef.current?.replaceDraft(savedDraft)')) {
+      window.fixtureHoldDraftRestoreFrame = false
+      heldDraftRestoreFrame = callback
+      return heldDraftRestoreFrameId
+    }
+    return nativeRequestAnimationFrame(callback)
+  }
+  window.cancelAnimationFrame = frameId => {
+    if (frameId === heldDraftRestoreFrameId) { heldDraftRestoreFrame = null; return }
+    nativeCancelAnimationFrame(frameId)
+  }
+  window.fixtureHasHeldDraftRestoreFrame = () => heldDraftRestoreFrame !== null
+  window.fixtureReleaseDraftRestoreFrame = () => {
+    const callback = heldDraftRestoreFrame
+    heldDraftRestoreFrame = null
+    callback?.(performance.now())
+  }
   function Fixture() {
     useEffect(() => {
       // Let the composer's mount-time draft restoration finish before input.
@@ -159,10 +182,11 @@ async function withBrowser(spec, run) {
   }
 }
 
+const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
 const browsers = [
   { name: 'Chromium', path: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   { name: 'Firefox', browser: 'firefox', path: process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox' },
-]
+].filter(browser => selectedBrowser === 'all' || browser.name.toLowerCase() === selectedBrowser)
 
 for (const spec of browsers) {
   test(`${spec.name} edits pasted-text blocks without resetting native text flow`, async () => withBrowser(spec, async page => {
@@ -448,14 +472,21 @@ for (const spec of browsers) {
     await page.waitForSelector(editor)
     await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-trailing-newline]').length), 1)
-    await page.evaluate(() => {
-      const editorNode = window.fixtureEditor(); const walker = document.createTreeWalker(editorNode, NodeFilter.SHOW_TEXT); const text = walker.nextNode()
-      editorNode.focus()
-      const range = document.createRange(); range.setStart(text, text.nodeValue.length); range.collapse(true)
-      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range)
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const restoredEnd = await page.evaluate(() => {
+      const editorNode = window.fixtureEditor()
+      editorNode.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      const trailingNewline = editorNode.querySelector('[data-composer-trailing-newline]')
+      const offset = [...editorNode.childNodes].indexOf(trailingNewline)
+      window.fixtureCaretAtRootOffset(offset)
+      const selection = getSelection()
+      return { offset, anchorNodeIsEditor: selection.anchorNode === editorNode, anchorOffset: selection.anchorOffset }
     })
+    assert.deepEqual(restoredEnd, { offset: restoredEnd.offset, anchorNodeIsEditor: true, anchorOffset: restoredEnd.offset })
     await page.keyboard.type('x')
-    assert.equal(await page.evaluate(() => window.fixtureDraft), '\n\nx')
+    await page.waitForFunction(() => window.fixtureDraft === '\n\nx')
+    await page.waitForFunction(() => window.fixtureEditor()?.textContent?.includes('x'))
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     assert.equal(await copyAll(), '\n\nx')
 
     await reset(`fixture/newline-text-${spec.name}`)
@@ -755,7 +786,8 @@ test('Chromium hides the empty placeholder during trusted composition without pe
   await client.detach()
 }))
 
-test('Firefox hides and restores the empty placeholder around synthetic composition', async () => withBrowser(browsers[1], async page => {
+const firefoxSpec = browsers.find(browser => browser.name === 'Firefox')
+if (firefoxSpec) test('Firefox hides and restores the empty placeholder around synthetic composition', async () => withBrowser(firefoxSpec, async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
   await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
   await page.click(editor)
@@ -1380,20 +1412,31 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.evaluate(() => window.fixtureReleaseTranscription())
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments.some(segment => segment.type === 'text' && segment.text.includes('transcript')))
   assert.equal(await page.$eval(editor, node => node.textContent), 'session B')
-  await page.evaluate(() => window.fixtureSetSession('fixture/main'))
+  await page.evaluate(() => { window.fixtureHoldDraftRestoreFrame = true; window.fixtureSetSession('fixture/main') })
   await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'session A\n\ntranscript')
+  await page.waitForFunction(() => window.fixtureHasHeldDraftRestoreFrame())
 
   await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste(Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n')) })
+  await page.waitForSelector('.foxwarm-composer-pasted-text-chip')
   const exact = await page.evaluate(() => window.fixtureDraft)
-  const copied = await page.evaluate(() => {
+  await page.evaluate(() => window.fixtureReleaseDraftRestoreFrame())
+  await page.waitForFunction((expected) => {
+    const stored = JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main'))
+    return window.fixtureDraft === expected
+      && window.fixtureEditor()?.querySelector('.foxwarm-composer-pasted-text-chip')
+      && stored.segments?.length === 1
+      && stored.segments[0]?.type === 'pasted-text'
+      && expected.includes(stored.segments[0]?.text)
+  }, {}, exact)
+  await page.evaluate(() => {
+    window.fixtureCopiedText = null
+    document.addEventListener('copy', event => {
+      queueMicrotask(() => { window.fixtureCopiedText = event.clipboardData?.getData('text/plain') || '' })
+    }, { once: true })
     window.fixtureSelectAll()
-    const data = new DataTransfer()
-    const event = new Event('copy', { bubbles: true, cancelable: true })
-    Object.defineProperty(event, 'clipboardData', { value: data })
-    window.fixtureEditor().dispatchEvent(event)
-    return data.getData('text/plain')
   })
-  assert.equal(copied, exact)
+  await page.keyboard.down('Control'); await page.keyboard.press('c'); await page.keyboard.up('Control')
+  await page.waitForFunction(expected => window.fixtureCopiedText === expected, {}, exact)
   await page.evaluate(() => window.fixtureSelectAll())
   await page.keyboard.down('Control'); await page.keyboard.press('x'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), '')

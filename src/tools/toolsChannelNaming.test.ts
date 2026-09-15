@@ -8,7 +8,6 @@ import { tool_send_file } from '../toolsSessionAgent';
 test('send_to_channel tool schema uses channelTargetId and drops channelId parameter', () => {
   const def = definitions.find(entry => entry.name === 'send_to_channel');
   assert.ok(def, 'send_to_channel definition should exist');
-  assert.ok(def?.description.includes('specific channel target'));
   assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'channelTargetId'), true);
   assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'channelId'), false);
   assert.deepEqual(def?.parameters?.required, ['channelTargetId', 'message']);

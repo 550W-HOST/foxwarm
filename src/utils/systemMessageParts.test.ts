@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
 import { buildSystemMessageParts, buildTimestampedSystemMessageParts, isSystemPayloadTextPart, withInputTimePart } from './systemMessageParts';
+
+process.env.TZ = 'Asia/Shanghai';
 
 test('buildSystemMessageParts wraps legacy timer-style system text into one system part', () => {
   const parts = buildSystemMessageParts('Scheduled timer fired (id: timer-1)\nrun nightly sync');

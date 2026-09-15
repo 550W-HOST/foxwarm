@@ -47,18 +47,29 @@ async function buildFixtureBundle() {
     window.fetch = async (input) => {
       const url = String(input)
       if (url.includes('/context-blocks/7/expand')) return new Response(JSON.stringify({ sessionId: 'fixture/main', blockId: 7, expansionKind: 'messages', target: 'B#7', previewLength: 6000, messages: nestedMessages }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      if (url.includes('/history')) return new Response(JSON.stringify({ session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, modelKey: 'fixture/model' }, messages, queuedMessages: [], queueLength: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/history')) return new Response(JSON.stringify({ session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: messages.length, historyVersion: 0, modelKey: 'fixture/model' }, messages, queuedMessages: [], queueLength: 0, latestSeq: 3, historyVersion: 0, prefixLength: 0, historyComplete: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/models')) return new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit: 128000 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/commands')) return new Response(JSON.stringify({ commands: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 404 })
     }
 
-    class FixtureEventSource {
-      static CLOSED = 2
-      constructor() { this.readyState = 1; queueMicrotask(() => this.onopen?.({})) }
-      close() { this.readyState = FixtureEventSource.CLOSED }
+    class FixtureWebSocket {
+      static CONNECTING = 0
+      static OPEN = 1
+      static CLOSED = 3
+      constructor() { this.readyState = FixtureWebSocket.CONNECTING; queueMicrotask(() => { this.readyState = FixtureWebSocket.OPEN; this.onopen?.({}) }) }
+      close() { this.readyState = FixtureWebSocket.CLOSED }
+      send(raw) {
+        const payload = JSON.parse(raw)
+        if (payload.type !== 'set-subscriptions') return
+        queueMicrotask(() => {
+          this.onmessage?.({ data: JSON.stringify({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }) })
+          this.onmessage?.({ data: JSON.stringify({ type: 'subscriptions-applied', revision: payload.revision }) })
+        })
+      }
     }
-    window.EventSource = FixtureEventSource
+    window.WebSocket = FixtureWebSocket
 
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
       sessionId: 'fixture/main',

@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import schedule from 'node-schedule';
 import {
   buildTimerTriggeredMessage,
   createTimer,
   createTimersStore,
+  createWaitTimeoutTimer,
   deleteTimer,
   fireTimerForTests,
   initializeTimers,
@@ -110,9 +112,67 @@ test('buildTimerTriggeredMessage wraps timer content in foxwarm-message metadata
   assert.match(message, /timerId="timer-1"/);
   assert.match(message, /mode="cron"/);
   assert.match(message, /hint="Scheduled timer fired"/);
-  assert.match(message, new RegExp(`localTime="[^"]*${offset.replace('+', '\\+')}"`));
+  assert.match(message, new RegExp(`time="[^"]*${offset.replace('+', '\\+')}"`));
   assert.match(message, /\nrun nightly sync\n<\/foxwarm-message>$/);
   assert.doesNotMatch(message, /Asia\/Shanghai/);
+});
+
+test('one-time scheduling treats only a null job whose deadline crossed as due', async () => {
+  await withTempDir(async (dirPath) => {
+    const timersPath = path.join(dirPath, 'timers.json');
+    setTimersStoreForTests(createTimersStore(timersPath));
+    const originalScheduleJob = schedule.scheduleJob;
+    const sessionIds = ['crossed', 'future', 'valid'].map(suffix => `timer_boundary_${suffix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    const prepareWait = async (sessionId: string, waitId: string, timeoutSeconds: number) => {
+      const session = await sessionManager.getSession(sessionId);
+      session.meta.wait = { id: waitId, startedAt: Date.now(), timeoutSeconds };
+      await sessionManager.saveSession(sessionId);
+      return session;
+    };
+    const waitForQueue = async (session: any) => {
+      const deadline = Date.now() + 2000;
+      while (session.queue.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(session.queue.length, 1);
+    };
+
+    try {
+      const crossed = await prepareWait(sessionIds[0], 'wait-crossed', 0.2);
+      let crossedAtEntry = false;
+      (schedule as any).scheduleJob = (date: Date): any => {
+        crossedAtEntry = date.getTime() > Date.now();
+        while (Date.now() <= date.getTime()) {}
+        return null;
+      };
+      await createWaitTimeoutTimer({ sessionId: crossed.id, waitId: 'wait-crossed', timeoutSeconds: 0.2 });
+      await waitForQueue(crossed);
+      assert.equal(crossedAtEntry, true, 'the library hook is entered while the deadline is still future');
+      assert.equal(crossed.meta.wait, undefined);
+      assert.equal(crossed.queue[0].waitTimeoutId, 'wait-crossed');
+      assert.match(crossed.queue[0].parts[0].system || '', /wait timeout reached after 0\.2s/);
+
+      const future = await prepareWait(sessionIds[1], 'wait-future', 1);
+      (schedule as any).scheduleJob = (): any => null;
+      await assert.rejects(() => createWaitTimeoutTimer({ sessionId: future.id, waitId: 'wait-future', timeoutSeconds: 1 }), /Invalid timer date/);
+      assert.equal(future.queue.length, 0);
+
+      const valid = await prepareWait(sessionIds[2], 'wait-valid', 1);
+      let validCallback: (() => void) | undefined;
+      (schedule as any).scheduleJob = (_date: Date, callback: () => void): any => {
+        validCallback = callback;
+        return { cancel: () => true };
+      };
+      await createWaitTimeoutTimer({ sessionId: valid.id, waitId: 'wait-valid', timeoutSeconds: 1 });
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(valid.queue.length, 0, 'a valid scheduled job gets no immediate duplicate delivery');
+      assert.ok(validCallback);
+      validCallback();
+      await waitForQueue(valid);
+      assert.equal(valid.queue[0].waitTimeoutId, 'wait-valid');
+    } finally {
+      (schedule as any).scheduleJob = originalScheduleJob;
+      for (const sessionId of sessionIds) await sessionManager.deleteSession(sessionId).catch(() => false);
+    }
+  });
 });
 
 test('new-session timer allocation skips an archived generated id', async () => {

@@ -162,12 +162,14 @@ test('configured executable provider derives canonical tools and preserves exact
       { currentSessionEffects: effects },
     );
     assert.match(JSON.stringify(direct), /fixture-read/);
-    assert.equal(await tool_call_tool({
+    const unifiedRead = String(await tool_call_tool({
       source: 'node',
       nodeId: 'fixture-sandbox',
       name: 'read',
       args: { filePath: 'memfs://fixture/unified.txt' },
-    }, ctx), 'fixture-read');
+    }, ctx));
+    assert.equal(unifiedRead.split('\n---\n', 1)[0], 'fixture-read');
+    assert.match(unifiedRead, /\n---\n/);
     const scripted = await tool_run_script({
       code: 'def main(args):\n    return call_tool(source="node", nodeId="fixture-sandbox", name="read", args={"filePath": "memfs://fixture/script.txt"})',
     }, ctx);
@@ -264,7 +266,8 @@ test('colon executable Node IDs round-trip through canonical discovery tool IDs'
       toolId: 'node:fixture:sandbox/read',
       args: { filePath: 'memfs://fixture:colon/read.txt' },
     }, ctx);
-    assert.equal(result, 'fixture-read');
+    assert.equal(String(result).split('\n---\n', 1)[0], 'fixture-read');
+    assert.match(String(result), /\n---\n/);
   } finally {
     await cleanupExecution(transport);
     await sessionManager.deleteSession(sourceId).catch(() => false);

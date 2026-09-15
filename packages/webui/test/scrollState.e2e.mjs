@@ -64,6 +64,17 @@ async function readAnchorOffset(messageKey) {
   }, messageKey)
 }
 
+async function waitForTimelineScrollHandler() {
+  await page.waitForFunction(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    if (!(container instanceof HTMLElement)) return false
+    if (document.querySelector('button[aria-label="Scroll to top"]')) return true
+    container.scrollTop = 250
+    container.dispatchEvent(new Event('scroll'))
+    return false
+  }, { timeout: 5_000 })
+}
+
 before(async () => {
   const token = (await readFile(tokenFile, 'utf8')).trim()
   browser = await puppeteer.launch({
@@ -177,6 +188,7 @@ test('sidebar refresh does not refocus the unchanged current session, but a real
 test('full timeline prepend preserves a stable row while content below resizes', async () => {
   await openPersistentChat(primarySessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
+  await waitForTimelineScrollHandler()
 
   const expected = await page.evaluate(() => {
     const container = document.querySelector('.foxwarm-chat-messages')
@@ -218,6 +230,7 @@ test('continued user scrolling cancels the stale prepend restore target', async 
   await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await openPersistentChat(primarySessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
+  await waitForTimelineScrollHandler()
 
   const positions = await page.evaluate(() => {
     const container = document.querySelector('.foxwarm-chat-messages')

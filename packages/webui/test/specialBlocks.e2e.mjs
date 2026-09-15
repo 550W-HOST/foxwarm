@@ -15,6 +15,9 @@ const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-special-blocks-e2e-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
+const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
+const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
+const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 
 let browser
 let page
@@ -143,10 +146,10 @@ before(async () => {
     target: 'es2020',
     jsx: 'automatic',
     alias: {
-      react: 'preact/compat',
-      'react-dom': 'preact/compat',
-      'react-dom/client': 'preact/compat/client',
-      'react/jsx-runtime': 'preact/jsx-runtime',
+      react: preactCompatPath,
+      'react-dom': preactCompatPath,
+      'react-dom/client': preactCompatClientPath,
+      'react/jsx-runtime': preactJsxRuntimePath,
     },
     loader: { '.css': 'css' },
     logLevel: 'silent',

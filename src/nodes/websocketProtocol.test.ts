@@ -15,6 +15,7 @@ import {
   setNodeRegistryStoreForTests,
 } from './registry';
 import { registerNodeWebSocket } from './websocket';
+import { sessionCatalogStore } from '../session/catalogStore';
 
 function messageQueue(ws: WebSocket) {
   const queued: any[] = [];
@@ -32,16 +33,19 @@ test('authenticated unversioned legacy client registers ready and can dispatch a
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-protocol-ws-'));
   setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(tempDir, 'nodes.json')));
   resetNodeRegistryForTests();
+  await sessionCatalogStore.initialize();
   const pending = await createPendingPairing({
     requestedName: 'legacy-wire-node',
     nodeType: 'cli-node',
     capabilities: { tools: [{ name: 'exec', description: 'exec' }] },
   });
   const approved = await approvePendingPairing(pending.id, 'legacy-wire-node');
-  const port = 35600 + Math.floor(Math.random() * 300);
-  const server = new HttpServer(port, 'api-token');
+  const server = new HttpServer(0, 'api-token');
   registerNodeWebSocket(server, 'pair-token');
   await server.start();
+  const address = (server as any).httpServer.address();
+  assert.equal(typeof address === 'object' && typeof address?.port === 'number', true);
+  const port = address.port as number;
   const ws = new WebSocket(`ws://127.0.0.1:${port}/node_ws?id=legacy-wire-node&auth=${approved.authToken}`);
   const nextMessage = messageQueue(ws);
   try {
@@ -70,7 +74,7 @@ test('authenticated unversioned legacy client registers ready and can dispatch a
     const dispatched = await nextMessage();
     assert.equal(dispatched.type, 'cli_response');
     assert.equal(dispatched.requestId, 'after-register');
-    assert.equal(dispatched.ok, true);
+    assert.equal(dispatched.ok, true, JSON.stringify(dispatched));
     assert.equal(ws.readyState, WebSocket.OPEN);
   } finally {
     ws.close();

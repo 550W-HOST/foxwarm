@@ -14,6 +14,9 @@ const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-model-trigger-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
 const assetsDirectory = path.join(webuiRoot, 'dist/assets')
+const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
+const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
+const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 let server
 let browser
 let page
@@ -45,7 +48,7 @@ await writeFile(entryPath, `
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: 'preact/compat', 'react-dom': 'preact/compat', 'react-dom/client': 'preact/compat/client', 'react/jsx-runtime': 'preact/jsx-runtime' },
+    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
   const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))

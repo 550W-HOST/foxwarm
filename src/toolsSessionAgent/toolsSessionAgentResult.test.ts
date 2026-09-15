@@ -33,9 +33,18 @@ async function ensureSession(id: string): Promise<Session> {
 }
 
 test('wait returns concise output without echoing reason text', async () => {
-  const result = await tool_wait({ reason: 'because the handoff is complete' });
-  assert.equal(result.output, 'ok');
-  assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
+  const sessionId = makeSessionId('tool_result_wait');
+  const session = await ensureSession(sessionId);
+  try {
+    const result = await tool_wait(
+      { reason: 'because the handoff is complete', waitForInput: true },
+      { sessionId, session },
+    );
+    assert.equal(result.output, 'ok');
+    assert.deepEqual(result.__toolLoopControl, { stopCurrentTurn: true });
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 });
 
 test('send_to_session rejects self-sends', async () => {

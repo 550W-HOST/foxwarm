@@ -1,0 +1,187 @@
+name: Tests
+
+on:
+  push:
+    branches: [testing, main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+
+jobs:
+  core:
+    name: Core, packages, and quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Build packages and WebUI
+        run: |
+          npm run build
+          npm --prefix packages/webui run build
+      - name: Run core and package tests
+        env:
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:unit
+      - name: Run quality checks
+        run: |
+          npm run quality:code-index
+          npm run quality:unused
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-core
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7
+
+  chromium:
+    name: Chromium fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Install Chrome for Testing
+        id: browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_log="$RUNNER_TEMP/chrome-for-testing-install.log"
+          sudo "$(command -v node)" node_modules/@puppeteer/browsers/lib/cjs/main-cli.js \
+            install chrome@145.0.7632.77 \
+            --path "$RUNNER_TEMP/puppeteer-browsers" \
+            --install-deps \
+            --format '{{path}}' | tee "$install_log"
+          browser_path="$(tail -n 1 "$install_log")"
+          test -x "$browser_path"
+          "$browser_path" --version
+          echo "path=$browser_path" >> "$GITHUB_OUTPUT"
+      - name: Build packages and WebUI
+        run: |
+          npm run build
+          npm --prefix packages/webui run build
+      - name: Run Chromium fixtures
+        env:
+          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:webui:e2e
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-chromium
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7
+
+  app:
+    name: Real app with mock LLM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Install Chrome for Testing
+        id: browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_log="$RUNNER_TEMP/chrome-for-testing-install.log"
+          sudo "$(command -v node)" node_modules/@puppeteer/browsers/lib/cjs/main-cli.js \
+            install chrome@145.0.7632.77 \
+            --path "$RUNNER_TEMP/puppeteer-browsers" \
+            --install-deps \
+            --format '{{path}}' | tee "$install_log"
+          browser_path="$(tail -n 1 "$install_log")"
+          test -x "$browser_path"
+          "$browser_path" --version
+          echo "path=$browser_path" >> "$GITHUB_OUTPUT"
+      - name: Build packages and WebUI
+        run: |
+          npm run build
+          npm --prefix packages/webui run build
+      - name: Run real-application E2E
+        env:
+          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:app:e2e
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-app
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7

@@ -299,10 +299,13 @@ function scheduleTimer(timer: SessionTimer): void {
     throw new Error('One-time timer is missing `at`.');
   }
 
-  if (timer.at <= Date.now()) {
+  const fireDueTimer = () => {
     setImmediate(() => {
       void fireTimer(timer.id);
     });
+  };
+  if (timer.at <= Date.now()) {
+    fireDueTimer();
     return;
   }
 
@@ -311,6 +314,10 @@ function scheduleTimer(timer: SessionTimer): void {
   });
 
   if (!job) {
+    if (timer.at <= Date.now()) {
+      fireDueTimer();
+      return;
+    }
     throw new Error(`Invalid timer date: ${timer.at}`);
   }
 

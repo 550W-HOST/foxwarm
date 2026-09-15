@@ -16,13 +16,15 @@ test('setting a session process title remains role-recognizable in Linux comm', 
   const child = spawn(process.execPath, ['-e', [
     `const { setFoxwarmProcessTitle } = require(${JSON.stringify(__filename.replace(/\.test\.js$/, '.js'))});`,
     `setFoxwarmProcessTitle('session', 'agent/main');`,
+    `process.send('ready');`,
     `setTimeout(() => {}, 5000);`,
-  ].join('')], { stdio: 'ignore' });
+  ].join('')], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
 
   try {
     await new Promise<void>((resolve, reject) => {
-      child.once('error', reject);
-      setTimeout(resolve, 100);
+      const timer = setTimeout(() => reject(new Error('Timed out waiting for child process-title readiness')), 5000);
+      child.once('error', error => { clearTimeout(timer); reject(error); });
+      child.once('message', message => { clearTimeout(timer); message === 'ready' ? resolve() : reject(new Error(`Unexpected child readiness message: ${String(message)}`)); });
     });
     const comm = fs.readFileSync(`/proc/${child.pid}/comm`, 'utf8').trim();
     const cmdline = fs.readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();

@@ -49,7 +49,7 @@ test('runtime summaries preserve tool batch, waiting details, and idle', () => {
   assert.equal(getRuntimeStateSummary(runtimeState('waiting', {
     waiting: {
       waitId: 'sessions',
-      waitingFor: 'sessions',
+      waitingFor: 'all-sessions',
       waitAllSessions: ['one', 'two'],
       satisfiedSessions: ['one'],
     },
@@ -58,7 +58,7 @@ test('runtime summaries preserve tool batch, waiting details, and idle', () => {
     waiting: { waitId: 'exec', waitingFor: 'exec', waitExecIds: ['job-a', 'job-b'] },
   })), 'waiting: exec 2')
   assert.equal(getRuntimeStateSummary(runtimeState('waiting', {
-    waiting: { waitId: 'timer', waitingFor: 'timer', timeoutSeconds: 30 },
-  })), 'waiting: timer 30s')
+    waiting: { waitId: 'timer', waitingFor: 'fallback', timeoutSeconds: 30 },
+  })), 'waiting: fallback 30s')
   assert.equal(getRuntimeStateSummary(runtimeState('idle')), 'idle')
 })
