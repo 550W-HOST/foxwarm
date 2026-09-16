@@ -241,6 +241,11 @@ export function convertToOpenAIFormat(
     contents = preparedImages.messages;
     const isDeduplicated = preparedImages.isDeduplicated;
     const openaiMessages = [];
+    const pendingToolImages: any[] = [];
+    const flushToolImages = () => {
+        if (pendingToolImages.length === 0) return;
+        openaiMessages.push({ role: 'user', content: pendingToolImages.splice(0) });
+    };
 
     for (const msg of contents) {
         let role = msg.role as any;
@@ -340,12 +345,22 @@ export function convertToOpenAIFormat(
 
             for (const toolId of toolIdOrder) {
                 const groupedParts = groupedByToolId.get(toolId) || [];
-                const hasNonTextPart = groupedParts.some((x: any) => x.type !== 'text');
-                const content = groupedParts.length === 0
+                // Chat Completions tool content accepts text, not image_url parts.
+                // Delay the companion user message until every adjacent tool result
+                // has been emitted, including batches split across internal messages.
+                const imageParts = groupedParts.filter((part: any) => part.type === 'image_url');
+                if (imageParts.length > 0) {
+                    pendingToolImages.push(
+                        { type: 'text', text: `Images returned by tool_call_id=${toolId}:` },
+                        ...imageParts,
+                    );
+                }
+                const textParts = groupedParts.filter((part: any) => part.type === 'text');
+                const content = textParts.length === 0
                     ? ''
-                    : !hasNonTextPart && groupedParts.length === 1
-                    ? groupedParts[0].text
-                    : groupedParts;
+                    : textParts.length === 1
+                    ? textParts[0].text
+                    : textParts;
 
                 openaiMessages.push({
                     role: 'tool',
@@ -357,6 +372,7 @@ export function convertToOpenAIFormat(
             continue;
         }
 
+        flushToolImages();
         let content = [];
         let toolCalls = [];
         let reasoningContent = null;
@@ -437,6 +453,7 @@ export function convertToOpenAIFormat(
         openaiMessages.push(message);
     }
 
+    flushToolImages();
     return openaiMessages;
 }
 
