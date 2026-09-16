@@ -369,6 +369,196 @@ public sealed class SessionTurnTests
         Assert.Empty(entry.Snapshot().Queue);
     }
 
+    [Fact]
+    public async Task StrictAppendFailurePreservesAcknowledgedIngressAndRestoresSelection()
+    {
+        var store = new AppendFailureProbeStore();
+        var chat = new ControlledChat();
+        var registry = new SessionRegistry(store, chat);
+        var entry = registry.Add("s");
+        // Isolate strict-append compensation from a later normal processor started by ingress.
+        registry.TriggerOverride = _ => Task.CompletedTask;
+        entry.State.Queue.Add(QueueItem.UserText("A"));
+        store.FailNextStrictAppend();
+
+        var runner = registry.Runner.ProcessQueueAsync("s");
+        await store.HeldStrictAppend;
+
+        var ingress = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("B", clientMessageId: "b"));
+        Assert.False(ingress.IsCompleted);
+        var hotBeforeRelease = entry.Snapshot();
+        Assert.Contains(hotBeforeRelease.Queue, item => item.Parts?.FirstOrDefault()?[
+            "text"]?.GetValue<string>() == "B");
+        Assert.DoesNotContain(hotBeforeRelease.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
+        var timestamp = hotBeforeRelease.Meta["lastMessageTime"]!.GetValue<long>();
+        entry.WithStateForTest(state => state.Meta["lastMessageTime"] = JsonValue.Create(timestamp));
+
+        store.ReleaseHeldStrictAppend();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runner);
+        await ingress;
+
+        var hotFinal = entry.Snapshot();
+        var storedFinal = await store.LoadAsync("s");
+        Assert.NotNull(storedFinal);
+        Assert.Equal(1, CountValue(hotFinal, "A"));
+        Assert.Equal(1, CountValue(hotFinal, "B"));
+        Assert.Equal(1, CountValue(storedFinal!, "A"));
+        Assert.Equal(1, CountValue(storedFinal!, "B"));
+        Assert.False(hotFinal.Busy);
+        Assert.False(storedFinal.Busy);
+        Assert.Equal(timestamp, hotFinal.Meta["lastMessageTime"]?.GetValue<long>());
+        Assert.Equal(timestamp, storedFinal.Meta["lastMessageTime"]?.GetValue<long>());
+
+        Assert.NotEmpty(store.Observations);
+    }
+
+    [Fact]
+    public async Task InitialAndNoninitialPartsUseCanonicalSessionTagAndTimestampBoundary()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var registry = new SessionRegistry(store, new ControlledChat());
+        var sessionId = " \r\n  alpha \t \u0001 & < > \" ' \u000B omega \n ";
+        var entry = registry.Add(sessionId);
+        entry.State.Queue.Add(QueueItem.UserText("first"));
+
+        await registry.Runner.ProcessQueueAsync(sessionId);
+
+        var initial = entry.Snapshot();
+        var initialUser = initial.History.Single(message => message["role"]?.GetValue<string>() == "user");
+        var initialParts = (JsonArray)initialUser["parts"]!;
+        Assert.Equal(
+            "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega\" />",
+            initialParts[0]?["system"]?.GetValue<string>());
+        Assert.True(initial.Meta["lastMessageTime"]?.GetValue<long>() > 0);
+
+        entry.State.Meta["lastMessageTime"] = 1;
+        entry.State.Queue.Add(QueueItem.UserText("second"));
+        await registry.Runner.ProcessQueueAsync(sessionId);
+
+        var noninitial = entry.Snapshot();
+        var secondUser = noninitial.History.Last(message => message["role"]?.GetValue<string>() == "user");
+        var secondParts = (JsonArray)secondUser["parts"]!;
+        Assert.Equal("second", secondParts[0]?["text"]?.GetValue<string>());
+        Assert.DoesNotContain(secondParts, part => part?["system"] is not null);
+        Assert.True(noninitial.Meta["lastMessageTime"]?.GetValue<long>() > 1);
+    }
+
+    [Fact]
+    public async Task PrebuiltMessageDoesNotPreparePartsOrChangeTimestamp()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var registry = NewRegistry(store, new ControlledChat(), out var entry);
+        entry.State.Meta["lastMessageTime"] = 42L;
+        var prebuilt = new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" })
+        };
+        entry.State.Queue.Add(new QueueItem(QueueItemType.User, Array.Empty<JsonObject>()));
+        entry.State.Queue.Add(QueueItem.Prebuilt(prebuilt));
+
+        await registry.Runner.ProcessQueueAsync("s");
+
+        var snapshot = entry.Snapshot();
+        var user = snapshot.History.Single(message => message["role"]?.GetValue<string>() == "user");
+        Assert.Equal(prebuilt.ToJsonString(), user.ToJsonString());
+        Assert.Equal(42, snapshot.Meta["lastMessageTime"]?.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task ObserverFailureAfterAppendCommitDoesNotRollbackCommittedState()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        var registry = NewRegistry(store, chat, out var entry);
+        var once = 0;
+        entry.Committed = _ =>
+        {
+            if (Interlocked.Exchange(ref once, 1) == 0) throw new InvalidOperationException("observer failed");
+        };
+        entry.State.Queue.Add(QueueItem.UserText("committed"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => registry.Runner.ProcessQueueAsync("s"));
+
+        var hot = entry.Snapshot();
+        var stored = await store.LoadAsync("s");
+        Assert.NotNull(stored);
+        Assert.Contains(hot.History, message => message.ToJsonString().Contains("committed", StringComparison.Ordinal));
+        Assert.Contains(stored!.History, message => message.ToJsonString().Contains("committed", StringComparison.Ordinal));
+        Assert.Empty(hot.Queue);
+        Assert.Empty(stored.Queue);
+        Assert.False(hot.Busy);
+        Assert.False(stored.Busy);
+    }
+
+    [Fact]
+    public async Task ObserverFailureAfterStopFinalizationCommitDoesNotRollbackCommittedState()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var entry = new SessionEntry(new SessionState("s"), store);
+        entry.State.Queue.Add(QueueItem.UserText("finalized"));
+        var host = new LocalSessionTurnHost(entry, store, new ControlledChat());
+        Assert.True(await host.TryClaimBusyAsync());
+        entry.SetStoppingForTest(true);
+        var once = 0;
+        entry.Committed = _ =>
+        {
+            if (Interlocked.Exchange(ref once, 1) == 0) throw new InvalidOperationException("observer failed");
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.FinalizeStoppedAsync());
+
+        var hot = entry.Snapshot();
+        var stored = await store.LoadAsync("s");
+        Assert.NotNull(stored);
+        Assert.Contains(hot.History, message => message.ToJsonString().Contains("finalized", StringComparison.Ordinal));
+        Assert.Contains(stored!.History, message => message.ToJsonString().Contains("finalized", StringComparison.Ordinal));
+        Assert.Empty(hot.Queue);
+        Assert.Empty(stored.Queue);
+        Assert.False(hot.Busy);
+        Assert.False(hot.Stopping);
+        Assert.False(stored.Busy);
+        Assert.False(stored.Stopping);
+    }
+
+    [Fact]
+    public async Task StopFinalizationStrictFailureRestoresOnlyItsOwnState()
+    {
+        var store = new AppendFailureProbeStore();
+        var entry = new SessionEntry(new SessionState("s"), store);
+        entry.State.Queue.Add(QueueItem.UserText("A"));
+        var host = new LocalSessionTurnHost(entry, store, new ControlledChat());
+        Assert.True(await host.TryClaimBusyAsync());
+        var before = entry.Snapshot();
+        entry.SetStoppingForTest(true);
+        entry.State.Meta["before"] = "kept";
+        store.FailStrictCommitNumber(2);
+
+        var finalization = host.FinalizeStoppedAsync();
+        await store.HeldStrictAppend;
+        entry.WithStateForTest(state =>
+        {
+            state.Queue.Add(QueueItem.UserText("B"));
+            state.Meta["independent"] = "kept";
+        });
+        entry.SetStoppingForTest(true);
+
+        store.ReleaseHeldStrictAppend();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => finalization);
+
+        var snapshot = entry.Snapshot();
+        Assert.Equal(new[] { "A", "B" }, snapshot.Queue.Select(item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>()));
+        Assert.Empty(snapshot.History);
+        Assert.True(snapshot.Busy);
+        Assert.Equal(before.BusyStartedAt, snapshot.BusyStartedAt);
+        Assert.True(snapshot.Stopping);
+        Assert.Equal("kept", snapshot.Meta["before"]?.GetValue<string>());
+        Assert.Equal("kept", snapshot.Meta["independent"]?.GetValue<string>());
+        Assert.Null(snapshot.Meta["lastMessageTime"]);
+        Assert.DoesNotContain(snapshot.History, message => message.ToJsonString().Contains("A", StringComparison.Ordinal));
+        Assert.DoesNotContain(snapshot.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
+    }
+
     private static SessionRegistry NewRegistry(InMemorySessionAuthorityStore store, ControlledChat chat, out SessionEntry entry)
     {
         var registry = new SessionRegistry(store, chat);
@@ -382,6 +572,9 @@ public sealed class SessionTurnTests
     }
 
     private static string? ClientId(JsonObject message) => message["__meta"]?["clientMessageId"]?.GetValue<string>();
+    private static int CountValue(SessionSnapshot snapshot, string value) =>
+        snapshot.Queue.Count(item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == value)
+        + snapshot.History.Count(message => message.ToJsonString().Contains($"\"text\":\"{value}\"", StringComparison.Ordinal));
     private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
@@ -463,6 +656,111 @@ internal sealed class ControlledChat : IChatService
 
     public sealed record Call(string SessionId, IReadOnlyList<JsonObject> History);
     private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+
+internal sealed class AppendFailureProbeStore : ISessionAuthorityStore
+{
+    private readonly object gate = new();
+    private readonly Dictionary<string, SessionSnapshot> snapshots = new();
+    private readonly List<CommitObservation> observations = new();
+    private readonly TaskCompletionSource<bool> heldStrictAppend = NewSignal();
+    private readonly TaskCompletionSource<bool> releaseHeldStrictAppend = NewSignal();
+    private int? failingStrictCommit;
+    private int strictCommitCount;
+
+    public Task HeldStrictAppend => heldStrictAppend.Task;
+
+    public IReadOnlyList<CommitObservation> Observations
+    {
+        get
+        {
+            lock (gate) return observations.ToArray();
+        }
+    }
+
+    public void FailNextStrictAppend() => FailStrictCommitNumber(2);
+    public void FailStrictCommitNumber(int commitNumber) => failingStrictCommit = commitNumber;
+    public void ReleaseHeldStrictAppend() => releaseHeldStrictAppend.TrySetResult(true);
+
+    public async Task CommitAsync(SessionSnapshot snapshot, SaveKind kind, CancellationToken cancellationToken = default)
+    {
+        CommitObservation observation;
+        var holdAndFail = false;
+        lock (gate)
+        {
+            if (kind == SaveKind.Strict && ++strictCommitCount == failingStrictCommit)
+            {
+                failingStrictCommit = null;
+                holdAndFail = true;
+            }
+
+            observation = new CommitObservation(
+                kind,
+                snapshot.Busy,
+                snapshot.Stopping,
+                QueueValues(snapshot.Queue),
+                snapshot.History.Select(message => message.ToJsonString()).ToArray(),
+                "started");
+            observations.Add(observation);
+        }
+
+        if (holdAndFail)
+        {
+            heldStrictAppend.TrySetResult(true);
+            await releaseHeldStrictAppend.Task.WaitAsync(cancellationToken);
+            observation.Outcome = "failed";
+            throw new InvalidOperationException("planned strict append failure");
+        }
+
+        lock (gate)
+        {
+            snapshots[snapshot.Id] = Clone(snapshot);
+            observation.Outcome = "committed";
+        }
+    }
+
+    public Task<SessionSnapshot?> LoadAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            snapshots.TryGetValue(sessionId, out var snapshot);
+            return Task.FromResult(snapshot is null ? null : Clone(snapshot));
+        }
+    }
+
+    private static string[] QueueValues(IEnumerable<QueueItem> items) => items.Select(item =>
+        item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() ?? item.Type.ToString()).ToArray();
+
+    private static SessionSnapshot Clone(SessionSnapshot snapshot) => new(
+        snapshot.Id,
+        snapshot.History.Select(message => (JsonObject)message.DeepClone()).ToArray(),
+        snapshot.Queue.Select(item => item.CloneItem()).ToArray(),
+        snapshot.Busy,
+        snapshot.BusyStartedAt,
+        snapshot.Stopping,
+        (JsonObject)snapshot.Meta.DeepClone());
+
+    private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public sealed class CommitObservation
+    {
+        public CommitObservation(SaveKind kind, bool busy, bool stopping, string[] queue, string[] history, string outcome)
+        {
+            Kind = kind;
+            Busy = busy;
+            Stopping = stopping;
+            Queue = queue;
+            History = history;
+            Outcome = outcome;
+        }
+
+        public SaveKind Kind { get; }
+        public bool Busy { get; }
+        public bool Stopping { get; }
+        public string[] Queue { get; }
+        public string[] History { get; }
+        public string Outcome { get; set; }
+    }
 }
 
 internal static class SessionEntryTestExtensions

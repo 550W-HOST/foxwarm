@@ -417,42 +417,68 @@ public sealed class LocalSessionTurnHost
     {
         if (items.Count == 0) return;
         foreach (var item in items) SessionIngress.EnsureSupportedForRunner(item);
-        var before = entry.Snapshot();
+        var removedItems = items.Select(item => item.CloneItem()).ToArray();
+        var appendedMessages = new List<JsonObject>();
+        JsonNode? previousLastMessageTime = null;
+        JsonNode? appliedLastMessageTime = null;
+        var hadLastMessageTime = false;
         entry.WithState(state =>
         {
             if (state.Queue.Count < items.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
             state.Queue.RemoveRange(0, items.Count);
             var firstInput = state.History.Count == 0;
+            var preparedParts = false;
             foreach (var item in items)
             {
                 if (item.Message is not null)
                 {
-                    state.History.Add((JsonObject)item.Message.DeepClone());
+                    var appendedMessage = (JsonObject)item.Message.DeepClone();
+                    state.History.Add(appendedMessage);
+                    appendedMessages.Add(appendedMessage);
                     firstInput = false;
                     continue;
                 }
                 if (item.Parts is null || item.Parts.Count == 0) continue;
                 var parts = item.Parts.Select(part => (JsonObject)part.DeepClone()).ToArray();
-                if (firstInput)
+                if (!preparedParts)
                 {
-                    parts = new[] { new JsonObject { ["system"] = $"<foxwarm-session id=\"{state.Id}\"/>" } }.Concat(parts).ToArray();
+                    hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
+                    previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
+                    appliedLastMessageTime = JsonValue.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    state.Meta["lastMessageTime"] = appliedLastMessageTime;
+                    preparedParts = true;
+                    if (firstInput) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
                 }
                 var message = new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(parts.Select(p => (JsonNode)p).ToArray()) };
                 if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
                 state.History.Add(message);
+                appendedMessages.Add(message);
                 firstInput = false;
             }
         });
         try
         {
             await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-            entry.InvokeCommitted(entry.Snapshot());
         }
         catch
         {
-            Restore(before);
+            entry.WithState(state =>
+            {
+                foreach (var message in appendedMessages)
+                {
+                    for (var index = state.History.Count - 1; index >= 0; index--)
+                    {
+                        if (!ReferenceEquals(state.History[index], message)) continue;
+                        state.History.RemoveAt(index);
+                        break;
+                    }
+                }
+                state.Queue.InsertRange(0, removedItems.Select(item => item.CloneItem()));
+                RestoreLastMessageTime(state, hadLastMessageTime, previousLastMessageTime, appliedLastMessageTime);
+            });
             throw;
         }
+        entry.InvokeCommitted(entry.Snapshot());
     }
 
     public async Task<string> ChatAsync(string turnId)
@@ -492,25 +518,48 @@ public sealed class LocalSessionTurnHost
 
     public async Task FinalizeStoppedAsync()
     {
-        var before = entry.Snapshot();
+        var drainedItems = Array.Empty<QueueItem>();
+        var appendedMessages = new List<JsonObject>();
+        var beforeBusy = false;
+        long? beforeBusyStartedAt = null;
+        var beforeStopping = false;
+        JsonNode? previousLastMessageTime = null;
+        JsonNode? appliedLastMessageTime = null;
+        var hadLastMessageTime = false;
         entry.WithState(state =>
         {
+            drainedItems = state.Queue.Select(item => item.CloneItem()).ToArray();
+            beforeBusy = state.Busy;
+            beforeBusyStartedAt = state.BusyStartedAt;
+            beforeStopping = state.Stopping;
             var firstInput = state.History.Count == 0;
+            var preparedParts = false;
             foreach (var item in state.Queue)
             {
                 if (item.Type == QueueItemType.CompactCommit) continue;
                 if (item.Message is not null)
                 {
-                    state.History.Add((JsonObject)item.Message.DeepClone());
+                    var appendedMessage = (JsonObject)item.Message.DeepClone();
+                    state.History.Add(appendedMessage);
+                    appendedMessages.Add(appendedMessage);
                     firstInput = false;
                     continue;
                 }
                 if (item.Parts is null || item.Parts.Count == 0) continue;
                 var parts = item.Parts.Select(p => (JsonObject)p.DeepClone()).ToArray();
-                if (firstInput) parts = new[] { new JsonObject { ["system"] = $"<foxwarm-session id=\"{state.Id}\"/>" } }.Concat(parts).ToArray();
+                if (!preparedParts)
+                {
+                    hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
+                    previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
+                    appliedLastMessageTime = JsonValue.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    state.Meta["lastMessageTime"] = appliedLastMessageTime;
+                    preparedParts = true;
+                    if (firstInput) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
+                }
                 var message = new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(parts.Select(p => (JsonNode)p).ToArray()) };
                 if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
                 state.History.Add(message);
+                appendedMessages.Add(message);
                 firstInput = false;
             }
             state.Queue.Clear();
@@ -522,30 +571,68 @@ public sealed class LocalSessionTurnHost
         {
             await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
             Interlocked.Increment(ref releaseCommits);
-            entry.InvokeCommitted(entry.Snapshot());
         }
         catch
         {
-            Restore(before);
+            entry.WithState(state =>
+            {
+                foreach (var message in appendedMessages)
+                {
+                    for (var index = state.History.Count - 1; index >= 0; index--)
+                    {
+                        if (!ReferenceEquals(state.History[index], message)) continue;
+                        state.History.RemoveAt(index);
+                        break;
+                    }
+                }
+                state.Queue.InsertRange(0, drainedItems.Select(item => item.CloneItem()));
+                if (state.Busy == false) state.Busy = beforeBusy;
+                if (state.BusyStartedAt is null) state.BusyStartedAt = beforeBusyStartedAt;
+                if (state.Stopping == false) state.Stopping = beforeStopping;
+                RestoreLastMessageTime(state, hadLastMessageTime, previousLastMessageTime, appliedLastMessageTime);
+            });
             throw;
         }
+        entry.InvokeCommitted(entry.Snapshot());
     }
 
-    private void Restore(SessionSnapshot snapshot)
+    private static JsonObject SessionTag(string sessionId) => new()
     {
-        entry.WithState(state =>
-        {
-            state.History.Clear();
-            state.History.AddRange(snapshot.History.Select(m => (JsonObject)m.DeepClone()));
-            state.Queue.Clear();
-            state.Queue.AddRange(snapshot.Queue.Select(i => i.CloneItem()));
-            state.Busy = snapshot.Busy;
-            state.BusyStartedAt = snapshot.BusyStartedAt;
-            state.Stopping = snapshot.Stopping;
-            state.Meta.Clear();
-            foreach (var property in snapshot.Meta) state.Meta[property.Key] = property.Value?.DeepClone();
-        });
+        ["system"] = $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(sessionId)}\" />"
+    };
+
+    private static string EscapeFoxwarmAttribute(string value)
+    {
+        var normalized = new string(value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Select(character => character switch
+            {
+                >= '\u0000' and <= '\u0008' or '\u000B' or '\u000C' or >= '\u000E' and <= '\u001F' or '\u007F' => ' ',
+                '\n' => ' ',
+                _ => character,
+            }).ToArray());
+        normalized = string.Join(' ', normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized
+            .Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal)
+            .Replace("'", "&apos;", StringComparison.Ordinal);
     }
+
+    private static void RestoreLastMessageTime(
+        SessionState state,
+        bool hadPrevious,
+        JsonNode? previous,
+        JsonNode? applied)
+    {
+        var current = state.Meta["lastMessageTime"];
+        if (applied is null || !ReferenceEquals(current, applied)) return;
+        if (hadPrevious) state.Meta["lastMessageTime"] = previous?.DeepClone();
+        else state.Meta.Remove("lastMessageTime");
+    }
+
 }
 
 public sealed class SessionIngress
