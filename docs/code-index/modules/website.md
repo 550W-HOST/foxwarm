@@ -11,7 +11,7 @@ Owns the static public project homepage, user documentation, root installer down
 ## Public interfaces
 
 - `https://foxwarm.550w.host/` — project homepage.
-- `/docs/` — English user documentation.
+- `/docs/` — English user documentation with the standard Starlight article layout and navigation sidebar.
 - `/install-foxwarm.sh` and `/install-foxwarm.ps1` — byte-exact build copies of the repository-root installers.
 - `npm ci`, `npm run build`, and `npm run check` from `website/` — standalone dependency, production-build, and validation boundaries.
 

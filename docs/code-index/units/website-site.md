@@ -11,7 +11,7 @@ Builds and validates the public Foxwarm project website and focused user documen
 
 - `astro.config.mjs` fixes the canonical origin at `https://foxwarm.550w.host`, enables static output and sitemap generation, and configures Starlight routes, navigation, search, branding, edit links, and documentation CSS.
 - `src/pages/index.astro` provides a custom accessible homepage with install/docs/source entry points, restrained light/dark styling, and a clearly labeled system illustration rather than a simulated product screenshot.
-- `src/content/docs/docs/` owns nine initial user pages: documentation index, install, model setup, concepts/memory, tools/Skills/MCP, Nodes, Channels, data/upgrades/backups, and FAQ.
+- `src/content/docs/docs/` owns nine initial user pages: an ordinary `/docs/` article with the Starlight navigation sidebar, plus install, model setup, concepts/memory, tools/Skills/MCP, Nodes, Channels, data/upgrades/backups, and FAQ.
 - `scripts/sync-assets.mjs` copies both repository-root installers and the existing WebUI favicon assets into ignored `website/public/` build inputs before development or production build.
 - The test suite validates required routes, canonical URLs, indexability, local links/assets, installer byte parity and file identity, robots/sitemap output, Pagefind search output, and absence of unresolved installer-host placeholders.
 - The Pages workflow uses immutable revisions of official checkout, Node setup, Pages artifact upload, and deploy actions. It installs the website with `npm ci`, runs the standalone check, and uploads `website/dist`. Pull requests are checked but only a successful `main` push or a manual run explicitly selected on `main` can deploy; permissions are job-scoped and deployment is serialized.

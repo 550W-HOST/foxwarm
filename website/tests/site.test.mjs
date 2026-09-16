@@ -65,6 +65,18 @@ test('build contains every public page with the canonical custom-domain URL', as
   }
 });
 
+test('the homepage documentation action opens an ordinary docs page with navigation', async () => {
+  const homepage = await readFile(routeToFile('/'), 'utf8');
+  assert.match(homepage, /<a class="button secondary" href="\/docs\/">Read the docs/);
+
+  const docsHome = await readFile(routeToFile('/docs/'), 'utf8');
+  assert.doesNotMatch(docsHome, /data-has-hero/);
+  assert.match(docsHome, /class="sidebar-pane/);
+  assert.match(docsHome, /id="starlight__sidebar"/);
+  assert.match(docsHome, /href="\/docs\/" aria-current="page"/);
+  assert.match(docsHome, /class="sl-menu-button/);
+});
+
 test('built local links and assets resolve inside dist', async () => {
   const missing = [];
   for (const filePath of await htmlFiles()) {
