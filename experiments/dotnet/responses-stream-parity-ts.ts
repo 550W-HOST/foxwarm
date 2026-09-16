@@ -13,7 +13,7 @@ function normalizeError(error: any, item: Case) {
   const terminal = item.events.find(event => ['response.failed', 'response.incomplete', 'response.error', 'error'].includes(event.type));
   const source = terminal?.type === 'response.failed' || terminal?.type === 'response.incomplete' ? terminal.response : terminal?.type === 'response.error' ? terminal.error : terminal;
   const detail = source?.error && typeof source.error === 'object' ? source.error : source;
-  const message = detail?.message || source?.message || detail?.label || (
+  const message = detail?.message || source?.message || (
     terminal?.type === 'response.failed' ? 'OpenAI Responses request failed.' :
     terminal?.type === 'response.incomplete' ? 'OpenAI Responses request was incomplete.' : 'OpenAI Responses stream error.');
   const status = detail?.status ?? source?.status;

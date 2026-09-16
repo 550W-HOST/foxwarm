@@ -21,7 +21,7 @@ The Responses collector uses native async `Stream.ReadAsync`, incremental UTF-8 
 
 ## Differential oracle
 
-The existing Phase 2A `parity-corpus.json`, categories, and runner remain unchanged. Responses streaming has a separate 9-case corpus at `responses-stream-corpus.json`. It invokes the actual TypeScript `collectOpenAIResponsesStream` with the exact synthetic string/Buffer chunks and compares it with the C# collector over the same UTF-8 bytes. The comparator requires equal corpus/TS/C# lengths and exact semantic equality for final response JSON, every cumulative progress snapshot, meaningful-progress count, safety metadata, concatenated decoded raw text, complete SSE blocks, and normalized success/error categories and terminal fields. It also rejects missing completion, wrong progress/event counts, and late terminal errors. Native malformed-parser and low-level read diagnostics are intentionally not required to be byte-identical.
+The existing Phase 2A `parity-corpus.json`, categories, and runner remain unchanged. Responses streaming has a separate 10-case corpus at `responses-stream-corpus.json`. It invokes the actual TypeScript `collectOpenAIResponsesStream` with the exact synthetic string/Buffer chunks and compares it with the C# collector over the same UTF-8 bytes. The comparator requires equal corpus/TS/C# lengths and exact semantic equality for final response JSON, every cumulative progress snapshot, meaningful-progress count, safety metadata, concatenated decoded raw text, complete SSE blocks, and normalized success/error categories and terminal fields. It also rejects missing completion, wrong progress/event counts, and late terminal errors. Native malformed-parser and low-level read diagnostics are intentionally not required to be byte-identical.
 
 Run the separate Responses differential check from the repository root:
 
@@ -34,7 +34,7 @@ python3 experiments/dotnet/responses-stream-parity-compare.py dotnet
 The TypeScript subprocess is bounded and its JSON prefix is parsed because importing the real provider module can retain process-local logging handles after the oracle result is written. `FOXWARM_NO_CONSOLE_LOG=1` is applied by the wrapper; no provider request is made. The expected result is:
 
 ```text
-comparison ok: 9 cases; semantic final/progress/raw/block/error parity exact
+comparison ok: 10 cases; semantic final/progress/raw/block/error parity exact
 ```
 
 Run the preserved Phase 2A differential oracle separately with `python3 experiments/dotnet/run-parity.py` after the repository JavaScript dependencies and shared generated package are available. The prototype remains outside normal Node CI and does not alter TypeScript runtime behavior, persistence, model routing, or Session ownership.

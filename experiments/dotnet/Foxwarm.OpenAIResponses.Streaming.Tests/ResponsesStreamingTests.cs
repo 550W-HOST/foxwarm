@@ -65,6 +65,18 @@ public sealed class ResponsesStreamingTests
     }
 
     [Fact]
+    public void Accumulator_reasoning_done_empty_retains_existing_summary_without_progress()
+    {
+        var progress = new List<ResponsesStreamProgress>(); var accumulator = new ResponsesEventAccumulator(new ResponsesStreamCallbacks { OnProgress = snapshot => progress.Add(snapshot) });
+        accumulator.Consume(Event("response.reasoning_summary_text.delta", ("output_index", 0), ("summary_index", 0), ("delta", "kept")));
+        var count = progress.Count;
+        accumulator.Consume(Event("response.reasoning_summary_text.done", ("output_index", 0), ("summary_index", 0), ("text", "")));
+        Assert.Equal(count, progress.Count);
+        accumulator.Consume(Event("response.completed", ("response", Obj(("output", new JsonArray(Obj(("type", "reasoning"))))))));
+        Assert.Equal("kept", progress[^1].Reasoning);
+    }
+
+    [Fact]
     public void Accumulator_is_owned_and_terminal_errors_are_typed()
     {
         var source = Event("response.output_item.added", ("output_index", 0), ("item", Obj(("type", "message"), ("content", new JsonArray()))));
@@ -73,6 +85,13 @@ public sealed class ResponsesStreamingTests
         Assert.Equal("message", accumulator.CompleteAtEof()["output"]![0]!["type"]!.GetValue<string>());
         var error = Assert.Throws<OpenAiResponsesTerminalException>(() => new ResponsesEventAccumulator().Consume(Event("response.failed", ("response", Obj(("error", Obj(("message", "bad"), ("status", 500), ("code", "x"))))))));
         Assert.Equal("response.failed", error.TerminalKind); Assert.Equal("bad", error.Message); Assert.Equal("500", error.Status); Assert.Equal("x", error.Code);
+    }
+
+    [Fact]
+    public void Accumulator_terminal_label_does_not_override_event_fallback()
+    {
+        var error = Assert.Throws<OpenAiResponsesTerminalException>(() => new ResponsesEventAccumulator().Consume(Event("response.failed", ("response", Obj(("label", "provider label"))))));
+        Assert.Equal("OpenAI Responses request failed.", error.Message);
     }
 
     [Theory]

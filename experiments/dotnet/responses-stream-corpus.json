@@ -26,6 +26,12 @@
         "delta": "\nDo"
       },
       {
+        "type": "response.reasoning_summary_text.done",
+        "output_index": 0,
+        "summary_index": 0,
+        "text": ""
+      },
+      {
         "type": "response.output_item.added",
         "output_index": 1,
         "item": {
@@ -108,6 +114,7 @@
       "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[],\"unknown\":{\"keep\":true}}}\n\n",
       "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan\"}\n\n",
       "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":1,\"delta\":\"\\nDo\"}\n\n",
+      "data: {\"type\":\"response.reasoning_summary_text.done\",\"output_index\":0,\"summary_index\":0,\"text\":\"\"}\n\n",
       "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]}}\n\n",
       "data: {\"type\":\"response.content_part.added\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
       "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"content_index\":0,\"delta\":\"Hel\"}\n\n",
@@ -400,6 +407,22 @@
       "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n",
       "data: {\"type\":\"response.error\",\"error\":{\"message\":\"late error\",\"code\":\"late\"}}\n\n",
       "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "terminal-label-only",
+    "events": [
+      {
+        "type": "response.failed",
+        "response": {
+          "label": "provider label",
+          "status": 500,
+          "code": "oops"
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.failed\",\"response\":{\"label\":\"provider label\",\"status\":500,\"code\":\"oops\"}}\n\n"
     ]
   }
 ]
