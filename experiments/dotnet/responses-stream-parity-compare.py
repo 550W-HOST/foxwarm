@@ -59,9 +59,13 @@ def compare(case, left, right):
         raise AssertionError(f"{case['name']}: status mismatch {a.get('status')} != {b.get('status')}")
     if a.get('status') != expected_status(case):
         raise AssertionError(f"{case['name']}: unexpected status {a.get('status')}")
+    common_keys = {'progress', 'meaningfulCount', 'safety', 'decodedRaw', 'blocks', 'status'}
+    expected_observation_keys = common_keys | ({'final'} if a.get('status') == 'success' else {'error'})
+    if set(a) != expected_observation_keys or set(b) != expected_observation_keys:
+        raise AssertionError(f"{case['name']}: observation key presence mismatch: TS={set(a)!r} C#={set(b)!r} expected={expected_observation_keys!r}")
     for field in ('meaningfulCount', 'safety', 'decodedRaw', 'blocks', 'progress'):
-        if not strict_equal(a.get(field), b.get(field)):
-            raise AssertionError(f"{case['name']}: {field} mismatch\nTS={a.get(field)!r}\nC#={b.get(field)!r}")
+        if not strict_equal(a[field], b[field]):
+            raise AssertionError(f"{case['name']}: {field} mismatch\nTS={a[field]!r}\nC#={b[field]!r}")
     if a.get('status') == 'success':
         if 'final' not in a or 'final' not in b:
             raise AssertionError(f"{case['name']}: completion was not observed")
@@ -108,8 +112,9 @@ if '--self-test-negative' in sys.argv:
     must_reject(lambda left, right: left['observation']['error'].__setitem__('message', 'wrong actual message'), terminal_index)
     must_reject(lambda left, right: right['observation']['final']['output'][0]['unknown'].__setitem__('keep', 1))
     must_reject(lambda left, right: right['observation']['final']['output'][0]['unknown'].pop('nullable'), 0)
+    must_reject(lambda left, right: right['observation'].pop('safety'))
     must_reject(lambda left, right: right['observation']['progress'].pop())
     must_reject(lambda left, right: right['observation']['blocks'].pop())
     must_reject(lambda left, right: right['observation'].__setitem__('status', 'error'))
     must_reject(lambda left, right: right['observation'].__setitem__('status', 'success'), late_index)
-    print('negative comparator checks ok: wrong terminal message, bool-vs-number, absent-vs-null, counts, unobserved completion, and late error rejected')
+    print('negative comparator checks ok: wrong terminal message, bool-vs-number, absent-vs-null, missing common field, counts, unobserved completion, and late error rejected')
