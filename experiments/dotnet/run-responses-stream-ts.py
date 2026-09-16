@@ -10,28 +10,25 @@ from pathlib import Path
 root = Path(__file__).parent
 env = os.environ.copy()
 env['FOXWARM_NO_CONSOLE_LOG'] = '1'
-cmd = [env.get('FOXWARM_TSX', 'npx'), str(root / 'responses-stream-parity-ts.ts')]
-if env.get('FOXWARM_TSX') is None:
-    cmd = ['npx', '--yes', 'tsx@4.19.2', str(root / 'responses-stream-parity-ts.ts')]
-with tempfile.TemporaryDirectory() as directory:
-    stdout_path, stderr_path = Path(directory) / 'stdout', Path(directory) / 'stderr'
-    with stdout_path.open('w+') as stdout, stderr_path.open('w+') as stderr:
-        proc = subprocess.Popen(cmd, cwd=root.parent.parent, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=5)
-        stdout.flush(); stderr.flush()
-    raw = stdout_path.read_text()
-    errors = stderr_path.read_text()
-try:
-    value, _ = json.JSONDecoder().raw_decode(raw.lstrip())
-except json.JSONDecodeError:
-    sys.stderr.write(errors)
-    sys.stderr.write(raw)
-    raise
-print(json.dumps(value, separators=(',', ':')))
-if proc.returncode not in (0, -9):
-    sys.stderr.write(errors)
-    raise SystemExit(proc.returncode)
+env['FOXWARM_SYNC_FILE_LOG'] = '1'
+with tempfile.TemporaryDirectory(prefix='foxwarm-responses-oracle-') as data_dir:
+    env['FOXWARM_DATA_DIR'] = data_dir
+    tsx = env.get('FOXWARM_TSX')
+    cmd = [tsx, str(root / 'responses-stream-parity-ts.ts')] if tsx else ['npx', '--yes', 'tsx@4.19.2', str(root / 'responses-stream-parity-ts.ts')]
+    proc = subprocess.Popen(cmd, cwd=root.parent.parent, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
+        raise SystemExit('TypeScript Responses oracle timed out and was killed')
+    if proc.returncode != 0:
+        sys.stderr.write(stderr)
+        sys.stderr.write(stdout)
+        raise SystemExit(f'TypeScript Responses oracle exited with {proc.returncode}')
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        sys.stderr.write(stderr)
+        raise SystemExit(f'TypeScript Responses oracle emitted non-JSON stdout: {error}')
+print(json.dumps(result, separators=(',', ':')))

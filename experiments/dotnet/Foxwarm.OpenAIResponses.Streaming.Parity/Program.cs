@@ -12,8 +12,9 @@ foreach (var item in corpus)
     var progress = new List<ResponsesStreamProgress>(); var safety = new List<JsonObject>(); var blocks = new List<string>(); var decoded = new StringBuilder(); var meaningful = 0;
     var callbacks = new ResponsesStreamCallbacks { OnProgress = snapshot => progress.Add(snapshot), OnMeaningfulProgress = () => meaningful++, OnSafetyBuffering = metadata => safety.Add((JsonObject)metadata.DeepClone()), OnDecodedChunk = chunk => decoded.Append(chunk), OnSseBlock = block => blocks.Add(block) };
     JsonObject? final = null; JsonObject? error = null;
-    try { final = await ResponsesSseCollector.CollectAsync(new ChunkedStream(item.Chunks.SelectMany(Encoding.UTF8.GetBytes).ToArray(), item.Chunks.Select(chunk => Encoding.UTF8.GetByteCount(chunk)).ToArray()), CancellationToken.None, callbacks, StreamOwnership.Dispose); }
-    catch (OpenAiResponsesTerminalException terminal) { error = new JsonObject { ["category"] = "provider-terminal", ["kind"] = terminal.TerminalKind, ["message"] = terminal.Message, ["status"] = terminal.Status, ["code"] = terminal.Code }; }
+    var byteChunks = item.ByteChunks is { Count: > 0 } ? item.ByteChunks.Select(Convert.FromBase64String).ToList() : item.Chunks.Select(Encoding.UTF8.GetBytes).ToList();
+    try { final = await ResponsesSseCollector.CollectAsync(new ChunkedStream(byteChunks.SelectMany(x => x).ToArray(), byteChunks.Select(x => x.Length).ToArray()), CancellationToken.None, callbacks, StreamOwnership.Dispose); }
+    catch (OpenAiResponsesTerminalException terminal) { error = new JsonObject { ["category"] = "provider-terminal", ["kind"] = terminal.TerminalKind, ["message"] = terminal.Message }; if (terminal.Status is not null) error["status"] = terminal.Status; if (terminal.Code is not null) error["code"] = terminal.Code; }
     catch (MalformedSseEventJsonException malformed) { error = new JsonObject { ["category"] = "malformed-json", ["message"] = malformed.Message }; }
     catch (ResponsesStreamException streamError) { error = new JsonObject { ["category"] = streamError.Category switch { ResponsesStreamErrorCategory.EofBeforeCompleted => "eof-before-completed", ResponsesStreamErrorCategory.Read => "read", _ => "stream" }, ["message"] = streamError.Message }; }
     catch (OperationCanceledException) { error = new JsonObject { ["category"] = "cancellation" }; }
@@ -23,7 +24,7 @@ foreach (var item in corpus)
 }
 Console.Write(results.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
 
-sealed record CorpusCase(string Name, List<JsonObject> Events, List<string> Chunks);
+sealed record CorpusCase(string Name, List<JsonObject> Events, List<string> Chunks, List<string>? ByteChunks = null);
 
 sealed class ChunkedStream(byte[] data, int[] chunkSizes) : Stream
 {
