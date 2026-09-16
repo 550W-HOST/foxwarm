@@ -297,6 +297,20 @@
     "rawArgsText": "raw"
   },
   {
+    "name": "args stringify stored error with raw",
+    "op": "argsStringify",
+    "args": {},
+    "rawArgsText": "raw text",
+    "argsParseError": "stored error"
+  },
+  {
+    "name": "args stringify stored error with empty raw",
+    "op": "argsStringify",
+    "args": {},
+    "rawArgsText": "",
+    "argsParseError": "stored error"
+  },
+  {
     "name": "args stringify unicode control nested numbers",
     "op": "argsStringify",
     "args": {
