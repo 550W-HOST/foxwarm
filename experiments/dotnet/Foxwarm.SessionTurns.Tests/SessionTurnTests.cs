@@ -105,6 +105,54 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
+    public async Task PrebuiltFirstConsumesPartsPreparationBoundary()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        chat.QueueResult("answer");
+        var registry = NewRegistry(store, chat, out var entry);
+        registry.TriggerOverride = _ => Task.CompletedTask;
+        entry.State.Meta["lastMessageTime"] = 42L;
+        var prebuilt = new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" })
+        };
+        entry.State.Queue.Add(QueueItem.Prebuilt(prebuilt));
+        entry.State.Queue.Add(QueueItem.UserText("later"));
+
+        await registry.Runner.ProcessQueueAsync("s");
+
+        var snapshot = entry.Snapshot();
+        var later = snapshot.History.Last(message => message["role"]?.GetValue<string>() == "user");
+        var laterParts = (JsonArray)later["parts"]!;
+        Assert.Equal("later", laterParts[0]?["text"]?.GetValue<string>());
+        Assert.DoesNotContain(laterParts, part => part?["system"] is not null);
+        Assert.Equal(42L, snapshot.Meta["lastMessageTime"]?.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task EmptyThenPartsStillPreparesFirstCommittedInput()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        chat.QueueResult("answer");
+        var registry = NewRegistry(store, chat, out var entry);
+        registry.TriggerOverride = _ => Task.CompletedTask;
+        entry.State.Queue.Add(new QueueItem(QueueItemType.User, Array.Empty<JsonObject>()));
+        entry.State.Queue.Add(QueueItem.UserText("parts"));
+
+        await registry.Runner.ProcessQueueAsync("s");
+
+        var snapshot = entry.Snapshot();
+        var user = snapshot.History.Single(message => message["role"]?.GetValue<string>() == "user");
+        Assert.Equal(
+            "<foxwarm-system kind=\"session\" currentSessionId=\"s\" />",
+            ((JsonArray)user["parts"]!)[0]?["system"]?.GetValue<string>());
+        Assert.True(snapshot.Meta["lastMessageTime"]?.GetValue<long>() > 0);
+    }
+
+    [Fact]
     public async Task PeekedLeadingItemAdvancesAndIsConsumedOnce()
     {
         var store = new InMemorySessionAuthorityStore();
@@ -417,7 +465,7 @@ public sealed class SessionTurnTests
     {
         var store = new InMemorySessionAuthorityStore();
         var registry = new SessionRegistry(store, new ControlledChat());
-        var sessionId = " \r\n  alpha \t \u0001 & < > \" ' \u000B omega \n ";
+        var sessionId = "\uFEFF \r\n  alpha \t \u0001 & < > \" ' \u000B omega \u0085 \uFEFF \n ";
         var entry = registry.Add(sessionId);
         entry.State.Queue.Add(QueueItem.UserText("first"));
 
@@ -427,7 +475,7 @@ public sealed class SessionTurnTests
         var initialUser = initial.History.Single(message => message["role"]?.GetValue<string>() == "user");
         var initialParts = (JsonArray)initialUser["parts"]!;
         Assert.Equal(
-            "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega\" />",
+            "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega \u0085\" />",
             initialParts[0]?["system"]?.GetValue<string>());
         Assert.True(initial.Meta["lastMessageTime"]?.GetValue<long>() > 0);
 
@@ -441,6 +489,33 @@ public sealed class SessionTurnTests
         Assert.Equal("second", secondParts[0]?["text"]?.GetValue<string>());
         Assert.DoesNotContain(secondParts, part => part?["system"] is not null);
         Assert.True(noninitial.Meta["lastMessageTime"]?.GetValue<long>() > 1);
+    }
+
+    [Fact]
+    public async Task StopFinalizationPrebuiltFirstConsumesPartsPreparationBoundary()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var entry = new SessionEntry(new SessionState("s"), store);
+        entry.State.Meta["lastMessageTime"] = 42L;
+        var prebuilt = new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "prebuilt" })
+        };
+        entry.State.Queue.Add(QueueItem.Prebuilt(prebuilt));
+        entry.State.Queue.Add(QueueItem.UserText("later"));
+        var host = new LocalSessionTurnHost(entry, store, new ControlledChat());
+        Assert.True(await host.TryClaimBusyAsync());
+        entry.SetStoppingForTest(true);
+
+        await host.FinalizeStoppedAsync();
+
+        var snapshot = entry.Snapshot();
+        var later = snapshot.History.Last(message => message["role"]?.GetValue<string>() == "user");
+        var laterParts = (JsonArray)later["parts"]!;
+        Assert.Equal("later", laterParts[0]?["text"]?.GetValue<string>());
+        Assert.DoesNotContain(laterParts, part => part?["system"] is not null);
+        Assert.Equal(42L, snapshot.Meta["lastMessageTime"]?.GetValue<long>());
     }
 
     [Fact]

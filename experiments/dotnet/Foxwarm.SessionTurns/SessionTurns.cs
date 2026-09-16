@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.MessageJson;
@@ -426,8 +427,8 @@ public sealed class LocalSessionTurnHost
         {
             if (state.Queue.Count < items.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
             state.Queue.RemoveRange(0, items.Count);
-            var firstInput = state.History.Count == 0;
-            var preparedParts = false;
+            var historyEmpty = state.History.Count == 0;
+            var committedAnyInput = false;
             foreach (var item in items)
             {
                 if (item.Message is not null)
@@ -435,25 +436,24 @@ public sealed class LocalSessionTurnHost
                     var appendedMessage = (JsonObject)item.Message.DeepClone();
                     state.History.Add(appendedMessage);
                     appendedMessages.Add(appendedMessage);
-                    firstInput = false;
+                    committedAnyInput = true;
                     continue;
                 }
                 if (item.Parts is null || item.Parts.Count == 0) continue;
                 var parts = item.Parts.Select(part => (JsonObject)part.DeepClone()).ToArray();
-                if (!preparedParts)
+                if (!committedAnyInput)
                 {
                     hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
                     previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
                     appliedLastMessageTime = JsonValue.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                     state.Meta["lastMessageTime"] = appliedLastMessageTime;
-                    preparedParts = true;
-                    if (firstInput) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
+                    if (historyEmpty) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
                 }
                 var message = new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(parts.Select(p => (JsonNode)p).ToArray()) };
                 if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
                 state.History.Add(message);
                 appendedMessages.Add(message);
-                firstInput = false;
+                committedAnyInput = true;
             }
         });
         try
@@ -532,8 +532,8 @@ public sealed class LocalSessionTurnHost
             beforeBusy = state.Busy;
             beforeBusyStartedAt = state.BusyStartedAt;
             beforeStopping = state.Stopping;
-            var firstInput = state.History.Count == 0;
-            var preparedParts = false;
+            var historyEmpty = state.History.Count == 0;
+            var committedAnyInput = false;
             foreach (var item in state.Queue)
             {
                 if (item.Type == QueueItemType.CompactCommit) continue;
@@ -542,25 +542,24 @@ public sealed class LocalSessionTurnHost
                     var appendedMessage = (JsonObject)item.Message.DeepClone();
                     state.History.Add(appendedMessage);
                     appendedMessages.Add(appendedMessage);
-                    firstInput = false;
+                    committedAnyInput = true;
                     continue;
                 }
                 if (item.Parts is null || item.Parts.Count == 0) continue;
                 var parts = item.Parts.Select(p => (JsonObject)p.DeepClone()).ToArray();
-                if (!preparedParts)
+                if (!committedAnyInput)
                 {
                     hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
                     previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
                     appliedLastMessageTime = JsonValue.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                     state.Meta["lastMessageTime"] = appliedLastMessageTime;
-                    preparedParts = true;
-                    if (firstInput) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
+                    if (historyEmpty) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
                 }
                 var message = new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(parts.Select(p => (JsonNode)p).ToArray()) };
                 if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
                 state.History.Add(message);
                 appendedMessages.Add(message);
-                firstInput = false;
+                committedAnyInput = true;
             }
             state.Queue.Clear();
             state.Stopping = false;
@@ -612,7 +611,20 @@ public sealed class LocalSessionTurnHost
                 '\n' => ' ',
                 _ => character,
             }).ToArray());
-        normalized = string.Join(' ', normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var collapsed = new StringBuilder(normalized.Length);
+        var pendingWhitespace = false;
+        foreach (var character in normalized)
+        {
+            if (IsEcmaWhitespace(character))
+            {
+                pendingWhitespace = collapsed.Length > 0;
+                continue;
+            }
+            if (pendingWhitespace) collapsed.Append(' ');
+            collapsed.Append(character);
+            pendingWhitespace = false;
+        }
+        normalized = collapsed.ToString();
         return normalized
             .Replace("&", "&amp;", StringComparison.Ordinal)
             .Replace("<", "&lt;", StringComparison.Ordinal)
@@ -620,6 +632,11 @@ public sealed class LocalSessionTurnHost
             .Replace("\"", "&quot;", StringComparison.Ordinal)
             .Replace("'", "&apos;", StringComparison.Ordinal);
     }
+
+    private static bool IsEcmaWhitespace(char character) => character is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2028' or '\u2029' or '\u202F' or '\u205F' or '\u3000' or '\uFEFF' ||
+        character is >= '\u2000' and <= '\u200A';
 
     private static void RestoreLastMessageTime(
         SessionState state,
