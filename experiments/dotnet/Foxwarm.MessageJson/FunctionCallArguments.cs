@@ -22,7 +22,7 @@ public static class FunctionCallArguments
         if (raw is null) return new ParsedArguments(new JsonObject());
         if (raw is JsonObject obj) return new ParsedArguments((JsonObject)obj.DeepClone());
         if (raw is not JsonValue value || !value.TryGetValue<string>(out var text))
-            return new ParsedArguments(new JsonObject(), JsString(raw), $"Invalid tool arguments JSON: expected an object string, received {JsonType(raw)}");
+            throw new UnsupportedArgumentInputException("Non-string non-object argument input is outside the experimental C# boundary.");
         if (text.Length == 0) return new ParsedArguments(new JsonObject());
         try
         {
@@ -32,28 +32,8 @@ public static class FunctionCallArguments
             return new ParsedArguments((JsonObject)parsedObject.DeepClone(), text);
         }
         catch (JsonException error)
-        {
-            // Keep the stable JS error for the representative truncated-object boundary.
-            var detail = text == "{" ? "Expected property name or '}' in JSON at position 1 (line 1 column 2)" : error.Message;
-            return new ParsedArguments(new JsonObject(), text, $"Invalid tool arguments JSON: {detail}");
-        }
+        { return new ParsedArguments(new JsonObject(), text, $"Invalid tool arguments JSON: {error.Message}"); }
     }
-
-    private static string JsString(JsonNode value) => value switch
-    {
-        JsonArray array => string.Join(',', array.Select(item => item is null ? "" : JsString(item))),
-        JsonObject => "[object Object]",
-        JsonValue scalar when scalar.TryGetValue<string>(out var text) => text,
-        JsonValue scalar when scalar.TryGetValue<bool>(out var boolean) => boolean ? "true" : "false",
-        JsonValue scalar => scalar.ToJsonString().Trim('"'),
-        _ => "undefined"
-    };
-
-    private static string JsonType(JsonNode? value) => value switch
-    {
-        JsonObject => "object", JsonArray => "object", JsonValue v when v.TryGetValue<string>(out _) => "string",
-        JsonValue v when v.TryGetValue<bool>(out _) => "boolean", JsonValue => "number", null => "object", _ => "object"
-    };
 
     private static string ParsedJsonType(JsonNode? value) => value switch
     {
@@ -63,3 +43,4 @@ public static class FunctionCallArguments
 }
 
 public sealed record ParsedArguments(JsonObject Args, string? RawArgsText = null, string? ArgsParseError = null);
+public sealed class UnsupportedArgumentInputException(string message) : Exception(message);
