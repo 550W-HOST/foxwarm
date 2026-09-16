@@ -58,14 +58,28 @@ public static class ConditionalMemory
         foreach (var c in normalized)
         {
             if (c is >= '\0' and <= '\u0008' or '\u000B' or '\u000C' or >= '\u000E' and <= '\u001F' or '\u007F') chars.Append(' ');
-            else if (c == '\n' || char.IsWhiteSpace(c)) chars.Append(' ');
+            else if (IsJavaScriptWhitespace(c)) chars.Append(' ');
             else chars.Append(c);
         }
-        var collapsed = Regex.Replace(chars.ToString(), "\\s+", " ", RegexOptions.CultureInvariant).Trim();
+        var collapsedBuilder = new StringBuilder(chars.Length);
+        var previousSpace = false;
+        foreach (var c in chars.ToString())
+        {
+            if (c == ' ')
+            {
+                if (previousSpace) continue;
+                previousSpace = true;
+            }
+            else previousSpace = false;
+            collapsedBuilder.Append(c);
+        }
+        var collapsed = collapsedBuilder.ToString().Trim(' ');
         return collapsed.Replace("&", "&amp;", StringComparison.Ordinal)
             .Replace("<", "&lt;", StringComparison.Ordinal).Replace(">", "&gt;", StringComparison.Ordinal)
             .Replace("\"", "&quot;", StringComparison.Ordinal).Replace("'", "&apos;", StringComparison.Ordinal);
     }
+
+    private static bool IsJavaScriptWhitespace(char c) => c is '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or '\u1680' or '\u2028' or '\u2029' or '\u202F' or '\u205F' or '\u3000' or '\uFEFF' || c is >= '\u2000' and <= '\u200A';
 
     private static string UnescapeAttributeValue(string value) => value
         .Replace("&quot;", "\"", StringComparison.Ordinal).Replace("&apos;", "'", StringComparison.Ordinal)
@@ -163,7 +177,7 @@ public static class ConditionalMemory
 
     private static bool WildcardMatches(string pattern, string modelId)
     {
-        var regex = "^" + string.Join(".*", pattern.Split('*').Select(Regex.Escape)) + "$";
+        var regex = "^" + string.Join("[^\\r\\n\\u2028\\u2029]*", pattern.Split('*').Select(Regex.Escape)) + "$";
         return Regex.IsMatch(modelId, regex, RegexOptions.CultureInvariant);
     }
 }

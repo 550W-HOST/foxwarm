@@ -8,7 +8,7 @@ Contains a limited, manual ordinary-.NET migration prototype. The first port is 
 
 ## Scope
 
-The C# library ports the pure filtering and current-model snapshot header helpers from [src-conditional-memory](./src-conditional-memory.md), preserving the confirmed bounded grammar and byte-level newline/header behavior. TypeScript remains authoritative, and the prototype is outside the normal Node build and test dependency graph. It does not port Session workers, persistence, model routing, provider transport, or runtime snapshot ownership.
+The C# library ports the pure filtering and current-model snapshot header helpers from [src-conditional-memory](./src-conditional-memory.md), preserving the confirmed bounded grammar and byte-level newline/header behavior. A 30-case shared corpus is run through both the actual TypeScript helpers and C# helpers by an explicit manual differential runner; undefined results are represented explicitly. TypeScript remains authoritative, and the prototype is outside the normal Node build and test dependency graph. It does not port Session workers, persistence, model routing, provider transport, or runtime snapshot ownership.
 
 The next-module inventory is intentionally deferred: canonical Message/MessagePart JSON/provider serialization, Responses SSE incremental parsing/cancellation with a local fake provider, and a disposable-database LanceDB native binding probe. Each may require non-mechanical contract decisions before implementation.
 
