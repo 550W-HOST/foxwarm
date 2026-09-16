@@ -1,0 +1,111 @@
+using System.Text;
+using System.Text.Json.Nodes;
+using Foxwarm.OpenAIResponses.Streaming;
+
+namespace Foxwarm.OpenAIResponses.Streaming.Tests;
+
+public sealed class ResponsesStreamingTests
+{
+    [Fact]
+    public void Accumulator_reconstructs_reasoning_text_function_call_and_keeps_unknown_fields()
+    {
+        var progress = new List<ResponsesStreamProgress>(); var meaningful = 0;
+        var accumulator = new ResponsesEventAccumulator(new ResponsesStreamCallbacks { OnProgress = snapshot => progress.Add(snapshot), OnMeaningfulProgress = () => meaningful++ });
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 0), ("item", Obj(("type", "reasoning"), ("summary", new JsonArray()), ("vendor", Obj(("x", true)))))));
+        accumulator.Consume(Event("response.reasoning_summary_text.delta", ("output_index", 0), ("summary_index", 0), ("delta", "Think")));
+        accumulator.Consume(Event("response.reasoning_summary_text.done", ("output_index", 0), ("summary_index", 0), ("text", "Thinking done")));
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 1), ("item", Obj(("type", "message"), ("role", "assistant"), ("content", new JsonArray())))));
+        accumulator.Consume(Event("response.output_text.delta", ("output_index", 1), ("content_index", 0), ("delta", "Hi")));
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 2), ("item", Obj(("type", "function_call"), ("call_id", "c1"), ("name", "read"), ("arguments", "")))));
+        accumulator.Consume(Event("response.function_call_arguments.delta", ("output_index", 2), ("delta", "{}")));
+        accumulator.Consume(Event("response.completed", ("response", Obj(("id", "r1"), ("output", new JsonArray())))));
+        var result = accumulator.CompleteAtEof();
+        Assert.Equal(3, ((JsonArray)result["output"]!).Count);
+        Assert.Equal("Thinking done", result["output"]![0]!["summary"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Hi", result["output"]![1]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("{}", result["output"]![2]!["arguments"]!.GetValue<string>());
+        Assert.True(result["output"]![0]!["vendor"]!["x"]!.GetValue<bool>());
+        Assert.True(meaningful >= 4); Assert.NotEmpty(progress);
+    }
+
+    [Fact]
+    public void Accumulator_preserves_sparse_index_order_and_rejects_unaligned_completed_output()
+    {
+        var accumulator = new ResponsesEventAccumulator();
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 2), ("item", Obj(("type", "web_search_call"), ("id", "search")))));
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 4), ("item", Obj(("type", "message"), ("role", "assistant"), ("content", new JsonArray())))));
+        accumulator.Consume(Event("response.output_text.delta", ("output_index", 4), ("content_index", 0), ("delta", "answer")));
+        accumulator.Consume(Event("response.completed", ("response", Obj(("output", new JsonArray(Obj(("type", "message"), ("role", "assistant"), ("content", new JsonArray()))))))));
+        var result = accumulator.CompleteAtEof();
+        Assert.Equal("web_search_call", result["output"]![0]!["type"]!.GetValue<string>());
+        Assert.Equal("message", result["output"]![1]!["type"]!.GetValue<string>());
+        Assert.Equal("answer", result["output"]![1]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Accumulator_aligned_enrichment_preserves_streamed_summary_annotations_arguments_and_phase()
+    {
+        var accumulator = new ResponsesEventAccumulator();
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 0), ("item", Obj(("type", "reasoning"), ("summary", new JsonArray())))));
+        accumulator.Consume(Event("response.reasoning_summary_text.delta", ("output_index", 0), ("summary_index", 0), ("delta", "one")));
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 1), ("item", Obj(("type", "function_call"), ("call_id", "c"), ("arguments", "{\"x\":1}")))));
+        accumulator.Consume(Event("response.output_item.added", ("output_index", 2), ("item", Obj(("type", "message"), ("role", "assistant"), ("phase", "commentary"), ("content", new JsonArray())))));
+        accumulator.Consume(Event("response.output_text.delta", ("output_index", 2), ("content_index", 0), ("delta", "text")));
+        var completed = new JsonArray(
+            Obj(("type", "reasoning"), ("status", "completed"), ("summary", new JsonArray(Obj(("type", "summary_text"), ("text", "condensed"))))),
+            Obj(("type", "function_call"), ("call_id", "c"), ("arguments", "")),
+            Obj(("type", "message"), ("role", "assistant"), ("content", new JsonArray(Obj(("type", "output_text"), ("text", "text"))))));
+        accumulator.Consume(Event("response.completed", ("response", Obj(("output", completed)))));
+        var result = accumulator.CompleteAtEof();
+        Assert.Equal("one", result["output"]![0]!["summary"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("{\"x\":1}", result["output"]![1]!["arguments"]!.GetValue<string>());
+        Assert.Equal("commentary", result["output"]![2]!["phase"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Accumulator_is_owned_and_terminal_errors_are_typed()
+    {
+        var source = Event("response.output_item.added", ("output_index", 0), ("item", Obj(("type", "message"), ("content", new JsonArray()))));
+        var accumulator = new ResponsesEventAccumulator(); accumulator.Consume(source); source["item"]!["type"] = "changed";
+        accumulator.Consume(Event("response.completed", ("response", Obj(("output", new JsonArray())))));
+        Assert.Equal("message", accumulator.CompleteAtEof()["output"]![0]!["type"]!.GetValue<string>());
+        var error = Assert.Throws<OpenAiResponsesTerminalException>(() => new ResponsesEventAccumulator().Consume(Event("response.failed", ("response", Obj(("error", Obj(("message", "bad"), ("status", 500), ("code", "x"))))))));
+        Assert.Equal("response.failed", error.TerminalKind); Assert.Equal("bad", error.Message); Assert.Equal("500", error.Status); Assert.Equal("x", error.Code);
+    }
+
+    [Fact]
+    public async Task Collector_handles_fragmented_utf8_crlf_comments_data_lines_and_callbacks()
+    {
+        var body = "comment\r\nevent: ignored\r\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"hé😀\"}\r\n\r\ndata: {\r\ndata: \"type\":\"response.completed\",\r\ndata: \"response\":{\"output\":[]}}\r\n\r\ndata: [DONE]\r\n\r\n";
+        var stream = new ChunkedStream(Encoding.UTF8.GetBytes(body), new[] { 1, 2, 3, 7, 11, 19, 23, 31 });
+        var raw = new StringBuilder(); var blocks = new List<string>();
+        var result = await ResponsesSseCollector.CollectAsync(stream, CancellationToken.None, new ResponsesStreamCallbacks { OnDecodedChunk = chunk => raw.Append(chunk), OnSseBlock = block => blocks.Add(block) });
+        Assert.Equal("hé😀", result["output"]![0]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(body, raw.ToString()); Assert.Equal(4, blocks.Count); Assert.True(stream.Disposed);
+    }
+
+    [Fact]
+    public async Task Collector_reports_eof_malformed_and_cancel_categories_and_leave_open()
+    {
+        await Assert.ThrowsAsync<ResponsesStreamException>(() => ResponsesSseCollector.CollectAsync(new MemoryStream(Encoding.UTF8.GetBytes("data: [DONE]\n\n")), CancellationToken.None));
+        var malformed = await Assert.ThrowsAsync<MalformedSseEventJsonException>(() => ResponsesSseCollector.CollectAsync(new MemoryStream(Encoding.UTF8.GetBytes("data: {bad}\n\n")), CancellationToken.None));
+        Assert.Equal("data: {bad}", malformed.Block);
+        var stream = new MemoryStream(Encoding.UTF8.GetBytes("data: [DONE]\n\n")); var token = new CancellationToken(true);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ResponsesSseCollector.CollectAsync(stream, token)); Assert.False(stream.CanRead == false && stream.Position == 0);
+        var leave = new MemoryStream(Encoding.UTF8.GetBytes("data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n")); await ResponsesSseCollector.CollectAsync(leave, CancellationToken.None, ownership: StreamOwnership.LeaveOpen); Assert.True(leave.CanRead);
+    }
+
+    private static JsonObject Event(string type, params (string Name, object? Value)[] fields) { var obj = new JsonObject { ["type"] = type }; foreach (var (name, value) in fields) obj[name] = ToNode(value); return obj; }
+    private static JsonObject Obj(params (string Name, object? Value)[] fields) { var obj = new JsonObject(); foreach (var (name, value) in fields) obj[name] = ToNode(value); return obj; }
+    private static JsonNode? ToNode(object? value) => value switch { null => null, JsonNode node => node.DeepClone(), _ => JsonValue.Create(value) };
+
+    private sealed class ChunkedStream(byte[] data, int[] cuts) : Stream
+    {
+        private int position; private int cutIndex; public bool Disposed { get; private set; }
+        public override bool CanRead => !Disposed; public override bool CanSeek => false; public override bool CanWrite => false; public override long Length => data.Length; public override long Position { get => position; set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); if (position >= data.Length) return ValueTask.FromResult(0); var size = cutIndex < cuts.Length ? cuts[cutIndex++] : data.Length - position; size = Math.Min(size, data.Length - position); data.AsMemory(position, size).CopyTo(buffer); position += size; return ValueTask.FromResult(size); }
+        protected override void Dispose(bool disposing) { Disposed = true; base.Dispose(disposing); }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException(); public override void SetLength(long value) => throw new NotSupportedException(); public override void Flush() { } public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+}
