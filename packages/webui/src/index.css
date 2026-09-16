@@ -1848,3 +1848,42 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   border-color: var(--foxwarm-color-accent-border) !important;
   box-shadow: inset 0 0 0 2px rgb(var(--foxwarm-color-focus-ring-rgb) / 0.72) !important;
 }
+
+/* Sidebar density changes presentation only; drag targets remain row-relative. */
+.session-compact-disclosure > button,
+.session-pin[aria-pressed="false"] {
+  opacity: 0;
+}
+.session-row-compact:hover .session-compact-disclosure > button,
+.session-row-compact:focus-within .session-compact-disclosure > button,
+.session-row:hover .session-pin,
+.session-row:focus-within .session-pin {
+  opacity: 1;
+}
+.session-compact-status {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.session-compact-status[data-session-status="requesting-model"],
+.session-compact-status[data-session-status="running-tool"] {
+  box-shadow: 0 0 5px 1px currentColor;
+  animation: session-compact-glow 2s ease-in-out infinite;
+}
+@keyframes session-compact-glow {
+  50% { box-shadow: 0 0 2px 0 currentColor; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-compact-status { animation: none !important; }
+}
+@media (pointer: coarse) {
+  .session-compact-disclosure > button,
+  .session-row .session-pin { opacity: 1; }
+  .session-row-compact { min-height: 44px; }
+  .session-compact-disclosure { width: 32px; }
+  .session-row-compact button,
+  .session-pin { min-height: 40px; min-width: 32px; }
+}
