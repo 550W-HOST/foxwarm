@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Foxwarm.OpenAIResponses.Streaming;
 
@@ -15,7 +16,11 @@ public enum ResponsesStreamErrorCategory
     Cancellation,
 }
 
-public sealed record ResponsesToolCallProgress(int Index, string? Id, string? Name, string? Arguments);
+public sealed record ResponsesToolCallProgress(
+    int Index,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Id,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Arguments);
 public sealed record ResponsesStreamProgress(string Reasoning, string Text, IReadOnlyList<ResponsesToolCallProgress> ToolCalls);
 
 public sealed class ResponsesStreamCallbacks
@@ -176,9 +181,9 @@ public sealed class ResponsesEventAccumulator
     private static bool HasUsableSummary(JsonNode? value) => value is JsonArray array && array.Any(x => x is JsonObject o && (String(o, "text") ?? String(o, "summary")) is { Length: > 0 });
 
     private static JsonObject MergeContent(JsonObject? existing, JsonObject? incoming)
-    { if (existing is null) return incoming is null ? new JsonObject() : (JsonObject)incoming.DeepClone(); if (incoming is null) return existing; var merged = (JsonObject)existing.DeepClone(); foreach (var pair in incoming) merged[pair.Key] = pair.Value?.DeepClone(); if (incoming.ContainsKey("text") || existing.ContainsKey("text")) merged["text"] = incoming["text"] is not null ? incoming["text"]!.DeepClone() : existing["text"]?.DeepClone(); if (incoming.ContainsKey("refusal") || existing.ContainsKey("refusal")) merged["refusal"] = incoming["refusal"] is not null ? incoming["refusal"]!.DeepClone() : existing["refusal"]?.DeepClone(); if (incoming["annotations"] is JsonArray ia && ia.Count > 0) merged["annotations"] = ia.DeepClone(); else if (existing.ContainsKey("annotations")) merged["annotations"] = existing["annotations"]?.DeepClone(); return merged; }
+    { if (existing is null) return incoming is null ? new JsonObject() : (JsonObject)incoming.DeepClone(); if (incoming is null) return (JsonObject)existing.DeepClone(); var merged = (JsonObject)existing.DeepClone(); foreach (var pair in incoming) merged[pair.Key] = pair.Value?.DeepClone(); if (incoming.ContainsKey("text") || existing.ContainsKey("text")) merged["text"] = incoming["text"] is not null ? incoming["text"]!.DeepClone() : existing["text"]?.DeepClone(); if (incoming.ContainsKey("refusal") || existing.ContainsKey("refusal")) merged["refusal"] = incoming["refusal"] is not null ? incoming["refusal"]!.DeepClone() : existing["refusal"]?.DeepClone(); if (incoming["annotations"] is JsonArray ia && ia.Count > 0) merged["annotations"] = ia.DeepClone(); else if (existing.ContainsKey("annotations")) merged["annotations"] = existing["annotations"]?.DeepClone(); return merged; }
     private static JsonObject MergeOutput(JsonObject? existing, JsonObject incoming)
-    { if (existing is null) return (JsonObject)incoming.DeepClone(); var merged = (JsonObject)existing.DeepClone(); foreach (var pair in incoming) merged[pair.Key] = pair.Value?.DeepClone(); var ec = existing["content"] as JsonArray; var ic = incoming["content"] as JsonArray; if (ec is not null || ic is not null) { var max = Math.Max(ec?.Count ?? 0, ic?.Count ?? 0); var content = new JsonArray(); for (var i = 0; i < max; i++) { var mergedPart = MergeContent(ec?[i] as JsonObject, ic?[i] as JsonObject); content.Add(mergedPart); } merged["content"] = content; } if ((incoming["arguments"] is null || String(incoming, "arguments") == "") && String(existing, "arguments") is { } args) merged["arguments"] = args; if (incoming["summary"] is JsonArray isummary && isummary.Count > 0) merged["summary"] = isummary.DeepClone(); else if (existing["summary"] is not null) merged["summary"] = existing["summary"]!.DeepClone(); return merged; }
+    { if (existing is null) return (JsonObject)incoming.DeepClone(); var merged = (JsonObject)existing.DeepClone(); foreach (var pair in incoming) merged[pair.Key] = pair.Value?.DeepClone(); var ec = existing["content"] as JsonArray; var ic = incoming["content"] as JsonArray; if (ec is not null || ic is not null) { var max = Math.Max(ec?.Count ?? 0, ic?.Count ?? 0); var content = new JsonArray(); for (var i = 0; i < max; i++) { var mergedPart = MergeContent(ec is not null && i < ec.Count ? ec[i] as JsonObject : null, ic is not null && i < ic.Count ? ic[i] as JsonObject : null); content.Add(mergedPart); } merged["content"] = content; } if ((incoming["arguments"] is null || String(incoming, "arguments") == "") && String(existing, "arguments") is { } args) merged["arguments"] = args; if (incoming["summary"] is JsonArray isummary && isummary.Count > 0) merged["summary"] = isummary.DeepClone(); else if (existing["summary"] is not null) merged["summary"] = existing["summary"]!.DeepClone(); return merged; }
     private static void Append(JsonObject target, string property, JsonNode? value) { if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out var delta) || delta.Length == 0) return; target[property] = (String(target, property) ?? "") + delta; }
     private OpenAiResponsesTerminalException BuildTerminal(string kind, string label, JsonNode? sourceNode) { var source = sourceNode as JsonObject ?? new JsonObject(); var detail = source["error"] as JsonObject ?? source; var message = String(detail, "message") ?? String(source, "message") ?? String(detail, "label") ?? label; return new OpenAiResponsesTerminalException(kind, message, Scalar(detail["status"] ?? source["status"]), String(detail, "code") ?? String(source, "code"), (JsonObject)detail.DeepClone()); }
     private static string? Scalar(JsonNode? node) => node is null ? null : node is JsonValue v && v.TryGetValue<string>(out var s) ? s : node.ToJsonString();

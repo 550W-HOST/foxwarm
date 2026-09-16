@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.OpenAIResponses.Streaming;
@@ -82,6 +84,36 @@ public sealed class ResponsesStreamingTests
         var result = await ResponsesSseCollector.CollectAsync(stream, CancellationToken.None, new ResponsesStreamCallbacks { OnDecodedChunk = chunk => raw.Append(chunk), OnSseBlock = block => blocks.Add(block) });
         Assert.Equal("hé😀", result["output"]![0]!["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal(body, raw.ToString()); Assert.Equal(4, blocks.Count); Assert.True(stream.Disposed);
+    }
+
+    [Fact]
+    public async Task Collector_disposes_held_http_body_on_cancellation_and_server_observes_close()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync(); accepted.SetResult();
+            await using var network = client.GetStream();
+            var request = new StringBuilder(); var buffer = new byte[256];
+            while (!request.ToString().Contains("\r\n\r\n", StringComparison.Ordinal)) { var read = await network.ReadAsync(buffer); if (read == 0) return; request.Append(Encoding.ASCII.GetString(buffer, 0, read)); }
+            requested.SetResult();
+            await network.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n"));
+            held.SetResult();
+            while (true) { var read = await network.ReadAsync(buffer); if (read == 0) { closed.SetResult(); return; } }
+        });
+        using var http = new HttpClient(); using var cancellation = new CancellationTokenSource();
+        using var response = await http.GetAsync(new Uri($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/stream"), HttpCompletionOption.ResponseHeadersRead);
+        var body = await response.Content.ReadAsStreamAsync();
+        var collection = ResponsesSseCollector.CollectAsync(body, cancellation.Token, ownership: StreamOwnership.Dispose);
+        await Task.WhenAll(accepted.Task, requested.Task, held.Task).WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => collection.WaitAsync(TimeSpan.FromSeconds(5)));
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        listener.Stop(); await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
