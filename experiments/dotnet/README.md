@@ -5,6 +5,7 @@ This directory is a manual migration experiment and is not part of the Node.js b
 - `Foxwarm.ConditionalMemory` ports the pure conditional-memory helpers.
 - `Foxwarm.MessageJson` is an owned `JsonObject` compatibility leaf for supported canonical messages and tool arguments.
 - `Foxwarm.OpenAIResponses.Streaming` ports one complete, transport-neutral OpenAI Responses event accumulator plus an async SSE collector. It is not a provider client: request construction, authentication, retries, routing, timeouts/watchdogs, WebSocket pooling, journaling, Session ownership, final `Message` conversion, and runtime integration remain outside the experiment.
+- `Foxwarm.SessionTurns` ports the first bounded Main-local Session-turn seams: owned Message JSON state, queue/source batching, ordered authority snapshot saves, one processor claim, one active cancellation handle, Stop finalization, and an in-process fake chat host. It has no production runtime integration.
 
 ## Build and tests
 
@@ -18,6 +19,20 @@ dotnet test experiments/dotnet/Foxwarm.DotnetSpike.sln --no-restore
 ```
 
 The Responses collector uses native async `Stream.ReadAsync`, incremental UTF-8 decoding, source-equivalent narrow SSE framing, and explicit `StreamOwnership.Dispose` (the default) or `LeaveOpen`. The accumulator owns retained input JSON by deep clone and emits cumulative progress, meaningful-progress, safety-buffering, decoded-text, and complete-block callbacks. Typed semantic terminal, malformed-event, read, EOF, and normal .NET cancellation categories are covered by independent xUnit tests. The loopback cancellation test proves accepted/requested/held/cancelled/connection-closed milestones without sleep-based synchronization; it does not contact a provider and does not restart a runtime.
+
+## Session-turn experiment
+
+`Foxwarm.SessionTurns` is an experiment-only translation of the current Main-local `sessionWorkers:false` path. `SessionState` keeps bounded queue and history records using owned Message JSON. `SessionEntry` protects short synchronous state mutations with a per-Session gate, serializes authority snapshot commits through a separate async save lane, claims one processor atomically, and transfers one active cancellation handle to Stop. `SessionIngress` awaits a best-effort save attempt before acknowledging ordinary input. Busy claims, queue/history commits, assistant persistence, and busy release use strict saves; strict claim failure rolls back the busy fields and makes no fake-chat call.
+
+`SessionTurnRunner` batches compatible leading sources by passive stream/conversation boundary and `preferDirectReply`, while preserving one canonical history row per queue item. `LocalSessionTurnHost` binds one exact Session entry and owns the fake chat's assistant append/persist step. Stop sets the boundary, takes and cancels the active request before waiting for its later best-effort save, and finalizes accepted queued inputs into history without another model call. Deterministic xUnit tests cover save ordering, source boundaries, processor claims, cross-Session concurrency, Stop/CTS races, finish-window handoff, callback reentry, unsupported paths, and ordinary chat failure.
+
+The component intentionally excludes tools/tool loops, compact execution, retry, waits, managed state, channel delivery, Worker IPC or placement, filesystem/SQLite persistence, crash recovery, performance equivalence, and production runtime integration. The in-memory authority store proves snapshot ordering and round-trip cloning only; it is not a filesystem or crash-recovery substitute.
+
+Run the component suite with:
+
+```sh
+dotnet vstest experiments/dotnet/Foxwarm.SessionTurns.Tests/bin/Debug/net10.0/Foxwarm.SessionTurns.Tests.dll --logger:'console;verbosity=normal'
+```
 
 ## Differential oracle
 
