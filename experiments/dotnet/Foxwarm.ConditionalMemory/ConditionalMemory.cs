@@ -8,8 +8,9 @@ public static class ConditionalMemory
     private const string SnapshotHeaderSeparator = "\n\n";
     private static readonly Regex ConditionalOpen = new("^[ \\t]*<foxwarm-if model-id=\"([^\"]*)\">[ \\t]*$", RegexOptions.CultureInvariant);
     private static readonly Regex ConditionalClose = new(@"^[ \t]*</foxwarm-if>[ \t]*$", RegexOptions.CultureInvariant);
-    private static readonly Regex ConditionalOpenLike = new(@"^[ \t]*<foxwarm-if\b[^>]*>[ \t]*$", RegexOptions.CultureInvariant);
-    private static readonly Regex ConditionalCloseLike = new(@"^[ \t]*</foxwarm-if\b[^>]*>[ \t]*$", RegexOptions.CultureInvariant);
+    // JavaScript's non-Unicode \\b is ASCII-word based; .NET's is Unicode-word based.
+    private static readonly Regex ConditionalOpenLike = new("^[ \\t]*<foxwarm-if(?=[^A-Za-z0-9_]|$)[^>]*>[ \\t]*$", RegexOptions.CultureInvariant);
+    private static readonly Regex ConditionalCloseLike = new("^[ \\t]*</foxwarm-if(?=[^A-Za-z0-9_]|$)[^>]*>[ \\t]*$", RegexOptions.CultureInvariant);
     private static readonly Regex CurrentModelHeader = new("^<foxwarm-current-model model-id=\"([^\"]*)\" />$", RegexOptions.CultureInvariant);
 
     public static string FilterConditionalMemorySource(string source, string modelId)

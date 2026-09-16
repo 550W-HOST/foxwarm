@@ -28,5 +28,8 @@
   {"name":"FEFF attribute whitespace probe","op":"build","modelId":"a\ufeffb","body":"x"},
   {"name":"NEL attribute whitespace probe","op":"build","modelId":"a\u0085b","body":"x"},
   {"name":"non-ASCII open-like boundary probe","op":"filter","source":"<foxwarm-ifé model-id=\"leaf\">\ntext\n</foxwarm-ifé>","modelId":"leaf"},
+  {"name":"non-ASCII unsupported nested open preserves outer","op":"filter","source":"<foxwarm-if model-id=\"leaf\">\nbefore\n<foxwarm-ifé>\ninner\n</foxwarm-if>\nafter\n</foxwarm-if>","modelId":"leaf"},
+  {"name":"non-ASCII unsupported nested close preserves outer","op":"filter","source":"<foxwarm-if model-id=\"leaf\">\nbefore\n<foxwarm-if model-id=\"other\">\ninner\n</foxwarm-ifé>\nafter\n</foxwarm-if>","modelId":"leaf"},
+  {"name":"ASCII boundary remains unsupported nested","op":"filter","source":"<foxwarm-if model-id=\"leaf\">\nbefore\n<foxwarm-if-extra>\ninner\n</foxwarm-if-extra>\nafter\n</foxwarm-if>","modelId":"leaf"},
   {"name":"line separator wildcard probe","op":"filter","source":"<foxwarm-if model-id=\"a*b\">\na\u2028b\n</foxwarm-if>","modelId":"a\u2028b"}
 ]
