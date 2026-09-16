@@ -1,6 +1,6 @@
 # Experimental .NET prototype
 
-This directory is a manual migration experiment and is not part of the Node.js build or test dependency graph. It currently contains a conventional .NET 10 solution with a behavior-equivalent port of the pure conditional-memory helpers.
+This directory is a manual migration experiment and is not part of the Node.js build or test dependency graph. It currently contains a conventional .NET 10 solution with a behavior-equivalent port of the pure conditional-memory helpers and a bounded Message/MessagePart JSON compatibility leaf.
 
 ## Run
 
@@ -14,7 +14,7 @@ The prototype intentionally uses ordinary managed .NET targets. It does not enab
 
 ## Scope and oracle
 
-`Foxwarm.ConditionalMemory` ports `filterConditionalMemorySource`, `buildCurrentModelSnapshot`, and `readCurrentModelSnapshotId` from `src/conditionalMemory.ts`. The focused xUnit tests independently assert representative expected strings. `parity-corpus.json` is a 30-case shared synthetic corpus covering every existing TypeScript test behavior plus deterministic probes for Unicode whitespace, non-ASCII tag boundaries, and line-separator wildcard behavior.
+`Foxwarm.ConditionalMemory` ports `filterConditionalMemorySource`, `buildCurrentModelSnapshot`, and `readCurrentModelSnapshotId` from `src/conditionalMemory.ts`. `Foxwarm.MessageJson` is a bounded compatibility leaf: owned `JsonObject`-backed canonical messages/parts for supported `user`/`model`/`tool` roles, exact property-presence and unknown-subtree preservation, separate exact-false visibility projection, and the `src/toolCallArgs.ts` argument parse/stringify helpers. It does not implement provider Responses conversion. The focused xUnit tests independently assert representative expected strings and ownership behavior. `parity-corpus.json` is a 41-case shared synthetic corpus covering every existing conditional-memory test behavior plus deterministic probes for Unicode whitespace, non-ASCII tag boundaries, line-separator wildcard behavior, owned Message JSON, visibility, and tool-argument parsing/stringification.
 
 Run the differential oracle from the repository root after restoring the repository JavaScript dependencies, building the shared package, and selecting a private .NET SDK:
 

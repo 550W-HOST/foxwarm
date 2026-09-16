@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foxwarm.ConditionalMemory.T
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foxwarm.ConditionalMemory.Parity", "Foxwarm.ConditionalMemory.Parity\Foxwarm.ConditionalMemory.Parity.csproj", "{6A1236F6-B065-4067-B0A1-B70A185E3CC6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foxwarm.MessageJson", "Foxwarm.MessageJson\Foxwarm.MessageJson.csproj", "{BD3A26B7-418E-444D-AD13-A966C5772D98}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,18 @@ Global
 		{6A1236F6-B065-4067-B0A1-B70A185E3CC6}.Release|x64.Build.0 = Release|Any CPU
 		{6A1236F6-B065-4067-B0A1-B70A185E3CC6}.Release|x86.ActiveCfg = Release|Any CPU
 		{6A1236F6-B065-4067-B0A1-B70A185E3CC6}.Release|x86.Build.0 = Release|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Debug|x64.Build.0 = Debug|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Debug|x86.Build.0 = Debug|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Release|x64.ActiveCfg = Release|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Release|x64.Build.0 = Release|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Release|x86.ActiveCfg = Release|Any CPU
+		{BD3A26B7-418E-444D-AD13-A966C5772D98}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

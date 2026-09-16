@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Foxwarm.ConditionalMemory\Foxwarm.ConditionalMemory.csproj" />
+    <ProjectReference Include="..\Foxwarm.MessageJson\Foxwarm.MessageJson.csproj" />
   </ItemGroup>
 
 </Project>
