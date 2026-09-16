@@ -54,6 +54,7 @@ Nodes, providers, and authenticated CLI Node runtime
 | Module | Responsibility |
 |---|---|
 | [browser-node](./modules/browser-node.md) | Browser-extension node tools and per-tab/domain permission policy |
+| [experimental .NET prototype](./units/experiments-dotnet.md) | Limited manual port of pure conditional-memory helpers; no runtime integration |
 | [channels](./modules/channels.md) | Channel abstraction and concrete platform adapters |
 | [cli-node](./modules/cli-node.md) | Remote node client, tool execution, and operator TUI |
 | [infrastructure](./modules/infrastructure.md) | Bootstrap, HTTP, configuration, utilities, skills, timers, and terminals |

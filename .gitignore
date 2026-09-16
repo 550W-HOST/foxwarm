@@ -27,6 +27,9 @@ __pycache__/
 /test/node-client-state
 /test/sandbox-workspace-node
 /test/.temp
+/.temp/
+experiments/dotnet/**/bin/
+experiments/dotnet/**/obj/
 
 # CLI node package build output
 /packages/cli-node/dist
