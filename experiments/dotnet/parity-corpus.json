@@ -228,17 +228,17 @@
   {
     "name": "args parse nested",
     "op": "argsParse",
-    "rawArgsText": "{\"outer\":{\"n\":1e-6,\"z\":null},\"items\":[]}"
+    "rawInput": "{\"outer\":{\"n\":1e-6,\"z\":null},\"items\":[]}"
   },
   {
     "name": "args parse error",
     "op": "argsParse",
-    "rawArgsText": "{"
+    "rawInput": "{"
   },
   {
     "name": "args parse scalar",
     "op": "argsParse",
-    "rawArgsText": "[]"
+    "rawInput": "[]"
   },
   {
     "name": "args parse empty string",
@@ -320,5 +320,14 @@
       "negativeZero": -0.0,
       "safe": 9007199254740991
     }
+  },
+  {
+    "name": "args stringify empty error empty raw",
+    "op": "argsStringify",
+    "args": {
+      "x": 1
+    },
+    "rawArgsText": "",
+    "argsParseError": ""
   }
 ]
