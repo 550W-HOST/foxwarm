@@ -239,5 +239,72 @@
     "name": "args parse scalar",
     "op": "argsParse",
     "rawArgsText": "[]"
+  },
+  {
+    "name": "args parse empty string",
+    "op": "argsParse",
+    "rawInput": ""
+  },
+  {
+    "name": "args parse explicit null",
+    "op": "argsParse",
+    "rawInput": null
+  },
+  {
+    "name": "args parse object input",
+    "op": "argsParse",
+    "rawInput": {
+      "x": null,
+      "arr": [
+        1,
+        {}
+      ]
+    }
+  },
+  {
+    "name": "args parse array input",
+    "op": "argsParse",
+    "rawInput": [
+      1,
+      null
+    ]
+  },
+  {
+    "name": "args parse number input",
+    "op": "argsParse",
+    "rawInput": 7
+  },
+  {
+    "name": "args parse boolean input",
+    "op": "argsParse",
+    "rawInput": true
+  },
+  {
+    "name": "args parse malformed missing value",
+    "op": "argsParse",
+    "rawInput": "{\"a\":}"
+  },
+  {
+    "name": "args parse malformed trailing",
+    "op": "argsParse",
+    "rawInput": "{\"a\":1}x"
+  },
+  {
+    "name": "args stringify empty parse error",
+    "op": "argsStringify",
+    "args": {},
+    "argsParseError": "",
+    "rawArgsText": "raw"
+  },
+  {
+    "name": "args stringify unicode control nested numbers",
+    "op": "argsStringify",
+    "args": {
+      "text": "é\n\u0001",
+      "fraction": 1.25,
+      "exp": 1e-06,
+      "negativeZero": -0.0,
+      "safe": 9007199254740991
+    }
   }
 ]

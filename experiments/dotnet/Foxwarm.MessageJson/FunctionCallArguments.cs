@@ -7,7 +7,7 @@ public static class FunctionCallArguments
 {
     public static string Stringify(JsonObject? args = null, string? rawArgsText = null, string? argsParseError = null)
     {
-        if (argsParseError is not null)
+        if (!string.IsNullOrEmpty(argsParseError))
         {
             var error = new JsonObject { ["error"] = argsParseError };
             if (!string.IsNullOrEmpty(rawArgsText)) error["rawArgsText"] = rawArgsText;
@@ -22,13 +22,13 @@ public static class FunctionCallArguments
         if (raw is null) return new ParsedArguments(new JsonObject());
         if (raw is JsonObject obj) return new ParsedArguments((JsonObject)obj.DeepClone());
         if (raw is not JsonValue value || !value.TryGetValue<string>(out var text))
-            return new ParsedArguments(new JsonObject(), raw.ToJsonString(), $"Invalid tool arguments JSON: expected an object string, received {JsonType(raw)}");
+            return new ParsedArguments(new JsonObject(), JsString(raw), $"Invalid tool arguments JSON: expected an object string, received {JsonType(raw)}");
         if (text.Length == 0) return new ParsedArguments(new JsonObject());
         try
         {
             var parsed = JsonNode.Parse(text);
             if (parsed is not JsonObject parsedObject)
-                return new ParsedArguments(new JsonObject(), text, $"Invalid tool arguments JSON: expected top-level object but received {JsonType(parsed)}");
+                return new ParsedArguments(new JsonObject(), text, $"Invalid tool arguments JSON: expected top-level object but received {ParsedJsonType(parsed)}");
             return new ParsedArguments((JsonObject)parsedObject.DeepClone(), text);
         }
         catch (JsonException error)
@@ -39,7 +39,23 @@ public static class FunctionCallArguments
         }
     }
 
+    private static string JsString(JsonNode value) => value switch
+    {
+        JsonArray array => string.Join(',', array.Select(item => item is null ? "" : JsString(item))),
+        JsonObject => "[object Object]",
+        JsonValue scalar when scalar.TryGetValue<string>(out var text) => text,
+        JsonValue scalar when scalar.TryGetValue<bool>(out var boolean) => boolean ? "true" : "false",
+        JsonValue scalar => scalar.ToJsonString().Trim('"'),
+        _ => "undefined"
+    };
+
     private static string JsonType(JsonNode? value) => value switch
+    {
+        JsonObject => "object", JsonArray => "object", JsonValue v when v.TryGetValue<string>(out _) => "string",
+        JsonValue v when v.TryGetValue<bool>(out _) => "boolean", JsonValue => "number", null => "object", _ => "object"
+    };
+
+    private static string ParsedJsonType(JsonNode? value) => value switch
     {
         JsonArray => "array", JsonObject => "object", JsonValue v when v.TryGetValue<string>(out _) => "string",
         JsonValue v when v.TryGetValue<bool>(out _) => "boolean", JsonValue => "number", null => "object", _ => "object"
