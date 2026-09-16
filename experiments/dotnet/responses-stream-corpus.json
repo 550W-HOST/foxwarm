@@ -1,0 +1,405 @@
+[
+  {
+    "name": "assembly-and-callbacks",
+    "events": [
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "reasoning",
+          "summary": [],
+          "unknown": {
+            "keep": true
+          }
+        }
+      },
+      {
+        "type": "response.reasoning_summary_text.delta",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": "Plan"
+      },
+      {
+        "type": "response.reasoning_summary_text.delta",
+        "output_index": 0,
+        "summary_index": 1,
+        "delta": "\nDo"
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 1,
+        "item": {
+          "type": "message",
+          "role": "assistant",
+          "phase": "commentary",
+          "content": []
+        }
+      },
+      {
+        "type": "response.content_part.added",
+        "output_index": 1,
+        "content_index": 0,
+        "part": {
+          "type": "output_text",
+          "text": ""
+        }
+      },
+      {
+        "type": "response.output_text.delta",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": "Hel"
+      },
+      {
+        "type": "response.output_text.delta",
+        "output_index": 1,
+        "content_index": 0,
+        "delta": "lo"
+      },
+      {
+        "type": "response.output_text.annotation.added",
+        "output_index": 1,
+        "content_index": 0,
+        "annotation_index": 0,
+        "annotation": {
+          "type": "url_citation",
+          "url": "https://example.test"
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 2,
+        "item": {
+          "type": "function_call",
+          "call_id": "call_1",
+          "name": "read",
+          "arguments": ""
+        }
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "output_index": 2,
+        "delta": "{\"path\":"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "output_index": 2,
+        "delta": "\"x\"}"
+      },
+      {
+        "type": "response.metadata",
+        "metadata": {
+          "type": "safety_buffering",
+          "message": "safe"
+        }
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "id": "resp_1",
+          "output": [],
+          "usage": {
+            "output_tokens": 7
+          }
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[],\"unknown\":{\"keep\":true}}}\n\n",
+      "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan\"}\n\n",
+      "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":1,\"delta\":\"\\nDo\"}\n\n",
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]}}\n\n",
+      "data: {\"type\":\"response.content_part.added\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
+      "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"content_index\":0,\"delta\":\"Hel\"}\n\n",
+      "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"content_index\":0,\"delta\":\"lo\"}\n\n",
+      "data: {\"type\":\"response.output_text.annotation.added\",\"output_index\":1,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"url\":\"https://example.test\"}}\n\n",
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read\",\"arguments\":\"\"}}\n\n",
+      "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"{\\\"path\\\":\"}\n\n",
+      "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"\\\"x\\\"}\"}\n\n",
+      "data: {\"type\":\"response.metadata\",\"metadata\":{\"type\":\"safety_buffering\",\"message\":\"safe\"}}\n\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[],\"usage\":{\"output_tokens\":7}}}\n\n",
+      "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "aligned-enrichment",
+    "events": [
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "reasoning",
+          "summary": []
+        }
+      },
+      {
+        "type": "response.reasoning_summary_text.delta",
+        "output_index": 0,
+        "summary_index": 0,
+        "delta": "separate"
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 1,
+        "item": {
+          "type": "function_call",
+          "call_id": "c",
+          "arguments": "{\"x\":1}"
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 2,
+        "item": {
+          "type": "message",
+          "role": "assistant",
+          "phase": "final_answer",
+          "content": []
+        }
+      },
+      {
+        "type": "response.output_text.delta",
+        "output_index": 2,
+        "content_index": 0,
+        "delta": "answer"
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "output": [
+            {
+              "type": "reasoning",
+              "summary": [
+                {
+                  "type": "summary_text",
+                  "text": "condensed"
+                }
+              ],
+              "status": "completed"
+            },
+            {
+              "type": "function_call",
+              "call_id": "c",
+              "arguments": ""
+            },
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "answer"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n",
+      "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"separate\"}\n\n",
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"c\",\"arguments\":\"{\\\"x\\\":1}\"}}\n\n",
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n",
+      "data: {\"type\":\"response.output_text.delta\",\"output_index\":2,\"content_index\":0,\"delta\":\"answer\"}\n\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"condensed\"}],\"status\":\"completed\"},{\"type\":\"function_call\",\"call_id\":\"c\",\"arguments\":\"\"},{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}]}}\n\n",
+      "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "sparse-hosted-output",
+    "events": [
+      {
+        "type": "response.output_item.added",
+        "output_index": 2,
+        "item": {
+          "type": "web_search_call",
+          "id": "search_1",
+          "status": "completed"
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "output_index": 4,
+        "item": {
+          "type": "message",
+          "role": "assistant",
+          "content": []
+        }
+      },
+      {
+        "type": "response.output_text.delta",
+        "output_index": 4,
+        "content_index": 0,
+        "delta": "visible"
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "visible"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"type\":\"web_search_call\",\"id\":\"search_1\",\"status\":\"completed\"}}\n\n",
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":4,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+      "data: {\"type\":\"response.output_text.delta\",\"output_index\":4,\"content_index\":0,\"delta\":\"visible\"}\n\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"visible\"}]}]}}\n\n",
+      "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "refusal-and-empty-done",
+    "events": [
+      {
+        "type": "response.content_part.added",
+        "output_index": 0,
+        "content_index": 0,
+        "part": {
+          "type": "refusal"
+        }
+      },
+      {
+        "type": "response.refusal.delta",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "No"
+      },
+      {
+        "type": "response.refusal.done",
+        "output_index": 0,
+        "content_index": 0,
+        "refusal": ""
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": []
+            }
+          ]
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"refusal\"}}\n\n",
+      "data: {\"type\":\"response.refusal.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"No\"}\n\n",
+      "data: {\"type\":\"response.refusal.done\",\"output_index\":0,\"content_index\":0,\"refusal\":\"\"}\n\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}]}}\n\n",
+      "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "comments-and-multiline-data",
+    "events": [
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "message",
+          "role": "assistant",
+          "content": []
+        }
+      },
+      {
+        "type": "response.output_text.delta",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "hé😀"
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "output": []
+        }
+      }
+    ],
+    "chunks": [
+      ": comment\r\nevent: ignored\r\nid: 1\r\n\r\n",
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\r\n\r\n",
+      "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"hé😀\"}\r\n\r\n",
+      "data: {\r\ndata: \"type\":\"response.completed\",\r\ndata: \"response\":{\"output\":[]}}\r\n\r\n",
+      "data: [DONE]\r\n\r\n"
+    ]
+  },
+  {
+    "name": "done-without-completed",
+    "events": [],
+    "chunks": [
+      "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "terminal-failed",
+    "events": [
+      {
+        "type": "response.failed",
+        "response": {
+          "error": {
+            "message": "provider failed",
+            "status": 429,
+            "code": "rate_limit"
+          }
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"provider failed\",\"status\":429,\"code\":\"rate_limit\"}}}\n\n",
+      "data: [DONE]\n\n"
+    ]
+  },
+  {
+    "name": "malformed-json",
+    "events": [],
+    "chunks": [
+      "data: {not-json}\n\n"
+    ]
+  },
+  {
+    "name": "completed-then-late-error",
+    "events": [
+      {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+          "type": "message",
+          "role": "assistant",
+          "content": []
+        }
+      },
+      {
+        "type": "response.completed",
+        "response": {
+          "output": []
+        }
+      },
+      {
+        "type": "response.error",
+        "error": {
+          "message": "late error",
+          "code": "late"
+        }
+      }
+    ],
+    "chunks": [
+      "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n",
+      "data: {\"type\":\"response.error\",\"error\":{\"message\":\"late error\",\"code\":\"late\"}}\n\n",
+      "data: [DONE]\n\n"
+    ]
+  }
+]
