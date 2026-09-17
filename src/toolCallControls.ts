@@ -24,7 +24,7 @@ export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled
   if (enabled) {
     properties.confirmation = {
       type: 'string',
-      description: `Put confirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the middle placeholder with your own review. If the handoff should not proceed, cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
+      description: `Put confirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the middle placeholder with your own review. Check whether the recipient needs this handoff to perform work, make a decision, or change its current actions; if it would only acknowledge the message, omit it or combine it with the next actionable handoff. If the handoff should not proceed, cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
     };
     required.push('confirmation');
   }
