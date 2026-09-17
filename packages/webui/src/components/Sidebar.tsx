@@ -80,7 +80,7 @@ export default function Sidebar({
     : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   return (
     <div className="h-full bg-fw-surface border-r border-fw-border flex flex-col">
-      <div className="p-4 border-b border-fw-border space-y-3">
+      <div className="shrink-0 p-4 border-b border-fw-border space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
           <div className="flex items-center gap-1">
@@ -92,11 +92,6 @@ export default function Sidebar({
             >
               {isPeek ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
-            <GlobalUiSettingsMenu
-              menuAlign="end"
-              onOpenSetup={onSelectSetup}
-              setupActive={currentView === 'setup'}
-            />
           </div>
         </div>
 
@@ -154,6 +149,14 @@ export default function Sidebar({
           bounded={bounded}
           toolbarContainerClassName="p-2 pb-1"
           listContainerClassName="p-2 pt-1"
+        />
+      </div>
+      <div data-sidebar-footer className="flex shrink-0 justify-end border-t border-fw-border bg-fw-surface p-2">
+        <GlobalUiSettingsMenu
+          menuAlign="end"
+          menuSide="top"
+          onOpenSetup={onSelectSetup}
+          setupActive={currentView === 'setup'}
         />
       </div>
     </div>

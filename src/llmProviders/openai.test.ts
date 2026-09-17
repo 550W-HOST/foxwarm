@@ -989,9 +989,11 @@ test('OpenAI tool serializers prepend one persisted LLM timing marker before ima
 
   const chat = convertToOpenAIFormat(history);
   const firstChat = chat.find(item => item.tool_call_id === 'first');
-  assert.ok(Array.isArray(firstChat.content));
-  assert.match(firstChat.content[0].text, /kind="time".*time="2026-07-27 05:00:00 \+0800".*prevLLMReqTime="8.2s"/);
-  assert.equal(firstChat.content.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
+  assert.equal(typeof firstChat.content, 'string');
+  assert.match(firstChat.content, /kind="time".*time="2026-07-27 05:00:00 \+0800".*prevLLMReqTime="8.2s"/);
+  assert.equal(firstChat.content.match(/prevLLMReqTime/g)?.length, 1);
+  assert.deepEqual(chat.map(item => item.role), ['tool', 'tool', 'user']);
+  assert.equal(chat[2].content[1].type, 'image_url');
   assert.equal(chat.some(item => item.tool_call_id === 'second' && String(item.content).includes('prevLLMReqTime')), false);
 
   const responses = convertToOpenAIResponsesFormat(history);
@@ -1129,7 +1131,9 @@ test('OpenAI tool serializers preserve deduplicated orphan tool IDs with bounded
   assert.match(JSON.stringify(duplicateChat), /id=duplicate-orphan/);
   assert.match(JSON.stringify(duplicateChat), /deduplicated=true/);
   assert.equal(JSON.stringify(duplicateChat).includes('base64,'), false);
-  assert.equal(JSON.stringify(uniqueChat).includes(`base64,${unique}`), true);
+  assert.equal(uniqueChat.content, '');
+  assert.equal(JSON.stringify(chat[chat.length - 1]).includes(`base64,${unique}`), true);
+  assert.match(chat[chat.length - 1].content[0].text, /call_unique/);
 
   const responses = convertToOpenAIResponsesFormat(history);
   const duplicateResponses = responses.find(item => item.call_id === 'call_duplicate');
@@ -1261,4 +1265,94 @@ test('convertToOpenAIFormat selects exactly one configured assistant history rea
   assert.equal(compatible[0].content, 'visible answer');
   assert.equal(compatible[0].tool_calls[0].id, 'call_1');
   assert.deepEqual(compatible[0].provider_specific_fields, { reasoning_signature: 'sig-xyz' });
+});
+
+test('Chat tool images follow all parallel results in one or multiple internal messages', () => {
+  const data = Buffer.from('parallel-image').toString('base64');
+  const response = (id: string, output: string): Message['parts'][number] => ({
+    functionResponse: { tool_use_id: id, name: 'capture', response: { output } },
+  });
+  const firstParts: Message['parts'] = [
+    response('call_a', 'first output'),
+    { toolUseId: 'call_a', inlineData: { mimeType: 'image/png', data }, imageMeta: { imageId: 'first-image', mimeType: 'image/png' } },
+  ];
+  const secondParts = [response('call_b', 'second output')];
+  for (const split of [false, true]) {
+    for (const trailingRole of [undefined, 'user', 'model'] as const) {
+      const history: Message[] = [
+        { role: 'model', parts: ['call_a', 'call_b'].map(id => ({ functionCall: { id, name: 'capture', args: {} } })) },
+        ...(split
+          ? [{ role: 'tool', parts: firstParts }, { role: 'tool', parts: secondParts }]
+          : [{ role: 'tool', parts: [...firstParts, ...secondParts] }]) as Message[],
+        ...(trailingRole ? [{ role: trailingRole, parts: [{ text: 'next message' }] }] : []) as Message[],
+      ];
+      const snapshot = structuredClone(history);
+      const chat = convertToOpenAIFormat(history);
+      assert.deepEqual(chat.slice(0, 4).map(item => item.role), ['assistant', 'tool', 'tool', 'user']);
+      assert.equal(chat[1].tool_call_id, 'call_a');
+      assert.match(chat[1].content, /id=first-image/);
+      assert.match(chat[1].content, /first output/);
+      assert.equal(chat[2].content, 'second output');
+      assert.deepEqual(chat[3].content, [
+        { type: 'text', text: 'Images returned by tool_call_id=call_a:' },
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } },
+      ]);
+      for (const tool of chat.filter(item => item.role === 'tool')) {
+        assert.equal(JSON.stringify(tool).includes('image_url'), false);
+      }
+      if (trailingRole) assert.equal(chat[4].content, 'next message');
+      else assert.equal(chat.length, 4);
+      assert.deepEqual(history, snapshot);
+    }
+  }
+});
+
+test('Chat text-only tool groups retain their exact shape and do not add user messages', () => {
+  const history: Message[] = [{ role: 'tool', parts: [
+    { functionResponse: { tool_use_id: 'call_a', name: 'read', response: { output: 'first' } } },
+    { functionResponse: { tool_use_id: 'call_a', name: 'read', response: { output: 'second' } } },
+    { functionResponse: { tool_use_id: 'call_b', name: 'read', response: { output: '' } } },
+    { functionResponse: { tool_use_id: 'call_c', name: 'read', response: { output: 'single' } } },
+  ] }];
+  assert.deepEqual(convertToOpenAIFormat(history), [
+    { role: 'tool', tool_call_id: 'call_a', content: [{ type: 'text', text: 'first' }, { type: 'text', text: 'second' }] },
+    { role: 'tool', tool_call_id: 'call_b', content: '' },
+    { role: 'tool', tool_call_id: 'call_c', content: 'single' },
+  ]);
+});
+
+test('Chat transferred tool images retain per-call grouping and request-local deduplication', () => {
+  const first = Buffer.from('first tool image').toString('base64');
+  const second = Buffer.from('second tool image').toString('base64');
+  const history: Message[] = ['call_a', 'call_b'].map((id, index) => ({ role: 'tool', parts: [
+    { functionResponse: { tool_use_id: id, name: 'capture', response: { output: id } } },
+    { toolUseId: id, inlineData: { mimeType: 'image/png', data: first }, imageMeta: { imageId: `first-${index}`, mimeType: 'image/png' } },
+    ...(index ? [{ toolUseId: id, inlineData: { mimeType: 'image/png', data: second } }] : []),
+  ] }));
+  history.push({ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: first } }] });
+  const snapshot = structuredClone(history);
+  const chat = convertToOpenAIFormat(history);
+  assert.deepEqual(chat.map(item => item.role), ['tool', 'tool', 'user', 'user']);
+  assert.match(chat[1].content, /id=first-1.*deduplicated=true/);
+  assert.deepEqual(chat[2].content.map((part: any) => part.type), ['text', 'image_url', 'text', 'image_url']);
+  assert.match(chat[2].content[0].text, /call_a/);
+  assert.match(chat[2].content[2].text, /call_b/);
+  assert.equal(JSON.stringify(chat).split(`base64,${first}`).length - 1, 1);
+  assert.equal(JSON.stringify(chat).split(`base64,${second}`).length - 1, 1);
+  assert.match(JSON.stringify(chat[3]), /deduplicated/);
+  assert.deepEqual(history, snapshot);
+});
+
+test('Chat flushes transferred images separately for consecutive tool-call turns', () => {
+  const history: Message[] = ['a', 'b'].flatMap(id => [
+    { role: 'model', parts: [{ functionCall: { id, name: 'capture', args: {} } }] },
+    { role: 'tool', parts: [
+      { inlineData: { mimeType: 'image/png', data: Buffer.from(id).toString('base64') } },
+      { functionResponse: { tool_use_id: id, name: 'capture', response: { output: 'done' } } },
+    ] },
+  ] as Message[]);
+  const chat = convertToOpenAIFormat(history);
+  assert.deepEqual(chat.map(item => item.role), ['assistant', 'tool', 'user', 'assistant', 'tool', 'user']);
+  assert.match(chat[2].content[0].text, /tool_call_id=a:/);
+  assert.match(chat[5].content[0].text, /tool_call_id=b:/);
 });

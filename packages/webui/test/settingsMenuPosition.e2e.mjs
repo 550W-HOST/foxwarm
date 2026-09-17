@@ -20,6 +20,25 @@ async function buildFixtureBundle() {
     import { createRoot } from 'react-dom/client'
     import GlobalUiSettingsMenu from ${JSON.stringify(componentEntry)}
 
+    import Sidebar from ${JSON.stringify(new URL('../src/components/Sidebar.tsx', import.meta.url).pathname)}
+
+    function SidebarFixture() {
+      const [view, setView] = useState('session')
+      const noop = () => {}
+      return React.createElement('div', { style: { width: 'min(340px, 100vw)', height: '100dvh' } },
+        React.createElement(Sidebar, {
+          sessions: Array.from({ length: 50 }, (_, i) => ({ id: 'demo/s' + i, displayName: 'Session ' + i, messageCount: 2, lastMessageTime: 100-i, parentSessionId: null })),
+          agents: [], currentSession: 'demo/s0', currentView: view,
+          onSelectSession: noop, onSelectArchitecture: noop, onSelectSetup: () => setView('setup'),
+          codePath: '/', codeNodeId: 'master', codeOpenInNewWindow: false, codeActive: false,
+          nodeTargets: [], onRefreshNodeTargets: noop, onOpenCode: noop, onCodeNodeChange: noop,
+          onCodePathChange: noop, onCodeOpenInNewWindowChange: noop, onCreateTerminalTab: noop,
+          onCreateAgent: async () => {}, onCreateSession: async () => {}, onToggleCollapsed: noop,
+          idleNotificationModes: {}, onToggleIdleNotificationMode: noop,
+        })
+      )
+    }
+
     function Fixture() {
       const [anchorLeft, setAnchorLeft] = useState('640px')
       const [align, setAlign] = useState('end')
@@ -43,7 +62,7 @@ async function buildFixtureBundle() {
       )
     }
 
-    createRoot(document.getElementById('root')).render(React.createElement(Fixture))
+    createRoot(document.getElementById('root')).render(React.createElement(location.search === '?sidebar' ? SidebarFixture : Fixture))
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'settings-menu-position-fixture.tsx' },
@@ -222,4 +241,49 @@ test('global UI settings keeps only the Auto, Light, and Dark color-mode control
     assert.equal(text.includes(movedLabel), false, `${movedLabel} is not duplicated in global settings`)
   }
   assert.deepEqual(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.map(button => button.textContent?.trim()).filter(text => ['auto', 'light', 'dark'].includes(text?.toLowerCase() || '')).map(text => text?.toLowerCase())), ['auto', 'light', 'dark'])
+})
+
+
+test('sidebar Settings lives in a fixed footer and opens upward on desktop and touch', async () => {
+  for (const mobile of [false, true]) {
+    await page.setViewport({ width: mobile ? 320 : 1000, height: mobile ? 480 : 700, isMobile: mobile, hasTouch: mobile })
+    await page.goto(fixtureUrl + '?sidebar', { waitUntil: 'load' })
+    const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
+    await page.waitForSelector(trigger)
+    assert.equal(await page.$$eval('button[aria-label="Open UI settings"]', els => els.length), 1)
+    const topBefore = await page.$eval(trigger, e => e.getBoundingClientRect().top)
+    await page.$eval('[data-session-list-scroll-container]', e => { e.scrollTop = e.scrollHeight })
+    assert.equal(await page.$eval(trigger, e => e.getBoundingClientRect().top), topBefore)
+    assert.equal(await page.$eval('[data-sidebar-footer]', e => e.closest('[data-session-list-scroll-container]') === null), true)
+    await page.focus(trigger)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-global-ui-settings-menu]')).visibility === 'visible')
+    const geometry = await page.evaluate(() => {
+      const menu = document.querySelector('[data-global-ui-settings-menu]').getBoundingClientRect()
+      const trigger = document.querySelector('[data-sidebar-footer] button').getBoundingClientRect()
+      return { top: menu.top, bottom: menu.bottom, left: menu.left, right: menu.right, triggerTop: trigger.top, triggerBottom: trigger.bottom, height: innerHeight, width: innerWidth }
+    })
+    assert.ok(geometry.top >= 7.5 && geometry.bottom < geometry.triggerTop)
+    assert.ok(geometry.left >= 7.5 && geometry.right <= geometry.width - 7.5)
+    assert.ok(geometry.triggerBottom <= geometry.height && geometry.triggerBottom >= geometry.height - 12)
+    await page.keyboard.press('Tab')
+    assert.equal(await page.evaluate(() => !!document.activeElement.closest('[data-global-ui-settings-menu]')), true)
+    await page.keyboard.press('Escape')
+    assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
+    assert.equal(await page.$eval(trigger, e => e === document.activeElement), true)
+    if (mobile) await page.tap(trigger)
+    else await page.click(trigger)
+    await page.waitForSelector('[data-global-ui-settings-menu]')
+    await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent.includes('WebUI: Open setup')).click())
+    assert.equal(await page.$eval(trigger, e => e.getAttribute('aria-pressed')), 'true')
+    await page.click(trigger)
+    assert.ok(await page.$('[data-global-ui-settings-menu]'))
+    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.includes('WebUI: reload'))), true)
+    await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent === 'dark').click())
+    assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true)
+    await page.click(trigger)
+    await page.click('h1')
+    assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
+  }
 })

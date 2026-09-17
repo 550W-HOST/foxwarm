@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ListCollapse, GitBranch } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
+import { useSessionListCompact } from '../sessionListDensity'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
 export interface Session {
@@ -475,6 +476,7 @@ function DraggableSessionRow({
 
 export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
+  const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
@@ -1156,13 +1158,68 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
 
+    const pinButton = (
+      <button
+        type="button"
+        className={`session-pin ${compact ? 'session-compact-pin h-6' : 'h-5'} inline-flex w-4 shrink-0 items-center justify-center rounded focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 ${session.pinned ? 'text-fw-accent' : 'text-fw-text-muted hover:text-fw-text'}`}
+        aria-label={session.pinned ? 'Unpin from top' : 'Pin to top'}
+        aria-pressed={!!session.pinned}
+        title={session.pinned ? 'Unpin from top' : 'Pin to top'}
+        onClick={(e) => {
+          e.stopPropagation()
+          void togglePinned(session.id, !session.pinned)
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        <Pin className="h-3.5 w-3.5 rotate-45" strokeWidth={1.5} aria-hidden="true" />
+      </button>
+    )
+
+    const disclosure = (
+      hasChildren && (
+        <div className={compact ? "session-compact-disclosure w-4 shrink-0 flex items-center" : "mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-fw-text-muted"}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpand(session.id)
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className={`${compact ? 'h-6 w-4 justify-center' : '-ml-1 -my-1 gap-x-1.5 gap-y-0.5 px-1 py-1'} inline-flex items-center rounded text-left text-fw-text-muted hover:text-fw-text focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 dark:text-fw-text-muted dark:hover:text-fw-text-strong`}
+            title={`${isExpanded ? 'Collapse' : 'Expand'} child sessions · ${childTotal ?? 'Unknown'} children${descendantBusyCount ? ` · ${descendantBusyCount} active` : ''}`}
+            aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+            aria-expanded={isExpanded}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {isExpanded ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              )}
+            </svg>
+            <span className={compact ? "sr-only" : undefined}>{childTotal} {childTotal === 1 ? 'child' : 'children'}</span>
+            {!compact && descendantBusyCount > 0 && (
+              <>
+                <span>•</span>
+                <span className="text-fw-accent dark:text-fw-accent">{descendantBusyCount} active</span>
+              </>
+            )}
+          </button>
+        </div>
+      )
+    )
+
     return (
       <div
         key={session.id}
       >
         <DraggableSessionRow
           session={session}
-          className={`group relative flex items-center rounded cursor-pointer active:cursor-grabbing mt-1 ${
+          className={`group session-row relative flex items-center rounded cursor-pointer active:cursor-grabbing ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${
             isCurrentSession
               ? 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/30'
               : 'hover:bg-fw-hover dark:hover:bg-fw-hover'
@@ -1181,22 +1238,49 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 allowReorder={allowSidebarOrder}
                 allowParentDrop={allowParentDrop}
               />
+              {compact ? (
+                <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
+                  {hasChildren ? disclosure : <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" />}
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong" title={`${session.displayName || displayId} · ${session.id}`}>
+                    {session.displayName || displayId}
+                  </span>
+                  {pinButton}
+                  {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
+                  {unreadSessionIds.has(session.id) && (
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
+                  )}
+                  {descendantBusyCount > 0 && (
+                    <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
+                      <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+                    </span>
+                  )}
+                  {showRuntimeBadge && (
+                    <span
+                      role="img"
+                      aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
+                      title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
+                      data-session-status={runtimeStateName}
+                      className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
+                    />
+                  )}
+                </div>
+              ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate text-fw-text-strong text-sm">
-                    {session.pinned && (
-                      <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-fw-accent dark:text-fw-accent" aria-label="Pinned session" />
-                    )}
-                    {session.displayName || displayId}
-                    {unreadSessionIds.has(session.id) && (
-                      <span className="ml-1.5 inline-flex items-center align-middle">
-                        <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
-                        <span className="sr-only">Unread idle completion</span>
-                      </span>
-                    )}
-                    {session.archived && (
-                      <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
-                    )}
+                  <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
+                    <span className="min-w-0 flex-1 truncate" data-session-title>
+                      {session.displayName || displayId}
+                      {unreadSessionIds.has(session.id) && (
+                        <span className="ml-1.5 inline-flex items-center align-middle">
+                          <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
+                          <span className="sr-only">Unread idle completion</span>
+                        </span>
+                      )}
+                      {session.archived && (
+                        <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
+                      )}
+                    </span>
+                    {pinButton}
                   </div>
                   {session.displayName && (
                     <div className="text-xs text-fw-text-muted font-mono truncate">
@@ -1221,41 +1305,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     )}
                     <span>{session.sequenceMessageCount ?? session.messageCount ?? 0} msgs</span>
                   </div>
-                  {hasChildren && (
-                    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-fw-text-muted">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleExpand(session.id)
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => e.stopPropagation()}
-                        onDoubleClick={(e) => e.stopPropagation()}
-                        className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-fw-text-muted hover:text-fw-text focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 dark:text-fw-text-muted dark:hover:text-fw-text-strong"
-                        title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                        aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                        aria-expanded={isExpanded}
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          {isExpanded ? (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                          ) : (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          )}
-                        </svg>
-                        <span>{childTotal} {childTotal === 1 ? 'child' : 'children'}</span>
-                        {descendantBusyCount > 0 && (
-                          <>
-                            <span>•</span>
-                            <span className="text-fw-accent dark:text-fw-accent">{descendantBusyCount} active</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
+                  {disclosure}
                 </div>
               </div>
+              )}
               {/* Menu button - only visible on mobile */}
               <button
                 onClick={(e) => handleMenuClick(e, session.id)}
@@ -1418,7 +1471,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-full min-h-0 flex-col" data-session-list-density={compact ? 'compact' : 'normal'}>
         <div className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
           <div className="flex items-center gap-1.5">
             <div className="relative min-w-0 flex-1">
@@ -1452,6 +1505,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             >
               <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
+            <button
+              type="button"
+              onClick={toggleCompact}
+              aria-label="Compact session rows"
+              aria-pressed={compact}
+              title={compact ? 'Use normal session rows' : 'Use compact session rows'}
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${compact ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
+            >
+              <ListCollapse className="h-3.5 w-3.5" />
+            </button>
           </div>
           <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
@@ -1460,7 +1523,20 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           <div className={listContainerClassName}>
             {rootSessions.length > 0 ? (
               <>
-                {visibleRootSessions.map(session => renderSession(session))}
+                {[
+                  { label: 'Pinned', pinned: true },
+                  { label: 'Sessions', pinned: false },
+                ].map(({ label, pinned }) => {
+                  // Partition existing visible roots only: pinned descendants are already
+                  // elevated by visibleParentMap, and each root retains its subtree.
+                  const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
+                  return sectionRoots.length > 0 ? (
+                    <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
+                      <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">{label}</h3>
+                      {sectionRoots.map(session => renderSession(session))}
+                    </section>
+                  ) : null
+                })}
                 {hiddenRootCount > 0 && (
                   <button
                     onClick={toggleShowMoreRoots}
