@@ -7,7 +7,7 @@ import { executeMainManagementTool, initializeMainManagementTools, shutdownMainM
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
 import { copyBetweenNodes, executeNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
-import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream } from './sessionWorkerPresentation';
+import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, publishPresentationQueueHistoryAppend } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
 import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import * as llm from './llm';
@@ -336,6 +336,7 @@ async function start(): Promise<void> {
     deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
+    publishPresentationQueueHistoryAppend: append => publishPresentationQueueHistoryAppend(identity, append),
     publishPresentationStream: event => publishPresentationModelStream(identity, event),
     persistence: {
       readState: async id => {

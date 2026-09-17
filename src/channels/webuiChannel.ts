@@ -3,7 +3,6 @@
  */
 
 import express from 'express';
-import crypto from 'crypto';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
@@ -33,8 +32,7 @@ import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { getSessionListSequenceMessageCounts } from '../session/archiveStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
-import type { Message, MessagePart, QueueItem, Session } from '../types';
-import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import type { Message, QueueHistoryAppendPresentation, QueueItem, Session } from '../types';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
@@ -55,10 +53,9 @@ import {
 } from '../webuiSessionListQueries';
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
+import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
-const MAX_QUEUED_PREVIEW_ITEMS = 20;
-const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
 const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
 const TERMINAL_WEBSOCKET_KEEPALIVE_MS = 30_000;
 
@@ -212,39 +209,6 @@ function parseOptionalPositiveNumberQuery(value: unknown, label: string): number
   return Math.floor(parsed);
 }
 
-function truncateQueuedPreviewText(value: string): string {
-  if (value.length <= MAX_QUEUED_PREVIEW_TEXT_CHARS) {
-    return value;
-  }
-  return `${value.slice(0, MAX_QUEUED_PREVIEW_TEXT_CHARS)}\n… [preview truncated]`;
-}
-
-function sanitizeQueuedPreviewPart(part: MessagePart): MessagePart | null {
-  const sanitized: MessagePart = { ...part };
-
-  if (typeof sanitized.text === 'string') {
-    sanitized.text = truncateQueuedPreviewText(sanitized.text);
-  }
-  if (typeof sanitized.system === 'string') {
-    sanitized.system = truncateQueuedPreviewText(sanitized.system);
-  }
-  if (typeof sanitized.thinking === 'string') {
-    sanitized.thinking = truncateQueuedPreviewText(sanitized.thinking);
-  }
-
-  if (sanitized.inlineData || sanitized.inlineDataRef) {
-    const mimeType = sanitized.inlineData?.mimeType
-      || sanitized.inlineData?.mime_type
-      || sanitized.inlineDataRef?.mimeType
-      || 'attachment';
-    delete sanitized.inlineData;
-    delete (sanitized as any).inlineDataRef;
-    return { text: `[${mimeType} attachment preview omitted]` };
-  }
-
-  return sanitized;
-}
-
 function sanitizeWebUiTransportValue(value: any): any {
   if (Array.isArray(value)) return value.map(sanitizeWebUiTransportValue);
   if (!value || typeof value !== 'object') return value;
@@ -332,112 +296,6 @@ async function sanitizeWebUiDebugPayload(payload: any): Promise<any> {
   return sanitizeWebUiTransportValue(result);
 }
 
-function sanitizeQueuedPreviewParts(parts: MessagePart[] | undefined): MessagePart[] {
-  if (!Array.isArray(parts)) {
-    return [];
-  }
-  return parts
-    .map(sanitizeQueuedPreviewPart)
-    .filter((part): part is MessagePart => !!part);
-}
-
-function hashQueuedPreviewItem(index: number, item: QueueItem): string {
-  const hash = crypto.createHash('sha1');
-  hash.update(String(index));
-  hash.update('\0');
-  hash.update(item.type || 'unknown');
-  hash.update('\0');
-  hash.update(JSON.stringify({
-    source: item.source,
-    sourceSessionId: item.sourceSessionId,
-    parts: item.parts,
-    message: item.message,
-  }, (_key, value) => (
-    typeof value === 'string' && value.length > 1000 ? `${value.slice(0, 1000)}…` : value
-  )).slice(0, 20_000));
-  return hash.digest('hex').slice(0, 12);
-}
-
-function hasSystemPart(parts: MessagePart[]): boolean {
-  return parts.some(part => typeof part.system === 'string' && part.system.trim().length > 0);
-}
-
-function buildNonUserQueuedPreviewParts(item: QueueItem, parts: MessagePart[]): MessagePart[] {
-  if (hasSystemPart(parts)) {
-    return parts;
-  }
-
-  const text = parts
-    .map(part => part.text || part.thinking || '')
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-  if (!text) {
-    return [];
-  }
-
-  return [{
-    system: formatFoxwarmMessage({
-      type: item.type || 'background',
-      ...(item.sourceSessionId ? { sourceSessionId: item.sourceSessionId } : {}),
-      hint: 'queued session event preview',
-    }, truncateQueuedPreviewText(text)),
-  }];
-}
-
-function buildQueuedPreviewMessage(item: QueueItem, index: number): Message | null {
-  if (item.type === 'compact-commit') {
-    return null;
-  }
-
-  const synthetic = `queued-${index}-${item.type}-${hashQueuedPreviewItem(index, item)}`;
-  const queuedMeta = {
-    ...(item.message?.__meta || {}),
-    synthetic,
-    temporary: true,
-    queuedPreview: true,
-    queueIndex: index,
-    queueType: item.type,
-  };
-
-  if (item.message) {
-    return {
-      ...item.message,
-      parts: sanitizeQueuedPreviewParts(item.message.parts),
-      __meta: queuedMeta,
-    };
-  }
-
-  const sanitizedParts = sanitizeQueuedPreviewParts(item.parts);
-  const parts = item.type === 'user'
-    ? sanitizedParts
-    : buildNonUserQueuedPreviewParts(item, sanitizedParts);
-
-  if (parts.length === 0) {
-    return null;
-  }
-
-  return {
-    role: 'user',
-    parts,
-    __meta: queuedMeta,
-  };
-}
-
-function buildQueuedPreviewMessages(queue: QueueItem[] | undefined): Message[] {
-  if (!Array.isArray(queue) || queue.length === 0) {
-    return [];
-  }
-
-  const messages: Message[] = [];
-  for (let index = 0; index < queue.length && messages.length < MAX_QUEUED_PREVIEW_ITEMS; index++) {
-    const message = buildQueuedPreviewMessage(queue[index], index);
-    if (message) {
-      messages.push(message);
-    }
-  }
-  return messages;
-}
 
 
 export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsConfigPath()) {
@@ -3335,6 +3193,24 @@ export class WebUIChannel implements Channel {
       });
     }
     this.realtimeHub?.broadcastSession(sessionId, payload);
+  }
+
+  broadcastQueueHistoryAppend(sessionId: string, append: QueueHistoryAppendPresentation) {
+    const clients = this.sseClients.get(sessionId);
+    for (const message of append.messages) {
+      const payload = { type: 'message', message: buildWebUiMessage(message) };
+      const data = JSON.stringify(payload);
+      (clients || []).forEach(client => {
+        try { client.write(`data: ${data}\n\n`); }
+        catch (e) { logger.error({ err: e }, 'Failed to send SSE queue history message'); }
+      });
+    }
+    this.realtimeHub?.broadcastSession(sessionId, {
+      type: 'history-append',
+      ...append,
+      messages: append.messages.map(buildWebUiMessage),
+      queuedMessages: append.queuedMessages.map(buildWebUiMessage),
+    });
   }
 
   broadcastSessionEvent(sessionId: string, event: any) {

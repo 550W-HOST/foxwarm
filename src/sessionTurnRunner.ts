@@ -89,6 +89,7 @@ export interface SessionTurnHost {
   saveSession(session: Session): Promise<void>;
   appendSessionMessage: typeof sessionManager.appendSessionMessage;
   appendSessionMessages: typeof sessionManager.appendSessionMessages;
+  appendQueuedSessionMessages: typeof sessionManager.appendQueuedSessionMessages;
   notifyHistoryUpdate: typeof sessionManager.notifyHistoryUpdate;
   applyCompletedCompactJob: typeof sessionManager.applyCompletedCompactJob;
   processSessionCompactionRequest: typeof sessionManager.processSessionCompactionRequest;
@@ -148,8 +149,13 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       ...(effects.execRuntime ? { execRuntime: effects.execRuntime } : {}),
       appendMessages: turnEffects.appendMessages
         ? bind(turnEffects.appendMessages)
-        : ((session, messages) => sessionManager.appendSessionMessagesForSession(
+        : (async (session, messages) => { await sessionManager.appendSessionMessagesForSession(
           session, messages, () => effects.persistSession(session), notifyHistoryUpdate,
+        ); }),
+      appendQueuedMessages: turnEffects.appendQueuedMessages
+        ? bind(turnEffects.appendQueuedMessages)
+        : ((session, messages) => sessionManager.appendQueuedSessionMessagesForSession(
+          session, messages, () => effects.persistSession(session),
         )),
       updateBusy: turnEffects.updateBusy
         ? bind(turnEffects.updateBusy)
@@ -198,6 +204,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   saveSession(session: Session): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.persistSession(session); }
   appendSessionMessage(session: Session, message: Message): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessage(session, message); }
   appendSessionMessages(session: Session, messages: Message[]): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessages(session, messages); }
+  appendQueuedSessionMessages(session: Session, messages: Message[]): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendQueuedMessages(session, messages); }
   notifyHistoryUpdate(sessionId: string, message: Message): void { this.assertOwnerId(sessionId); this.currentSessionEffects.notifyHistoryUpdate(sessionId, message); }
   get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return this.overrides.applyCompletedCompactJob || sessionManager.applyCompletedCompactJob; }
   get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return this.overrides.processSessionCompactionRequest || sessionManager.processSessionCompactionRequest; }
@@ -511,6 +518,11 @@ export class SessionTurnRunner {
     let parts = pendingParts;
     let consumedInput = false;
 
+    if (parts?.length && this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).hasInput) {
+      await this.appendUserMessage(session, parts);
+      parts = null;
+    }
+    const selected: QueueItem[] = [];
     while (session.queue[0]) {
       if (!isQueueItem(session.queue[0])) {
         session.queue.shift();
@@ -532,31 +544,12 @@ export class SessionTurnRunner {
         continue;
       }
 
-      // Queue entries are canonical history boundaries. Flush the current
-      // unsent turn before recording a follow-up, rather than concatenating
-      // their parts into one user message. Provider serializers are the only
-      // layer that may normalize adjacent same-role messages for a protocol.
-      if (!consumedInput && parts?.length) {
-        await this.appendUserMessage(session, parts);
-        parts = null;
-      }
+      if (item.message || item.parts?.length) selected.push(item);
+    }
 
-      if (item.message) {
-        consumedInput = true;
-        await this.appendQueueItemMessage(session, item, () => this.host.appendSessionMessage(session, item.message!));
-        continue;
-      }
-
-      if (!item.parts?.length) {
-        continue;
-      }
-
+    if (selected.length > 0) {
       consumedInput = true;
-      await this.appendQueueItemMessage(
-        session,
-        item,
-        () => this.appendUserMessage(session, item.parts!, item.clientMessageId),
-      );
+      await this.appendQueuedTurnInputs(session, session.id, selected, false);
     }
 
     return {
@@ -584,11 +577,12 @@ export class SessionTurnRunner {
     return { hasInput, latestSource };
   }
 
-  private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[]): Promise<void> {
+  private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[], firstStartsTurn = true): Promise<void> {
     let firstInputItem = true;
+    const messages: Message[] = [];
     for (const item of items) {
       if (item.message) {
-        await this.appendQueueItemMessage(session, item, () => this.host.appendSessionMessage(session, item.message!));
+        messages.push(item.message);
         firstInputItem = false;
         continue;
       }
@@ -598,15 +592,22 @@ export class SessionTurnRunner {
 
       // Only the first input item starts this turn, so it receives turn metadata.
       // Every queued item is still persisted as its own canonical message.
-      const parts = firstInputItem
+      const parts = firstStartsTurn && firstInputItem
         ? this.prepareTurnParts(session, sessionId, item.parts)
         : item.parts;
-      await this.appendQueueItemMessage(
-        session,
-        item,
-        () => this.appendUserMessage(session, parts, item.clientMessageId),
-      );
+      messages.push({ role: 'user', parts, ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}) });
       firstInputItem = false;
+    }
+    if (messages.length === 0) return;
+    try {
+      await this.commitChildHandoffMutation(
+        session,
+        () => { for (const item of items) applyChildHandoffQueueItem(session, item); },
+        () => this.host.appendQueuedSessionMessages(session, messages),
+      );
+    } catch (error) {
+      if (!isSessionAuthorityPostCommitError(error)) session.queue.unshift(...items);
+      throw error;
     }
   }
 
@@ -669,7 +670,7 @@ export class SessionTurnRunner {
           for (const item of committedItems) applyChildHandoffQueueItem(session, item);
         },
         () => messages.length > 0
-          ? this.host.appendSessionMessages(session, messages)
+          ? this.host.appendQueuedSessionMessages(session, messages)
           : this.host.saveSession(session),
       );
       committedMessages += messages.length;
@@ -790,14 +791,6 @@ export class SessionTurnRunner {
       }
       throw error;
     }
-  }
-
-  private appendQueueItemMessage(session: Session, item: QueueItem, append: () => Promise<void>): Promise<void> {
-    return this.commitChildHandoffMutation(
-      session,
-      () => { applyChildHandoffQueueItem(session, item); },
-      append,
-    );
   }
 
   private getChildTurnState(session: Session): {

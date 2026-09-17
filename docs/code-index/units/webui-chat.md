@@ -7,6 +7,8 @@ Secondary files: packages/webui/src/components/ProcessingStatus.tsx, packages/we
 
 Owns one mounted session's committed history, queued preview, runtime/model snapshot, logical realtime subscription, message upload/send, stop/dequeue/continue commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
 
+Queue-origin history deltas update committed and queued timelines through one reducer action only when their canonical sequences are contiguous from the trusted frontier. A gap, incoherent state, or request-racing delta stages only a bounded missing sequence range and forces non-starvable authoritative reconciliation from the last contiguous sequence; neither the queue side nor the history side is rendered alone. History responses also replace both timeline sides atomically, including recovery when the transient delta was dropped. During tail-plus-prefix bootstrap, an assembled snapshot ending before a newer staged batch is retained as the complete older boundary and the batch is recovered with `afterSeq`, rather than forcing another full snapshot. The HTTP latest sequence remains authoritative even when older rows are not mounted, while concurrent live rows advance that boundary only through a contiguous sorted suffix; a later row cannot skip an unseen sequence. The authoritative latest-sequence/version frontier, not only mounted rows, fences delayed covered deltas while the prefix is pending.
+
 ## Export
 
 - default memoized `Chat` component.

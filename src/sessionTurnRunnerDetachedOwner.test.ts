@@ -35,16 +35,17 @@ function createEffects(session: Session, events: string[]): llm.CurrentSessionTu
     assert.equal(sessionId, session.id);
     events.push(`history:${message.role}`);
   };
-  const appendMessages = (owner: Session, messages: Message[]) => sessionManager.appendSessionMessagesForSession(
+  const appendMessages = async (owner: Session, messages: Message[]) => { await sessionManager.appendSessionMessagesForSession(
     owner,
     messages,
     () => persistSession(owner),
     notifyHistoryUpdate,
-  );
+  ); };
   return {
     placement: 'local',
     appendMessage: (owner, message) => appendMessages(owner, [message]),
     appendMessages,
+    appendQueuedMessages: (owner, messages) => sessionManager.appendQueuedSessionMessagesForSession(owner, messages, () => persistSession(owner), (_session, batch) => batch.forEach(message => notifyHistoryUpdate(owner.id, message))),
     persistSession,
     updateBusy: (owner, busy) => sessionManager.updateSessionBusyStateForSession(
       owner,
@@ -122,6 +123,47 @@ test('detached exact owner completes canonical foreground provider turn', async 
   } finally {
     (llm as any).chat = originalChat;
   }
+});
+
+test('selected compatible prefix commits one complete authority batch before postcommit interruption', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_partial_prefix_${Date.now()}`, 'first queued input');
+  session.busy = true;
+  session.queue.push({ type: 'background', parts: [{ text: 'second queued input' }] });
+  const effects = createEffects(session, []);
+  let persistCount = 0;
+  const appendMessages = async (owner: Session, messages: Message[]) => { await sessionManager.appendSessionMessagesForSession(
+    owner,
+    messages,
+    async () => {
+      persistCount += 1;
+      await writeAuthoritativeSessionState(owner);
+      if (persistCount === 1) {
+        throw new SessionAuthorityPostCommitError('stop after the first selected-prefix authority commit');
+      }
+    },
+    () => {},
+  ); };
+  effects.appendMessage = (owner, message) => appendMessages(owner, [message]);
+  effects.appendMessages = appendMessages;
+  effects.appendQueuedMessages = async (owner, messages) => { await sessionManager.appendQueuedSessionMessagesForSession(owner, messages, async () => {
+    persistCount += 1;
+    await writeAuthoritativeSessionState(owner);
+    throw new SessionAuthorityPostCommitError('stop after selected-prefix authority commit');
+  }, () => {}); };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+
+  const selected = (runner as any).drainLeadingQueuedTurnInputs(session) as { items: QueueItem[] };
+  assert.equal(selected.items.length, 2);
+  assert.equal(session.queue.length, 0);
+  await assert.rejects(
+    () => (runner as any).appendQueuedTurnInputs(session, session.id, selected.items),
+    error => error instanceof SessionAuthorityPostCommitError,
+  );
+
+  const authority = await readSessionHistorySnapshot(session.id);
+  assert.deepEqual(authority?.queue, []);
+  assert.deepEqual((authority?.history || []).map((message: Message) => message.parts.find(part => part.text)?.text), ['first queued input', 'second queued input']);
 });
 
 test('one owned processor iterates many source turns with fresh TURN_IDs and one busy claim/release', async () => {
@@ -487,7 +529,7 @@ test('Stop bulk commit applies child-handoff boundaries in queue order and prese
     session.stopping = true;
     if (initialState) session.childHandoffState = structuredClone(initialState);
     const effects = createEffects(session, []);
-    if (appendError) effects.appendMessages = async () => { throw appendError; };
+    if (appendError) effects.appendQueuedMessages = async () => { throw appendError; };
     const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
     if (appendError) {
       await assert.rejects(() => (runner as any).finalizeStoppedSession(session), error => error === appendError);
@@ -623,9 +665,9 @@ test('exact host preserves append-many, wait, identity mismatch, and persistence
   const failedEffects = createEffects(session, events);
   const failPersist = async () => { throw new Error('detached persist failed'); };
   failedEffects.persistSession = failPersist;
-  failedEffects.appendMessages = (owner, messages) => sessionManager.appendSessionMessagesForSession(
+  failedEffects.appendMessages = async (owner, messages) => { await sessionManager.appendSessionMessagesForSession(
     owner, messages, failPersist, failedEffects.notifyHistoryUpdate,
-  );
+  ); };
   failedEffects.appendMessage = (owner, message) => failedEffects.appendMessages(owner, [message]);
   const failedHost = new LocalSessionTurnHost(failedEffects, session);
   await assert.rejects(() => failedHost.saveSession(session), /detached persist failed/);

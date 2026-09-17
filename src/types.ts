@@ -321,6 +321,17 @@ export interface QueueItem {
   externalEventId?: string;
 }
 
+/** Presentation-only queue-origin history append; never persisted as Session state. */
+export interface QueueHistoryAppendPresentation {
+  messages: Message[];
+  queuedMessages: Message[];
+  queueLength: number;
+  queuedPreviewOmittedCount: number;
+  messageCount: number;
+  historyVersion: number;
+  latestSeq: number;
+}
+
 export interface CompactionRequest {
   keepPercent?: number;
   compactGuidance?: string;

@@ -2,6 +2,7 @@ import { logger } from './common';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
 import { WebUIChannel } from './channels/webuiChannel';
+import { composeQueuedPreviewProjection } from './channels/webuiQueuePreview';
 import { TUIChannel } from './channels/tuiChannel';
 import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import { initializeChannelRuntime, startManagedChannel } from './channelRuntime';
@@ -60,6 +61,7 @@ import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
 import { initializeExecManager } from './execManager';
 import { setFoxwarmProcessTitle } from './processTitle';
+import { isQueueItem } from './types';
 
 setFoxwarmProcessTitle('main');
 
@@ -244,6 +246,18 @@ async function start() {
             // SSE fan-out and the stream-event bus; never writes semantic state.
             presentationSink: {
                 broadcastMessage: (sessionId, message) => webuiChannel?.broadcastMessage(sessionId, message),
+                broadcastQueueHistoryAppend: (sessionId, append) => {
+                    const pending = sessionWorkerStore!.listMailboxIntentsAfter(sessionId, append.lastAppliedMailboxId, 4096)
+                        .flatMap(intent => intent.kind === 'enqueue' && isQueueItem(intent.payload) ? [structuredClone(intent.payload)] : []);
+                    const projection = composeQueuedPreviewProjection({ hotQueuedMessages: append.queuedMessages, hotQueueLength: append.hotQueueLength, pendingQueue: pending });
+                    webuiChannel?.broadcastQueueHistoryAppend(sessionId, {
+                        messages: append.messages,
+                        ...projection,
+                        messageCount: append.messageCount,
+                        historyVersion: append.historyVersion,
+                        latestSeq: append.latestSeq,
+                    });
+                },
                 notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
             },
             onWorkerReady: sessionId => {
@@ -435,6 +449,8 @@ async function start() {
         sessionRuntime.subscribe((eventName, payload: any) => {
             if (eventName === 'history') {
                 webuiChannel!.broadcastMessage(payload.sessionId, payload.message);
+            } else if (eventName === 'queueHistoryAppend') {
+                webuiChannel!.broadcastQueueHistoryAppend(payload.sessionId, payload.append);
             } else if (eventName === 'stream') {
                 webuiChannel!.broadcastSessionEvent(payload.sessionId, payload.event);
             } else if (eventName === 'listChanged') {

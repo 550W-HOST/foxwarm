@@ -14,7 +14,7 @@ import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDe
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import * as vector from './vector';
-import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, shutdownSessionWorkerPresentation } from './sessionWorkerPresentation';
+import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, publishPresentationQueueHistoryAppend, shutdownSessionWorkerPresentation } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
 import { deliverCommittedFinal, deliverIntermediateText, finishChannelProgress, initializeSessionTurnDelivery, reportChannelProgress, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import { shutdownToolScriptRuntime } from './toolscript';
@@ -53,6 +53,7 @@ async function start(): Promise<void> {
     reportChannelProgress: (turnId, source, progress) => reportChannelProgress({ sourceSessionId: sessionId, turnId, ...(source ? { source } : {}), progress }),
     finishChannelProgress: turnId => finishChannelProgress({ sourceSessionId: sessionId, turnId }),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
+    publishPresentationQueueHistoryAppend: append => publishPresentationQueueHistoryAppend(identity, append),
     publishPresentationStream: event => publishPresentationModelStream(identity, event),
   });
   const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });

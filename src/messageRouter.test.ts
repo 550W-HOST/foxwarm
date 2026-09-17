@@ -889,14 +889,15 @@ test('MessageRouter active turns do not decode sentinel-like stream suffixes as 
   const boundary = router.turnRunner.getSourceMergeBoundary({
     platform: 'wework', channelUserId: 'conversation', weworkStreamId: 'stream-a\u0000prefer-direct-reply',
   });
-  const originalAppend = sessionManager.appendSessionMessage;
-  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
+  const turnEffects = router.turnRunner.host.currentSessionEffects;
+  const originalAppend = turnEffects.appendQueuedMessages;
+  turnEffects.appendQueuedMessages = async (target: any, messages: Message[]) => { target.history.push(...messages); };
   try {
     const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(session, null, boundary);
     assert.equal(consumed.consumedInput, true);
     assert.equal(session.queue.length, 0);
   } finally {
-    (sessionManager as any).appendSessionMessage = originalAppend;
+    turnEffects.appendQueuedMessages = originalAppend;
   }
 });
 
@@ -1627,7 +1628,8 @@ test('stop commits content that arrives while stop history is being finalized', 
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
-  const originalAppendSessionMessages = sessionManager.appendSessionMessages;
+  const turnEffects = router.turnRunner.host.currentSessionEffects;
+  const originalAppendQueuedMessages = turnEffects.appendQueuedMessages;
   let chatCallCount = 0;
   let injectedDuringFinalization = false;
 
@@ -1641,9 +1643,8 @@ test('stop commits content that arrives while stop history is being finalized', 
     await sessionManager.requestSessionStop(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'stop-finalizing-tool', name: 'read', response: { output: 'stopped' } } }] };
   };
-  (sessionManager as any).appendSessionMessages = async (...args: Parameters<typeof sessionManager.appendSessionMessages>) => {
-    await originalAppendSessionMessages(...args);
-    const messages = args[1];
+  turnEffects.appendQueuedMessages = async (owner: Session, messages: Message[]) => {
+    await originalAppendQueuedMessages(owner, messages);
     if (!injectedDuringFinalization && messages.some(message => message.parts.some(part => part.text === 'queued before finalization'))) {
       injectedDuringFinalization = true;
       assert.equal(session.stopping, true);
@@ -1673,7 +1674,7 @@ test('stop commits content that arrives while stop history is being finalized', 
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
-    (sessionManager as any).appendSessionMessages = originalAppendSessionMessages;
+    turnEffects.appendQueuedMessages = originalAppendQueuedMessages;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }

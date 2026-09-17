@@ -34,6 +34,8 @@ import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 import type { SessionWorkerBtwResult, SessionWorkerCatalogFieldsPatch, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
 import { getModelStreamDraft } from './modelStreamDraft';
+import { buildQueuedPreviewMessages } from './channels/webuiQueuePreview';
+import type { WorkerQueueHistoryAppend } from './sessionWorkerPresentationService';
 
 function mergeTextDelta(left: any, right: any): any {
   if (!left) return right ? { ...right } : undefined;
@@ -90,6 +92,7 @@ export type SessionWorkerHostDependencies = {
   finishChannelProgress?: (turnId: string) => Promise<void>;
   /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
   publishPresentationMessage?: (message: Message) => Promise<void>;
+  publishPresentationQueueHistoryAppend?: (append: WorkerQueueHistoryAppend) => Promise<void>;
   /** Transient presentation channel: model-stream events for the WebUI fan-out. */
   publishPresentationStream?: (event: SessionStreamEvent) => Promise<void>;
 };
@@ -616,6 +619,22 @@ export class SessionWorkerHost {
     }
   }
 
+  private forwardQueueHistoryAppend(messages: Message[]): void {
+    if (!this.presentationSubscribed || !this.dependencies.publishPresentationQueueHistoryAppend) return;
+    if (messages.some(message => message.role === 'model')) this.flushCoalescedStreamEvents();
+    const session = this.session!;
+    const append: WorkerQueueHistoryAppend = {
+      messages: JSON.parse(JSON.stringify(messages)),
+      queuedMessages: buildQueuedPreviewMessages(session.queue),
+      hotQueueLength: session.queue.length,
+      lastAppliedMailboxId: session.lastAppliedMailboxId || 0,
+      messageCount: session.history.length,
+      historyVersion: session.historyVersion || 0,
+      latestSeq: Math.max(0, (session.nextMessageSeq || 1) - 1),
+    };
+    this.forwardPresentation(() => this.dependencies.publishPresentationQueueHistoryAppend!(append));
+  }
+
   private static readonly STREAM_COALESCE_MS = 500;
 
   private forwardSessionStreamEvent(event: SessionStreamEvent): void {
@@ -788,11 +807,17 @@ export class SessionWorkerHost {
       await appendSessionMessagesForSession(owner, messages, persist, () => {});
       this.forwardAppendedMessages(messages);
     });
+    const appendQueuedMessages = (owner: Session, messages: Message[]) => transactional(async () => {
+      this.assertOwner(owner);
+      const canonical = await appendSessionMessagesForSession(owner, messages, persist, () => {});
+      this.forwardQueueHistoryAppend(canonical);
+    });
     let activeAbort: AbortController | undefined;
     return {
       placement: 'session-worker',
       appendMessage: (owner, message) => appendMessages(owner, [message]),
       appendMessages,
+      appendQueuedMessages,
       persistSession: owner => { this.assertOwner(owner); return persist(); },
       persistSessionStrict: owner => { this.assertOwner(owner); return persist(); },
       updateBusy: async (owner, busy) => {

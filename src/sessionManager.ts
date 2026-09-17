@@ -685,6 +685,7 @@ let onSessionRetryRequested: ((sessionId: string) => void | Promise<void>) | nul
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
+let onQueueHistoryAppended: ((session: Session, messages: Message[]) => void) | null = null;
 
 // Callback when transient session events are updated (for SSE broadcasting)
 let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => void) | null = null;
@@ -776,6 +777,10 @@ function completeStandaloneCompactRelease(sessionId: string): void {
 
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
+}
+
+export function setOnQueueHistoryAppended(callback: (session: Session, messages: Message[]) => void) {
+  onQueueHistoryAppended = callback;
 }
 
 export function setOnSessionEventUpdated(callback: (sessionId: string, event: SessionStreamEvent) => void) {
@@ -2928,6 +2933,10 @@ export function notifyHistoryUpdate(sessionId: string, message: Message) {
   }
 }
 
+export function notifyQueueHistoryAppend(session: Session, messages: Message[]): void {
+  onQueueHistoryAppended?.(session, messages);
+}
+
 export function notifySessionEvent(sessionId: string, event: SessionStreamEvent) {
   if (onSessionEventUpdated) {
     onSessionEventUpdated(sessionId, event);
@@ -2952,10 +2961,10 @@ export async function appendSessionMessagesForSession(
   messages: Message[],
   persistSession: () => Promise<void>,
   notifyMessage: (sessionId: string, message: Message) => void = notifyHistoryUpdate,
-): Promise<void> {
+): Promise<Message[]> {
 
   if (messages.length === 0) {
-    return;
+    return [];
   }
 
   const before = captureSessionSemanticState(session);
@@ -2985,6 +2994,26 @@ export async function appendSessionMessagesForSession(
   for (const message of messagesToNotify) {
     notifyMessage(session.id, message);
   }
+  return messagesToNotify;
+}
+
+export async function appendQueuedSessionMessagesForSession(
+  session: Session,
+  messages: Message[],
+  persistSession: () => Promise<void>,
+  notifyBatch: (session: Session, messages: Message[]) => void = notifyQueueHistoryAppend,
+): Promise<void> {
+  const canonical = await appendSessionMessagesForSession(session, messages, persistSession, () => {});
+  try {
+    notifyBatch(session, canonical);
+  } catch (error) {
+    logger.warn({ err: error, sessionId: session.id }, 'Queue history presentation notification failed after commit');
+  }
+}
+
+export async function appendQueuedSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
+  const session = typeof sessionOrId === 'string' ? await getSession(sessionOrId) : sessionOrId;
+  await appendQueuedSessionMessagesForSession(session, messages, () => saveSessionForSessionCritical(session));
 }
 
 export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {

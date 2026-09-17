@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -15,6 +15,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - `buildWebUiSessionState(sessionDto)` — canonical single-session runtime/model/effort/node/cwd payload shared by list, history, and streams.
 - `buildWebUiModelsPayload(currentModel?)` — model selector capability payload including virtual routing metadata and allowed/default effort presentation.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
+- `composeQueuedPreviewProjection(...)` — combines a Worker hot preview with later durable mailbox input while preserving the global preview cap and queue indices.
 - `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — parity delivery to current multiplexed WebSocket and compatibility SSE clients.
 - `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
 
@@ -106,6 +107,8 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 ### D-webui-channel-queue-preview
 
 Queued content is returned as a separate render-only array in the normal history payload. It is not a second queue API and is never mixed into committed messages.
+
+Current WebSocket clients also receive one queue-origin `history-append` delta containing the canonical appended rows and the same bounded queue-preview representation. Legacy SSE retains individual `message` frames. Queue previews remain presentation-only and inline attachment bodies are omitted.
 
 ### D-webui-channel-workspace-removal
 

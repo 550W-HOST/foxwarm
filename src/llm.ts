@@ -260,6 +260,7 @@ export interface CurrentSessionEffects {
 
 export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
     appendMessages(session: Session, messages: Message[]): Promise<void>;
+    appendQueuedMessages(session: Session, messages: Message[]): Promise<void>;
     updateBusy(session: Session, busy: boolean): Promise<void>;
     startWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
     notifyHistoryUpdate(sessionId: string, message: Message): void;
@@ -283,6 +284,7 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
         placement: 'local',
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
+        appendQueuedMessages: (session, messages) => sessionManager.appendQueuedSessionMessages(session, messages),
         persistSession,
         persistSessionStrict,
         updateBusy: (session, busy) => {

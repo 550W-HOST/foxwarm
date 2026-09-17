@@ -42,7 +42,7 @@ async function buildFixtureBundle() {
         session: { id: extras.sessionId || 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, messageCount: extras.messageCount ?? messages.length, historyVersion, modelKey: 'fixture/model' },
         messages,
         persistentMemorySnapshot: 'snapshot supplied by history',
-        queuedMessages: [],
+        queuedMessages: extras.queuedMessages ?? [],
         queueLength,
         latestSeq,
         historyVersion,
@@ -139,7 +139,7 @@ async function buildFixtureBundle() {
       }
       emit(payload) {
         if (!this.opened) { this.pending.push(payload); return }
-        const sessionPayloadTypes = new Set(['session-state', 'session-event', 'message', 'session-deleted', 'typing'])
+        const sessionPayloadTypes = new Set(['session-state', 'session-event', 'message', 'history-append', 'session-deleted', 'typing'])
         const message = sessionPayloadTypes.has(payload.type) && !payload.sessionId ? { ...payload, sessionId: 'fixture/main' } : payload
         this.onmessage?.({ data: JSON.stringify(message) })
       }
@@ -174,8 +174,23 @@ async function buildFixtureBundle() {
   return result.outputFiles[0].text
 }
 
+async function fixtureStartupStage(name, operation) {
+  let timer
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Fixture startup stage timed out: ${name}`)), 8000) }),
+    ])
+  } catch (error) {
+    console.error(`[chatHistoryLoading fixture startup failed: ${name}]`, error)
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 before(async () => {
-  const bundle = await buildFixtureBundle()
+  const bundle = await fixtureStartupStage('esbuild-bundle', buildFixtureBundle)
   server = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     const tallTimelineCss = request.url?.includes('restoreOldAnchor')
@@ -183,9 +198,24 @@ before(async () => {
       : ''
     response.end(`<!doctype html><html><head><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}.foxwarm-chat-composer-form-anchor{position:relative}.foxwarm-chat-composer-form-anchor>[data-slash-command-overlay="true"]{position:absolute;left:0;right:0;bottom:calc(100% + .5rem)}${tallTimelineCss}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  await fixtureStartupStage('http-listen', () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
-  browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  browser = await fixtureStartupStage('chromium-launch', () => puppeteer.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    timeout: 7000,
+    dumpio: process.env.FOXWARM_E2E_CHROMIUM_DUMPIO === '1',
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  }))
+  const readinessPage = await fixtureStartupStage('page-create', () => browser.newPage())
+  try {
+    await fixtureStartupStage('page-readiness', async () => {
+      await readinessPage.goto(fixtureUrl, { waitUntil: 'load' })
+      await readinessPage.waitForFunction(() => typeof window.renderFixtureChats === 'function')
+    })
+  } finally {
+    await readinessPage.close()
+  }
 })
 
 after(async () => {
@@ -901,6 +931,316 @@ test('post-request stream state wins over an older history session snapshot', as
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Thinking... • 3 queued messages will be inserted after this model response')), true)
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('live streaming text')), true)
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 2)
+  await page.close()
+})
+
+test('queue-origin append atomically moves one logical input between timelines', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'model', parts: [{ text: 'prior committed row' }], __meta: { seq: 1, timestamp: 10 } },
+  ], 0, {
+    messageCount: 1,
+    latestSeq: 1,
+    queuedMessages: [{
+      role: 'user',
+      parts: [{ text: 'queue transition duplicate probe' }],
+      __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-probe' },
+    }],
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('queue transition duplicate probe'))
+
+  await page.evaluate(() => {
+    window.emitFixtureEvent({
+      type: 'session-state',
+      session: {
+        id: 'fixture/main',
+        busy: true,
+        runtimeState: { state: 'requesting-model' },
+        queueLength: 0,
+        messageCount: 2,
+        historyVersion: 0,
+        modelKey: 'fixture/model',
+      },
+    })
+    window.emitFixtureEvent({
+      type: 'history-append', historyVersion: 0, messageCount: 2, queueLength: 0, latestSeq: 2,
+      messages: [{ role: 'user', parts: [{ text: 'queue transition duplicate probe' }], __meta: { seq: 2, timestamp: 20 } }],
+      queuedMessages: [], queuedPreviewOmittedCount: 0,
+    })
+  })
+
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue transition duplicate probe'))
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue transition duplicate probe') === true,
+    queued: document.querySelector('[data-queued-preview]')?.textContent.includes('queue transition duplicate probe') === true,
+  })), { committed: true, queued: false })
+  await page.close()
+})
+
+test('queue-origin append after an earlier missing canonical row preserves the safe frontier and recovers atomically', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'model', parts: [{ text: 'frontier row 1' }], __meta: { seq: 1, timestamp: 10 } },
+  ], 0, {
+    messageCount: 1,
+    latestSeq: 1,
+    queuedMessages: [{ role: 'user', parts: [{ text: 'queue row 3' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-row-3' } }],
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('queue row 3'))
+  await page.evaluate(() => {
+    window.emitFixtureEvent({
+      type: 'session-state',
+      session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 3, historyVersion: 0, modelKey: 'fixture/model' },
+    })
+    window.emitFixtureEvent({
+      type: 'history-append', historyVersion: 0, messageCount: 3, queueLength: 0, latestSeq: 3,
+      messages: [{ role: 'user', parts: [{ text: 'queue row 3' }], __meta: { seq: 3, timestamp: 30 } }],
+      queuedMessages: [], queuedPreviewOmittedCount: 0,
+    })
+  })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  assert.match(await page.evaluate(() => window.fixtureRequests.filter(url => url.includes('/history')).at(-1)), /afterSeq=1/)
+  assert.deepEqual(await page.evaluate(() => ({
+    queueRowCommitted: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue row 3') === true,
+    queueRowQueued: document.querySelector('[data-queued-preview]')?.textContent.includes('queue row 3') === true,
+  })), { queueRowCommitted: false, queueRowQueued: true })
+  await page.evaluate(() => window.resolveFixtureHistory(0, [
+    { role: 'model', parts: [{ text: 'missing row 2' }], __meta: { seq: 2, timestamp: 20 } },
+    { role: 'user', parts: [{ text: 'queue row 3' }], __meta: { seq: 3, timestamp: 30 } },
+  ], 0, { messageCount: 3, latestSeq: 3, queuedMessages: [] }))
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('missing row 2'))
+  assert.deepEqual(await page.evaluate(() => ({
+    missing: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('missing row 2') === true,
+    queueRowCommitted: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue row 3') === true,
+    queueRowQueued: document.querySelector('[data-queued-preview]')?.textContent.includes('queue row 3') === true,
+  })), { missing: true, queueRowCommitted: true, queueRowQueued: false })
+  await page.close()
+})
+
+test('queue-origin append waits for an already in-flight authoritative correction', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'model', parts: [{ text: 'prior committed row' }], __meta: { seq: 1, timestamp: 10 } },
+  ], 0, {
+    messageCount: 1,
+    latestSeq: 1,
+    queuedMessages: [{ role: 'user', parts: [{ text: 'in-flight queue A' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-in-flight-a' } }],
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('in-flight queue A'))
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'session-state',
+    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 2, historyVersion: 0, modelKey: 'fixture/model' },
+  }))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'history-append', historyVersion: 0, messageCount: 2, queueLength: 0, latestSeq: 2,
+    messages: [{ role: 'user', parts: [{ text: 'in-flight queue A' }], __meta: { seq: 2, timestamp: 20 } }],
+    queuedMessages: [], queuedPreviewOmittedCount: 0,
+  }))
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('in-flight queue A') === true,
+    queued: document.querySelector('[data-queued-preview]')?.textContent.includes('in-flight queue A') === true,
+  })), { committed: false, queued: true })
+  await page.close()
+})
+
+test('a dropped queue-origin append recovers history and queue together from afterSeq', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'model', parts: [{ text: 'prior committed row' }], __meta: { seq: 1, timestamp: 10 } },
+  ], 0, {
+    messageCount: 1,
+    latestSeq: 1,
+    queuedMessages: [{ role: 'user', parts: [{ text: 'dropped append queue A' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-dropped-a' } }],
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('dropped append queue A'))
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'session-state',
+    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 2, historyVersion: 0, modelKey: 'fixture/model' },
+  }))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('dropped append queue A') === true,
+    queued: document.querySelector('[data-queued-preview]')?.textContent.includes('dropped append queue A') === true,
+  })), { committed: false, queued: true })
+  await page.evaluate(() => window.resolveFixtureHistory(0, [
+    { role: 'user', parts: [{ text: 'dropped append queue A' }], __meta: { seq: 2, timestamp: 20 } },
+  ], 0, { messageCount: 2, latestSeq: 2, queuedMessages: [] }))
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('dropped append queue A'))
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('dropped append queue A') === true,
+    queued: document.querySelector('[data-queued-preview]')?.textContent.includes('dropped append queue A') === true,
+  })), { committed: true, queued: false })
+  await page.close()
+})
+
+test('unsafe queue-origin append with newer unresolved queue state applies neither timeline side', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'model', parts: [{ text: 'prior committed row' }], __meta: { seq: 1, timestamp: 10 } },
+  ], 0, {
+    messageCount: 1,
+    latestSeq: 1,
+    queuedMessages: [{
+      role: 'user',
+      parts: [{ text: 'queue mismatch duplicate probe' }],
+      __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-mismatch-probe' },
+    }],
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('queue mismatch duplicate probe'))
+
+  await page.evaluate(() => {
+    window.emitFixtureEvent({
+      type: 'session-state',
+      session: {
+        id: 'fixture/main',
+        busy: true,
+        runtimeState: { state: 'requesting-model' },
+        queueLength: 2,
+        messageCount: 2,
+        historyVersion: 0,
+        modelKey: 'fixture/model',
+      },
+    })
+    window.emitFixtureEvent({
+      type: 'history-append', historyVersion: 0, messageCount: 2, queueLength: 0, latestSeq: 2,
+      messages: [{ role: 'user', parts: [{ text: 'queue mismatch duplicate probe' }], __meta: { seq: 2, timestamp: 20 } }],
+      queuedMessages: [], queuedPreviewOmittedCount: 0,
+    })
+    window.fixtureOrdinaryFramesSent = 0
+    const emitOrdinaryFrame = () => {
+      const offset = window.fixtureOrdinaryFramesSent++
+      window.emitFixtureMessage({ role: 'model', parts: [{ text: `later ordinary frame ${offset} must wait` }], __meta: { seq: 3 + offset, timestamp: 30 + offset } })
+      if (window.fixtureOrdinaryFramesSent >= 20) window.clearInterval(window.fixtureOrdinaryFramesTimer)
+    }
+    emitOrdinaryFrame()
+    window.fixtureOrdinaryFramesTimer = window.setInterval(emitOrdinaryFrame, 10)
+  })
+
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue mismatch duplicate probe') === true,
+    queued: document.querySelector('[data-queued-preview]')?.textContent.includes('queue mismatch duplicate probe') === true,
+    laterFrame: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('later ordinary frame') === true,
+  })), { committed: false, queued: true, laterFrame: false })
+  assert.ok(await page.evaluate(() => window.fixtureOrdinaryFramesSent) < 20, 'ordinary frames must not postpone atomic recovery until streaming becomes quiet')
+  assert.match(await page.evaluate(() => window.fixtureRequests.filter(url => url.includes('/history')).at(-1)), /afterSeq=1/)
+  const ordinaryFrameCount = await page.evaluate(() => {
+    window.clearInterval(window.fixtureOrdinaryFramesTimer)
+    return window.fixtureOrdinaryFramesSent
+  })
+  const recovered = [
+    { role: 'user', parts: [{ text: 'queue mismatch duplicate probe' }], __meta: { seq: 2, timestamp: 20 } },
+    ...Array.from({ length: ordinaryFrameCount }, (_, offset) => ({ role: 'model', parts: [{ text: `later ordinary frame ${offset} must wait` }], __meta: { seq: 3 + offset, timestamp: 30 + offset } })),
+  ]
+  await page.evaluate((messages, count) => window.resolveFixtureHistory(2, messages, 0, {
+    messageCount: 2 + count,
+    latestSeq: 2 + count,
+    queuedMessages: [
+      { role: 'user', parts: [{ text: 'newer queued B' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-b' } },
+      { role: 'user', parts: [{ text: 'newer queued C' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'queued-c' } },
+    ],
+  }), recovered, ordinaryFrameCount)
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue mismatch duplicate probe'))
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('queue mismatch duplicate probe') === true,
+    oldQueue: document.querySelector('[data-queued-preview]')?.textContent.includes('queue mismatch duplicate probe') === true,
+    newerQueue: document.querySelector('[data-queued-preview]')?.textContent.includes('newer queued B') === true,
+  })), { committed: true, oldQueue: false, newerQueue: true })
+  await page.close()
+})
+
+test('trusted tail frontier ignores a delayed covered queue append while prefix history is pending', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  const tail = Array.from({ length: 100 }, (_, index) => ({ role: 'model', parts: [{ text: `tail ${index + 101}` }], __meta: { seq: index + 101, timestamp: index + 101 } }))
+  await page.evaluate(messages => window.resolveFixtureHistory(1, messages, 0, {
+    messageCount: 200,
+    latestSeq: 200,
+    prefixLength: 100,
+    historyComplete: false,
+    queuedMessages: [{ role: 'user', parts: [{ text: 'newer queue B' }], __meta: { queuedPreview: true, temporary: true, synthetic: 'queue-b' } }],
+  }), tail)
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('newer queue B'))
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'history-append', historyVersion: 0, messageCount: 50, queueLength: 0, latestSeq: 50,
+    messages: [{ role: 'user', parts: [{ text: 'delayed covered queue A' }], __meta: { seq: 50, timestamp: 50 } }],
+    queuedMessages: [], queuedPreviewOmittedCount: 0,
+  }))
+  assert.deepEqual(await page.evaluate(() => ({
+    delayed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('delayed covered queue A') === true,
+    newerQueue: document.querySelector('[data-queued-preview]')?.textContent.includes('newer queue B') === true,
+  })), { delayed: false, newerQueue: true })
+  await page.close()
+})
+
+test('prefix bootstrap keeps the contiguous authority frontier when a live gap precedes a newer queue batch', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  const tail = Array.from({ length: 100 }, (_, index) => ({ role: 'model', parts: [{ text: `bootstrap tail ${index + 101}` }], __meta: { seq: index + 101, timestamp: index + 101 } }))
+  await page.evaluate(messages => window.resolveFixtureHistory(1, messages, 0, {
+    messageCount: 200,
+    latestSeq: 200,
+    prefixLength: 100,
+    historyComplete: false,
+    queuedMessages: [{ role: 'user', parts: [{ text: 'bootstrap queue A' }], __meta: { queuedPreview: true, temporary: true, synthetic: 'bootstrap-a' } }],
+  }), tail)
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.evaluate(() => {
+    window.emitFixtureMessage({ role: 'model', parts: [{ text: 'concurrent row 202 before missing 201' }], __meta: { seq: 202, timestamp: 202 } })
+    window.emitFixtureEvent({
+      type: 'session-state',
+      session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 1, messageCount: 203, historyVersion: 0, modelKey: 'fixture/model' },
+    })
+    window.emitFixtureEvent({
+      type: 'history-append', historyVersion: 0, messageCount: 203, queueLength: 1, latestSeq: 203,
+      messages: [{ role: 'user', parts: [{ text: 'newer queue row 203' }], __meta: { seq: 203, timestamp: 203 } }],
+      queuedMessages: [{ role: 'user', parts: [{ text: 'bootstrap queue B' }], __meta: { queuedPreview: true, temporary: true, synthetic: 'bootstrap-b' } }],
+      queuedPreviewOmittedCount: 0,
+    })
+  })
+  const prefix = Array.from({ length: 100 }, (_, index) => ({ role: 'model', parts: [{ text: `bootstrap prefix ${index + 1}` }], __meta: { seq: index + 1, timestamp: index + 1 } }))
+  await page.evaluate(messages => window.resolveFixtureHistory(0, messages, 0, { messageCount: 200, latestSeq: 100, queuedMessages: [] }), prefix)
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+  const request = await page.evaluate(() => window.fixtureRequests.filter(url => url.includes('/history')).at(-1))
+  assert.match(request, /afterSeq=200/)
+  assert.match(request, /historyVersion=0/)
+  assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('bootstrap prefix 1')), true)
+  assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('concurrent row 202 before missing 201')), true)
+  assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('newer queue row 203')), false)
+  await page.evaluate(() => window.resolveFixtureHistory(1, [
+    { role: 'model', parts: [{ text: 'recovered missing row 201' }], __meta: { seq: 201, timestamp: 201 } },
+    { role: 'model', parts: [{ text: 'concurrent row 202 before missing 201' }], __meta: { seq: 202, timestamp: 202 } },
+    { role: 'user', parts: [{ text: 'newer queue row 203' }], __meta: { seq: 203, timestamp: 203 } },
+  ], 0, {
+    messageCount: 203,
+    latestSeq: 203,
+    queuedMessages: [{ role: 'user', parts: [{ text: 'bootstrap queue B' }], __meta: { queuedPreview: true, temporary: true, synthetic: 'bootstrap-b' } }],
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('newer queue row 203'))
+  assert.equal(await page.evaluate(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('recovered missing row 201')), true)
+  assert.equal(await page.evaluate(() => document.querySelector('[data-queued-preview]')?.textContent.includes('bootstrap queue B')), true)
   await page.close()
 })
 

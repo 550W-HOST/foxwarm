@@ -8,8 +8,9 @@ import {
   RpcServiceHandler,
 } from './rpc';
 import * as sessionManager from './sessionManager';
-import type { Message, QueueItem, QueueSource, Session, SessionStreamEvent, TokenUsage } from './types';
+import type { Message, QueueHistoryAppendPresentation, QueueItem, QueueSource, Session, SessionStreamEvent, TokenUsage } from './types';
 import { isQueueItem } from './types';
+import { buildQueuedPreviewMessages } from './channels/webuiQueuePreview';
 import { getEffectiveSessionQueueLength, type SessionRuntimeState } from './sessionRuntimeState';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerProjectionEntry, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
@@ -142,6 +143,7 @@ export type SessionRuntimeCompactionResultDto =
 
 export type SessionRuntimeEventPayloads = {
   history: { sessionId: string; message: Message };
+  queueHistoryAppend: { sessionId: string; append: QueueHistoryAppendPresentation };
   stream: { sessionId: string; event: SessionStreamEvent };
   listChanged: Record<string, never>;
   stateChanged: { sessionId: string; session: SessionRuntimeSessionDto | null };
@@ -152,7 +154,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 11, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 12, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -189,6 +191,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   stopEvents: rpcMethod<Record<string, never>, { stopped: true }>(),
 }, {
   history: rpcEvent<SessionRuntimeEventPayloads['history']>(),
+  queueHistoryAppend: rpcEvent<SessionRuntimeEventPayloads['queueHistoryAppend']>(),
   stream: rpcEvent<SessionRuntimeEventPayloads['stream']>(),
   listChanged: rpcEvent<SessionRuntimeEventPayloads['listChanged']>(),
   stateChanged: rpcEvent<SessionRuntimeEventPayloads['stateChanged']>(),
@@ -425,6 +428,21 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     sessionManager.setOnHistoryUpdated((sessionId, message) => {
       eventContext?.emit('history', { sessionId, message });
     });
+    sessionManager.setOnQueueHistoryAppended((session, messages) => {
+      const queuedMessages = buildQueuedPreviewMessages(session.queue);
+      eventContext?.emit('queueHistoryAppend', {
+        sessionId: session.id,
+        append: {
+          messages,
+          queuedMessages,
+          queueLength: session.queue.length,
+          queuedPreviewOmittedCount: Math.max(0, session.queue.length - queuedMessages.length),
+          messageCount: session.history.length,
+          historyVersion: session.historyVersion || 0,
+          latestSeq: Math.max(0, ...messages.map(message => message.__meta?.seq || 0)),
+        },
+      });
+    });
     sessionManager.setOnSessionEventUpdated((sessionId, event) => {
       eventContext?.emit('stream', { sessionId, event });
     });
@@ -480,6 +498,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   const uninstallEventCallbacks = () => {
     eventContext = undefined;
     sessionManager.setOnHistoryUpdated(() => {});
+    sessionManager.setOnQueueHistoryAppended(() => {});
     sessionManager.setOnSessionEventUpdated(() => {});
     sessionManager.setOnSessionListUpdated(() => {});
     sessionManager.setOnSessionStateUpdated(() => {});

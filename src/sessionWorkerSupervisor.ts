@@ -15,7 +15,7 @@ import type { CompactionRequest } from './types';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
-import { createSessionWorkerPresentationServiceHandler, sessionWorkerPresentationServiceDescriptor } from './sessionWorkerPresentationService';
+import { createSessionWorkerPresentationServiceHandler, sessionWorkerPresentationServiceDescriptor, type WorkerQueueHistoryAppend } from './sessionWorkerPresentationService';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor,
   SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
@@ -43,6 +43,7 @@ export type SessionWorkerSupervisorOptions = {
   /** Pure pass-through sinks for the transient presentation channel (WebUI SSE fan-out / stream-event bus); never write semantic state. */
   presentationSink?: {
     broadcastMessage: (sessionId: string, message: any) => void;
+    broadcastQueueHistoryAppend: (sessionId: string, append: WorkerQueueHistoryAppend) => void;
     notifySessionEvent: (sessionId: string, event: any) => void;
   };
   /** Exact-owner history reader used by the Worker-to-Main management facade. */
@@ -611,6 +612,7 @@ export class SessionWorkerSupervisor {
         reverseRegistry.register(sessionWorkerPresentationServiceDescriptor, createSessionWorkerPresentationServiceHandler({
           expected: publicationIdentity,
           broadcastMessage: this.options.presentationSink.broadcastMessage,
+          broadcastQueueHistoryAppend: this.options.presentationSink.broadcastQueueHistoryAppend,
           notifySessionEvent: this.options.presentationSink.notifySessionEvent,
         }));
       }
