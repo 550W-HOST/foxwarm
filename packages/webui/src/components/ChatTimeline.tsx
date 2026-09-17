@@ -190,6 +190,8 @@ const formatDurationSummary = (samples: DurationSample[]): string => {
   return labels.join(' • ') || 'unavailable'
 }
 
+const MIN_COLLAPSED_BETWEEN_REQUESTS_MS = 60_000
+
 const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
     ? 'text-fw-warning dark:text-fw-warning'
@@ -223,6 +225,9 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
   const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
   const betweenRequestsMs = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
+  const collapsedBetweenRequestsMs = betweenRequestsMs !== null && betweenRequestsMs >= MIN_COLLAPSED_BETWEEN_REQUESTS_MS
+    ? betweenRequestsMs
+    : null
 
   return (
     <button
@@ -256,19 +261,19 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
           <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-          {(betweenRequestsMs !== null || apiDurationMs !== null) ? (
+          {(collapsedBetweenRequestsMs !== null || apiDurationMs !== null) ? (
             <span
               data-usage-timing-summary
               className="inline-flex items-center gap-2 border-l border-fw-border pl-2"
             >
-              {betweenRequestsMs !== null ? (
+              {collapsedBetweenRequestsMs !== null ? (
                 <span
                   data-usage-timing-kind="between"
                   className="inline-flex items-center gap-1 text-fw-text-subtle"
-                  title={`Between requests: ${formatDetailedDuration(betweenRequestsMs)}`}
+                  title={`Between requests: ${formatDetailedDuration(collapsedBetweenRequestsMs)}`}
                 >
                   <Hourglass aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
-                  <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(betweenRequestsMs)}</span>
+                  <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(collapsedBetweenRequestsMs)}</span>
                 </span>
               ) : null}
               {apiDurationMs !== null ? (

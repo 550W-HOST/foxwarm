@@ -39,8 +39,18 @@ async function buildFixtureBundle() {
         { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'timed-tool', name: 'exec', response: { output: 'ok' } } }], __meta: { seq: 'timed-tool' } },
         { role: 'model', parts: [{ text: 'Timed response' }], __meta: { seq: 'timed-current', usage: usage(4, 5, 6), modelId: 'provider/timed', timestamp: 6500, llmRequestTiming: requestTiming(5000, 6500) } },
       ] },
+      ordinaryBelowMinute: { messages: [
+        { role: 'model', parts: [{ text: 'Previous boundary request' }], __meta: { seq: 'ordinary-below-prior', llmRequestTiming: requestTiming(0, 1000) } },
+        { role: 'model', parts: [{ text: 'Below-minute response' }], __meta: { seq: 'ordinary-below-current', usage: usage(7, 8, 9), modelId: 'provider/below-minute', timestamp: 62499, llmRequestTiming: requestTiming(60999, 62499) } },
+      ] },
+      ordinaryAtMinute: { messages: [
+        { role: 'model', parts: [{ text: 'Previous boundary request' }], __meta: { seq: 'ordinary-at-prior', llmRequestTiming: requestTiming(0, 1000) } },
+        { role: 'model', parts: [{ text: 'One-minute response' }], __meta: { seq: 'ordinary-at-current', usage: usage(7, 8, 9), modelId: 'provider/at-minute', timestamp: 62500, llmRequestTiming: requestTiming(61000, 62500) } },
+      ] },
       groupSame: { groupTools: true, messages: [toolCall('same-one', 'provider/real-model', 'virtual/same', 1700000000000, 1000, 2000), toolResponse('same-one'), toolCall('same-two', 'provider/real-model', 'virtual/same', 1700000000000, 5000, 7000), toolResponse('same-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'same-final' } }] },
       groupDifferent: { groupTools: true, messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000, 1000, 2000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000, 5000, 7000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
+      groupBelowMinute: { groupTools: true, messages: [toolCall('group-below-one', 'provider/group-below', null, 1700000000000, 0, 1000), toolResponse('group-below-one'), toolCall('group-below-two', 'provider/group-below', null, 1700000062499, 60999, 62499), toolResponse('group-below-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'group-below-final' } }] },
+      groupAtMinute: { groupTools: true, messages: [toolCall('group-at-one', 'provider/group-at', null, 1700000000000, 0, 1000), toolResponse('group-at-one'), toolCall('group-at-two', 'provider/group-at', null, 1700000062500, 61000, 62500), toolResponse('group-at-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'group-at-final' } }] },
       longMobile: { messages: [{ role: 'model', parts: [{ text: 'Long route response' }], __meta: { seq: 4, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: longVirtualKey, timestamp: 1700000000000 } }] },
       hidden: { showUsageBadge: false, messages: [{ role: 'model', parts: [{ text: 'Hidden usage' }], __meta: { seq: 5, usage: usage(1, 2, 3), modelId: 'provider/hidden', timestamp: 1700000000000 } }] },
     }
@@ -71,8 +81,8 @@ async function buildFixtureBundle() {
 async function mountFixture(width = 1100) {
   await page.setViewport({ width, height: 900, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 9)
-  assert.equal(await page.$$eval('[data-usage-badge]', badges => badges.length), 8)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 13)
+  assert.equal(await page.$$eval('[data-usage-badge]', badges => badges.length), 12)
 }
 
 async function badgeState(id) {
@@ -117,7 +127,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:1400px;max-width:100%;min-width:0;margin-bottom:24px}</style></head><body><main>${['concrete', 'virtual', 'missing', 'invalid', 'timed', 'groupSame', 'groupDifferent', 'longMobile', 'hidden'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:1400px;max-width:100%;min-width:0;margin-bottom:24px}</style></head><body><main>${['concrete', 'virtual', 'missing', 'invalid', 'timed', 'ordinaryBelowMinute', 'ordinaryAtMinute', 'groupSame', 'groupDifferent', 'groupBelowMinute', 'groupAtMinute', 'longMobile', 'hidden'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -184,7 +194,6 @@ test('request timing shows API latency and the tool-inclusive interval between r
     text: item.textContent.trim(),
     title: item.getAttribute('title'),
   }))), [
-    { kind: 'between', text: '3s', title: 'Between requests: 3s (3000ms)' },
     { kind: 'api', text: '1s', title: 'API response: 1s (1500ms)' },
   ])
 
@@ -192,6 +201,31 @@ test('request timing shows API latency and the tool-inclusive interval between r
   const expanded = await badgeState('timed')
   assert.ok(expanded.text.includes('Between3s (3000ms)'), expanded.text)
   assert.ok(expanded.text.includes('API1s (1500ms)'), expanded.text)
+})
+
+test('collapsed ordinary and grouped badges show between timing only from the raw one-minute boundary', async () => {
+  await mountFixture()
+
+  for (const id of ['ordinaryBelowMinute', 'groupBelowMinute']) {
+    assert.deepEqual(await page.$$eval(`#${id} [data-usage-timing-kind]`, items => items.map(item => item.getAttribute('data-usage-timing-kind'))), ['api'])
+    const collapsed = await badgeState(id)
+    assert.ok(collapsed.text.includes('C'), collapsed.text)
+    await page.click(`#${id} [data-usage-badge]`)
+    const expanded = await badgeState(id)
+    assert.ok(expanded.text.includes('Between59s (59999ms)'), expanded.text)
+    assert.ok(expanded.text.includes('API'), expanded.text)
+  }
+
+  for (const id of ['ordinaryAtMinute', 'groupAtMinute']) {
+    assert.deepEqual(await page.$$eval(`#${id} [data-usage-timing-kind]`, items => items.map(item => ({
+      kind: item.getAttribute('data-usage-timing-kind'),
+      text: item.textContent.trim(),
+      title: item.getAttribute('title'),
+    }))), [
+      { kind: 'between', text: '1m', title: 'Between requests: 1m (60000ms)' },
+      { kind: 'api', text: id === 'ordinaryAtMinute' ? '1s' : '2s', title: id === 'ordinaryAtMinute' ? 'API response: 1s (1500ms)' : 'API response: 2s (2500ms)' },
+    ])
+  }
 })
 
 test('collapsed tool-group details aggregate calls without attributing them to the first route, and badge click does not expand the group', async () => {
