@@ -56,7 +56,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 - `./chatShared` — shared utilities (`renderMarkdown`, `formatToolLabel`, `isSystemLikeText`, `copyTextToClipboard`, `IconToggleButton`, types `Message`, `ToolTagItem`, `ViewMode`, etc.)
 - `./ImageParts` — renders image content parts
 - `./ReasoningCard` — collapsible reasoning/thinking display
-- `./ToolTimelineItems` — `InterleavedToolGroup`, `ToolCallsBlock`, `ToolResponsesBlock`, `ToolGroupSummaryCard`, `getToolResponseStatus`
+- `./ToolTimelineItems` — `InterleavedToolGroup`, `ToolCallsBlock`, `ToolResponsesBlock`, `ToolGroupSummaryCard`
 
 ## Behavior
 

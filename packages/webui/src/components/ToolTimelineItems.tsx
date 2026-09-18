@@ -123,8 +123,6 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
-export { getToolResponseStatus }
-
 const getToolPairStatus = (responses: FunctionResponse[], imageParts: MessagePart[] = []): 'success' | 'error' | 'neutral' => {
   if (responses.some((resp) => getToolResponseStatus(resp) === 'error')) {
     return 'error'
@@ -141,6 +139,10 @@ const truncateToolResultPreview = (text: string): string => {
   if (text.length <= COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS) return text
   return `${text.slice(0, COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS)}...`
 }
+
+const renderTextResult = (text: string, expanded: boolean): ReactNode => (
+  <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? text : truncateToolResultPreview(text)}</div>
+)
 
 export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
 
@@ -435,9 +437,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
       const displayStr = expanded ? output : preview
       return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
     }
-    const raw = formatToolResponseText(resp)
-    const preview = truncateToolResultPreview(raw)
-    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? raw : preview}</div>
+    return renderTextResult(formatToolResponseText(resp), expanded)
   }
 
   const download = getSendFileDownload(call, resp)
@@ -448,44 +448,46 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   }
 
   if (download) {
-    const preview = truncateToolResultPreview(primaryText)
     return (
       <div className="space-y-2">
         <ToolDownloadButton url={download.url} fileName={download.fileName} />
-        {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
+        {primaryText ? renderTextResult(primaryText, expanded) : null}
       </div>
     )
   }
 
   if (primaryText) {
-    const preview = truncateToolResultPreview(primaryText)
-    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
+    return renderTextResult(primaryText, expanded)
   }
 
   if (getToolResponseStatus(resp) === 'success') {
     return expanded ? <div className="text-fw-text-muted">Completed</div> : <div>Completed</div>
   }
 
-  const respFormatted = formatToolResponseText(resp)
-  const preview = truncateToolResultPreview(respFormatted)
-  return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
+  return renderTextResult(formatToolResponseText(resp), expanded)
 }
 
 const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
+
+const ToolScriptSubCallTag = ({ subCall }: { subCall: ToolScriptSubCall }) => (
+  <>
+    {subCall.status === 'running' && (
+      <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
+    )}
+    <ToolTag
+      name={subCall.name}
+      label={subCall.name}
+      tone={subCall.status === 'failed' ? 'error' : subCall.status === 'completed' ? 'success' : 'neutral'}
+    />
+  </>
+)
 
 const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1 py-0.5">
       {subCalls.map((sc) => (
         <span key={sc.id} className="inline-flex items-center gap-0.5">
-          {sc.status === 'running' && (
-            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
-          )}
-          <ToolTag
-            name={sc.name}
-            label={sc.name}
-            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
-          />
+          <ToolScriptSubCallTag subCall={sc} />
         </span>
       ))}
     </div>
@@ -497,14 +499,7 @@ const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }
     <div className="ml-3 border-l-2 border-fw-accent-border dark:border-fw-accent-border pl-2 space-y-0.5 py-1">
       {subCalls.map((sc) => (
         <div key={sc.id} className="flex items-center gap-2 text-xs">
-          {sc.status === 'running' && (
-            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
-          )}
-          <ToolTag
-            name={sc.name}
-            label={sc.name}
-            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
-          />
+          <ToolScriptSubCallTag subCall={sc} />
           {sc.argsSummary && (
             <span className="text-fw-text-muted truncate max-w-[200px]">{sc.argsSummary}</span>
           )}
@@ -590,7 +585,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
-  const tagTone = pairStatus === 'error' ? 'error' : pairStatus === 'success' ? 'success' : 'neutral'
+  const tagTone = pairStatus
   const partialToolCall = shouldUseStreamingToolPlaceholder({
     modelMessageMeta: modelMessage?.__meta,
     hasCall: !!call,
@@ -628,6 +623,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const hasBody = expanded || !!responsePreview || hasToolScriptProgress
 
   const actionButtonsToneClass = `foxwarm-tool-action-buttons-${tagTone}`
+  const resultSeparatorClass = `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}`
 
   const expandedCallContent = call ? (
     <div className={`text-fw-text ${showDiffToggles ? 'relative' : ''}`}>
@@ -698,13 +694,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               {hasResponseContent && !hasToolScriptProgress && (
                 <div className="text-fw-text">
                   {responses.length > 0 && responses.map((resp, idx) => (
-                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
+                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? resultSeparatorClass : ''}>
                       {renderToolResponseContent(resp, true, call)}
                     </div>
                   ))}
 
                   {imageParts.length > 0 && (
-                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
+                    <div className={responses.length > 0 ? resultSeparatorClass : ''}>
                       <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call?.id || primaryName}`} />
                     </div>
                   )}
@@ -718,7 +714,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                   {responses.length > 0 && responses.map((resp, idx) => {
                     const content = renderToolScriptResultContent(resp, true)
                     return content ? (
-                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
+                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? resultSeparatorClass : ''}>
                         {content}
                       </div>
                     ) : null

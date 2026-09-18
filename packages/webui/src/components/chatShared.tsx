@@ -25,7 +25,6 @@ import {
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
-import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
 export {
   renderAssistantMarkdownSegments,
@@ -36,8 +35,6 @@ export {
   renderMarkdownWithSanitizer,
   type MarkdownRenderSegment,
 } from './markdownRenderer'
-
-export const formatObject = formatCompactObjectPreview
 
 export interface SlashCommandOption {
   name: string
@@ -437,9 +434,8 @@ export const isHeavySystemTextLine = (text: string): boolean => (
   (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
 
-export const isCollapsibleSystemText = (text: string): boolean => (
-  (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
-)
+/** Same predicate as `isHeavySystemTextLine`, named for the user-text collapse caller. */
+export const isCollapsibleSystemText = isHeavySystemTextLine
 
 const normalizeSystemMessageKind = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
@@ -641,12 +637,6 @@ export const applySlashCommandSuggestion = (completion: SlashCommandCompletion, 
   return `${nextTokens.join(' ')} `
 }
 
-export const resizeTextarea = (textarea: HTMLTextAreaElement | null) => {
-  if (!textarea) return
-  textarea.style.height = 'auto'
-  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
-}
-
 export const getCollapsedReasoningPreview = (thinking: string): string => {
   const lines = thinking
     .split('\n')
@@ -796,8 +786,6 @@ export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', 
     </span>
   )
 }
-
-export const ToolLabel = ({ name, label }: { name: string; label?: string }) => <ToolTag name={name} label={label} />
 
 export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   <div className="flex min-w-0 flex-wrap items-center gap-1.5">

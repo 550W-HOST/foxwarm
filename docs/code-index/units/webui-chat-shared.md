@@ -24,7 +24,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `parseApplyPatchPreview` — parses patch text into structured preview operations
 - `buildPatchHunkSnippets` — extracts old/new text from a patch hunk
 - `computeUnifiedDiffLines` — generates unified diff output from two strings
-- `formatObject` / `formatCompactObjectPreview` — compact object serialization
+- `formatCompactObjectPreview` — compact object serialization
 - Interfaces: `Message`, `MessagePart`, `OpenAIResponsesAnnotation`, `FunctionCall`, `FunctionResponse`, `SlashCommandOption`, `SlashCommandCompletion`, `PatchPreviewOperation`, `SessionStreamEvent`, `ViewMode`, `ToolViewMode`
 - `SessionStreamEvent` mirrors both legacy cumulative stream fields and version-2 offset delta/tool-argument fields.
 - `ContextBlockMessageMeta` — frontend mirror of rendered CTX-BLOCK metadata placed on `message.__meta.contextBlock`

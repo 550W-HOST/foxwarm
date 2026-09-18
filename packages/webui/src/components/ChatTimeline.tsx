@@ -7,6 +7,7 @@ import {
   formatToolLabel,
   formatStructuredSystemText,
   getSystemMessagePreviewDescriptor,
+  getToolResponseStatus,
   isCollapsibleSystemText,
   isHeavySystemTextLine,
   isLightweightSystemTextLine,
@@ -39,7 +40,6 @@ import {
   ToolCallsBlock,
   ToolGroupSummaryCard,
   ToolResponsesBlock,
-  getToolResponseStatus,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
@@ -192,12 +192,10 @@ const formatDurationSummary = (samples: DurationSample[]): string => {
 
 const MIN_COLLAPSED_BETWEEN_REQUESTS_MS = 60_000
 
-const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
+const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
     ? 'text-fw-warning dark:text-fw-warning'
-    : tone === 'muted'
-      ? 'text-fw-text-muted dark:text-fw-text-muted'
-      : 'text-fw-text-muted dark:text-fw-text-muted'
+    : 'text-fw-text-muted dark:text-fw-text-muted'
 
   return (
     <span className={`flex items-baseline justify-between gap-1 ${colorClass}`}>
@@ -247,7 +245,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
       {expanded ? (
         <>
           {callCount ? <ModelUsageRow label="Calls" value={callCount} tone="normal" /> : null}
-          <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="muted" />
+          <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
           <ModelUsageTextRow label="Between" value={formatDurationSummary(attribution.betweenRequestsMs)} />
@@ -258,7 +256,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
       ) : (
         <>
           {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
-          <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
+          <ModelUsageRow label="C" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
           {(collapsedBetweenRequestsMs !== null || apiDurationMs !== null) ? (
