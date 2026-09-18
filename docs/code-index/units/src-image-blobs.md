@@ -32,6 +32,7 @@ bytes; it must not introduce a QQ-specific durable image format.
 - Legacy path reads are confined to the configured state directory.
 - Provider hydration lazily loads the in-process `libheif-js` WASM decoder only for declared `image/heic` or `image/heif` references, validates actual container/decoded pixels, enforces a 64-megapixel limit before pixel decode, and uses decoded transparency to select PNG versus JPEG. Provider-native PNG/JPEG/GIF/WebP bytes pass through unchanged. Request-local deduplication hashes this resulting inline payload directly rather than trusting message-carried helper identity.
 - Externalization strips legacy/reserved provider-image helper keys from every converted part, including already-reference-only parts, so those keys cannot enter canonical Session, queue, archive, or WebUI source shapes. Low-level LLM requests apply the same pure scrub to their structured-cloned canonical request before journaling.
+- Provider-generated output images use the same store: the hosted Responses image path validates the provider bytes, writes one content-addressed blob per accepted image, and records a reference-only part with `imageMeta.origin = "generated"`. Identical bytes from two separate generations share one blob while each native call record is preserved, and replay reads the blob back rather than trusting provider payload bytes.
 
 ## Dependencies
 

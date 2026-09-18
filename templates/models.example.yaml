@@ -51,6 +51,20 @@ providers:
   #   toolChoice: auto  # or: required
   #   searchContextSize: medium  # low, medium, or high
 
+  # Responses models can also use OpenAI's hosted image generation. Images are
+  # returned as authenticated Blobs and can be edited by the same model on a
+  # later turn. Only openai, openai-responses, and openai-ws support this.
+  # imageGeneration: true  # or false, for default settings
+  # imageGeneration:
+  #   enabled: true
+  #   model: gpt-image-1        # optional hosted image model
+  #   action: auto              # auto, generate, or edit
+  #   size: 1024x1024           # optional, provider-defined
+  #   quality: high             # auto, low, medium, high, xhigh, or max
+  #   background: auto          # auto, opaque, or transparent
+  #   outputFormat: png         # png, jpeg, or webp
+  #   outputCompression: 90     # 0-100, used for jpeg and webp
+
   anthropic:
     providerType: anthropic
     baseUrl: https://api.anthropic.com

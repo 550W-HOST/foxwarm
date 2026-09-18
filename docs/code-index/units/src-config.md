@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts
+Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -22,7 +22,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort and web-search forms.
+- `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` and hosted `imageGeneration` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` and `imageGeneration` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort, web-search, and image-generation forms.
 - `MODEL_EFFORTS`, `ModelEffort`, `DEFAULT_MODEL_EFFORT`, `normalizeModelEffortConfig`, and `getConcreteModelEffortConfig`.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
@@ -89,7 +89,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Preferred provider field is `models`; legacy `model` remains a reader.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
-- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum.
+- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` and `imageGeneration` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum.
 - Provider-scoped `disallowEmptyResponse` inherits from the provider entry to each concrete model entry, is rejected on virtual entries, participates in the route fingerprint, and controls whether empty/reasoning-only completions are retryable failures.
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
 - `openai`, `openai-responses`, `openai-ws`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings. `openai-ws` rejects request compression because compression is an HTTP-body setting.
@@ -102,7 +102,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - App YAML missing at read time yields an empty config.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
 - Setup writes validate by parsing through the same current config readers before replacing files.
-- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort` and `webSearch` are removed before the result is reparsed.
+- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).
@@ -134,7 +134,9 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-feature-toggle-shorthand
 
-[2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
+[2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` and `imageGeneration` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
+
+[2026-09-19] Hosted image generation is a normalized provider/model toggle with `model`, `action`, `size`, `quality`, `background`, `output_format`, and `output_compression` tuning. Validation rejects unknown enum values, a non-integer or out-of-range compression, an empty model string, and the contradictory `output_format: jpeg` with `background: transparent` combination. The normalized form participates in concrete and virtual routing fingerprints and is rejected on virtual provider entries, while the raw value stays byte-preserving for Models Setup. The runtime rejects an effective enabled config on a protocol that cannot carry the hosted tool.
 
 `vector` therefore deliberately does not accept `true`: it is a connection object requiring `baseUrl`, with only `false` as the disable shorthand.
 

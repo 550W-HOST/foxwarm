@@ -15,6 +15,7 @@ Cross-module lifecycle for image bytes from transient ingress through canonical 
 4. Provider requests clone canonical messages and hydrate referenced bytes only while building OpenAI Responses, OpenAI Chat Completions, or Anthropic payloads. Claimed HEIC/HEIF bytes are decoded and normalized there to provider-safe JPEG or PNG without changing the durable blob/reference. Each physical request then sends identical provider-visible image bytes/MIME only once; later occurrences retain model-visible guidance or a `foxwarm-image` descriptor marked `deduplicated="true"`. Request diagnostics redact hydrated payloads.
 5. WebUI history, message SSE, CTX-BLOCK expansion, and explicit Debug responses recursively remove inline bytes and legacy image paths, exposing only transport-safe references with deployment-relative authenticated blob API paths. Unmaterializable legacy images carry explicit unavailable metadata. The browser renders only safe raster MIME types inline.
 6. `image_crop` and `image_write_to_file` resolve current blob references while retaining old inline/path readers. A trusted passed current-session owner searches its live history and then reads that session's canonical archive directly; legacy and other-session calls retain the compatible ID-based lookup. Master-local writes reuse the passed image bytes and existing path/isolation checks, while remote transfer remains on the existing node-manager path.
+7. A provider-hosted image result enters the same lifecycle from the outbound side. A completed Responses `image_generation_call` is validated against its declared format and size limits, written as one content-addressed blob, and reduced to a reference-only part with safe native metadata. The bytes are never written to session history, the request journal, logs, WebUI transport, or error diagnostics; only the blob reference is durable, and the same concrete model reads the blob back when a later turn replays the image for editing.
 
 ## Compatibility and failure behavior
 
@@ -27,7 +28,7 @@ Cross-module lifecycle for image bytes from transient ingress through canonical 
 
 ## Retention and current non-goals
 
-Retained archives may outlive live session deletion, so the first release performs no automatic blob garbage collection. History pagination, thumbnails/variants, provider output-image support, archive-wide rewrite/purge, service-worker/IndexedDB caching, and automatic blob GC remain outside this boundary.
+Retained archives may outlive live session deletion, so the first release performs no automatic blob garbage collection. History pagination, thumbnails/variants, partial or progressive image preview, archive-wide rewrite/purge, service-worker/IndexedDB caching, and automatic blob GC remain outside this boundary.
 
 ## Modules and units
 
@@ -35,6 +36,7 @@ Retained archives may outlive live session deletion, so the first release perfor
 - [session manager](../units/src-session-manager.md)
 - [session archive](../units/src-session-misc.md)
 - [LLM request layer](../units/src-llm.md)
+- [OpenAI image generation tool](../units/src-llm-openai-images.md)
 - [tool image utilities](../units/src-tool-utils.md)
 - [WebUI channel](../units/src-channels-webui.md)
 - [WebUI timeline](../units/webui-chat-timeline.md)
@@ -58,3 +60,9 @@ Compatibility is read-old/write-new and lazy per accessed live session, not a fu
 Identity hashes the exact current provider-visible decoded bytes and normalized MIME at the request boundary with a bounded input limit. Different provider-visible MIME values remain distinct, and HEIC/HEIF identity is therefore computed after provider-safe normalization. Duplicate status is held only in an internal side table, not in enumerable message fields. Legacy reserved helper keys are ignored and scrubbed during read-old/write-current externalization. Eligibility follows each serializer, so an image the protocol drops cannot seed the seen set.
 
 This is an attempt-local provider-clone transform after concrete-model history compatibility filtering. Every retry or virtual/failover physical attempt starts fresh. Canonical Session history, queues, archives, blob references, diagnostics redaction, and WebUI transport remain unchanged. Before the canonical pre-hydration request journal is written, the request-local clone also strips the same unsupported reserved helper keys so legacy/forged values cannot enter reconstruction.
+
+### D-image-generated-output-replay
+
+[2026-09-19] A provider-hosted generated image becomes durable state through the same blob boundary as every other image: bytes in, reference out. Request logs, response logs, raw-stream capture, the request journal, WebUI transport, and error diagnostics carry only the reference and safe native metadata.
+
+Native replay is allowed only for the exact concrete model that produced the image and only when the local blob bytes are readable. Another concrete model or protocol receives one bounded text note, and an unreadable blob is an explicit failure rather than a dangling native call id or a silent regeneration. The physical request that a generated image can reach also disables raw content capture, since the raw stream would otherwise be a second, unredacted copy of the same bytes.

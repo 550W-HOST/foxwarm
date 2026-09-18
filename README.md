@@ -411,6 +411,44 @@ enables the default settings, `webSearch: false` disables it, and an object
 enables it unless `enabled: false`; model-level values merge tuning fields from
 their provider while overriding the inherited enabled state.
 
+Responses models can also opt into OpenAI's hosted image generation:
+
+```yaml
+providers:
+  openai:
+    providerType: openai-responses
+    baseUrl: https://api.openai.com/v1
+    apiKey: your-openai-key
+    imageGeneration:
+      enabled: true
+      model: gpt-image-1      # optional hosted image model, provider default when omitted
+      action: auto            # auto, generate, or edit
+      size: 1024x1024         # optional, provider-defined
+      quality: high           # auto, low, medium, high, xhigh, or max
+      background: auto        # auto, opaque, or transparent
+      outputFormat: png       # png, jpeg, or webp
+      outputCompression: 90   # 0-100, used for jpeg and webp
+    models:
+      - gpt-5.6
+```
+
+Foxwarm sends the hosted `image_generation` tool beside its normal function and
+hosted search tools, so one turn can call tools, search, write text, and return
+images. Requested images are stored as authenticated Blobs and shown in the
+WebUI, and the same concrete model can edit a generated image on the next turn.
+The session history, request journal, and provider logs keep only the Blob
+reference; the image bytes are read back from the Blob when a turn replays the
+image to the model. Only the exact model that produced an image can edit it,
+and other models receive a short text note in its place. Hosted image
+generation is not enabled for compact planning or setup-test requests.
+
+Only Responses protocols (`openai`, `openai-responses`, and `openai-ws`)
+support this tool; enabling it on a chat-completions or Anthropic provider is
+rejected instead of being silently ignored. `imageGeneration: true` enables the
+default settings, `imageGeneration: false` disables it, and an object enables
+it unless `enabled: false`; model-level values merge tuning fields from their
+provider while overriding the inherited enabled state.
+
 For stable session routing and ordered failover, see
 [Virtual models](docs/virtual-models.md).
 
