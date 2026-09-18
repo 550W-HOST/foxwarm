@@ -292,6 +292,54 @@ test('persistent exec launches and inspects through the injected process operati
   }
 });
 
+test('persistent exec binds PWD to the requested cwd so a symlinked path form survives', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-pwd-'));
+  const realDir = path.join(root, 'real');
+  const linkedDir = path.join(root, 'linked');
+  await fs.ensureDir(realDir);
+  let requested = realDir;
+  if (process.platform !== 'win32') {
+    await fs.symlink(realDir, linkedDir);
+    requested = linkedDir;
+  }
+
+  let launched: { cwd?: string; env?: Record<string, string | undefined> } | undefined;
+  const operations: ProcessOperations = {
+    ...nativeProcessOperations,
+    async launch(request) {
+      launched = request;
+      return nativeProcessOperations.launch(request);
+    },
+  };
+  const manager = new PersistentExecManager({
+    nodeId: 'master',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    processOperations: operations,
+  });
+
+  try {
+    const entry = await manager.startPersistentExec({
+      command: 'true', agentName: 'main', nodeId: 'master', cwd: requested,
+    });
+    assert.equal(launched?.cwd, requested);
+    if (process.platform === 'win32') {
+      assert.equal(launched?.env?.PWD, undefined);
+    } else {
+      assert.equal(launched?.env?.PWD, requested);
+    }
+
+    const status = await manager.waitForExecCompletion(entry.id, 10_000);
+    assert.ok(status);
+    // The wrapper records the shell's own path form, which must stay the requested one
+    // instead of the physical getcwd() spelling of the same directory.
+    assert.equal(await manager.readFinishedExecWorkingDirectory(entry), requested);
+    await manager.finalizeForegroundExec(entry.id);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('PersistentExecManager serializes concurrent registry mutations', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-'));
   const registryPath = path.join(root, 'running-exec.json');

@@ -704,6 +704,10 @@ export class PersistentExecManager {
           FOXWARM_EXEC_PATHS_PATH: pathsPath,
           FOXWARM_EXEC_NODE_PATH: processOperations.nodePath,
           ...(commandScriptPath ? { FOXWARM_EXEC_COMMAND_PATH: commandScriptPath } : {}),
+          // Bind PWD to the validated cwd. An inherited PWD usually names the Main
+          // process directory, so the shell replaces it with the physical getcwd()
+          // spelling and a symlinked cwd form is silently lost.
+          ...(platform === 'win32' ? {} : { PWD: initialCwd }),
         },
         detached: platform !== 'win32',
         windowsHide: true,
