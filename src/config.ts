@@ -844,6 +844,27 @@ export type OpenAIWebSearchOptions = {
 
 export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
 
+export type OpenAIImageGenerationAction = 'auto' | 'generate' | 'edit';
+export type OpenAIImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type OpenAIImageGenerationBackground = 'auto' | 'opaque' | 'transparent';
+export type OpenAIImageGenerationOutputFormat = 'png' | 'jpeg' | 'webp';
+
+export type OpenAIImageGenerationOptions = {
+  /** Opt in to the hosted Responses API `image_generation` tool. An object without `enabled` means enabled. */
+  enabled?: boolean;
+  /** Optional hosted image model override. Omitted means the provider default. */
+  model?: string;
+  action?: OpenAIImageGenerationAction;
+  size?: string;
+  quality?: OpenAIImageGenerationQuality;
+  background?: OpenAIImageGenerationBackground;
+  outputFormat?: OpenAIImageGenerationOutputFormat;
+  /** PNG/WebP compression percentage. Ignored by the provider for other formats. */
+  outputCompression?: number;
+};
+
+export type OpenAIImageGenerationConfig = boolean | OpenAIImageGenerationOptions;
+
 export const MODEL_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ModelEffort = (typeof MODEL_EFFORTS)[number];
 export const DEFAULT_MODEL_EFFORT: ModelEffort = 'high';
@@ -946,6 +967,102 @@ function mergeOpenAIWebSearchConfig(
   };
 }
 
+export type NormalizedOpenAIImageGenerationConfig = Omit<OpenAIImageGenerationOptions, 'enabled'> & {
+  enabled: boolean;
+};
+
+const OPENAI_IMAGE_GENERATION_ACTIONS = ['auto', 'generate', 'edit'] as const;
+const OPENAI_IMAGE_GENERATION_QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const OPENAI_IMAGE_GENERATION_BACKGROUNDS = ['auto', 'opaque', 'transparent'] as const;
+const OPENAI_IMAGE_GENERATION_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
+
+export function normalizeOpenAIImageGenerationConfig(value: unknown): NormalizedOpenAIImageGenerationConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return { enabled: value };
+  }
+  if (!isPlainObject(value)) {
+    throw new Error('models config `imageGeneration` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('models config `imageGeneration.enabled` must be a boolean.');
+  }
+
+  const normalized: NormalizedOpenAIImageGenerationConfig = {
+    enabled: raw.enabled !== false,
+  };
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== 'string' || raw.model.trim().length === 0) {
+      throw new Error('models config `imageGeneration.model` must be a non-empty string.');
+    }
+    normalized.model = raw.model.trim();
+  }
+  if (raw.action !== undefined) {
+    if (typeof raw.action !== 'string' || !(OPENAI_IMAGE_GENERATION_ACTIONS as readonly string[]).includes(raw.action)) {
+      throw new Error('models config `imageGeneration.action` must be `auto`, `generate`, or `edit`.');
+    }
+    normalized.action = raw.action as OpenAIImageGenerationAction;
+  }
+  if (raw.size !== undefined) {
+    if (typeof raw.size !== 'string' || raw.size.trim().length === 0) {
+      throw new Error('models config `imageGeneration.size` must be a non-empty string.');
+    }
+    normalized.size = raw.size.trim();
+  }
+  if (raw.quality !== undefined) {
+    if (typeof raw.quality !== 'string' || !(OPENAI_IMAGE_GENERATION_QUALITIES as readonly string[]).includes(raw.quality)) {
+      throw new Error('models config `imageGeneration.quality` must be `auto`, `low`, `medium`, `high`, `xhigh`, or `max`.');
+    }
+    normalized.quality = raw.quality as OpenAIImageGenerationQuality;
+  }
+  if (raw.background !== undefined) {
+    if (typeof raw.background !== 'string' || !(OPENAI_IMAGE_GENERATION_BACKGROUNDS as readonly string[]).includes(raw.background)) {
+      throw new Error('models config `imageGeneration.background` must be `auto`, `opaque`, or `transparent`.');
+    }
+    normalized.background = raw.background as OpenAIImageGenerationBackground;
+  }
+  if (raw.outputFormat !== undefined) {
+    if (typeof raw.outputFormat !== 'string' || !(OPENAI_IMAGE_GENERATION_OUTPUT_FORMATS as readonly string[]).includes(raw.outputFormat)) {
+      throw new Error('models config `imageGeneration.outputFormat` must be `png`, `jpeg`, or `webp`.');
+    }
+    normalized.outputFormat = raw.outputFormat as OpenAIImageGenerationOutputFormat;
+  }
+  if (raw.outputCompression !== undefined) {
+    if (typeof raw.outputCompression !== 'number'
+      || !Number.isInteger(raw.outputCompression)
+      || raw.outputCompression < 0
+      || raw.outputCompression > 100) {
+      throw new Error('models config `imageGeneration.outputCompression` must be an integer between 0 and 100.');
+    }
+    normalized.outputCompression = raw.outputCompression;
+  }
+
+  if (normalized.outputFormat === 'jpeg' && normalized.background === 'transparent') {
+    throw new Error('models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent`.');
+  }
+
+  return normalized;
+}
+
+function mergeOpenAIImageGenerationConfig(
+  baseValue: OpenAIImageGenerationConfig | undefined,
+  overrideValue: OpenAIImageGenerationConfig | undefined,
+): NormalizedOpenAIImageGenerationConfig | undefined {
+  const base = normalizeOpenAIImageGenerationConfig(baseValue);
+  if (overrideValue === undefined) {
+    return base;
+  }
+  const override = normalizeOpenAIImageGenerationConfig(overrideValue)!;
+  return {
+    ...(base || {}),
+    ...override,
+  };
+}
+
 export type ModelConfigOverride = {
   contextLimit?: number;
   effort?: ModelEffortConfig;
@@ -953,6 +1070,7 @@ export type ModelConfigOverride = {
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
+  imageGeneration?: OpenAIImageGenerationConfig;
 };
 
 export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
@@ -973,6 +1091,7 @@ export type ProviderConfigEntry = {
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
+  imageGeneration?: OpenAIImageGenerationConfig;
   targets?: string[];
   failureThreshold?: number;
   cooldownMs?: number;
@@ -1008,6 +1127,7 @@ export type ModelConfigEntry = {
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: NormalizedOpenAIWebSearchConfig;
+  imageGeneration?: NormalizedOpenAIImageGenerationConfig;
   virtualRouting?: VirtualModelRoutingConfig;
 };
 
@@ -1236,6 +1356,10 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     resolvedProviderEntry.webSearch,
     modelOverride?.webSearch,
   );
+  const imageGeneration = mergeOpenAIImageGenerationConfig(
+    resolvedProviderEntry.imageGeneration,
+    modelOverride?.imageGeneration,
+  );
   return {
     providerKey,
     canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
@@ -1258,6 +1382,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
       modelOverride?.extraFields || {},
     ) || {},
     ...(webSearch && Object.keys(webSearch).length > 0 ? { webSearch } : {}),
+    ...(imageGeneration && Object.keys(imageGeneration).length > 0 ? { imageGeneration } : {}),
   };
 }
 
@@ -1341,6 +1466,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'asyncCompact',
     'disallowEmptyResponse',
     'webSearch',
+    'imageGeneration',
   ];
 
   for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
@@ -1436,6 +1562,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
           webSearchHash: hashConfigValue(entry.webSearch || {}),
+          imageGenerationHash: hashConfigValue(entry.imageGeneration || {}),
         };
       }),
     });
