@@ -863,6 +863,41 @@ interface MessageRowProps {
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
 }
 
+// The tool-group props below are rebuilt from `messages` on every recompute, so identity
+// comparison alone would re-render every row whenever the array identity changes (for
+// example for each streaming draft update). Compare their values instead: they are pure
+// functions of the message list, so equal values always produce identical output.
+const sameRequestTiming = (a: DerivedRequestTiming, b: DerivedRequestTiming): boolean => (
+  a === b || (a.apiDurationMs === b.apiDurationMs && a.betweenRequestsMs === b.betweenRequestsMs)
+)
+
+const sameToolTagItems = (a: ToolTagItem[], b: ToolTagItem[]): boolean => (
+  a === b || (a.length === b.length && a.every((item, index) => (
+    item.name === b[index].name && item.label === b[index].label && item.tone === b[index].tone
+  )))
+)
+
+const sameTokenUsage = (a: NormalizedTokenUsage | null, b: NormalizedTokenUsage | null): boolean => (
+  a === b || (!!a && !!b && a.cachedTokens === b.cachedTokens && a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens)
+)
+
+const sameSampleList = (a: DurationSample[], b: DurationSample[]): boolean => (
+  a === b || (a.length === b.length && a.every((sample, index) => sample === b[index]))
+)
+
+const sameStringList = (a: string[], b: string[]): boolean => (
+  a === b || (a.length === b.length && a.every((value, index) => value === b[index]))
+)
+
+const sameUsageAttribution = (a: UsageAttribution, b: UsageAttribution): boolean => (
+  a === b || (
+    sameStringList(a.models, b.models)
+    && sameSampleList(a.timestamps, b.timestamps)
+    && sameSampleList(a.apiDurationsMs, b.apiDurationsMs)
+    && sameSampleList(a.betweenRequestsMs, b.betweenRequestsMs)
+  )
+)
+
 const MessageRow = memo(function MessageRow({
   messageKey,
   msg,
@@ -991,7 +1026,9 @@ const MessageRow = memo(function MessageRow({
                 }
                 return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
-              if (contextBlock && partIdx === firstTextPartIndex && part.text) {
+              // Compare source part indices: `partIndex` indexes `msg.parts` like the folded-thinking
+              // check above, while `partIdx` skips parts that are not rendered as model content.
+              if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
@@ -1010,7 +1047,7 @@ const MessageRow = memo(function MessageRow({
   )
 }, (prev, next) => (
   prev.msg === next.msg &&
-  prev.requestTiming === next.requestTiming &&
+  sameRequestTiming(prev.requestTiming, next.requestTiming) &&
   prev.messageKey === next.messageKey &&
   prev.prevMsg === next.prevMsg &&
   prev.nextMsg === next.nextMsg &&
@@ -1019,10 +1056,10 @@ const MessageRow = memo(function MessageRow({
   prev.showUsageBadge === next.showUsageBadge &&
   (prev.msg.role !== 'user' || isHeavySystemLikeMessage(prev.msg) || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.groupKey === next.groupKey &&
-  prev.summaryTagItems === next.summaryTagItems &&
-  prev.groupUsage === next.groupUsage &&
+  sameToolTagItems(prev.summaryTagItems, next.summaryTagItems) &&
+  sameTokenUsage(prev.groupUsage, next.groupUsage) &&
   prev.groupUsageCallCount === next.groupUsageCallCount &&
-  prev.groupUsageAttribution === next.groupUsageAttribution &&
+  sameUsageAttribution(prev.groupUsageAttribution, next.groupUsageAttribution) &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
   prev.hideFoldedThinking === next.hideFoldedThinking &&
