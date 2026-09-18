@@ -855,6 +855,7 @@ interface MessageRowProps {
   groupUsageAttribution: UsageAttribution
   keepToolGroupExpanded: boolean
   showToolGroupSummary: boolean
+  hideFoldedThinking: boolean
   groupExpanded: boolean
   onExpandGroup: (groupKey: string) => void
   sessionId: string
@@ -881,6 +882,7 @@ const MessageRow = memo(function MessageRow({
   groupUsageAttribution,
   keepToolGroupExpanded,
   showToolGroupSummary,
+  hideFoldedThinking,
   groupExpanded,
   onExpandGroup,
   sessionId,
@@ -889,17 +891,17 @@ const MessageRow = memo(function MessageRow({
   onOpenCodeCommit,
   renderNestedMessages,
 }: MessageRowProps) {
-  const visibleModelParts = useMemo<Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null }>>(() => {
-    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null }> = []
-    for (const part of msg.parts) {
+  const visibleModelParts = useMemo<Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }>>(() => {
+    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }> = []
+    for (const [partIndex, part] of msg.parts.entries()) {
       if (part.text || part.system || part.thinking) {
-        visible.push({ part, webSearchAction: null })
+        visible.push({ part, webSearchAction: null, partIndex })
         continue
       }
       const webSearchAction = msg.role === 'model'
         ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
         : null
-      if (webSearchAction) visible.push({ part, webSearchAction })
+      if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
     }
     return visible
   }, [msg.parts])
@@ -970,7 +972,7 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
-            {visibleModelParts.map(({ part, webSearchAction }, partIdx) => {
+            {visibleModelParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
               if (webSearchAction) {
                 if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
                   return null
@@ -981,7 +983,12 @@ const MessageRow = memo(function MessageRow({
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
+                // A model text splits the group: thinking before the text belongs to the group
+                // that ends there, so it follows that group's expansion, while thinking after
+                // the text (and in text-free messages) follows this message's own group.
+                const foldedIntoGroupAbove = firstTextPartIndex !== -1 && partIndex < firstTextPartIndex
+                const folded = foldedIntoGroupAbove ? hideFoldedThinking : isCollapsedToolGroup
+                if (folded) {
                   return null
                 }
                 return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
@@ -1020,6 +1027,7 @@ const MessageRow = memo(function MessageRow({
   prev.groupUsageAttribution === next.groupUsageAttribution &&
   prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
   prev.showToolGroupSummary === next.showToolGroupSummary &&
+  prev.hideFoldedThinking === next.hideFoldedThinking &&
   prev.groupExpanded === next.groupExpanded &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
@@ -1103,17 +1111,41 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       return start
     }
 
-    const getToolGroupSummaryItems = (startIdx: number): ToolTagItem[] => {
+    const firstTextPartIndex = (msg: Message) => msg.parts.findIndex((p) => (p.text && p.text.trim()) || (p.system && String(p.system).trim()))
+
+    const getToolGroupSummary = (startIdx: number): { items: ToolTagItem[]; foldedThinkingIdx: number } => {
       const items: ToolTagItem[] = []
       const toolStatusById = new Map<string, 'success' | 'error'>()
+      let groupHasToolCalls = false
+      let textBreakIdx = -1
+      let end = startIdx
+
+      // A message that only carries text does not own the tool run that follows it: that run
+      // forms its own group with the same messages, so counting them here would render the
+      // same summary row twice. Only a text message with its own calls heads a group.
+      const startMsg = messages[startIdx]
+      const startFirstTextIdx = startMsg.role === 'model' ? firstTextPartIndex(startMsg) : -1
+      if (startFirstTextIdx !== -1 && !hasToolCalls(startMsg)) {
+        return { items, foldedThinkingIdx: -1 }
+      }
+      // A model text splits the group that contains it: parts before the text (its thinking)
+      // stay with the group that ends there, so only the parts from the text on belong here.
+      const startPartFrom = startFirstTextIdx > 0 ? startFirstTextIdx : 0
 
       for (let i = startIdx; i < messages.length; i++) {
         if (shouldStopAtIdx(startIdx, i)) break
         const m = messages[i]
         if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
+        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) {
+          textBreakIdx = i
+          break
+        }
+        end = i + 1
 
         m.parts.forEach((p) => {
+          if (p.functionCall) {
+            groupHasToolCalls = true
+          }
           if (p.functionResponse?.tool_use_id) {
             const nextStatus = getToolResponseStatus(p.functionResponse)
             const prevStatus = toolStatusById.get(p.functionResponse.tool_use_id)
@@ -1125,14 +1157,11 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
         })
       }
 
-      for (let i = startIdx; i < messages.length; i++) {
-        if (shouldStopAtIdx(startIdx, i)) break
-        const m = messages[i]
-        if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
-
-        m.parts.forEach((p) => {
-          if (p.thinking && p.thinking.trim() && !hasTextContent(m)) {
+      for (let i = startIdx; i < end; i++) {
+        messages[i].parts.slice(i === startIdx ? startPartFrom : 0).forEach((p) => {
+          // Thinking folds into the group summary whenever the group holds tool calls,
+          // including messages that also carry text.
+          if (p.thinking && p.thinking.trim() && groupHasToolCalls) {
             items.push({ name: 'reasoning', tone: 'neutral' })
           }
           if (p.functionCall) {
@@ -1145,7 +1174,24 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
           }
         })
       }
-      return items
+
+      // The message whose text ends this group keeps its own group for everything that follows
+      // the text, but the thinking before the text belongs here: it is counted in this summary
+      // and stays folded while this group is collapsed.
+      const trailing = textBreakIdx !== -1 ? messages[textBreakIdx] : undefined
+      let foldedThinkingIdx = -1
+      if (groupHasToolCalls && trailing) {
+        const trailingFirstTextIdx = trailing.role === 'model' ? firstTextPartIndex(trailing) : -1
+        const foldedThoughts = trailingFirstTextIdx === -1
+          ? []
+          : trailing.parts.slice(0, trailingFirstTextIdx).filter((p) => p.thinking && p.thinking.trim())
+        if (foldedThoughts.length > 0) {
+          foldedThinkingIdx = textBreakIdx
+          foldedThoughts.forEach(() => items.push({ name: 'reasoning', tone: 'neutral' }))
+        }
+      }
+
+      return { items, foldedThinkingIdx }
     }
 
     const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number; attribution: UsageAttribution } => {
@@ -1187,15 +1233,19 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
 
     const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
     const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
+    const foldedThinkingStartByIndex = new Map<number, number>()
     const groupUsageByStart = new Map<number, NormalizedTokenUsage | null>()
     const groupUsageCallCountByStart = new Map<number, number>()
     const groupUsageAttributionByStart = new Map<number, UsageAttribution>()
     const keepExpandedByStart = new Map<number, boolean>()
     startIdxByIndex.forEach((startIdx) => {
       if (!summaryTagItemsByStart.has(startIdx)) {
-        const items = getToolGroupSummaryItems(startIdx)
+        const summary = getToolGroupSummary(startIdx)
+        if (summary.foldedThinkingIdx !== -1) {
+          foldedThinkingStartByIndex.set(summary.foldedThinkingIdx, startIdx)
+        }
         const groupUsage = getToolGroupUsage(startIdx)
-        summaryTagItemsByStart.set(startIdx, items)
+        summaryTagItemsByStart.set(startIdx, summary.items)
         groupUsageByStart.set(startIdx, groupUsage.usage)
         groupUsageCallCountByStart.set(startIdx, groupUsage.callCount)
         groupUsageAttributionByStart.set(startIdx, groupUsage.attribution)
@@ -1217,6 +1267,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       groupUsageAttributionByIndex: startIdxByIndex.map((startIdx) => groupUsageAttributionByStart.get(startIdx) || { models: [], timestamps: [], apiDurationsMs: [], betweenRequestsMs: [] }),
       keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
+      foldedThinkingStartByIndex: messages.map((_, idx) => foldedThinkingStartByIndex.get(idx) ?? -1),
     }
   }, [messages, requestTimingByIndex])
 
@@ -1237,6 +1288,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
 
         const groupKey = toolGroupMeta.groupKeyByIndex[idx]
         const messageKey = toolGroupMeta.messageKeyByIndex[idx]
+        const foldedThinkingStart = toolGroupMeta.foldedThinkingStartByIndex[idx]
+        const hideFoldedThinking = groupTools
+          && foldedThinkingStart !== -1
+          && !expandedToolGroups.has(toolGroupMeta.groupKeyByIndex[foldedThinkingStart])
         return (
           <MessageRow
             key={messageKey}
@@ -1256,6 +1311,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             groupUsageAttribution={toolGroupMeta.groupUsageAttributionByIndex[idx]}
             keepToolGroupExpanded={toolGroupMeta.keepExpandedByIndex[idx]}
             showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
+            hideFoldedThinking={hideFoldedThinking}
             groupExpanded={expandedToolGroups.has(groupKey)}
             onExpandGroup={handleExpandGroup}
             sessionId={sessionId}

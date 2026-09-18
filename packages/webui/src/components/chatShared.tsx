@@ -807,6 +807,38 @@ export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   </div>
 )
 
+/** Collapses repeated tags of the same kind into `name ×N`, most frequent first. Errored calls count separately from successful ones. */
+export const summarizeToolTagCounts = (items: ToolTagItem[]): ToolTagItem[] => {
+  const order: string[] = []
+  const byKey = new Map<string, { name: string; label: string; count: number; tone: ToolTagTone }>()
+
+  items.forEach((item) => {
+    const label = item.label || item.name
+    const isError = item.tone === 'error'
+    const key = `${isError ? 'error' : 'ok'}:${label}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      order.push(key)
+      byKey.set(key, { name: item.name, label, count: 1, tone: isError ? 'error' : item.tone || 'neutral' })
+      return
+    }
+
+    existing.count += 1
+    if (!isError && item.tone === 'success' && existing.tone === 'neutral') {
+      existing.tone = 'success'
+    }
+  })
+
+  return order
+    .map((key, idx) => ({ idx, entry: byKey.get(key)! }))
+    .sort((a, b) => b.entry.count - a.entry.count || a.idx - b.idx)
+    .map(({ entry }) => ({
+      name: entry.name,
+      label: `${entry.label} ×${entry.count}`,
+      tone: entry.tone,
+    }))
+}
+
 export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
   <a
     href={`#session/${encodeURIComponent(sessionId)}`}

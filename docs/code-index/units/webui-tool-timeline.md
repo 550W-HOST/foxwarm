@@ -26,7 +26,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
 | `ToolDownloadButton({ url, fileName })` | ~15 | Renders a styled download button that triggers browser download |
-| `ToolGroupSummaryCard({ items, onExpand })` | ~15 | Collapsed card showing tool tags with expand toggle |
+| `ToolGroupSummaryCard({ items, onExpand })` | ~15 | Collapsed card showing tool tags counted per tag (`exec ×4`), failed calls counted in their own entry, most frequent first, with expand toggle |
 | `getToolDisplayLabel(call)` | ~1 | Formats a human-readable label for a tool call |
 | `getToolResponseStatus(resp)` | ~8 | Returns 'success' or 'error' based on response content |
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
@@ -58,7 +58,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Dependencies
 
-- `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`, `ToolViewMode`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
+- `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`, `ToolViewMode`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`, `summarizeToolTagCounts`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
 - `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`
 - `../../../shared/src/webuiToolRendering` — pure helpers for streaming partial-tool guards and session-link text parsing tests
 - `./ImageParts` — renders image message parts

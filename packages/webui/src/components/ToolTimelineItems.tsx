@@ -15,6 +15,7 @@ import {
   getToolResponseStatus,
   formatCompactObjectPreview,
   renderSystemTextWithSessionLinks,
+  summarizeToolTagCounts,
   parseApplyPatchPreview,
   type FunctionCall,
   type FunctionResponse,
@@ -100,6 +101,7 @@ const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
 }
 
 export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand }: { items: ToolTagItem[]; onExpand: () => void }) {
+  const countedItems = useMemo(() => summarizeToolTagCounts(items), [items])
   return (
     <div
       className={`foxwarm-tool-card foxwarm-tool-tone-neutral group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
@@ -112,7 +114,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
         className={toolThreadLineToneClasses.neutral}
       />
       <div className={`foxwarm-tool-header flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
-        <ToolTagList items={items} />
+        <ToolTagList items={countedItems} />
       </div>
     </div>
   )
