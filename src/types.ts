@@ -101,6 +101,12 @@ export interface InlineDataRef {
 
 export interface ImageMeta {
   imageId: string;
+  /**
+   * Provider-neutral provenance. `generated` marks an assistant image created
+   * by a hosted image-generation tool, so incompatible-model projections can
+   * describe it honestly even after opaque provider metadata is stripped.
+   */
+  origin?: 'generated' | 'uploaded' | 'tool';
   mimeType?: string;
   width?: number;
   height?: number;
