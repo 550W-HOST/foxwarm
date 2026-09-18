@@ -197,6 +197,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
           historyReasoningField: 'reasoning',
           effort: { allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], default: 'high' },
           webSearch: true,
+          imageGeneration: { enabled: true, outputFormat: 'png' },
           extraHeaders: { nested: { supportedByLoader: true }, numeric: 42 },
           customExtension: { enabled: true },
         },
@@ -206,7 +207,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
       providers: {
         modelOverride: {
           providerType: 'openai-responses',
-          models: [{ id: 'model-a', webSearch: false }],
+          models: [{ id: 'model-a', webSearch: false, imageGeneration: true }],
         },
       },
     },
@@ -304,8 +305,18 @@ test('models schema suggests known provider types while accepting custom strings
   const webSearchOptions = provider.properties.webSearch.oneOf.find((entry) => entry.type === 'object')
   assert.equal(webSearchOptions.properties.enabled.type, 'boolean')
   assert.deepEqual(webSearchOptions.properties.toolChoice.enum, ['auto', 'required'])
+  assert.equal(provider.properties.imageGeneration.oneOf.some((entry) => entry.type === 'boolean'), true)
+  const imageGenerationOptions = provider.properties.imageGeneration.oneOf.find((entry) => entry.type === 'object')
+  assert.equal(imageGenerationOptions.properties.enabled.type, 'boolean')
+  assert.deepEqual(imageGenerationOptions.properties.action.enum, ['auto', 'generate', 'edit'])
+  assert.deepEqual(imageGenerationOptions.properties.quality.enum, ['auto', 'low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(imageGenerationOptions.properties.background.enum, ['auto', 'opaque', 'transparent'])
+  assert.deepEqual(imageGenerationOptions.properties.outputFormat.enum, ['png', 'jpeg', 'webp'])
+  assert.equal(imageGenerationOptions.properties.outputCompression.minimum, 0)
+  assert.equal(imageGenerationOptions.properties.outputCompression.maximum, 100)
   assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('webSearch')), true)
   assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('effort')), true)
+  assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('imageGeneration')), true)
 })
 
 test('dynamic models suggestions use the current document and exclude virtual targets', () => {
