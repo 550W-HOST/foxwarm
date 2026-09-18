@@ -19,7 +19,7 @@ GitHub Actions uses those same public commands in separate core/unit-quality, Ch
 
 ## Behavior
 
-- Inventory rules classify tracked source tests and explicitly identify the full-application browser owner, generated duplicates, asset-dependent VS Code E2E, website-owned tests, standalone smoke/regression scripts, live-hardware smoke drivers, and interactive skill trials.
+- Inventory rules classify tracked source tests and explicitly identify the full-application harness files as one browser-owned group (`appHarnessE2e`), so every `test/app-e2e/*.e2e.mjs` scenario stays visible without being run standalone by a routine unit group. Generated duplicates, asset-dependent VS Code E2E, website-owned tests, standalone smoke/regression scripts, live-hardware smoke drivers, and interactive skill trials are identified the same way.
 - The runner launches backend files in small bounded shards. Node's test runner still gives each file a child process, while a preload assigns that process a separate disposable data root and short temporary path before application imports; subprocesses inherit that root unless a fixture explicitly replaces it.
 - Groups, backend shards, and browser files run in sorted order with bounded concurrency and finite progress/process timeouts. Output is streamed and saved with inventory, result summaries, screenshots, and disposable data in a fresh child beneath the selected artifact parent.
 - Provider credentials are cleared and proxy defaults point to closed loopback endpoints. Timeouts and interrupts terminate the active process group and produce a failing exit status.

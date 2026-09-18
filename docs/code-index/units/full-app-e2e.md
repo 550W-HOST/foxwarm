@@ -1,6 +1,6 @@
 # Unit: full-application E2E
 
-Files: test/app-e2e/run-app-e2e.mjs, test/app-e2e/mock-provider.mjs, test/app-e2e/core.e2e.mjs
+Files: test/app-e2e/run-app-e2e.mjs, test/app-e2e/mock-provider.mjs, test/app-e2e/core.e2e.mjs, test/app-e2e/imageGeneration.e2e.mjs, test/app-e2e/imageGenerationRestart.e2e.mjs
 Secondary files: packages/webui/test/lazyTimelineRestore.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/sessionListDrag.e2e.mjs, packages/webui/test/sessionListLiveRefresh.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
 ## Purpose
@@ -16,6 +16,8 @@ Owns deterministic end-to-end coverage through a real compiled Foxwarm server, b
 - Covers Responses WebSocket same-socket suffix reuse, forced-close full replay, ordinary Session fork isolation, synchronous versus real background compact planning, BTW request scope, and stable persisted prompt-cache identity with purpose-specific provider keys.
 - Uploads owned text and image files plus an opaque long-paste block through the real composer, verifies provider-visible serialization and canonical references, and checks accepted draft clearing and reload.
 - Runs the six former developer-runtime browser files against only the generated Session set. Their mutations and cleanup cannot select or alter an existing installation.
+- Covers the hosted image generation scenario through the built WebUI against a Responses provider with `imageGeneration` enabled: one text-free image reply is rendered and decoded, an anonymous Blob request is rejected while the authenticated deployment-relative route serves the bytes, a page reload still renders them, and a follow-up edit request is verified at the provider boundary to carry the original bytes inside one complete `image_generation_call` with no duplicate `input_image`.
+- Supports an owned application restart between scenario files (`restart:` entries, `FOXWARM_APP_E2E_FILES` for a targeted run). After the restart the second image scenario proves canonical history, both stored images, the WebUI rendering, and a further native replay all still work from disk.
 - Applies finite child deadlines and idempotent bounded cleanup for the exact owned current test, application, diagnostic browser, and provider on success, startup failure, timeout, SIGINT, or SIGTERM. Startup checks cancellation between allocations, and an awaited provider, log, application, or diagnostic-browser allocation that completes after cancellation is disposed before later work. Cancellation does not launch the next test or a diagnostic browser. Failures retain provider/application/test logs, browser console, and screenshots below the owned run directory.
 
 ## Boundaries

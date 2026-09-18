@@ -1,5 +1,6 @@
 import http from 'node:http'
 import { WebSocketServer } from 'ws'
+import sharp from 'sharp'
 
 function collectBody(req) {
   return new Promise((resolve, reject) => {
@@ -74,7 +75,36 @@ function chatTool(id, callId, name, args) {
   ]
 }
 
-export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
+// A hosted image response carries one image_generation_call item with no text:
+// the lifecycle events a real provider emits around the completed item.
+function responseImage(id, itemId, base64) {
+  const started = { type: 'image_generation_call', id: itemId, status: 'in_progress' }
+  const completed = { type: 'image_generation_call', id: itemId, status: 'completed', output_format: 'png', result: base64 }
+  return [
+    { type: 'response.output_item.added', output_index: 0, item: started },
+    { type: 'response.image_generation_call.in_progress', output_index: 0, item_id: itemId },
+    { type: 'response.image_generation_call.generating', output_index: 0, item_id: itemId },
+    { type: 'response.image_generation_call.completed', output_index: 0, item_id: itemId },
+    { type: 'response.output_item.done', output_index: 0, item: completed },
+    { type: 'response.completed', response: { id, object: 'response', status: 'completed', output: [completed], usage: { input_tokens: 21, output_tokens: 64 } } },
+    '[DONE]',
+  ]
+}
+
+// Every replayed generated image must arrive as one complete
+// image_generation_call carrying the original bytes, never as an input_image.
+function replayedImageResults(body) {
+  const input = Array.isArray(body.input) ? body.input : []
+  return {
+    results: input.filter(item => item?.type === 'image_generation_call' && typeof item.result === 'string').map(item => item.result),
+    inputImages: input.filter(item => item?.type === 'input_image').length,
+  }
+}
+
+// `enforceSequence` keeps the scripted request order strict for a full harness
+// run. A targeted run (`FOXWARM_APP_E2E_FILES`) relaxes only that ordering and
+// still fails on any unexpected request or unpaired tool output.
+export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enforceSequence = true }) {
   const expectedSequence = [
     'responses:INCREMENTAL',
     'responses:TOOL', 'responses:TOOL', 'responses:TOOL',
@@ -83,7 +113,16 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
     'ws:WS_ONE', 'ws:WS_TWO', 'ws:WS_THREE', 'ws:FORK_CHILD',
     'responses:ATTACHMENT', 'responses:LONGPASTE',
     'ws:COMPACT_SYNC', 'ws:COMPACT_BACKGROUND', 'ws:BTW',
+    'responses:IMAGE_ONE', 'responses:IMAGE_EDIT', 'responses:IMAGE_RESTART',
   ]
+  const generatedImages = {
+    one: await sharp({ create: { width: 9, height: 7, channels: 3, background: { r: 12, g: 120, b: 208 } } }).png().toBuffer(),
+    two: await sharp({ create: { width: 9, height: 7, channels: 3, background: { r: 208, g: 52, b: 12 } } }).png().toBuffer(),
+  }
+  const generatedImagesBase64 = {
+    one: generatedImages.one.toString('base64'),
+    two: generatedImages.two.toString('base64'),
+  }
   let expectedIndex = 0
   const requests = []
   const wsRequests = []
@@ -93,6 +132,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
   let stopAborted = false
   const consumeExpected = (protocol, marker) => {
     const actual = `${protocol}:${marker || 'unexpected'}`
+    if (!enforceSequence) return true
     const expected = expectedSequence[expectedIndex]
     if (actual !== expected) {
       unexpected = `provider request ${expectedIndex + 1} was ${actual}; expected ${expected || 'no further request'}`
@@ -143,7 +183,9 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
     }
     const wire = JSON.stringify(body)
     const protocol = req.url.endsWith('/responses') ? 'responses' : 'chat'
-    const record = { protocol, marker: ['AFTER_STOP', 'INCREMENTAL', 'TOOL', 'STOP', 'EMPTY', 'CHAT', 'ATTACHMENT', 'LONGPASTE'].find(value => wire.includes(`APP_E2E_${value}`)) || null, body }
+    // Later image markers are listed first: an edit or post-restart request also
+    // carries the earlier prompt text in its replayed history.
+    const record = { protocol, marker: ['IMAGE_RESTART', 'IMAGE_EDIT', 'IMAGE_ONE', 'AFTER_STOP', 'INCREMENTAL', 'TOOL', 'STOP', 'EMPTY', 'CHAT', 'ATTACHMENT', 'LONGPASTE'].find(value => wire.includes(`APP_E2E_${value}`)) || null, body }
     requests.push(record)
     await log(`${protocol} ${record.marker || 'unexpected'} model=${body.model || ''} inputBytes=${wire.length}\n`)
     if (!consumeExpected(protocol, record.marker)) {
@@ -208,6 +250,30 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
         unexpected = 'Chat tool result was missing or not paired to call_chat_write'
         res.writeHead(500).end(unexpected)
       }
+    // Dispatch on the already-resolved marker: an edit or post-restart request
+    // still carries the earlier prompt text in its replayed history.
+    } else if (record.marker === 'IMAGE_ONE') {
+      const tools = Array.isArray(body.tools) ? body.tools.map(tool => tool?.type) : []
+      await log(`responses IMAGE_ONE tools=${JSON.stringify(tools)}\n`)
+      if (!tools.includes('image_generation')) {
+        unexpected = 'IMAGE_ONE request did not declare the hosted image_generation tool'
+        res.writeHead(500).end(unexpected)
+      } else sse(res, responseImage('resp-image-one', 'ig_app_one', generatedImagesBase64.one))
+    } else if (record.marker === 'IMAGE_EDIT') {
+      const { results, inputImages } = replayedImageResults(body)
+      const carriesInstruction = JSON.stringify(body.input || []).includes('APP_E2E_IMAGE_EDIT')
+      await log(`responses IMAGE_EDIT replayed=${results.length} inputImages=${inputImages} instruction=${carriesInstruction}\n`)
+      if (results.length !== 1 || results[0] !== generatedImagesBase64.one || inputImages !== 0 || !carriesInstruction) {
+        unexpected = `IMAGE_EDIT request did not replay one native image call carrying the original bytes together with the instruction (replayed=${results.length}, inputImages=${inputImages}, instruction=${carriesInstruction})`
+        res.writeHead(500).end(unexpected)
+      } else sse(res, responseImage('resp-image-two', 'ig_app_two', generatedImagesBase64.two))
+    } else if (record.marker === 'IMAGE_RESTART') {
+      const { results, inputImages } = replayedImageResults(body)
+      await log(`responses IMAGE_RESTART replayed=${results.length} inputImages=${inputImages}\n`)
+      if (results.length !== 2 || results[0] !== generatedImagesBase64.one || results[1] !== generatedImagesBase64.two || inputImages !== 0) {
+        unexpected = `IMAGE_RESTART request did not replay both generated images from storage after the application restart (replayed=${results.length}, inputImages=${inputImages})`
+        res.writeHead(500).end(unexpected)
+      } else sse(res, responseText('resp-image-restart', ['generated images survived the restart']))
     } else {
       unexpected = `unconsumed ${protocol} request`
       res.writeHead(500, { 'content-type': 'application/json' })
@@ -316,6 +382,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0 }) {
     }),
     assertConsumed() {
       if (unexpected) throw new Error(unexpected)
+      if (!enforceSequence) return
       if (expectedIndex !== expectedSequence.length) {
         throw new Error(`provider consumed ${expectedIndex}/${expectedSequence.length} expected requests; next is ${expectedSequence[expectedIndex]}`)
       }
