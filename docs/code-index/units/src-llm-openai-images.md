@@ -17,6 +17,7 @@ Owns the OpenAI Responses hosted `image_generation` tool declaration and convert
 - `isImageGenerationCallItem(item)` / `isCompletedImageGenerationItem(item)` — output-item classification
 - `deriveGeneratedImageId(callId?, index)` — bounded, path-safe generated image identity
 - `formatGeneratedImageFailureNote(failures)` / `formatGeneratedImageModelPlaceholder()` — bounded user-visible text helpers
+- `GeneratedImageReplayError` — raised when persisted generated-image bytes cannot be replayed, so callers can classify the failure as local and non-retryable instead of a provider or transport error
 - `IMAGE_GENERATION_MAX_DECODED_BYTES` / `IMAGE_GENERATION_MAX_RESPONSE_BYTES` / `IMAGE_GENERATION_MAX_IMAGE_ITEMS` / `IMAGE_GENERATION_MAX_META_TEXT_CHARS` — local limits
 - `GeneratedImageFailure`, `NormalizedGeneratedImage`, `NormalizedGeneratedImages`, `GeneratedImageMime` — result types
 
@@ -42,3 +43,7 @@ Owns the OpenAI Responses hosted `image_generation` tool declaration and convert
 ### D-llm-image-generation-binary-boundary
 
 [2026-09-19] Provider image base64 is accepted only inside `externalizeGeneratedImageItems`, which validates the bytes, writes a content-addressed blob, and reduces the item to a reference plus safe metadata. Replay needs the same concrete model and locally verified bytes; a missing or unreadable blob is an explicit failure, never a dangling native call id or a silent regeneration.
+
+### D-llm-image-replay-local-failure
+
+[2026-09-19] A generated image that cannot be replayed from local storage raises `GeneratedImageReplayError` rather than a generic error. The failure is local, so it is reported as non-retryable and non-countable against model health: the provider was not asked for anything, retrying cannot restore the bytes, and a failover could pay twice for the same image. Canonical history is never rewritten to work around it.

@@ -10,6 +10,7 @@ import { formatSystemPartForModel } from '../utils/promptWrappers';
 import {
     buildImageGenerationReplayItem,
     formatGeneratedImageModelPlaceholder,
+    GeneratedImageReplayError,
     OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE,
 } from './openaiImages';
 
@@ -655,7 +656,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                         responseInput.push(buildImageGenerationReplayItem(responsesMeta.outputItem, part.inlineData.data));
                         inlineConsumed = true;
                     } else {
-                        throw new Error('Cannot replay a generated image call: the local image bytes are missing or unreadable.');
+                        throw new GeneratedImageReplayError('Cannot replay a generated image call: the local image bytes are missing or unreadable.');
                     }
                 } else {
                     responseInput.push(structuredClone(responsesMeta.outputItem));

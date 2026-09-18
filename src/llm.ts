@@ -31,6 +31,7 @@ import {
     externalizeGeneratedImageItems,
     formatGeneratedImageFailureNote,
     formatGeneratedImageModelPlaceholder,
+    GeneratedImageReplayError,
     isImageGenerationCallItem,
     isCompletedImageGenerationItem,
 } from './llmProviders/openaiImages';
@@ -3421,6 +3422,17 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
 
                 let failure = error instanceof ConcreteAttemptFailure
                     ? error
+                    : error instanceof GeneratedImageReplayError
+                    // Local recovery failure: the stored bytes for an already
+                    // generated image are gone, so the provider was never
+                    // called. Retrying cannot restore them and failing over
+                    // could pay for a duplicate generation.
+                    ? new ConcreteAttemptFailure(error.message, {
+                        kind: 'request-error',
+                        retryable: false,
+                        countable: false,
+                        logDetail: { error: error.message, name: error.name },
+                    })
                     : new ConcreteAttemptFailure(summarizeRetryReason(error), {
                         kind: 'request-error',
                         status: (error as AxiosResponse)?.status ? String((error as AxiosResponse).status) : undefined,

@@ -370,3 +370,67 @@ test('canonical history is not mutated when a generated image is replayed', asyn
   assert.equal(JSON.stringify(otherModel).includes(base64), false);
   assert.match(JSON.stringify(otherModel), /does not receive its image content/);
 });
+
+// Section 6.4: a local recovery failure must surface as a clear non-retryable
+// error. The provider is never asked to redo the work, and no retry is
+// announced even when the caller allows several attempts.
+test('a locally unreadable generated image fails immediately without retry or failover', async () => {
+  const cap = captureAxios(() => makeImageStream({ texts: [{ index: 0, text: 'unused' }] }));
+  const retries: any[] = [];
+  try {
+    const lostImage: Message = {
+      role: 'model',
+      parts: [{
+        imageMeta: { imageId: 'ig_lost', origin: 'generated', mimeType: 'image/png' },
+        providerMeta: {
+          openaiResponses: {
+            sourceModelId: 'fixture/model',
+            outputItem: { type: 'image_generation_call', id: 'ig_lost', status: 'completed', output_format: 'png' },
+          },
+        },
+      }],
+    };
+    await assert.rejects(
+      () => runRequest(responsesEntry({}), {
+        contents: [{ role: 'user', parts: [{ text: 'make it warmer' }] }, lostImage],
+        maxRetries: 3,
+        onRetry: async (event: any) => { retries.push(event); },
+      }),
+      /local image bytes are missing or unreadable/,
+    );
+    assert.equal(cap.captured.length, 0, 'a local replay failure must not call the provider');
+    assert.deepEqual(retries, [], 'a local replay failure must never be retried or failed over');
+  } finally {
+    cap.restore();
+  }
+});
+
+test('a missing generated image blob fails before any provider call', async () => {
+  const cap = captureAxios(() => makeImageStream({ texts: [{ index: 0, text: 'unused' }] }));
+  try {
+    const digest = crypto.createHash('sha256').update('absent-generated-image').digest('hex');
+    const missingRef: Message = {
+      role: 'model',
+      parts: [{
+        inlineDataRef: { imageId: 'ig_absent', blobId: `${digest}.png`, mimeType: 'image/png', byteLength: 8, sha256: digest },
+        imageMeta: { imageId: 'ig_absent', origin: 'generated', mimeType: 'image/png' },
+        providerMeta: {
+          openaiResponses: {
+            sourceModelId: 'fixture/model',
+            outputItem: { type: 'image_generation_call', id: 'ig_absent', status: 'completed', output_format: 'png' },
+          },
+        },
+      }],
+    };
+    await assert.rejects(
+      () => runRequest(responsesEntry({}), {
+        contents: [{ role: 'user', parts: [{ text: 'make it warmer' }] }, missingRef],
+        maxRetries: 3,
+      }),
+      /ENOENT|no such file/i,
+    );
+    assert.equal(cap.captured.length, 0, 'a missing local blob must not reach the provider');
+  } finally {
+    cap.restore();
+  }
+});

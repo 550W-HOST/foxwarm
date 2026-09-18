@@ -42,6 +42,19 @@ const SAFE_IMAGE_GENERATION_OUTPUT_ITEM_KEY_SET = new Set<string>(SAFE_IMAGE_GEN
 
 export type GeneratedImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
+/**
+ * Raised when a persisted generated image cannot be replayed because its local
+ * bytes are missing or unreadable. The provider was never asked for anything at
+ * that point, so this is a local recovery failure: callers must surface it
+ * directly instead of retrying the request or failing over to another model.
+ */
+export class GeneratedImageReplayError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GeneratedImageReplayError';
+  }
+}
+
 export type GeneratedImageFailure = {
   imageId: string;
   reason: string;
