@@ -1,6 +1,6 @@
 # Unit: webui-chat-timeline
 
-Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/usageTiming.ts, packages/webui/src/components/ContextBlockCard.tsx, packages/webui/src/components/ModelThreadCard.tsx, packages/webui/src/components/useThreadCardOverflowFade.ts, packages/webui/src/components/WebSearchCard.tsx, packages/webui/src/webSearchAction.ts, packages/webui/test/contextBlockCollapsedSummary.e2e.mjs, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/usageTiming.test.mjs, packages/webui/test/systemMessageCards.e2e.mjs, packages/webui/test/webSearchAction.test.mjs, packages/webui/test/webSearchCard.e2e.mjs
+Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/components/timelineRows.ts, packages/webui/src/usageTiming.ts, packages/webui/src/components/ContextBlockCard.tsx, packages/webui/src/components/ModelThreadCard.tsx, packages/webui/src/components/useThreadCardOverflowFade.ts, packages/webui/src/components/WebSearchCard.tsx, packages/webui/src/webSearchAction.ts, packages/webui/test/contextBlockCollapsedSummary.e2e.mjs, packages/webui/test/contextBlockPrecedingParts.e2e.mjs, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/usageTiming.test.mjs, packages/webui/test/systemMessageCards.e2e.mjs, packages/webui/test/webSearchAction.test.mjs, packages/webui/test/webSearchCard.e2e.mjs
 Secondary files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/chatViewportState.ts
 
 ## Purpose
@@ -10,6 +10,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 ## Key Exports
 
 - `ChatTimeline` — default export, the main timeline component
+- `buildTimelineRows(input, previousCache)` — pure one-pass derivation of the render model; returns the row list plus the identity-reuse cache
 - `getMessageStableKey(msg, idx)` — shared helper in `chatViewportState.ts` that generates a stable React key for a message
 - `getMessageViewportAnchorKey(message)` — returns a stable viewport identity for non-temporary committed rows
 - `ContextBlockCard` — renders CTX-BLOCK model messages as tool/reasoning-style thread cards with local expand/collapse state and the read-only WebUI archive expansion endpoint
@@ -25,9 +26,9 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 |----------|----------------|-------------|
 | `getMessageStableKey(msg, idx)` | ~28–34 | Produces a stable key from message metadata or index |
 | `getMessageViewportAnchorKey(message)` | `chatViewportState.ts` | Produces a context-block/seq/id/timestamp anchor key while excluding temporary/synthetic rows. |
-| `toTokenCount(value)` | ~67 | Safely coerces a value to a finite number or null |
-| `normalizeMessageUsage(value)` | ~71–84 | Normalizes various token usage shapes into a standard format |
-| `getModelMessageUsage(msg)` | ~86 | Extracts normalized usage from a model message |
+| `toTokenCount(value)` | `timelineRows.ts` | Safely coerces a value to a finite number or null |
+| `normalizeMessageUsage(value)` | `timelineRows.ts` | Normalizes various token usage shapes into a standard format |
+| `getModelMessageUsage(msg)` | `timelineRows.ts` | Extracts normalized usage from a model message |
 | `getUsageTotalTokens(usage)` | ~88 | Sums all token fields |
 | `formatTokenCount(count)` | ~92 | Formats a number as K/M shorthand |
 | `formatUsageTitle(usage, callCount)` | ~103 | Builds a tooltip string for usage badge |
@@ -47,13 +48,15 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 | `ModelMessageContent` | ~230 | Renders model message parts (text, reasoning, images, tool calls) |
 | `UserMessageContent` | ~290 | Renders user message parts with collapsible/system handling |
 | `CopyButton` | ~340 | Copy-to-clipboard button with checkmark feedback |
-| `MessageRow` | ~370 | Full message row: layout, bubble styling, tool group logic |
-| `ChatTimeline` | ~530 | Top-level component managing tool group expansion state and rendering |
+| `buildTimelineRows(input, previousCache)` | `timelineRows.ts` | Derives groups (tags, usage, kept-expanded group), per-row layout/visibility fields, and reuses previous row/group objects whose derived values are equal |
+| `MessageRow` | ~370 | Renders one derived row: layout, bubble styling, tool cards, usage badge |
+| `ChatTimeline` | ~530 | Top-level component owning group expansion state; builds rows and renders them |
 | `ContextBlockCard` | `ContextBlockCard.tsx` | Tool/reasoning-style CTX-BLOCK thread card with shared `ToolTag`/`ThreadLineButton` primitives and local nested expansion state |
 
 ## Dependencies
 
 - `./chatShared` — shared utilities (`renderMarkdown`, `formatToolLabel`, `isSystemLikeText`, `copyTextToClipboard`, `IconToggleButton`, types `Message`, `ToolTagItem`, `ViewMode`, etc.)
+- `./timelineRows` — the timeline row model (`buildTimelineRows`, `TimelineRowView`, `TimelineGroupView`, usage normalization/attribution helpers)
 - `./ImageParts` — renders image content parts
 - `./ReasoningCard` — collapsible reasoning/thinking display
 - `./ToolTimelineItems` — `InterleavedToolGroup`, `ToolCallsBlock`, `ToolResponsesBlock`, `ToolGroupSummaryCard`
@@ -85,7 +88,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 - Complete exact non-nested `<pasted-text>...</pasted-text>` wrappers inside direct-user text parts use the presentation and authority boundary in [D-webui-user-pasted-text-display](./webui-pasted-text.md#d-webui-user-pasted-text-display). Timeline classification excludes valid pasted content from heavy-system and metadata decisions while preserving surrounding authored whitespace.
 - User and assistant message surfaces expose semantic CSS hooks (`foxwarm-user-message-bubble`, `foxwarm-user-message-text`, `foxwarm-assistant-message-card`, `foxwarm-assistant-message-markdown`, `foxwarm-assistant-message-raw`) so opt-in UI style layers can restyle the timeline while preserving message grouping, Markdown sanitization, and view-mode behavior.
 - Timeline rows/cards and nested assistant, Reasoning, and CTX-BLOCK flex surfaces use `min-width: 0`/bounded widths so intrinsic Markdown content cannot widen the message or viewport. Top-level desktop model/tool/system rows fill 80% of the timeline, while user messages remain content-sized up to 80%; mobile and nested model/tool/system rows fill their timeline, and nested user messages cap at 85%. The built-CSS contract fixture is `packages/webui/test/messageWidth.e2e.mjs`, including persisted-`user` heavy/non-channel and nested system-card cases. The native Chat message scroller alone owns the defensive horizontal clip; shrinkable inner message-content, committed/queued, shared-timeline, row, and card boundaries remain overflow-visible so intentional negative-left thread gutters and external desktop usage-badge paint are not clipped. Shared Markdown CSS breaks long prose tokens, wraps fenced code with preserved whitespace, and assigns horizontal scrolling only to wide tables; `packages/webui/test/messageOverflow.e2e.mjs` and the actual-Chat fixture `packages/webui/test/timelineOverflowBoundary.e2e.mjs` prove malformed-child containment and intentional inner scrolling.
-- The component is heavily memoized (`memo`) to avoid re-renders on large conversations.
+- Timeline rendering is driven by an explicit row model: `buildTimelineRows` walks the message list once to resolve tool-group membership, summary tags, aggregate usage, folded thinking, the kept-expanded final group, and each row's layout/visibility/anchor fields. `ChatTimeline` only maps the resulting rows, and `MessageRow` reads one `row` object, so no render-time derivation depends on parallel per-index arrays staying aligned. Groups and rows are rebuilt on every message-list identity change (including streaming draft updates), but the builder reuses the previous object whenever the newly derived values are equal; the row memo therefore compares by identity and only the rows whose values changed re-render.
 - `Chat` treats a same-session SSE state change in committed `messageCount` or persisted `historyVersion` like a queue-length change and schedules the existing coalesced history refresh. This lets Worker/local state correct both appended and same-count rewritten history through an exact history GET without placing message bodies in the state event.
 - Display-only LLM retry notices remain visible as ordinary assistant cards, but ChatTimeline has no inline Retry/Continue action. Continue belongs only to the parent runtime-status bubble under [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
@@ -97,7 +100,7 @@ Request-duration and inter-request-gap semantics are governed by [D-pipeline-inp
 
 - [2026-07-21] Model Markdown overflow behavior is shared across ordinary assistant cards, Reasoning, and CTX-BLOCK summaries: long prose may break, fenced code wraps without horizontal scrolling, and semantic tables scroll horizontally within their own box. Nested message/flex surfaces must be shrinkable rather than relying on a final overflow-hiding ancestor.
 
-- [2026-09-18] The message-row memo compares the derived tool-group props (`requestTiming`, `summaryTagItems`, `groupUsage`, `groupUsageAttribution`) by value, not by identity. They are rebuilt from the whole message list on every recompute — including each streaming draft update — so identity comparison re-rendered every row on every stream delta (measured on a 600-message fixture: ~32 ms per delta before, ~3 ms after, byte-identical DOM). Restoring an identity check requires that the per-group view objects themselves become identity-stable first; do not switch back to `===` on these props on its own.
+- [2026-09-18] Timeline derivation is owned by `timelineRows.ts` and exposes one `row` object per rendered message; `MessageRow`'s memo compares `row` by identity. The builder is the only place allowed to decide group membership, summary tags, aggregate usage, folded thinking, kept-expanded groups, and row layout/anchor classes — keep those decisions out of the render bodies so an incremental change cannot desynchronize them. Identity reuse is a value-equality decision made inside the builder (equal derived values reuse the previous object); it is what keeps a streaming delta from re-rendering every row (measured on a 1200-message fixture with long tool results: one streaming increment committed ~22 ms and touched exactly one DOM node, versus ~324 ms and ~3290 DOM nodes when the previous per-index prop plumbing re-rendered rows). Do not reintroduce per-index side arrays or identity-unstable derived objects for the row props; extend `TimelineRowView`/`sameRowView` instead. A row outside any callable run has `group: null` — group state is only consumed by the model/tool render branch, so non-groupable rows deliberately do not carry an enclosing group.
 ### D-webui-timeline-overflow-boundary
 
 - [2026-08-18] Horizontal overflow defense belongs to the native outer Chat message scroller, whose existing content padding provides intentional paint and hit-test room. Keep inner message-content, committed/queued, shared `ChatTimeline`, message-row, and thread-card boundaries shrinkable with `min-width:0`/bounded widths, but do not clip their overflow: the external negative-left card gutter must remain clickable and the final desktop model row's external usage badge must retain its lower shadow/paint. Intentionally scrollable Markdown tables continue to own their local horizontal scrolling, while a malformed oversized child is still unable to widen the document through the outer scroller's clip. The shared `ThreadLineButton` keeps its left placement and 2px visual line alignment, but its responsive hit width is exactly 2px narrower than before: 14px below `sm` and 18px at `sm` and above, removing only the card/text-side strip across Tool, Reasoning/Web Search, System, and CTX-BLOCK cards.
