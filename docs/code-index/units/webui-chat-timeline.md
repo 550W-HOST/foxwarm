@@ -122,6 +122,8 @@ Request-duration and inter-request-gap semantics are governed by [D-pipeline-inp
 
 [2026-08-13] Completed OpenAI Responses hosted web-search activity is a reasoning-like model timeline artifact, not a Foxwarm tool invocation. Render only proven persisted `web_search_call` action shapes in their original model-part order: `search` uses the primary query with the first non-empty query-list entry as a compatibility fallback, and `open_page` identifies the URL honestly. The `Web Search` card shares Reasoning's completed neutral/slate thread-card chrome, starts collapsed, and expands only to normalized query or page details. It must not synthesize function calls or responses, enter tool execution/status grouping, mutate provider replay metadata, or replace the separate URL-annotation Sources surface. Unknown or malformed hosted items remain invisible in rendered mode while the existing whole-message JSON view retains the original metadata.
 
+[2026-09-19] A web-search card is content of the tool group that contains it, so its visibility follows the same collapsed-group rule as tool cards and folded reasoning: it is hidden exactly while the enclosing group is collapsed into its summary row, and shown whenever that group renders its content — including the kept-expanded final group, which never collapses into a summary row. Do not keep a suppression condition that ignores the kept-expanded flag: that silently hides the cards of a final group whose messages carry web-search activity and no visible text. Covered by `keepExpandedGroupWebSearch.e2e.mjs`.
+
 ## Integration
 
 - Consumed by a parent chat view that passes the `messages` array and display preferences (`isMobile`, `groupTools`, `showUsageBadge`, `showUserMessageMetadata`).

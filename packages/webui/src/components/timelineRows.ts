@@ -458,7 +458,10 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       collapsedGroup,
       renderSummary: groupTools && isGroupStart && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded,
       hideFoldedThinking: groupTools && foldedOwnerKey !== null && !expandedGroupKeys.has(foldedOwnerKey),
-      suppressWebSearchCards: groupTools && activeGroup !== null && !groupExpanded,
+      // Web-search cards are content of the group, so they are hidden exactly while the group is
+      // collapsed into its summary row. Reusing `collapsedGroup` keeps the keep-expanded tail group
+      // from hiding its own cards.
+      suppressWebSearchCards: collapsedGroup,
       usageBadge,
       usageAnchorRelative: usageBadge !== null && !isMobile,
       systemLikeMessage,
