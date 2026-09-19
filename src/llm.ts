@@ -9,7 +9,7 @@ import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
@@ -2544,7 +2544,9 @@ function buildConcreteRequestPlan(options: {
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
     const modelId = getModelIdForMetadata(modelEntry, modelKey);
-    const providerContents = prepareHistoryForConcreteModel(fixedContents, modelId);
+    // Compatibility filtering and provider-only hydration have already been
+    // performed for this exact concrete attempt. Do not prepare history twice.
+    const providerContents = fixedContents;
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIResponsesWs = providerType === 'openai-ws';
@@ -3008,7 +3010,6 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     const canonicalContents = stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     );
-    const fixedContents = await hydrateMessagesForProvider(canonicalContents);
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
@@ -3120,6 +3121,17 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             }
 
             const concreteModelId = getModelIdForMetadata(modelEntry, modelKey);
+            const requestApi = getOpenAIRequestApi(modelEntry.providerType || 'openai');
+            const providerContents = prepareHistoryForConcreteModel(canonicalContents, concreteModelId);
+            // This runs outside the transport retry catch: unreadable original
+            // blobs and local decoding failures cannot fail over or count as
+            // model/provider health failures.
+            const fixedContents = await hydrateMessagesForProvider(providerContents, {
+                protocol: requestApi === 'responses' ? 'openai-responses'
+                    : requestApi === 'chat-completions' ? 'openai-chat-completions' : 'anthropic',
+                concreteModelId,
+                outputFormat: PROVIDER_IMAGE_OUTPUT_FORMAT,
+            });
             const effectiveSystemPrompt = options.resolveSystemPromptForModel
                 ? await options.resolveSystemPromptForModel(concreteModelId)
                 : options.systemPrompt || '';

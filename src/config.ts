@@ -551,6 +551,7 @@ export type AppConfig = {
     enableTUI?: boolean;
   };
   llm?: CompactionConfig & {
+    providerImageOutputFormat?: 'webp' | 'jpeg';
     ollamaBaseUrl?: string;
     contextLimit?: number;
     compactBlockLevelMinTokens?: number;
@@ -714,6 +715,12 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 }
 
 export const APP_CONFIG = loadAppConfig();
+export function normalizeProviderImageOutputFormat(value: unknown): 'webp' | 'jpeg' {
+  if (value === undefined || value === 'webp') return 'webp';
+  if (value === 'jpeg') return 'jpeg';
+  throw new Error('app config `llm.providerImageOutputFormat` must be `webp` or `jpeg`.');
+}
+export const PROVIDER_IMAGE_OUTPUT_FORMAT = normalizeProviderImageOutputFormat(APP_CONFIG.llm?.providerImageOutputFormat);
 
 export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
