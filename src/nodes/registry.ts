@@ -20,6 +20,7 @@ export type NodeToolDefinition = {
 export type NodeCapabilitiesSnapshot = {
   tools: NodeToolDefinition[]
   services?: Record<string, number>
+  features?: { remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number }
 }
 
 export type ApprovedNodeRecord = {

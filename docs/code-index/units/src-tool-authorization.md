@@ -11,6 +11,8 @@ The removed builtin identity `update_session_snapshot` is rejected during policy
 
 ## Key exports
 
+`buildExternalToolAuthorizationRequest` optionally receives trusted execution-derived Node path records; external callers do not supply effective paths or Node identity in model arguments.
+
 - `TOOL_AUTH_CONFIG_PATH` — fixed `state/tool-authorization.yaml` authority.
 - `parseToolAuthorizationPolicyBytes()` — strict shared parser/validator for runtime loads and replacement candidates.
 - `loadToolAuthorizationPolicy()` / `loadToolAuthorizationPolicySync()` — async/sync execution-time loaders with a ten-second successful-parse cache and one fresh retry.

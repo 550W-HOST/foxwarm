@@ -11,12 +11,14 @@ import path from 'path';
 import { setNodeProcessTitle } from './processTitle';
 import WebSocket from 'ws';
 import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
+import { expandHomePath } from '../../shared/dist/execCwd';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import {
   CURRENT_NODE_PROTOCOL_RANGE,
   negotiateNodeProtocol,
   resolveAdvertisedNodeProtocol,
+  type ExternalNodeOwner,
 } from '../../shared/dist/nodeProtocol';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError, VSCODE_NODE_SERVICE_VERSIONS, type VscodeNodeServiceName } from '../../shared/dist/vscodeNodeService';
@@ -165,6 +167,9 @@ export class NodeClient {
   private heartbeatLastPingAt = 0;
   private pairingRejected = false;
   private protocolIncompatible = false;
+  private explicitlyDisconnected = false;
+  private negotiatedNodeProtocol = 0;
+  private readonly externalDefaultCwd = process.cwd();
   private localTriggerEnabled = true;
   private localTriggerPort = 0;
   private localTriggerServer: http.Server | null = null;
@@ -203,7 +208,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { remoteExecBackgroundRegistration: true },
+      features: { remoteExecBackgroundRegistration: true, externalToolOwner: 1 },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -412,6 +417,7 @@ export class NodeClient {
   }
 
   async connect(): Promise<void> {
+    this.explicitlyDisconnected = false;
     await this.loadStoredCredentials();
 
     if (!this.isAuthenticatedMode && !this.pairingToken) {
@@ -483,6 +489,7 @@ export class NodeClient {
       this.rejectPendingRequests(new Error(`Remote node connection closed before master acknowledged the request (${code}${reasonText ? `: ${reasonText}` : ''})`));
       logger.warn({ code, reason: reasonText }, 'Disconnected from master');
       this.onStatus?.('disconnected', { code, reason: reasonText });
+      if (this.explicitlyDisconnected) return;
       if (this.pairingRejected) {
         logger.warn('Pairing was rejected; not reconnecting automatically');
         return;
@@ -505,7 +512,7 @@ export class NodeClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) {
+    if (this.explicitlyDisconnected || this.reconnectTimer) {
       return;
     }
 
@@ -525,6 +532,7 @@ export class NodeClient {
   private async handleMessage(message: any): Promise<void> {
     switch (message.type) {
       case 'registered':
+        let negotiated = 0;
         try {
           const advertisedMaster = resolveAdvertisedNodeProtocol(message.nodeProtocol?.master);
           const compatibility = negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE, advertisedMaster.range);
@@ -544,6 +552,7 @@ export class NodeClient {
             this.ws?.close(1008, protocolMessage.slice(0, 120));
             return;
           }
+          negotiated = selectedProtocol;
         } catch (error) {
           this.protocolIncompatible = true;
           logger.error({ err: error }, 'Master returned an invalid Node protocol negotiation result');
@@ -551,6 +560,7 @@ export class NodeClient {
           return;
         }
         this.protocolIncompatible = false;
+        this.negotiatedNodeProtocol = negotiated;
         logger.info({ nodeId: message.nodeId }, 'Node registered');
         this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
@@ -712,6 +722,10 @@ export class NodeClient {
   }
 
   private async handleToolCall(message: any): Promise<void> {
+    if (Object.prototype.hasOwnProperty.call(message, 'owner')) {
+      await this.handleExternalToolCall(message);
+      return;
+    }
     const { callId, tool, args } = message;
     const timeoutMs = typeof message.timeoutMs === 'number' ? message.timeoutMs : undefined;
     const sessionId = typeof message.sessionId === 'string'
@@ -803,6 +817,39 @@ export class NodeClient {
         },
         ...(tool === 'exec' ? { execStarted } : {}),
       });
+    }
+  }
+
+  private async handleExternalToolCall(message: any): Promise<void> {
+    const callId = message.callId;
+    try {
+      const owner: ExternalNodeOwner = message.owner;
+      if (this.negotiatedNodeProtocol !== 3 || !owner || owner.kind !== 'external'
+        || typeof owner.externalId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(owner.externalId)
+        || typeof owner.contextId !== 'string' || !/^[a-f0-9-]{36}$/i.test(owner.contextId)
+        || Object.keys(owner).some(key => !['kind', 'externalId', 'contextId'].includes(key))
+        || Object.prototype.hasOwnProperty.call(message, 'sessionId')
+        || Object.prototype.hasOwnProperty.call(message, 'agentName')) {
+        throw new Error('External Node owner is unsupported or invalid.');
+      }
+      const tool = message.tool;
+      if (!['read', 'write', 'edit', 'apply_patch', 'get_default_cwd'].includes(tool) || this.toolCallInterceptor) {
+        throw new Error('This external Node tool is not available.');
+      }
+      const toolFn = (nodeTools as any)[tool];
+      const cwd = typeof message.sessionCwd === 'string' && message.sessionCwd ? message.sessionCwd : this.externalDefaultCwd;
+      const ctx = {
+        runtimeNodeId: this.connectedNodeId || this.requestedName,
+        fileOperations: nativeFileOperations,
+        resolveFilePath: (filePath: string) => {
+          const expanded = expandHomePath(filePath);
+          return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
+        },
+      };
+      const result = this.normalizeToolResult(await toolFn(message.args, ctx));
+      this.send({ type: 'tool_call_response', callId, result });
+    } catch (error: any) {
+      this.send({ type: 'tool_call_error', callId, error: { message: error instanceof Error ? error.message : 'External Node tool failed.' }, execStarted: false });
     }
   }
 
@@ -913,6 +960,7 @@ export class NodeClient {
   }
 
   async disconnect(): Promise<void> {
+    this.explicitlyDisconnected = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

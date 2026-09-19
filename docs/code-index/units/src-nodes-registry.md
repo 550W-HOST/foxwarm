@@ -4,6 +4,8 @@ Files: src/nodes/registry.ts, src/nodes/registry.test.ts
 
 ## Purpose
 
+Approved Node capability snapshots can include a negotiated CLI `externalToolOwner` feature bit; it is not an authorization grant by itself. The live negotiated v3 runtime and exact Node identity must also be checked before any external effect.
+
 Manages a persistent registry of approved nodes and pending pairing requests. Handles the full pairing lifecycle (create, approve, reject, claim, expire) with token-based authentication, WebSocket notifications to waiting clients, and disk-backed storage with backup/recovery.
 
 ## Key Exports

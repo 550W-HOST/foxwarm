@@ -1,6 +1,7 @@
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { nodesManager } from './manager';
 import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
+import type { ExternalNodeOwner } from '../../packages/shared/dist/nodeProtocol';
 import { describeNodeProtocolCompatibility, type NodeProtocolCompatibility } from '../../packages/shared/dist/nodeProtocol';
 import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
 import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
@@ -38,18 +39,26 @@ export type NodeDescriptor = {
 /** Descriptor shape implemented by providers; primitive providers never supply model tool definitions. */
 export type NodeProviderDescriptor = Omit<NodeDescriptor, 'tools'> & { tools?: NodeCapabilityDescriptor[] };
 
-export type NodeToolRequest = {
-  sourceSessionId: string;
+type NodeToolRequestBase = {
   nodeId: string;
   toolName: string;
   args: Record<string, unknown>;
+};
+
+export type NodeToolRequest = NodeToolRequestBase & ({
+  sourceSessionId: string;
+  owner?: never;
   context: {
     agent: string;
     currentNode?: string;
     cwd?: string;
     deferSessionCwdSync?: boolean;
   };
-};
+} | {
+  owner: ExternalNodeOwner;
+  sourceSessionId?: never;
+  context: { agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never };
+});
 
 export type NodeDefaultCwdRequest = {
   sourceSessionId: string;
@@ -315,6 +324,9 @@ export class NodeProviderRegistry {
     request: NodeToolRequest,
     options?: NodeProviderCallOptions,
   ): Promise<unknown> {
+    if (request.owner) {
+      throw new NodeProviderError('NODE_EXTERNAL_OWNER_UNSUPPORTED', `Node \`${request.nodeId}\` does not yet support external-owner primitive tools.`);
+    }
     if (request.toolName === 'exec') {
       if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
         throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`exec\` not available on node \`${request.nodeId}\`.`);
@@ -731,6 +743,9 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
         'NODE_EXECUTION_TOOL_UNAVAILABLE',
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
+    }
+    if (request.owner) {
+      return nodesManager.executeExternalTool(request.nodeId, request.toolName, request.args, request.owner, request.context.cwd);
     }
     const routingSnapshot = request.context.currentNode
       ? { currentNode: request.context.currentNode, ...(request.context.cwd !== undefined ? { cwd: request.context.cwd } : {}) }

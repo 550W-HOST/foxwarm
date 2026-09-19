@@ -583,13 +583,15 @@ export function buildExternalToolAuthorizationRequest(options: {
   tool: ToolAuthorizationToolRef;
   targetNode?: string;
   args?: Record<string, any>;
+  /** Trusted execution-bound path facts; never accepted directly from external request JSON. */
+  paths?: ToolAuthorizationPathRecord[];
 }): ToolAuthorizationRequest {
   const externalId = requireVerifiedMcpInboundExternalId(options.principal);
   return {
     principal: 'external', externalId,
     ...(options.sessionId ? { session: options.sessionId } : {}),
     tool: options.tool, ...(options.targetNode ? { targetNode: options.targetNode } : {}),
-    args: options.args || {}, paths: [],
+    args: options.args || {}, paths: options.paths || [],
   };
 }
 

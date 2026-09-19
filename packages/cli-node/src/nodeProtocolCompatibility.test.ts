@@ -44,9 +44,9 @@ test('current client rejects an invalid negotiated generation from Master', asyn
   const { client, statuses, closes } = makeClient();
   await (client as any).handleMessage({
     type: 'registered', nodeId: 'node-a',
-    nodeProtocol: { master: { min: 2, max: 3 }, negotiated: 3 },
+    nodeProtocol: { master: { min: 2, max: 3 }, negotiated: 2 },
   });
   assert.equal((client as any).protocolIncompatible, true);
-  assert.match(statuses[0]?.detail?.message || '', /invalid Node protocol selection 3; expected 2/);
+  assert.match(statuses[0]?.detail?.message || '', /invalid Node protocol selection 2; expected 3/);
   assert.equal(closes[0]?.[0], 1008);
 });

@@ -27,6 +27,7 @@ import {
   CURRENT_NODE_PROTOCOL_RANGE,
   describeNodeProtocolCompatibility,
   negotiateNodeProtocol,
+  type ExternalNodeOwner,
   type NodeProtocolCompatibility,
 } from '../../packages/shared/dist/nodeProtocol';
 
@@ -39,7 +40,7 @@ interface ToolDefinition {
 interface NodeCapabilities {
   tools: ToolDefinition[];
   services?: Record<string, number>;
-  features?: { remoteExecBackgroundRegistration?: boolean };
+  features?: { remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number };
 }
 
 interface Node {
@@ -65,7 +66,8 @@ interface ToolCall {
   id: string;
   name: string;
   args: Record<string, any>;
-  sessionId: string;
+  sessionId?: string;
+  externalOwner?: ExternalNodeOwner;
   node: string;
   remoteExec?: {
     originalSessionId: string;
@@ -562,6 +564,43 @@ export class NodesManager {
    */
   async executeNodeTool(nodeId: string, toolName: string, args: Record<string, any>, sessionId: string): Promise<any> {
     return await this.executeTool(nodeId, toolName, args, sessionId);
+  }
+
+  supportsExternalOwner(nodeId: string): boolean {
+    const node = this.nodes.get(nodeId);
+    return !!node?.ws && node.protocolCompatibility.negotiated === 3
+      && node.capabilities?.features?.externalToolOwner === 1;
+  }
+
+  /** External calls have a real authenticated transport owner, never a synthetic Session. */
+  async executeExternalTool(nodeId: string, toolName: string, args: Record<string, any>, owner: ExternalNodeOwner, cwd?: string): Promise<any> {
+    const node = this.nodes.get(nodeId);
+    if (!this.supportsExternalOwner(nodeId) || !node?.ws) {
+      throw new Error(`Node \`${nodeId}\` does not support external-owner calls.`);
+    }
+    if (!['read', 'write', 'edit', 'apply_patch', 'get_default_cwd'].includes(toolName) || !node.tools.has(toolName)) {
+      throw new Error(`Tool \`${toolName}\` is not available for external-owner calls on Node \`${nodeId}\`.`);
+    }
+    return new Promise<any>((resolve, reject) => {
+      const callId = `call_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
+      const timeout = setTimeout(() => {
+        if (this.toolCalls.delete(callId)) reject(new Error('External Node tool call timed out; outcome may be unknown.'));
+      }, 62_000);
+      timeout.unref?.();
+      this.toolCalls.set(callId, {
+        id: callId, name: toolName, args, externalOwner: owner, node: nodeId,
+        resolve: value => { clearTimeout(timeout); resolve(value); },
+        reject: error => { clearTimeout(timeout); reject(error); },
+      });
+      try {
+        node.ws!.send(JSON.stringify({ type: 'tool_call', callId, tool: toolName, args, owner,
+          ...(cwd === undefined ? {} : { sessionCwd: cwd }), timeoutMs: 62_000 }));
+      } catch (error) {
+        const pending = this.toolCalls.get(callId);
+        this.toolCalls.delete(callId);
+        pending?.reject(error);
+      }
+    });
   }
 
   /**
