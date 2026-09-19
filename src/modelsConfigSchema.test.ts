@@ -626,6 +626,7 @@ test('route fingerprint deterministically covers resolved concrete request plans
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).requestCompression = 'gzip'; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.extraFields.nested.a = 9; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).streamContentInactivityTimeoutMs = 300000; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).disallowEmptyResponse = true; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
@@ -758,4 +759,46 @@ test('legacy provider remains a fallback reader for virtual providerType values'
   });
   assert.equal(parsed.models['legacy-route'].providerType, 'session-hash');
   assert.deepEqual(parsed.models['legacy-route'].virtualRouting?.targets, ['concrete/model-a']);
+});
+
+test('stream inactivity inherits provider defaults, model overrides, and aliases', () => {
+  const parsed = loadModelsConfigFromObject({ default: 'slow/a', providers: {
+    slow: { streamContentInactivityTimeoutMs: 300_000, models: ['a', { id: 'b', streamContentInactivityTimeoutMs: 900_000 }] },
+    normal: { models: ['a'] }, alias: 'slow/b',
+  } });
+  assert.equal(parsed.models['slow/a'].streamContentInactivityTimeoutMs, 300_000);
+  assert.equal(parsed.models['slow/b'].streamContentInactivityTimeoutMs, 900_000);
+  assert.equal(parsed.models['normal/a'].streamContentInactivityTimeoutMs, 60_000);
+  assert.deepEqual(parsed.models.alias.virtualRouting.targets, ['slow/b']);
+});
+
+test('stream inactivity rejects invalid values at both scopes and on virtual providers', () => {
+  for (const value of [null, '300000', false, 0, -1, 1.5, NaN, Infinity, 2147483648]) {
+    for (const modelLevel of [false, true]) {
+      assert.throws(() => loadModelsConfigFromObject({ default: 'p/a', providers: { p: {
+        ...(modelLevel ? {} : { streamContentInactivityTimeoutMs: value }),
+        models: [{ id: 'a', ...(modelLevel ? { streamContentInactivityTimeoutMs: value } : {}) }],
+      } } }), /streamContentInactivityTimeoutMs must be an integer/);
+    }
+  }
+  for (const providerType of ['session-hash', 'failover']) {
+    assert.throws(() => loadModelsConfigFromObject({ default: 'v', providers: {
+      p: { models: ['a', 'b'] }, v: { providerType, targets: ['p/a', 'p/b'], streamContentInactivityTimeoutMs: 300000 },
+    } }), /forbids field `streamContentInactivityTimeoutMs`/);
+  }
+});
+
+test('editor schema exposes the same stream timeout bounds at provider and model scopes', async () => {
+  const { MODELS_CONFIG_SCHEMA } = await import('../packages/shared/dist/configSchemas');
+  const provider = (MODELS_CONFIG_SCHEMA as any).properties.providers.additionalProperties.oneOf.find((entry: any) => entry.type === 'object');
+  const field = provider.properties.streamContentInactivityTimeoutMs;
+  assert.equal(field.type, 'integer');
+  assert.equal(field.minimum, 1);
+  assert.equal(field.maximum, 2147483647);
+  assert.equal(field.default, 60000);
+  const model = provider.properties.models.items.anyOf.find((entry: any) => entry.type === 'object');
+  assert.deepEqual(model.properties.streamContentInactivityTimeoutMs, field);
+  for (const rule of provider.allOf.slice(0, 2)) {
+    assert.ok(rule.then.not.anyOf.some((entry: any) => entry.required.includes('streamContentInactivityTimeoutMs')));
+  }
 });

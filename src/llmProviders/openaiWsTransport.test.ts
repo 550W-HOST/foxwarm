@@ -637,7 +637,7 @@ test('openai-ws first-activity watchdog covers handshake and ignores unrelated r
   }
 });
 
-test('openai-ws meaningful deltas switch to and reset the one-minute inactivity watchdog', async () => {
+test('openai-ws meaningful deltas switch to and reset the three-minute inactivity watchdog', async () => {
   const timers = new FakeIdleTimers();
   setStreamingTimeoutTestHooks(timers.hooks);
   let socket!: FakeSocket;
@@ -918,4 +918,31 @@ test('LRU eviction and pool clear cancel every affected idle timer', async () =>
     .map(entry => entry.fields.closeCause);
   assert.equal(closeCauses.filter(cause => cause === 'lru-eviction').length, 1);
   assert.equal(closeCauses.filter(cause => cause === 'pool-clear').length, 5);
+});
+
+test('openai-ws custom inactivity applies after output and safety buffering never shortens it', async () => {
+  for (const configured of [300_000, 900_000]) {
+    const timers = new FakeIdleTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    let socket!: FakeSocket;
+    setOpenAIWsTransportTestHooks({ socketFactory: () => {
+      socket = new FakeSocket((_request, current) => {
+        current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a' });
+        current.frame({ type: 'response.metadata', metadata: { type: 'safety_buffering' } });
+        current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'b' });
+      });
+      return socket as any;
+    }});
+    const pending = requestOpenAIResponsesWs({
+      url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+      placement: 'local', signal: signal(), streamContentInactivityTimeoutMs: configured,
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const extended = Math.max(configured, 600_000);
+    assert.deepEqual(timers.entries.map(entry => entry.delayMs), [180_000, configured, extended, extended]);
+    timers.entries.at(-1)!.callback();
+    await assert.rejects(pending, new RegExp(`further model output activity after ${extended}ms`));
+    assert.equal(socket.terminated, 1);
+    assert.ok(timers.entries.every(entry => entry.cleared));
+  }
 });

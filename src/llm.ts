@@ -3040,6 +3040,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     else abortController.signal.addEventListener('abort', abortAttemptFromOuter, { once: true });
                     const watchdog = createStreamingAttemptWatchdog({
                         hardTimeoutMs: options.timeoutMs,
+                        streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
                         onTimeout: error => {
                             streamingTimeoutError = error;
                             attemptAbortController.abort();
@@ -3049,7 +3050,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
                     handleSafetyBuffering = metadata => {
                         const boundedMetadata = boundSafetyBufferingMetadata(metadata);
-                        watchdog.enterSafetyBuffering(boundedMetadata);
+                        const inactivityTimeoutMs = watchdog.enterSafetyBuffering(boundedMetadata);
                         logger.warn({
                             sessionId: options.sessionId,
                             purpose: options.purpose || 'low-level',
@@ -3057,7 +3058,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             iteration,
                             attempt,
                             metadata: boundedMetadata,
-                        }, 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+                        }, `OpenAI response entered safety buffering; extending the output inactivity timeout to ${inactivityTimeoutMs}ms.`);
                     };
                     cleanupStreamingAttempt = () => {
                         watchdog.finish();
@@ -3084,6 +3085,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         placement: options.currentSessionEffects?.placement || 'local',
                         signal: abortController.signal,
                         hardTimeoutMs: options.timeoutMs,
+                        streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
                         diagnostics: {
                             sessionId: options.sessionId,
                             purpose: options.purpose || 'low-level',
