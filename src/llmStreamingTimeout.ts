@@ -21,7 +21,7 @@ let timerHooks: TimerHooks = defaultTimerHooks;
 
 export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
-  enterSafetyBuffering(metadata: Record<string, unknown>): void;
+  enterSafetyBuffering(metadata: Record<string, unknown>): number;
   finish(): void;
 };
 
@@ -60,13 +60,14 @@ function timeoutError(kind: StreamingTimeoutKind, timeoutMs: number, safetyBuffe
 
 export function createStreamingAttemptWatchdog(options: {
   hardTimeoutMs?: number;
+  streamContentInactivityTimeoutMs?: number;
   onTimeout(error: Error, kind: StreamingTimeoutKind): void;
 }): StreamingAttemptWatchdog {
   let finished = false;
   let phaseTimer: TimerHandle | undefined;
   let hardTimer: TimerHandle | undefined;
   let phaseGeneration = 0;
-  let inactivityTimeoutMs = DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
+  let inactivityTimeoutMs = options.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
   let safetyBufferingMetadata: Record<string, unknown> | undefined;
 
   const clearPhase = () => {
@@ -108,10 +109,11 @@ export function createStreamingAttemptWatchdog(options: {
       schedulePhase('content-inactivity', inactivityTimeoutMs);
     },
     enterSafetyBuffering(metadata) {
-      if (finished) return;
+      if (finished) return inactivityTimeoutMs;
       safetyBufferingMetadata = boundSafetyBufferingMetadata(metadata);
-      inactivityTimeoutMs = SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS;
+      inactivityTimeoutMs = Math.max(inactivityTimeoutMs, SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS);
       schedulePhase('content-inactivity', inactivityTimeoutMs);
+      return inactivityTimeoutMs;
     },
     finish() {
       if (finished) return;

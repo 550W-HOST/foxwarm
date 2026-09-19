@@ -484,3 +484,73 @@ test('compact trailing indicators pack to the right without absent-status slots'
     assert.ok(widths[3] < widths[1] && widths[3] < widths[2])
   } finally { await page.close() }
 })
+
+test('remote node indicator shows only for non-master sessions in both densities', async () => {
+  const page = await open()
+  const inject = () => page.evaluate(() => {
+    window.fixtureSetSessions([
+      { id: 'demo/main', displayName: 'Master session', parentSessionId: null, runtimeState: { state: 'requesting-model' }, messageCount: 1 },
+      { id: 'demo/remote', displayName: 'Remote default node session', parentSessionId: null, currentNode: 'visualdust-a6000-ws1', runtimeState: { state: 'idle' }, messageCount: 1 },
+      { id: 'demo/tool', displayName: 'Tool running on another node', parentSessionId: null, currentNode: 'master', runtimeState: { state: 'running-tool', tool: { name: 'exec', executionNode: 'gpu-box-2' } }, messageCount: 1 },
+      { id: 'demo/long', displayName: 'A deliberately very long descriptive session title that has to keep truncating with the node icon present', parentSessionId: null, currentNode: 'visualdust-a6000-ws1', pinned: true, runtimeState: { state: 'requesting-model' }, messageCount: 1 },
+    ])
+    window.fixtureSetDescendantBusy([['demo/long', 2]])
+  })
+  const indicators = rowId => page.$$eval(`${row(rowId)} [data-session-node], ${row(rowId)} .session-pin, ${row(rowId)} [data-descendant-activity], ${row(rowId)} [data-session-status]`,
+    els => els.map(e => e.matches('.session-pin') ? 'pin' : e.hasAttribute('data-session-node') ? `node:${e.dataset.sessionNode}` : e.hasAttribute('data-descendant-activity') ? 'branch' : 'own'))
+  try {
+    assert.equal(await page.$('[data-session-node]'), null)
+    await page.click(toggle)
+    assert.equal(await page.$('[data-session-node]'), null)
+    await page.goto(url + '?descendants')
+    await page.waitForSelector('[data-session-list-density="compact"]')
+    await inject()
+    await page.waitForSelector('[data-session-node]')
+    assert.equal(await page.$(row('main') + ' [data-session-node]'), null)
+    assert.ok(await page.$(row('main') + ' [data-session-status]'))
+    assert.equal(await page.$eval(`${row('remote')} [data-session-node]`, e => e.dataset.sessionNode), 'visualdust-a6000-ws1')
+    assert.equal(await page.$eval(`${row('remote')} [data-session-node]`, e => e.getAttribute('aria-label')), 'Node: visualdust-a6000-ws1')
+    assert.equal(await page.$eval(`${row('remote')} [data-session-node]`, e => e.title), 'Node: visualdust-a6000-ws1')
+    assert.equal(await page.$eval(`${row('remote')} [data-session-node] svg`, e => e.getAttribute('stroke-width')), '2')
+    assert.equal(await page.$eval(`${row('remote')} [data-session-node] svg`, e => e.getAttribute('class')?.includes('h-3.5')), true)
+    assert.equal(await page.$eval(`${row('remote')} [data-session-node]`, e => getComputedStyle(e).animationName), 'none')
+    assert.equal(await page.$(row('remote') + ' [data-session-status]'), null)
+    assert.equal(await page.$eval(`${row('tool')} [data-session-node]`, e => e.dataset.sessionNode), 'gpu-box-2')
+    assert.equal(await page.$eval(`${row('tool')} [data-session-status]`, e => e.getAttribute('aria-label')), 'Status: tool: exec')
+    assert.deepEqual(await indicators('long'), ['pin', 'node:visualdust-a6000-ws1', 'branch', 'own'])
+    const geometry = await page.$eval(row('long'), row => {
+      const content = row.querySelector('.session-pin').parentElement
+      const items = [...content.children].slice([...content.children].indexOf(row.querySelector('.session-pin')))
+      const expectedRight = content.getBoundingClientRect().right - parseFloat(getComputedStyle(content).paddingRight)
+      return { right: items.at(-1).getBoundingClientRect().right, expectedRight, overflow: row.scrollWidth > row.clientWidth,
+        gaps: items.slice(1).map((e, i) => e.getBoundingClientRect().left - items[i].getBoundingClientRect().right) }
+    })
+    assert.ok(Math.abs(geometry.right - geometry.expectedRight) < 0.5)
+    assert.ok(geometry.gaps.every(gap => gap === 6))
+    assert.equal(geometry.overflow, false)
+    await page.click(toggle)
+    await page.waitForSelector('[data-session-list-density="normal"]')
+    assert.equal(await page.$('.session-compact-pin'), null)
+    assert.equal(await page.$(row('main') + ' [data-session-node]'), null)
+    const metadata = await page.$eval(`${row('tool')} [data-session-node]`, node => {
+      const row = node.closest('[data-session-id]')
+      const title = row.querySelector('[data-session-title]')
+      const line = node.parentElement
+      return { inTitleRow: title.contains(node) || title.parentElement.contains(node), sameLine: line === title.parentElement.parentElement.children[2],
+        nodes: row.querySelectorAll('[data-session-node]').length,
+        separator: node.nextElementSibling?.textContent, stateText: node.nextElementSibling?.nextElementSibling?.textContent,
+        iconSize: node.querySelector('svg').getBoundingClientRect().width,
+        followsSeparator: node.nextElementSibling?.textContent, overflow: row.scrollWidth > row.clientWidth,
+        ellipsis: getComputedStyle(title).textOverflow }
+    })
+    assert.equal(metadata.inTitleRow, false)
+    assert.equal(metadata.sameLine, true)
+    assert.equal(metadata.separator, '•')
+    assert.equal(metadata.stateText, 'tool: exec')
+    assert.equal(metadata.nodes, 1)
+    assert.equal(metadata.iconSize, 14)
+    assert.equal(metadata.followsSeparator, '•')
+    assert.equal(metadata.overflow, false)
+    assert.equal(metadata.ellipsis, 'ellipsis')
+  } finally { await page.close() }
+})

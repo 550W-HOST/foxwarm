@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ListCollapse, GitBranch } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ListCollapse, GitBranch, Server } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
+import { getResolvedSessionNodeId } from '../sessionNode'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
 export interface Session {
@@ -1144,6 +1145,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
     const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' : !!session.busy
+    const resolvedNodeId = getResolvedSessionNodeId(session)
     const rowParentSessionId = visibleParentMap.get(session.id) || null
     const targetParentWouldCreateCycle = rowParentSessionId
       ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
@@ -1157,6 +1159,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || draggingSessionId === session.id
       || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
+
+    const nodeBadge = resolvedNodeId !== 'master' && (
+      <span
+        role="img"
+        aria-label={`Node: ${resolvedNodeId}`}
+        title={`Node: ${resolvedNodeId}`}
+        data-session-node={resolvedNodeId}
+        className="inline-flex shrink-0 items-center justify-center text-fw-accent"
+      >
+        <Server className={compact ? 'h-3.5 w-3.5' : 'h-3.5 w-3.5'} strokeWidth={2} aria-hidden="true" />
+      </span>
+    )
 
     const pinButton = (
       <button
@@ -1249,6 +1263,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
                   )}
+                  {nodeBadge}
                   {descendantBusyCount > 0 && (
                     <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
                       <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
@@ -1288,6 +1303,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     </div>
                   )}
                   <div className="text-xs text-fw-text-muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    {nodeBadge}
+                    {resolvedNodeId !== 'master' && <span>•</span>}
                     {showRuntimeBadge && (
                       <>
                         <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>

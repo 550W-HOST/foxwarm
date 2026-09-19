@@ -44,7 +44,7 @@ test('oversized safety buffering metadata is reduced to bounded useful fields', 
   assert.ok(JSON.stringify(bounded).length <= 2048);
 });
 
-test('stream watchdog uses three minutes to first activity and one minute between increments', () => {
+test('stream watchdog uses three minutes to first activity and three minutes between increments', () => {
   assert.equal(DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS, 3 * 60 * 1000);
   assert.equal(DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS, 60 * 1000);
   const timers = new FakeTimers();
@@ -157,4 +157,24 @@ test('progress can continue beyond five minutes without an implicit overall stre
   }
   assert.equal(timers.entries.some(entry => entry.delayMs === 5 * 60 * 1000), false);
   watchdog.finish();
+});
+
+test('custom inactivity preserves first-content and hard limits; safety buffering never shortens it', () => {
+  for (const timeout of [300_000, 900_000]) {
+    const timers = new FakeTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    const watchdog = createStreamingAttemptWatchdog({
+      streamContentInactivityTimeoutMs: timeout, hardTimeoutMs: 7_000,
+      onTimeout: () => assert.fail('finished watchdog must not fire'),
+    });
+    assert.deepEqual(timers.entries.map(entry => entry.delayMs), [180_000, 7_000]);
+    watchdog.markMeaningfulProgress();
+    assert.equal(timers.entries.at(-1)!.delayMs, timeout);
+    assert.equal(watchdog.enterSafetyBuffering({ type: 'safety_buffering' }), Math.max(timeout, 600_000));
+    watchdog.markMeaningfulProgress();
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    watchdog.finish();
+    assert.ok(timers.entries.every(entry => entry.cleared));
+    for (const entry of timers.entries) entry.callback();
+  }
 });

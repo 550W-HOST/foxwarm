@@ -5,6 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
+import { DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS } from './llmStreamingTimeout';
 
 export type ChannelProgressConfig = false | {
   intervalMs: number;
@@ -948,6 +949,7 @@ function mergeOpenAIWebSearchConfig(
 
 export type ModelConfigOverride = {
   contextLimit?: number;
+  streamContentInactivityTimeoutMs?: number;
   effort?: ModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
   extraFields?: Record<string, any>;
@@ -965,6 +967,7 @@ export type ProviderConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  streamContentInactivityTimeoutMs?: number;
   effort?: ModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
@@ -1000,6 +1003,7 @@ export type ModelConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  streamContentInactivityTimeoutMs?: number;
   effort?: NormalizedModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
@@ -1222,6 +1226,14 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
         : `Provider \`${providerKey}\` historyReasoningField`,
     )
     : undefined;
+  for (const [value, label] of [
+    [resolvedProviderEntry.streamContentInactivityTimeoutMs, `Provider ${providerKey}`],
+    [modelOverride?.streamContentInactivityTimeoutMs, `Model ${providerKey}/${modelId}`],
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2_147_483_647)) {
+      throw new Error(`${label} streamContentInactivityTimeoutMs must be an integer between 1 and 2147483647 milliseconds.`);
+    }
+  }
   const providerEffort = normalizeModelEffortConfig(
     resolvedProviderEntry.effort,
     undefined,
@@ -1244,6 +1256,8 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     baseUrl: resolvedProviderEntry.baseUrl,
     apiKey: resolvedProviderEntry.apiKey,
     contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
+    streamContentInactivityTimeoutMs: modelOverride?.streamContentInactivityTimeoutMs
+      ?? resolvedProviderEntry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
     effort,
     ...(historyReasoningField ? { historyReasoningField } : {}),
     asyncCompact: resolvedProviderEntry.asyncCompact,
@@ -1336,6 +1350,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraFields',
     'extraHeaders',
     'contextLimit',
+    'streamContentInactivityTimeoutMs',
     'effort',
     'historyReasoningField',
     'asyncCompact',
@@ -1428,6 +1443,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           baseUrl: entry.baseUrl || null,
           requestCompression: entry.requestCompression || null,
           contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
+          streamContentInactivityTimeoutMs: entry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
           asyncCompact: entry.asyncCompact !== false,
           disallowEmptyResponse: entry.disallowEmptyResponse === true,
           effort: getConcreteModelEffortConfig(entry),
