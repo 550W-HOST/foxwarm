@@ -17,6 +17,7 @@ const requiredRoutes = [
   '/docs/model-setup/',
   '/docs/agents-sessions-memory/',
   '/docs/tools-skills-mcp/',
+  '/docs/mcp-inbound/',
   '/docs/nodes/',
   '/docs/channels/',
   '/docs/data-upgrades-backups/',

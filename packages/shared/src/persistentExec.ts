@@ -108,6 +108,8 @@ export interface StartPersistentExecOptions {
   cwd?: unknown;
   sessionCwd?: unknown;
   completionCapability?: string;
+  /** Optional caller fence after artifact setup but before trying to launch a process. */
+  onBeforeProcessLaunch?: () => void;
   onProcessStarted?: () => void;
 }
 
@@ -711,6 +713,7 @@ export class PersistentExecManager {
 
     let launched: { pid: number };
     try {
+      options.onBeforeProcessLaunch?.();
       launched = await processOperations.launch({
         command: launcher.command,
         args: launcher.args,

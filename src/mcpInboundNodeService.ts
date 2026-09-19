@@ -3,10 +3,12 @@ import type { ExternalNodeOwner } from '../packages/shared/dist/nodeProtocol';
 import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
 import type { ExternalExecutionContext } from './mcpInboundHttp';
 import { nodeProviderRegistry } from './nodes/providers';
+import { FIRST_PARTY_DOCKER_EXTERNAL_OWNER, type NodeDescriptor, type NodeProvider } from './nodes/providerRegistry';
+import type { DockerWorktreeNodeProvider } from './nodes/dockerWorktreeProvider';
 import { nodesManager } from './nodes/manager';
 import {
   completeExternalExec, finishExternalExecForeground, getExternalExec, listExternalExec,
-  markExternalExecUnknown, releaseExternalExecContext, reserveExternalExec,
+  markExternalExecUnknown, registerExternalExecBackground, releaseExternalExecContext, reserveExternalExec,
 } from './nodes/externalExecOwnership';
 import { plainJsonWithin } from './nodeExecutionService';
 import {
@@ -20,6 +22,11 @@ const EXTERNAL_NODE_TOOLS = new Set(['read', 'write', 'edit', 'apply_patch', 'ex
 const MAX_NODES = 100;
 const MAX_TOOLS_PER_NODE = 200;
 
+function firstPartyDocker(node: NodeDescriptor, provider: NodeProvider): provider is DockerWorktreeNodeProvider {
+  return node.kind === 'sandbox' && node.type === 'docker-worktree'
+    && provider[FIRST_PARTY_DOCKER_EXTERNAL_OWNER] === true;
+}
+
 export class ExternalNodeBeforeEffectError extends Error {}
 
 function owner(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext): ExternalNodeOwner {
@@ -30,6 +37,12 @@ function owner(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutio
 
 function assertContextActive(context: ExternalExecutionContext): void {
   if (context.disposed) throw new ExternalNodeBeforeEffectError('External execution context is unavailable.');
+}
+
+function completedExternalResult(owner: ExternalNodeOwner, record: NonNullable<ReturnType<typeof getExternalExec>>) {
+  const current = getExternalExec(owner, record.execId);
+  if (current !== record || current.state !== 'completed') return undefined;
+  return { execId: record.execId, nodeId: record.nodeId, state: 'completed', output: current.output, cwd: current.cwd };
 }
 
 function pathFacts(nodeId: string, name: string, args: Record<string, unknown>): ToolAuthorizationPathRecord[] {
@@ -52,7 +65,15 @@ export async function listExternalNodeTools(principal: VerifiedMcpInboundPrincip
   const result: Array<{ nodeId: string; name: string; description: string; inputSchema?: unknown }> = [];
   for (const node of (await nodeProviderRegistry.listNodes()).slice(0, MAX_NODES)) {
     assertContextActive(context);
-    if (node.kind !== 'remote' || node.availability !== 'ready' || !nodesManager.supportsExternalOwner(node.id)) continue;
+    if (node.availability !== 'ready') continue;
+    if (node.kind === 'remote') {
+      if (!nodesManager.supportsExternalOwner(node.id)) continue;
+    } else if (node.kind === 'sandbox' && node.type === 'docker-worktree') {
+      const selected = await nodeProviderRegistry.resolveNode(node.id);
+      assertContextActive(context);
+      if (!selected || !firstPartyDocker(selected.descriptor, selected.provider)
+        || selected.descriptor.availability !== 'ready') continue;
+    } else continue;
     for (const item of node.tools.slice(0, MAX_TOOLS_PER_NODE)) {
       const descriptors = Object.getOwnPropertyDescriptors(item);
       const name = descriptors.name && 'value' in descriptors.name ? descriptors.name.value : undefined;
@@ -86,8 +107,10 @@ export async function callExternalNodeTool(
   assertContextActive(context);
   const selected = await nodeProviderRegistry.resolveNode(nodeId);
   assertContextActive(context);
-  if (!selected || selected.descriptor.availability !== 'ready' || selected.descriptor.kind !== 'remote'
-    || !nodesManager.supportsExternalOwner(nodeId) || !selected.descriptor.tools.some(item => item.name === name)) {
+  if (!selected || selected.descriptor.availability !== 'ready'
+    || !(firstPartyDocker(selected.descriptor, selected.provider)
+      || (selected.descriptor.kind === 'remote' && nodesManager.supportsExternalOwner(nodeId)))
+    || !selected.descriptor.tools.some(item => item.name === name)) {
     throw new ExternalNodeBeforeEffectError('Node or Node capability is not available to external callers.');
   }
   const contextSnapshot = nodeId === context.currentNode && context.cwd ? { currentNode: nodeId, cwd: context.cwd } : {};
@@ -100,11 +123,18 @@ export async function callExternalNodeTool(
   try { record = reserveExternalExec(effectOwner, nodeId, args, cwd => {
     if (startedOnCurrentNode && context.currentNode === nodeId && context.selectionGeneration === selectedGeneration) context.cwd = cwd;
   }); } catch { throw new ExternalNodeBeforeEffectError('External command could not be reserved; no call was sent.'); }
-  (context.externalExecNodes ??= new Set()).add(nodeId);
+  if (firstPartyDocker(selected.descriptor, selected.provider)) record.dockerProvider = true;
+  else (context.externalExecNodes ??= new Set()).add(nodeId);
   try {
     const result = await nodeProviderRegistry.invokeTool({ owner: effectOwner, nodeId, toolName: name, args,
       context: { ...contextSnapshot, externalExec: { execId: record.execId, completionCapability: record.capability } },
-    }, { assertExternalOwnerActive: assertActive });
+    }, { assertExternalOwnerActive: assertActive,
+      ...(record.dockerProvider ? { bindExternalGeneration: (generation: string) => {
+        assertActive();
+        if (getExternalExec(effectOwner, record.execId) !== record) throw new ExternalNodeBeforeEffectError('External execution context is unavailable.');
+        record.dockerGeneration = generation;
+      } } : {}),
+    });
     const response = result && typeof result === 'object' ? result as Record<string, unknown> : {};
     if (response.execId !== record.execId || typeof response.background !== 'boolean' || typeof response.output !== 'string') {
       markExternalExecUnknown(record);
@@ -116,6 +146,9 @@ export async function callExternalNodeTool(
         markExternalExecUnknown(record);
         throw new Error('External Node exec output could not be retained; do not retry automatically.');
       }
+    } else if (record.dockerProvider && !registerExternalExecBackground(nodeId, effectOwner, record.execId, record.capability)) {
+      markExternalExecUnknown(record);
+      throw new Error('External Docker exec result could not be retained; do not retry automatically.');
     }
     return response;
   } catch (error: any) {
@@ -145,9 +178,18 @@ export async function externalExecResult(
   if (execId === undefined) return { executions: allowed.map(record => ({ execId: record.execId, nodeId: record.nodeId, state: record.state })) };
   if (allowed.length !== 1) throw new Error('Execution result is not permitted.');
   const record = allowed[0];
-  if (record.state === 'completed') return { execId, nodeId: record.nodeId, state: 'completed', output: record.output, cwd: record.cwd };
+  const completed = completedExternalResult(effectOwner, record);
+  if (completed) return completed;
   try {
-    const snapshot = await nodesManager.queryExternalExec(record.nodeId, effectOwner, record.execId);
+    let snapshot: unknown;
+    if (record.dockerProvider) {
+      if (!record.dockerGeneration) throw new Error('Docker execution has not been admitted.');
+      const selected = await nodeProviderRegistry.resolveNode(record.nodeId);
+      assertContextActive(context);
+      if (!selected || selected.descriptor.availability !== 'ready'
+        || !firstPartyDocker(selected.descriptor, selected.provider)) throw new Error('Docker Node is unavailable.');
+      snapshot = await selected.provider.queryExternalExec(effectOwner, record.execId, record.dockerGeneration);
+    } else snapshot = await nodesManager.queryExternalExec(record.nodeId, effectOwner, record.execId);
     if (getExternalExec(effectOwner, record.execId) !== record) {
       return { execId, nodeId: record.nodeId, state: 'unavailable', output: null };
     }
@@ -159,7 +201,11 @@ export async function externalExecResult(
       typeof answer.cwd === 'string' ? answer.cwd : undefined);
     return { execId, nodeId: record.nodeId, state: answer.state, output: answer.output,
       ...(typeof answer.cwd === 'string' && answer.cwd.length <= 4096 ? { cwd: answer.cwd } : {}) };
-  } catch { return { execId, nodeId: record.nodeId, state: 'unavailable', output: null }; }
+  } catch {
+    const completedSinceQuery = completedExternalResult(effectOwner, record);
+    if (completedSinceQuery) return completedSinceQuery;
+    return { execId, nodeId: record.nodeId, state: 'unavailable', output: null };
+  }
 }
 
 export function releaseExternalNodeContext(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext): void {
@@ -193,7 +239,8 @@ export async function externalNodeAction(
     const selected = await nodeProviderRegistry.resolveNode(context.currentNode);
     assertContextActive(context);
     return { currentNode: context.currentNode, cwd: context.cwd,
-      available: !!selected && selected.descriptor.availability === 'ready' && nodesManager.supportsExternalOwner(context.currentNode) };
+      available: !!selected && selected.descriptor.availability === 'ready'
+        && (firstPartyDocker(selected.descriptor, selected.provider) || nodesManager.supportsExternalOwner(context.currentNode)) };
   }
   if (action === 'list') {
     const tools = await listExternalNodeTools(principal, context);
@@ -202,15 +249,21 @@ export async function externalNodeAction(
   }
   const selected = await nodeProviderRegistry.resolveNode(selectedNodeId!);
   assertContextActive(context);
-  if (!selected || selected.descriptor.availability !== 'ready' || selected.descriptor.kind !== 'remote'
-    || !nodesManager.supportsExternalOwner(selectedNodeId!) || !selected.descriptor.tools.some(tool =>
+  if (!selected || selected.descriptor.availability !== 'ready'
+    || !(firstPartyDocker(selected.descriptor, selected.provider)
+      || (selected.descriptor.kind === 'remote' && nodesManager.supportsExternalOwner(selectedNodeId!)))
+    || !selected.descriptor.tools.some(tool =>
       EXTERNAL_NODE_TOOLS.has(tool.name) && isToolAuthorizationPotentiallyVisibleSync(buildExternalToolAuthorizationRequest({
         principal, sessionId: context.id, tool: { source: 'node', name: tool.name }, targetNode: selectedNodeId,
       })))) throw new Error('Node is not available to this external identity.');
-  const result = await nodesManager.executeExternalTool(selectedNodeId!, 'get_default_cwd', {}, effectOwner,
-    undefined, undefined, () => assertContextActive(context));
+  let raw: unknown;
+  if (firstPartyDocker(selected.descriptor, selected.provider)) raw = selected.descriptor.defaultCwd;
+  else {
+    const result = await nodesManager.executeExternalTool(selectedNodeId!, 'get_default_cwd', {}, effectOwner,
+      undefined, undefined, () => assertContextActive(context));
+    raw = result && typeof result === 'object' && 'output' in result ? (result as { output?: unknown }).output : result;
+  }
   assertContextActive(context);
-  const raw = result && typeof result === 'object' && 'output' in result ? (result as { output?: unknown }).output : result;
   if (typeof raw !== 'string' || !raw || raw.length > 4096) throw new Error('Node did not return a valid default working directory.');
   if (context.currentNode !== selectedNodeId) {
     context.currentNode = selectedNodeId!;

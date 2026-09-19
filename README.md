@@ -266,9 +266,11 @@ advertises `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`,
 `foxwarm_exec_result`, and `foxwarm_session` for authorized outbound MCP tools,
 compatible first-party authenticated CLI Nodes, and bounded Session list/read/send.
 External Node support covers read, write, edit, apply_patch, and exec; the
-colocated master, Docker and executable Nodes, browser tabs, and other direct
-Session controls are not available through this inbound endpoint. A Session
-send is ordinary queued input and confirms admission, not a recipient reply.
+first-party resident Docker-worktree provider supports those same five tools
+for an already-created, ready Node. The colocated master, executable providers,
+browser tabs, Node lifecycle mutations, and other direct Session controls are
+not available through this inbound endpoint. A Session send is ordinary queued
+input and confirms admission, not a recipient reply.
 Headless Node pairing uses the existing `/node_ws` handshake. An administrator
 reads the existing pairing token from the master's local token file and privately
 provides it to the new Node; inbound MCP does not issue or return that token.
@@ -299,6 +301,8 @@ behavior is unchanged. The inbound Bearer token is not the instance/WebUI token:
 every MCP POST, GET and DELETE must present its configured identity token.
 MCP connection state is in memory, expires after inactivity, and is lost on
 restart; there is no cross-connection background-result recovery yet.
+See [Connecting an external MCP client](website/src/content/docs/docs/mcp-inbound.md)
+for an SDK example, headless setup, concrete authorization rules, and limits.
 
 `llm.compactKeepPercent` controls the fraction of recent rendered history kept
 by default during compaction. `llm.compactThresholdPercent` controls the

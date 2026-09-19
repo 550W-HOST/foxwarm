@@ -38,6 +38,8 @@ Load the bundled `mcp-management` Skill before changing MCP configuration. It wa
 
 After configuring a server, list its tools before calling one. Check what the server can reach, because its own configuration may give it access to files, services, or accounts outside Foxwarm.
 
+To let an external client use Foxwarm's capabilities, see [Connect an external MCP client](/docs/mcp-inbound/). Inbound MCP is configured and authorized separately from the outbound servers above.
+
 :::caution
 Keep real tokens out of documentation, chat examples, committed Agent memory, and tool descriptions. Put credentials in your private runtime data or the external service's supported secret store.
 :::

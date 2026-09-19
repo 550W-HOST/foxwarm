@@ -5,7 +5,7 @@ Secondary files: `src/mcpInboundHttp.ts`, `src/mcpInboundNodeService.ts`, `src/m
 
 ## Purpose
 
-Production catalog on the Main-owned authenticated Streamable HTTP endpoint. It registers the approved `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, `foxwarm_exec_result` and `foxwarm_session` wrappers over enabled outbound MCP servers, compatible first-party authenticated CLI Nodes and bounded Main-owned Session ingress. Wrappers are not concrete permission identities; it never invents an Agent or internal Session.
+Production catalog on the Main-owned authenticated Streamable HTTP endpoint. It registers the approved `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, `foxwarm_exec_result` and `foxwarm_session` wrappers over enabled outbound MCP servers, compatible first-party authenticated CLI Nodes, already-ready resident Docker-worktree Nodes, and bounded Main-owned Session ingress. Wrappers are not concrete permission identities; it never invents an Agent or internal Session.
 
 ## Exports and behavior
 

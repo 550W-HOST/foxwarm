@@ -11,7 +11,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - `PersistentExecManager` — Main class orchestrating process spawning, tracking, reconciliation, and result formatting
 - `RunningExecEntry` — Interface describing a tracked running process, including its retained exact generated script path and either a Session/Agent or disjoint external owner
 - `ExecStatus` — Interface for process exit status
-- `StartPersistentExecOptions` — Options for starting a new execution
+- `StartPersistentExecOptions` — Options for starting a new execution, including an optional synchronous final prelaunch fence after artifact setup; a completed launch or uncertain launcher failure is never classified as definitely pre-effect
 - `ExecCompletionDispatcher` — Callback type for delivering completion notifications
 - `BACKGROUND_COMPLETION_EVENT_RETENTION_MS` — strict 24-hour lifetime for a background tracking record
 - `PersistentExecManagerOptions` — Configuration including distinct external cwd/artifact callbacks, optional target-truthful process-tree, entry-liveness, entry-live-cwd, post-persistence registry-idle and unknown-exit tracking-expiry callbacks

@@ -33,6 +33,7 @@ export default defineConfig({
         { label: 'Use Foxwarm', items: [
           { label: 'Agents, sessions, and memory', slug: 'docs/agents-sessions-memory' },
           { label: 'Tools, skills, and MCP', slug: 'docs/tools-skills-mcp' },
+          { label: 'Connect an external MCP client', slug: 'docs/mcp-inbound' },
           { label: 'Optional Nodes', slug: 'docs/nodes' },
           { label: 'Channels', slug: 'docs/channels' }
         ] },
