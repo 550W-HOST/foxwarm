@@ -72,14 +72,13 @@ export interface ToolAuthorizationPathRecord {
 }
 export type ToolAuthorizationRequest = {
   tool: ToolAuthorizationToolRef;
-  targetNode: string;
   args: Record<string, any>;
   paths: ToolAuthorizationPathRecord[];
   sourceParentSessionId?: string;
   sessionTargets?: Record<string, ToolAuthorizationSessionTarget | undefined>;
 } & (
-  | { principal: 'internal'; agent: string; session: string; externalId?: never }
-  | { principal: 'external'; externalId: string; session?: string; agent?: never }
+  | { principal: 'internal'; agent: string; session: string; targetNode: string; externalId?: never }
+  | { principal: 'external'; externalId: string; session?: string; agent?: never; targetNode?: string }
 );
 export interface ToolAuthorizationSessionTarget {
   id: string;
@@ -589,7 +588,7 @@ export function buildExternalToolAuthorizationRequest(options: {
   return {
     principal: 'external', externalId,
     ...(options.sessionId ? { session: options.sessionId } : {}),
-    tool: options.tool, targetNode: options.targetNode || 'master',
+    tool: options.tool, ...(options.targetNode ? { targetNode: options.targetNode } : {}),
     args: options.args || {}, paths: [],
   };
 }

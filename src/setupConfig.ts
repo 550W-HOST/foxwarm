@@ -17,6 +17,7 @@ import {
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
+  safeAppConfigYamlError,
 } from './config';
 
 export type ProviderSetupDraft = {
@@ -64,7 +65,7 @@ function parseYamlObject(rawYaml: string, label: string): Record<string, any> {
     parsed = yaml.load(rawYaml);
   } catch (error) {
     if (label === 'app config' && error instanceof yaml.YAMLException) {
-      throw new Error('Invalid app config YAML.');
+      throw safeAppConfigYamlError(error);
     }
     throw error;
   }

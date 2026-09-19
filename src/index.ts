@@ -22,6 +22,7 @@ import * as mainManagementTools from './mainManagementTools';
 import * as nodeExecution from './nodeExecution';
 import { nodeProviderRegistry } from './nodes/providers';
 import * as mcpExternal from './mcpExternalService';
+import { McpInboundHttpService } from './mcpInboundHttp';
 import * as vector from './vector';
 import { shutdownToolScriptRuntime } from './toolscript';
 import { registerChannel } from './channel';
@@ -43,6 +44,7 @@ import {
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
     MAIN_AGENT_MEMORY_DIR,
+    MCP_INBOUND_CONFIG,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
     SESSION_WORKERS_CONFIG,
@@ -64,6 +66,8 @@ import { setFoxwarmProcessTitle } from './processTitle';
 import { isQueueItem } from './types';
 
 setFoxwarmProcessTitle('main');
+
+let mcpInboundHttp: McpInboundHttpService | undefined;
 
 // Global error handlers
 process.on('unhandledRejection', (reason: any, promise) => {
@@ -406,8 +410,8 @@ async function start() {
 
     await initializeTimers();
 
-    // Start unified HTTP server (WebUI + Trigger + Nodes)
-    if (ENABLE_WEBUI || ENABLE_TRIGGER) {
+    // The Node HTTP/WebSocket surface also serves headless inbound MCP deployments.
+    if (ENABLE_WEBUI || ENABLE_TRIGGER || MCP_INBOUND_CONFIG.enabled) {
         const token = await ensureToken();
         const nodeToken = await ensureNodeToken();
         await initializeNodeRegistry();
@@ -419,48 +423,54 @@ async function start() {
         // Add nodes WebSocket handler to HTTP server
         registerNodeWebSocket(httpServerInstance, nodeToken);
         registerNodeHttpRoutes(httpServerInstance);
+        if (MCP_INBOUND_CONFIG.enabled) {
+            mcpInboundHttp = new McpInboundHttpService(MCP_INBOUND_CONFIG);
+            mcpInboundHttp.register(httpServerInstance);
+        }
         
         // Start HTTP server
         await httpServerInstance.start();
+
+        if (ENABLE_WEBUI || ENABLE_TRIGGER) {
+            webuiChannel = new WebUIChannel({
+                router,
+                token,
+                enableWebUI: ENABLE_WEBUI,
+                enableTrigger: ENABLE_TRIGGER,
+                loadModelStreamSnapshot: async sessionId => {
+                    const ownership = sessionWorkerStore?.findOwnership(sessionId);
+                    if (ownership && ownership.state !== 'inactive') {
+                        return sessionWorkerSupervisor?.loadModelStreamDraft(sessionId) || null;
+                    }
+                    return getModelStreamDraft(sessionId);
+                },
+            });
         
-        webuiChannel = new WebUIChannel({
-            router,
-            token,
-            enableWebUI: ENABLE_WEBUI,
-            enableTrigger: ENABLE_TRIGGER,
-            loadModelStreamSnapshot: async sessionId => {
-                const ownership = sessionWorkerStore?.findOwnership(sessionId);
-                if (ownership && ownership.state !== 'inactive') {
-                    return sessionWorkerSupervisor?.loadModelStreamDraft(sessionId) || null;
+            await webuiChannel.start();
+            registerChannel('webui', webuiChannel);
+            // Session-worker transient presentation subscription bridge: combined
+            // WebUI subscriber 0↔1 transitions gate worker-side forwarding.
+            webuiChannel.setPresentationSubscriptionListener((sessionId, active) => {
+                return sessionWorkerSupervisor?.setPresentationSubscription(sessionId, active);
+            });
+        
+            // Bridge transport-neutral SessionRuntime events into WebUI SSE.
+            sessionRuntime.subscribe((eventName, payload: any) => {
+                if (eventName === 'history') {
+                    webuiChannel!.broadcastMessage(payload.sessionId, payload.message);
+                } else if (eventName === 'queueHistoryAppend') {
+                    webuiChannel!.broadcastQueueHistoryAppend(payload.sessionId, payload.append);
+                } else if (eventName === 'stream') {
+                    webuiChannel!.broadcastSessionEvent(payload.sessionId, payload.event);
+                } else if (eventName === 'listChanged') {
+                    webuiChannel!.broadcastSessionListUpdate();
+                } else if (eventName === 'stateChanged') {
+                    webuiChannel!.broadcastSessionStateUpdate(payload.sessionId, payload.session);
                 }
-                return getModelStreamDraft(sessionId);
-            },
-        });
-        
-        await webuiChannel.start();
-        registerChannel('webui', webuiChannel);
-        // Session-worker transient presentation subscription bridge: combined
-        // WebUI subscriber 0↔1 transitions gate worker-side forwarding.
-        webuiChannel.setPresentationSubscriptionListener((sessionId, active) => {
-            return sessionWorkerSupervisor?.setPresentationSubscription(sessionId, active);
-        });
-        
-        // Bridge transport-neutral SessionRuntime events into WebUI SSE.
-        sessionRuntime.subscribe((eventName, payload: any) => {
-            if (eventName === 'history') {
-                webuiChannel!.broadcastMessage(payload.sessionId, payload.message);
-            } else if (eventName === 'queueHistoryAppend') {
-                webuiChannel!.broadcastQueueHistoryAppend(payload.sessionId, payload.append);
-            } else if (eventName === 'stream') {
-                webuiChannel!.broadcastSessionEvent(payload.sessionId, payload.event);
-            } else if (eventName === 'listChanged') {
-                webuiChannel!.broadcastSessionListUpdate();
-            } else if (eventName === 'stateChanged') {
-                webuiChannel!.broadcastSessionStateUpdate(payload.sessionId, payload.session);
-            }
-        });
+            });
+        }
     } else {
-        logger.info('HTTP server disabled (both WebUI and Trigger are disabled)');
+        logger.info('HTTP server disabled (WebUI, Trigger, and MCP inbound are disabled)');
     }
 
     const defaultTelegramEntry = getDefaultChannelConfigByType<TelegramConfig>('telegram');
@@ -624,6 +634,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         if (shutdownStarted) return;
         shutdownStarted = true;
         void Promise.resolve()
+            .then(() => mcpInboundHttp?.stop())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP inbound cleanly'))
             .then(() => shutdownToolScriptRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())

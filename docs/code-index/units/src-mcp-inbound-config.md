@@ -5,7 +5,7 @@ Secondary files: `src/config.ts`, `src/setupConfig.ts`, `src/toolAuthorization.t
 
 ## Purpose
 
-Validates optional inbound MCP identities from the application YAML and creates verified external principals from explicit HTTP Bearer Authorization headers. This unit is configuration and authorization foundation only: no MCP server route, external execution Session, Node operation, or Session message interface is registered yet. Outbound MCP server storage and credentials are independent.
+Validates optional inbound MCP identities from the application YAML and creates verified external principals from explicit HTTP Bearer Authorization headers. The HTTP ingress is owned by [src-mcp-inbound-http](./src-mcp-inbound-http.md); no Node operation or Session message interface is connected yet. Outbound MCP server storage and credentials are independent.
 
 ## Key exports
 
@@ -16,7 +16,7 @@ Validates optional inbound MCP identities from the application YAML and creates 
 
 ## Integration
 
-`config.ts` adds `AppConfig.mcpInbound` and validates it at application startup through `MCP_INBOUND_CONFIG`. `setupConfig.ts` applies the same validation before writing raw app YAML. Malformed YAML is reported without raw parser snippets in both app-config reads and Setup app-config validation; the existing administrator-only raw YAML editor otherwise retains its behavior. This unit does not accept an environment-token override. `toolAuthorization.ts` uses only a verified principal for external source facts.
+`config.ts` adds `AppConfig.mcpInbound` and validates it at application startup through `MCP_INBOUND_CONFIG`. `setupConfig.ts` applies the same validation before writing raw app YAML. Malformed YAML is reported with safe 1-based line/column locations but without raw parser snippets, reasons, keys or values; the existing administrator-only raw YAML editor otherwise retains its behavior. This unit does not accept an environment-token override. `toolAuthorization.ts` uses only a verified principal for external source facts.
 
 ## Tests
 
@@ -26,4 +26,4 @@ Focused tests check omitted/disabled and enabled config, invalid shapes even whe
 
 ### D-config-mcp-inbound-foundation
 
-[2026-09-19] Inbound MCP identity configuration is a distinct top-level YAML block, `mcpInbound: { enabled, identities: { <externalId>: { token } } }`. Omission defaults off; an enabled block requires at least one independent token. Validate supplied disabled blocks, reject duplicate effective tokens and malformed or unknown fields, and avoid echoing secret-bearing input. External IDs are derived exclusively from successful Bearer verification. The future endpoint has a fixed `/mcp` path; no configurable path, environment fallback, OAuth mode, or per-identity enable switch is part of this configuration. No network endpoint is supplied by this foundation.
+[2026-09-19] Inbound MCP identity configuration is a distinct top-level YAML block, `mcpInbound: { enabled, identities: { <externalId>: { token } } }`. Omission defaults off; an enabled block requires at least one independent token. Validate supplied disabled blocks, reject duplicate effective tokens and malformed or unknown fields, and avoid echoing secret-bearing input. External IDs are derived exclusively from successful Bearer verification. The enabled endpoint has a fixed `/mcp` path; no configurable path, environment fallback, OAuth mode, or per-identity enable switch is part of this configuration. Its transport and current empty catalog are specified by [D-mcp-inbound-http-transport](./src-mcp-inbound-http.md#d-mcp-inbound-http-transport).

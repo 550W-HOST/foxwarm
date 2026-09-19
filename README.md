@@ -261,9 +261,10 @@ vectorMaintenance:
 handoffConfirmation: false
 ```
 
-Inbound MCP configuration currently provides **validation and authorization
-foundation only**; enabling the block does not yet start an MCP listener. The
-future endpoint path is fixed at `/mcp`. It is separate from outbound MCP server
+Inbound MCP listens at the fixed `/mcp` path when explicitly enabled; this
+transport foundation currently advertises **no Foxwarm tools**. Node tool
+execution, outbound MCP forwarding, and Session interactions are not connected
+to inbound MCP yet. This setting is separate from outbound MCP server
 configuration. An omitted block defaults to disabled; malformed blocks fail
 validation even when `enabled: false`. Example shape (replace every placeholder
 with a distinct private token before enabling):
@@ -276,12 +277,15 @@ mcpInbound:
     operatorB: { token: REPLACE_WITH_UNIQUE_SECRET_B }
 ```
 
-Only an explicit `enabled: true` activates the configuration; there is no
+Only an explicit `enabled: true` activates the listener; there is no
 environment-variable token fallback. Never reuse the WebUI or Node pairing
 token. Ordered tool policy rules in `state/tool-authorization.yaml` may use
 `match.externalId`; externally authenticated calls without a matching allow
 rule are denied even if the policy's default is `allow`. Internal Session policy
-behavior is unchanged. This phase does not expose external tools or Sessions.
+behavior is unchanged. The inbound Bearer token is not the instance/WebUI token:
+every MCP POST, GET and DELETE must present its configured identity token.
+MCP connection state is in memory, expires after inactivity, and is lost on
+restart; there is no cross-connection background-result recovery yet.
 
 `llm.compactKeepPercent` controls the fraction of recent rendered history kept
 by default during compaction. `llm.compactThresholdPercent` controls the

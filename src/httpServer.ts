@@ -9,6 +9,10 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { logger } from './common';
 
+function isMcpPath(path: string): boolean {
+  return path.toLowerCase() === '/mcp' || path.toLowerCase() === '/mcp/';
+}
+
 export interface HttpServerOptions {
   port?: number;
   enableWebUI?: boolean;
@@ -60,17 +64,19 @@ export class HttpServer {
       level: 6,
       threshold: 1024,
       filter: (req, res) => {
-        if (req.path.includes('/stream')) {
+        if (req.path.includes('/stream') || isMcpPath(req.path)) {
           return false;
         }
         return compression.filter(req, res);
       }
     }));
     
-    this.app.use(express.json());
+    const parseJson = express.json();
+    this.app.use((req, res, next) => isMcpPath(req.path) ? next() : parseJson(req, res, next));
     
     // Cookie parser
     this.app.use((req, _res, next) => {
+      if (isMcpPath(req.path)) return next();
       req.cookies = {};
       const cookieHeader = req.headers.cookie;
       if (cookieHeader) {

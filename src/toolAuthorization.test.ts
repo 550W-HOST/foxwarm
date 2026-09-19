@@ -537,6 +537,12 @@ rules:
   assert.deepEqual(evaluateToolAuthorizationPolicy(policy, external('alpha', 'exec')).rule?.id, 'external-exec-allow');
   assert.equal(evaluateToolAuthorizationPolicy(policy, external('beta', 'exec')).action, 'deny');
   assert.equal(evaluateToolAuthorizationPolicy(policy, external('alpha', 'exec', 'node-b')).action, 'deny');
+  const noNode = buildExternalToolAuthorizationRequest({
+    principal: principalFor('alpha'), tool: { source: 'builtin', name: 'session' },
+  });
+  assert.equal(noNode.targetNode, undefined);
+  const masterOnly = parseToolAuthorizationPolicyBytes(`version: 1\nrules:\n- id: master-only\n  match: { targetNode: master }\n  action: allow\n`);
+  assert.equal(evaluateToolAuthorizationPolicy(masterOnly, noNode).action, 'deny');
   assert.throws(() => buildExternalToolAuthorizationRequest({
     principal: { externalId: 'alpha' } as any, tool: { source: 'node', name: 'exec' },
   }), /Verified MCP inbound identity is required/);

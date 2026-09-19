@@ -664,10 +664,18 @@ export function readAppConfigFile(): AppConfig {
   try {
     parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
   } catch (error) {
-    if (error instanceof yaml.YAMLException) throw new Error('Invalid app config YAML.');
+    if (error instanceof yaml.YAMLException) throw safeAppConfigYamlError(error);
     throw error;
   }
   return parsed || {};
+}
+
+export function safeAppConfigYamlError(error: yaml.YAMLException): Error {
+  const line = error.mark && Number.isSafeInteger(error.mark.line) && error.mark.line >= 0 ? error.mark.line + 1 : undefined;
+  const column = error.mark && Number.isSafeInteger(error.mark.column) && error.mark.column >= 0 ? error.mark.column + 1 : undefined;
+  return new Error(line && column
+    ? `Invalid app config YAML at line ${line}, column ${column}.`
+    : 'Invalid app config YAML.');
 }
 
 function loadAppConfig(): AppConfig {

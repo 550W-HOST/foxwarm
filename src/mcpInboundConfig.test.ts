@@ -53,6 +53,7 @@ test('YAML validation rejects duplicate keys and invalid secrets without leaking
       assert.throws(() => writeRawAppConfig(raw, dest), error => {
         assert.equal(String(error).includes(secretA), false);
         assert.equal(String(error).includes(secretB), false);
+        if (raw.includes('token: ' + secretB)) assert.match(String(error), /line \d+, column \d+/);
         return true;
       });
       assert.equal(await fs.readFile(dest, 'utf8'), original);
@@ -92,6 +93,7 @@ test('startup rejects a malformed disabled block and duplicate YAML keys without
     assert.notEqual(failure.status, 0);
     assert.equal((failure.stderr + failure.stdout).includes(secretA), false);
     assert.equal((failure.stderr + failure.stdout).includes(secretB), false);
+    assert.match(failure.stderr, /line \d+, column \d+/);
     await fs.outputFile(configPath, 'mcpInbound:\n  enabled: false\n  identities: {}\n');
     assert.equal(start().status, 0);
   } finally {
