@@ -1041,11 +1041,15 @@ export function normalizeOpenAIImageGenerationConfig(value: unknown): Normalized
     normalized.outputCompression = raw.outputCompression;
   }
 
-  if (normalized.outputFormat === 'jpeg' && normalized.background === 'transparent') {
+  if (hasTransparentJpegImageGenerationConflict(normalized)) {
     throw new Error('models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent`.');
   }
 
   return normalized;
+}
+
+function hasTransparentJpegImageGenerationConflict(config: NormalizedOpenAIImageGenerationConfig | undefined): boolean {
+  return config?.outputFormat === 'jpeg' && config?.background === 'transparent';
 }
 
 function mergeOpenAIImageGenerationConfig(
@@ -1057,10 +1061,19 @@ function mergeOpenAIImageGenerationConfig(
     return base;
   }
   const override = normalizeOpenAIImageGenerationConfig(overrideValue)!;
-  return {
+  const merged: NormalizedOpenAIImageGenerationConfig = {
     ...(base || {}),
     ...override,
   };
+  // Each side is valid on its own, so the effective combination has to be
+  // checked again after inheritance and overrides are applied.
+  if (hasTransparentJpegImageGenerationConflict(merged)) {
+    throw new Error(
+      'models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent` '
+      + 'after merging the provider and model settings.',
+    );
+  }
+  return merged;
 }
 
 export type ModelConfigOverride = {

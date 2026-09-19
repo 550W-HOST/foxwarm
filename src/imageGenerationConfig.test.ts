@@ -114,6 +114,66 @@ test('provider and model imageGeneration merge with the documented inheritance r
   assert.equal(parsed.models['bare/m'].imageGeneration, undefined);
 });
 
+test('merged provider and model imageGeneration settings are validated again as one effective configuration', () => {
+  const resolve = (providerImageGeneration: any, modelImageGeneration: any) => loadModelsConfigFromObject({
+    default: 'p/m',
+    providers: {
+      p: {
+        ...RESPONSES_PROVIDER,
+        imageGeneration: providerImageGeneration,
+        models: [{ id: 'm', imageGeneration: modelImageGeneration }],
+      },
+    },
+  }).models['p/m'].imageGeneration;
+
+  // A transparent provider background combined with a model-side jpeg format is
+  // contradictory even though each side is valid on its own.
+  assert.throws(
+    () => resolve({ background: 'transparent' }, { outputFormat: 'jpeg' }),
+    /cannot combine `outputFormat: jpeg` with `background: transparent` after merging/,
+  );
+  // The same conflict inherits in the other direction.
+  assert.throws(
+    () => resolve({ outputFormat: 'jpeg' }, { background: 'transparent' }),
+    /cannot combine `outputFormat: jpeg` with `background: transparent` after merging/,
+  );
+  assert.throws(() => resolve({ background: 'transparent', quality: 'high' }, { outputFormat: 'jpeg', action: 'edit' }), /after merging/);
+
+  // A legitimate override that resolves the conflict still passes with the
+  // documented inheritance rules.
+  assert.deepEqual(resolve({ background: 'transparent' }, { outputFormat: 'png' }), {
+    enabled: true,
+    background: 'transparent',
+    outputFormat: 'png',
+  });
+  assert.deepEqual(resolve({ outputFormat: 'jpeg', quality: 'high' }, { background: 'opaque' }), {
+    enabled: true,
+    outputFormat: 'jpeg',
+    quality: 'high',
+    background: 'opaque',
+  });
+  assert.deepEqual(resolve({ background: 'transparent', outputFormat: 'webp' }, { quality: 'low' }), {
+    enabled: true,
+    background: 'transparent',
+    outputFormat: 'webp',
+    quality: 'low',
+  });
+
+  // `enabled` keeps its existing meaning and inheritance.
+  assert.deepEqual(resolve({ background: 'transparent' }, false), {
+    enabled: false,
+    background: 'transparent',
+  });
+  assert.deepEqual(resolve({ background: 'transparent' }, true), {
+    enabled: true,
+    background: 'transparent',
+  });
+  assert.deepEqual(resolve(true, { outputFormat: 'jpeg' }), {
+    enabled: true,
+    outputFormat: 'jpeg',
+  });
+});
+
 test('imageGeneration participates in virtual routing fingerprints without leaking into them', () => {
   const base = {
     default: 'route',
