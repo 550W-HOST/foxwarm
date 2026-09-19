@@ -15,7 +15,7 @@ const MAX_DISCOVERY_LIMIT = 50;
 // Inbound MCP tool names, descriptions, and input schemas.
 const discoverTool: Tool = {
   name: 'foxwarm_discover',
-  description: "Search available Foxwarm tools and inspect their inputs. Results identify each tool's source and exact Node or MCP server. A listed tool may still require permission for the arguments used in a call.",
+  description: "Search available Foxwarm tools and inspect their inputs. Results identify each tool's source and, where applicable, its Node or MCP server. A listed tool may still require permission for the arguments used in a call.",
   inputSchema: {
     type: 'object', additionalProperties: false,
     properties: {
