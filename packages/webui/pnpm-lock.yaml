@@ -14,9 +14,6 @@ dependencies:
   '@dnd-kit/utilities':
     specifier: ^3.2.2
     version: 3.2.2(react@18.3.1)
-  '@preact/compat':
-    specifier: ^18.3.1
-    version: 18.3.2(preact@10.29.1)
   '@tailwindcss/typography':
     specifier: ^0.5.19
     version: 0.5.19(tailwindcss@3.4.19)
@@ -56,17 +53,14 @@ dependencies:
   monaco-yaml:
     specifier: ^5.5.1
     version: 5.5.1(monaco-editor@0.54.0)
-  preact:
-    specifier: ^10.28.4
-    version: 10.29.1
   qrcode:
     specifier: ^1.5.4
     version: 1.5.4
   react:
-    specifier: ^18.2.0
+    specifier: 18.3.1
     version: 18.3.1
   react-dom:
-    specifier: ^18.2.0
+    specifier: 18.3.1
     version: 18.3.1(react@18.3.1)
   react-resizable-panels:
     specifier: ^4.10.0
@@ -582,14 +576,6 @@ packages:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
-
-  /@preact/compat@18.3.2(preact@10.29.1):
-    resolution: {integrity: sha512-5vSl55K5yLMvocT7PBKxDOHGgYPjMrKQqqr6roSNjIXcJOtSgDDMjpiCAF3s7klRdmGrN75b/Przmjw8gmlg/w==}
-    peerDependencies:
-      preact: '*'
-    dependencies:
-      preact: 10.29.1
-    dev: false
 
   /@rolldown/pluginutils@1.0.0-beta.27:
     resolution: {integrity: sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==}
@@ -1582,10 +1568,6 @@ packages:
       nanoid: 3.3.11
       picocolors: 1.1.1
       source-map-js: 1.2.1
-
-  /preact@10.29.1:
-    resolution: {integrity: sha512-gQCLc/vWroE8lIpleXtdJhTFDogTdZG9AjMUpVkDf2iTCNwYNWA+u16dL41TqUDJO4gm2IgrcMv3uTpjd4Pwmg==}
-    dev: false
 
   /prettier@3.9.6:
     resolution: {integrity: sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g==}

@@ -76,6 +76,9 @@ async function buildFixtureBundle() {
 async function mountFixture(width = 900) {
   await page.setViewport({ width, height: 720, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
+  const renderedChildren = await page.evaluate(() => document.querySelector('#root')?.childElementCount || 0)
+  assert.ok(renderedChildren > 0, 'React fixture mounts before querying session preferences')
+  await page.waitForSelector('button[aria-label="Open session options"]')
   await page.waitForFunction(() => !!window.chatSettingsFixture)
 }
 

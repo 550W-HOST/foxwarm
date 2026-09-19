@@ -211,6 +211,8 @@ before(async () => {
   try {
     await fixtureStartupStage('page-readiness', async () => {
       await readinessPage.goto(fixtureUrl, { waitUntil: 'load' })
+      const fixtureInstalled = await readinessPage.evaluate(() => typeof window.renderFixtureChats === 'function')
+      assert.equal(fixtureInstalled, true, 'fixture installs the Chat renderer before history tests')
       await readinessPage.waitForFunction(() => typeof window.renderFixtureChats === 'function')
     })
   } finally {

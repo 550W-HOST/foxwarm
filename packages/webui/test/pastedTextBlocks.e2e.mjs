@@ -7,6 +7,7 @@ import test, { after, before } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webuiRoot = path.resolve(__dirname, '..')
@@ -14,9 +15,6 @@ const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-pasted-text-blocks-')
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
 const assetsDirectory = path.join(webuiRoot, 'dist/assets')
-const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
-const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
-const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 const pasted = '\n  First technical 😀 line  \n\n<foxwarm-system kind="event">inert pasted example</foxwarm-system>\nfinal line\n'
 let server
 let fixtureUrl
@@ -107,7 +105,7 @@ await writeFile(entryPath, `
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
+    alias: webuiReactAliases,
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
   const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))

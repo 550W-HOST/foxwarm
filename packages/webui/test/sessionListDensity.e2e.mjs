@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 let server, browser, url
 const toggle = 'button[aria-label="Compact session rows"]'
@@ -67,7 +68,7 @@ before(async () => {
       createRoot(document.getElementById('root')).render(<Fixture />)
     ` },
     bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
-    alias: { 'react': 'preact/compat', 'react-dom': 'preact/compat', 'react/jsx-runtime': 'preact/jsx-runtime' },
+    alias: webuiReactAliases,
     define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
   })
   const assets = new URL('../dist/assets/', import.meta.url)

@@ -92,6 +92,7 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 - Model/effort changes propagate up through paired callbacks to the existing session model and child-model endpoints. Model refresh and settings navigation propagate through `onRefreshModels`/`onOpenModelSettings`; canonical navigation behavior is [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 - Attachments and text are bundled as stable `{ ref, file }` entries and sent via `onSend`; upload and message POST success are both required before accepted-clear. Upload uses the existing multipart and message schemas, overriding only the multipart filename with the generated ref prefix.
 - Chat builds optimistic legacy-shaped descriptor parts from the ordinary upload response. The backend remains unaware of composer refs and keeps its existing append/order behavior. Canonical descriptor grammar remains [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
+- The generated browser fixture resolves the WebUI's React runtime through `test/reactRendererAliases.mjs`. Controlled pasted-text modal edits simulate a native textarea value change before dispatching `input`; its cut/undo check uses the browser's keyboard path rather than a synthetic `beforeinput`, so these checks exercise the same React event handlers as user input.
 
 ## Design decisions
 
