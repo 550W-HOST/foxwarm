@@ -1,6 +1,6 @@
 # Unit: src-toolscript
 
-Files: src/toolscript.ts, src/toolscript.test.ts
+Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptImageParts.test.ts
 Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
 
 ## Purpose
@@ -22,7 +22,7 @@ ToolScript result/run types are internal, not exported TypeScript API types.
 ## Host API
 
 - `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks.
-- `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history.
+- `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history; returns the text plus canonical parts (text and Blob-referenced images) without reasoning, function calls, provider metadata, or image bytes.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.
 - `open_managed_session`, `session_step`, `release_managed_session`, `wait_for_managed_event` — explicit managed-session controller operations.
 
@@ -61,6 +61,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.
+- Canonical image parts returned by a final result (for example the `parts` of a `request_model_without_context` result) are promoted the same way, except that their bytes stay in the image Blob store and only the reference travels to the outer tool result. The promoted reference becomes the session-visible image under the tool-result image id convention, the textual result keeps a bounded placeholder in its place, and an unresolvable reference fails the tool result instead of leaving a dangling image.
 - MCP image content returned through a nested unified `call_tool` is source-normalized into the same inline payload shape, then promoted through the outer ToolScript result and provider image serialization without copying base64 into textual output.
 
 ## Compatibility
@@ -99,3 +100,7 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 ### D-toolscript-process-lifetime-pool
 
 [2026-08-10] Each Foxwarm OS process owns its lazily created native/WASM Monty pool for that process lifetime. Supported graceful shutdown must await the pool close before process exit or teardown of services used by ToolScript host calls. The close is idempotent, owns a pending creation exactly once, does not create an unused runtime, and leaves persisted runs/snapshots intact; later runtime use may lazily create a new pool.
+
+### D-toolscript-one-shot-parts
+
+[2026-09-19] `request_model_without_context` keeps its existing text behavior and additionally returns the canonical parts of the low-level result, so a script can hand a model-produced image back to the outer tool result instead of dropping it. The parts carry text and image parts whose bytes stay in the image Blob store; reasoning, function calls, provider metadata, and transport-only reference fields are not projected, and no image bytes enter the script value, the run record, or the model-visible text. A final result returning those parts promotes only the image parts through the shared tool-result image boundary, keeps other parts in place, and replaces the promoted entries with a bounded placeholder, while JSON that does not match the canonical reference shape is never treated as an image.

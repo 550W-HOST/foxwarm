@@ -16,7 +16,7 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 - Hidden, discoverable management tools list, inspect, and cancel persisted runs.
 - Hidden `start_toolscript_run` remains callable only for documented user-automation compatibility.
 - `resumeBackgroundToolScriptRunForManagedSession` resumes controllers when a managed-session event arrives.
-- Scripts call the external host functions `call_tool`, `request_model_without_context`, `ask_agent`, `open_managed_session`, `session_step`, `release_managed_session`, and `wait_for_managed_event`; Monty provides ordinary language/runtime behavior such as `print`.
+- Scripts call the external host functions `call_tool`, `request_model_without_context`, `ask_agent`, `open_managed_session`, `session_step`, `release_managed_session`, and `wait_for_managed_event`; Monty provides ordinary language/runtime behavior such as `print`. A one-shot model result reports its text plus canonical parts, so a script can return a model-produced image to the outer tool result as a stored-image reference rather than as bytes.
 
 ## Invariants
 
@@ -61,3 +61,7 @@ Managed-session orchestration is available through explicit host primitives. The
 ### D-toolscript-minimal-host-api
 
 The host API stays small and composable. Tool discovery remains the agent's responsibility through the normal Foxwarm tool surfaces rather than a ToolScript-only discovery helper.
+
+### D-toolscript-one-shot-parts
+
+A script can hand a model-produced image to the outer tool result through the one-shot result parts. Image bytes stay in the image Blob store and reach the session through the shared tool-result image boundary, so no image data travels through the script value, the run record, or the model-visible text. See [D-toolscript-one-shot-parts](../units/src-toolscript.md#d-toolscript-one-shot-parts).

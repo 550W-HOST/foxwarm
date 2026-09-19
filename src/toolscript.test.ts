@@ -881,7 +881,7 @@ test('request_model_without_context uses direct low-level llm request with no to
   try {
     const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
     assert.equal(result.status, 'completed');
-    assert.deepEqual(result.result, { text: 'pong' });
+    assert.deepEqual(result.result, { text: 'pong', parts: [] });
     assert.equal(captured.model, 'anthropic/claude-sonnet-4-5');
     assert.equal(captured.effort, 'none');
     assert.equal(captured.systemPrompt, '');
@@ -916,7 +916,7 @@ test('request_model_without_context can override model per call', async () => {
   try {
     const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
     assert.equal(result.status, 'completed');
-    assert.deepEqual(result.result, { text: 'pong' });
+    assert.deepEqual(result.result, { text: 'pong', parts: [] });
     assert.equal(capturedModel, 'openai/gpt-4.1-mini');
   } finally {
     (llm as any).requestLlmOnce = originalRequestLlmOnce;

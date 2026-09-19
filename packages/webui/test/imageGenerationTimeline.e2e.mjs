@@ -8,6 +8,7 @@ const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.url).pathname
 const pngId = `${'d'.repeat(64)}.png`
 const missingId = `${'e'.repeat(64)}.png`
+const toolPngId = `${'f'.repeat(64)}.png`
 const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
 
 async function buildFixtureBundle() {
@@ -44,6 +45,18 @@ async function buildFixtureBundle() {
     render('missing', [
       { role: 'model', parts: [{ inlineDataRef: missingRef }], __meta: { modelId: 'p/model' } },
     ])
+
+    // A script-produced image handed back inside a tool result.
+    render('tool', [
+      { role: 'user', parts: [{ text: 'SCRIPT_IMAGE_REQUEST' }] },
+      {
+        role: 'tool',
+        parts: [
+          { toolUseId: 'call_script', inlineDataRef: { blobId: '${toolPngId}', imageId: 'call_script#1', mimeType: 'image/png', apiPath: '/blobs/${toolPngId}' }, imageMeta: { imageId: 'call_script#1', mimeType: 'image/png' } },
+          { functionResponse: { tool_use_id: 'call_script', name: 'run_script', response: { status: 'completed', result: { parts: '[1 image part(s) promoted]' } } } },
+        ],
+      },
+    ])
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'image-generation-timeline-fixture.tsx' },
@@ -73,13 +86,24 @@ test('a text-free model message still renders its generated image through the au
       response.end(pngBytes)
       return
     }
+    if (request.url === `/nested/api/blobs/${toolPngId}`) {
+      requests.push({ url: request.url, cookie: request.headers.cookie || '' })
+      if (!String(request.headers.cookie || '').includes('foxwarm_token=fixture-token')) {
+        response.writeHead(401, { 'Content-Type': 'application/json' })
+        response.end('{"error":"Unauthorized"}')
+        return
+      }
+      response.writeHead(200, { 'Content-Type': 'image/png' })
+      response.end(pngBytes)
+      return
+    }
     if (request.url === `/nested/api/blobs/${missingId}`) {
       response.writeHead(404, { 'Content-Type': 'application/json' })
       response.end('{"error":"Not found"}')
       return
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><body><div id="pure"></div><div id="mixed"></div><div id="missing"></div><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><body><div id="pure"></div><div id="mixed"></div><div id="missing"></div><div id="tool"></div><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `http://127.0.0.1:${server.address().port}`
@@ -92,8 +116,10 @@ test('a text-free model message still renders its generated image through the au
     await page.waitForFunction(() => {
       const pure = document.querySelector('#pure img')
       const mixed = document.querySelector('#mixed img')
+      const toolImage = document.querySelector('#tool img')
       return pure?.complete && pure.naturalWidth === 1
         && mixed?.complete && mixed.naturalWidth === 1
+        && toolImage?.complete && toolImage.naturalWidth === 1
         && document.querySelector('#missing')?.textContent?.includes('Image unavailable')
     })
 
@@ -116,6 +142,14 @@ test('a text-free model message still renders its generated image through the au
 
     // A missing Blob renders an explicit placeholder instead of dropping the turn.
     assert.match(await page.$eval('#missing', element => element.textContent || ''), /Image unavailable/)
+
+    // A script-produced image inside a tool result renders through the same
+    // authenticated Blob route.
+    assert.equal(await page.$$('#tool img').then(nodes => nodes.length), 1)
+    assert.equal(await page.$eval('#tool img', image => image.naturalWidth), 1)
+    assert.equal(requests.some(request => request.url === `/nested/api/blobs/${toolPngId}` && request.cookie.includes('foxwarm_token=fixture-token')), true)
+    assert.equal(await page.$eval('#tool img', image => image.getAttribute('src')), `${origin}/nested/api/blobs/${toolPngId}`)
+    assert.match(await page.$eval('#tool', element => element.textContent || ''), /IMAGE: id=call_script#1|1 image part\(s\) promoted|run_script/)
   } finally {
     await browser?.close()
     server.closeAllConnections?.()
