@@ -23,6 +23,7 @@ import {
 } from './remoteExecLiveness';
 import { generatePersistentExecPetname } from '../../packages/shared/dist/persistentExec';
 import { PERSISTENT_EXEC_ID_COLLISION_CODE } from '../../packages/shared/dist/persistentExec';
+import { completeExternalExec, registerExternalExecBackground } from './externalExecOwnership';
 import {
   CURRENT_NODE_PROTOCOL_RANGE,
   describeNodeProtocolCompatibility,
@@ -141,6 +142,10 @@ export class NodeServiceRequestError extends Error {
 export class NodesManager {
   private nodes: Map<string, Node> = new Map();
   private toolCalls: Map<string, ToolCall> = new Map();
+  private externalExecQueries = new Map<string, {
+    nodeId: string; owner: ExternalNodeOwner; execId: string;
+    resolve: (value: unknown) => void; reject: (error: unknown) => void; timeout: NodeJS.Timeout;
+  }>();
   private fileTransfers: Map<string, PendingFileTransfer> = new Map();
   private serviceRequests: Map<string, PendingServiceRequest> = new Map();
   private serviceEventListeners = new Set<(event: NodeServiceEvent) => void>();
@@ -358,6 +363,12 @@ export class NodesManager {
   }
 
   private rejectPendingOperationsForNode(nodeId: string, reason: string): void {
+    for (const [requestId, request] of this.externalExecQueries.entries()) {
+      if (request.nodeId !== nodeId) continue;
+      this.externalExecQueries.delete(requestId);
+      clearTimeout(request.timeout);
+      request.reject(new Error('External Node result is unavailable.'));
+    }
     for (const [callId, call] of this.toolCalls.entries()) {
       if (call.node !== nodeId) continue;
       this.toolCalls.delete(callId);
@@ -572,13 +583,56 @@ export class NodesManager {
       && node.capabilities?.features?.externalToolOwner === 1;
   }
 
+  registerExternalExecBackground(nodeId: string, owner: ExternalNodeOwner, execId: string, capability: string): boolean {
+    return this.supportsExternalOwner(nodeId) && registerExternalExecBackground(nodeId, owner, execId, capability);
+  }
+
+  completeExternalExec(nodeId: string, owner: ExternalNodeOwner, execId: string, capability: string, output: string, cwd?: string): boolean {
+    return this.supportsExternalOwner(nodeId) && completeExternalExec(nodeId, owner, execId, capability, output, cwd);
+  }
+
+  async queryExternalExec(nodeId: string, owner: ExternalNodeOwner, execId: string): Promise<unknown> {
+    const node = this.nodes.get(nodeId);
+    if (!this.supportsExternalOwner(nodeId) || !node?.ws) throw new Error('External Node is unavailable.');
+    return new Promise((resolve, reject) => {
+      const requestId = `external-exec-${crypto.randomBytes(12).toString('hex')}`;
+      const timeout = setTimeout(() => {
+        if (this.externalExecQueries.delete(requestId)) reject(new Error('External Node result query timed out.'));
+      }, 10_000);
+      timeout.unref?.();
+      this.externalExecQueries.set(requestId, { nodeId, owner, execId, resolve, reject, timeout });
+      try { node.ws!.send(JSON.stringify({ type: 'external_exec_result_request', requestId, owner, execId })); }
+      catch (error) { this.handleExternalExecQuery(nodeId, requestId, undefined, error); }
+    });
+  }
+
+  handleExternalExecQuery(nodeId: string, requestId: string, result?: unknown, error?: unknown): void {
+    const pending = this.externalExecQueries.get(requestId);
+    if (!pending || pending.nodeId !== nodeId) return;
+    this.externalExecQueries.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (error) pending.reject(error); else pending.resolve(result);
+  }
+
+  releaseExternalOwner(nodeId: string, owner: ExternalNodeOwner): void {
+    const node = this.nodes.get(nodeId);
+    if (this.supportsExternalOwner(nodeId) && node?.ws) {
+      try { node.ws.send(JSON.stringify({ type: 'external_exec_release', owner })); }
+      catch { /* The Main owner is already expired; the disconnected Node cannot reclaim it. */ }
+    }
+  }
+
   /** External calls have a real authenticated transport owner, never a synthetic Session. */
-  async executeExternalTool(nodeId: string, toolName: string, args: Record<string, any>, owner: ExternalNodeOwner, cwd?: string): Promise<any> {
+  async executeExternalTool(
+    nodeId: string, toolName: string, args: Record<string, any>, owner: ExternalNodeOwner, cwd?: string,
+    exec?: { execId: string; completionCapability: string },
+  ): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!this.supportsExternalOwner(nodeId) || !node?.ws) {
       throw new Error(`Node \`${nodeId}\` does not support external-owner calls.`);
     }
-    if (!['read', 'write', 'edit', 'apply_patch', 'get_default_cwd'].includes(toolName) || !node.tools.has(toolName)) {
+    if (!['read', 'write', 'edit', 'apply_patch', 'exec', 'get_default_cwd'].includes(toolName) || !node.tools.has(toolName)
+      || (toolName === 'exec' && !exec) || (toolName !== 'exec' && exec)) {
       throw new Error(`Tool \`${toolName}\` is not available for external-owner calls on Node \`${nodeId}\`.`);
     }
     return new Promise<any>((resolve, reject) => {
@@ -594,6 +648,7 @@ export class NodesManager {
       });
       try {
         node.ws!.send(JSON.stringify({ type: 'tool_call', callId, tool: toolName, args, owner,
+          ...(exec ? { backgroundExecId: exec.execId, completionCapability: exec.completionCapability } : {}),
           ...(cwd === undefined ? {} : { sessionCwd: cwd }), timeoutMs: 62_000 }));
       } catch (error) {
         const pending = this.toolCalls.get(callId);
@@ -766,9 +821,10 @@ export class NodesManager {
   /**
    * Handle tool response from node
    */
-  handleToolResponse(callId: string, result: any): void {
+  handleToolResponse(callId: string, result: any, authenticatedNodeId?: string): void {
     const call = this.toolCalls.get(callId);
     if (call) {
+      if (call.externalOwner && call.node !== authenticatedNodeId) return;
       this.toolCalls.delete(callId);
       if (call.remoteExec) {
         const identity = {
@@ -793,9 +849,10 @@ export class NodesManager {
   /**
    * Handle tool error from node
    */
-  handleToolError(callId: string, error: unknown, reportedExecStarted?: boolean): void {
+  handleToolError(callId: string, error: unknown, reportedExecStarted?: boolean, authenticatedNodeId?: string): void {
     const call = this.toolCalls.get(callId);
     if (call) {
+      if (call.externalOwner && call.node !== authenticatedNodeId) return;
       this.toolCalls.delete(callId);
       if (call.remoteExec) {
         const identity = {
@@ -813,7 +870,9 @@ export class NodesManager {
         if (isDefinitePreStart) releaseRemoteExecReservation(identity);
         else markRemoteExecOutcomeUnknown(identity);
       }
-      call.reject(error);
+      call.reject(call.externalOwner && error && typeof error === 'object'
+        ? { ...error, ...(typeof reportedExecStarted === 'boolean' ? { execStarted: reportedExecStarted } : {}) }
+        : error);
       logger.warn({ callId, tool: call.name, error }, 'Tool error received');
     } else {
       logger.warn({ callId }, 'Tool error for unknown call');

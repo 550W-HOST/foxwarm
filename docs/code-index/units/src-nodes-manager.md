@@ -30,8 +30,9 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 | `getNode(nodeId)` / `listNodes()` / `listNodesWithTools()` | Query runtime node state and dynamic capabilities. |
 | `listNodeServiceSummaries()` | Returns a copy of connected node IDs/types/service versions and activity without exposing model-tool schemas. |
 | `executeNodeTool(...)` / `executeTool(...)` | Dispatches a tool call locally for `master` or over WebSocket for a remote node; direct parallel exec may provide a node/cwd routing snapshot. |
-| `supportsExternalOwner(nodeId)` / `executeExternalTool(...)` | Require an online negotiated-v3 authenticated Node with explicit `externalToolOwner:1` before dispatching the disjoint owner payload. Current external path supports file primitives and `get_default_cwd`; internal Session calls are unchanged. |
-| `handleToolResponse(...)` / `handleToolError(...)` | Resolves/rejects a pending remote tool call by call id. |
+| `supportsExternalOwner(nodeId)` / `executeExternalTool(...)` | Require an online negotiated-v3 authenticated Node with explicit `externalToolOwner:1` before dispatching the disjoint owner payload. The external path supports file primitives, persistent exec with a separate reserved identity and `get_default_cwd`; internal Session calls are unchanged. |
+| `handleToolResponse(...)` / `handleToolError(...)` | Resolves/rejects a pending remote tool call by call id; external replies additionally match the authenticated Node source. |
+| `registerExternalExecBackground(...)` / `completeExternalExec(...)` / `queryExternalExec(...)` / `releaseExternalOwner(...)` | Accept authenticated, signed external command receipts, query only the owning Node and notify it when a context ends; no Session event is created. |
 | `adaptLegacyRemoteNodeToolResult(result)` | Converts the explicitly supported old remote-node image result shapes to current structured inline data without mutating canonical or malformed values. |
 | `readFileFromNode(...)` / `writeFileToNode(...)` | Reads/writes local or remote files through the node file-transfer protocol. |
 | `handleFileReadResponse(...)` / `handleFileWriteResponse(...)` / `handleFileTransferError(...)` | Resolves/rejects pending remote file transfers. |

@@ -5,7 +5,7 @@ Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExec
 
 ## Purpose
 
-`NodeToolRequest` now admits a disjoint explicit external-owner branch for Main-local verified inbound callers without `sourceSessionId` or Agent. Only the authenticated resident Node provider handles that branch in this stage. Primitive providers fail before effect until they implement external ownership; the internal Session request shape and provider behavior remain unchanged.
+`NodeToolRequest` now admits a disjoint explicit external-owner branch for Main-local verified inbound callers without `sourceSessionId` or Agent. Only the authenticated resident CLI Node provider handles that branch in this stage, including a reserved real exec ID and completion capability. Primitive providers fail before effect until they implement external ownership; the internal Session request shape and provider behavior remain unchanged.
 
 Defines the small Main-owned provider and registry boundary for generic Nodes. A Node descriptor identifies the exact Node, its kind, provider, availability, derived capabilities, and safe optional routing metadata. Primitive providers expose filesystem/exec backends; Core composes canonical model file tools above them. Authenticated remote Nodes retain a separate complete-tool adapter.
 

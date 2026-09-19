@@ -283,10 +283,29 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           break;
         }
         case 'tool_call_response':
-          nodesManager.handleToolResponse(data.callId, data.result);
+          nodesManager.handleToolResponse(data.callId, data.result, nodeId || authenticatedNodeId || undefined);
           break;
         case 'tool_call_error':
-          nodesManager.handleToolError(data.callId, data.error, typeof data.execStarted === 'boolean' ? data.execStarted : undefined);
+          nodesManager.handleToolError(data.callId, data.error, typeof data.execStarted === 'boolean' ? data.execStarted : undefined,
+            nodeId || authenticatedNodeId || undefined);
+          break;
+        case 'external_exec_background': {
+          const accepted = nodesManager.registerExternalExecBackground(nodeId || authenticatedNodeId || '', data.owner,
+            data.execId, data.completionCapability);
+          if (!accepted) logger.warn({ nodeId, execId: data.execId }, 'Rejected external exec background notice');
+          break;
+        }
+        case 'external_exec_completed': {
+          const accepted = nodesManager.completeExternalExec(nodeId || authenticatedNodeId || '', data.owner,
+            data.execId, data.completionCapability, data.output, data.cwd);
+          if (data.requestId) ws.send(JSON.stringify(accepted
+            ? { type: 'cli_response', requestId: data.requestId, ok: true, result: { accepted: true } }
+            : { type: 'cli_response', requestId: data.requestId, ok: false, error: 'External execution owner is unavailable.' }));
+          break;
+        }
+        case 'external_exec_result_response':
+          nodesManager.handleExternalExecQuery(nodeId || authenticatedNodeId || '', data.requestId, data.result,
+            data.error ? new Error('External Node result query failed.') : undefined);
           break;
         case 'file_read_response':
           nodesManager.handleFileReadResponse(data.transferId, data.file);

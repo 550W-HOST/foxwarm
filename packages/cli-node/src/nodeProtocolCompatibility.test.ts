@@ -50,3 +50,11 @@ test('current client rejects an invalid negotiated generation from Master', asyn
   assert.match(statuses[0]?.detail?.message || '', /invalid Node protocol selection 2; expected 3/);
   assert.equal(closes[0]?.[0], 1008);
 });
+
+test('a Session-only tool interceptor does not advertise external execution it cannot approve', () => {
+  const client = new NodeClient({ host: 'http://master.invalid', nodeId: 'node-a', authToken: 'token',
+    localTrigger: false, toolCallInterceptor: async () => true });
+  assert.equal((client as any).getNodeCapabilities().features.externalToolOwner, undefined);
+  const standalone = makeClient();
+  assert.equal((standalone.client as any).getNodeCapabilities().features.externalToolOwner, 1);
+});

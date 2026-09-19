@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -25,12 +26,14 @@ export interface ExternalExecutionContext {
   readonly externalId: string;
   currentNode: string;
   cwd: string | null;
+  selectionGeneration: number;
 }
 
 /** Trusted process-local catalog; the application registers only implemented capabilities. */
 export interface McpInboundCatalog {
   listTools(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): Promise<Tool[]>;
   callTool(context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal, principal: VerifiedMcpInboundPrincipal): Promise<CallToolResult>;
+  releaseContext?(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): void | Promise<void>;
 }
 
 /** Only the trusted catalog may mark a diagnostic as safe to return to the external client. */
@@ -64,6 +67,7 @@ function sendError(res: Response, code: number, message: string): void {
 
 export class McpInboundHttpService {
   private readonly connections = new Map<string, Connection>();
+  private readonly requestSignals = new AsyncLocalStorage<AbortSignal>();
   private readonly live = new Set<Connection>();
   private readonly sweep: NodeJS.Timeout;
   private stopped = false;
@@ -120,12 +124,14 @@ export class McpInboundHttpService {
     connection.disposed = true;
     this.connections.delete(connection.id);
     this.live.delete(connection);
-    await connection.server.close();
+    try { await this.catalog?.releaseContext?.(connection.context, connection.principal); }
+    finally { await connection.server.close(); }
   }
 
   private async open(principal: VerifiedMcpInboundPrincipal): Promise<Connection> {
     const id = randomUUID();
-    const context: ExternalExecutionContext = { id, externalId: principal.externalId, currentNode: 'master', cwd: null };
+    const context: ExternalExecutionContext = { id, externalId: principal.externalId,
+      currentNode: 'master', cwd: null, selectionGeneration: 0 };
     Object.defineProperties(context, {
       id: { writable: false }, externalId: { writable: false },
     });
@@ -155,7 +161,9 @@ export class McpInboundHttpService {
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       if (!this.catalog) return { isError: true, content: [{ type: 'text', text: 'No tools are available.' }] };
       try {
-        const result = await this.catalog.callTool(context, request.params.name, request.params.arguments || {}, extra.signal, principal);
+        const requestSignal = this.requestSignals.getStore();
+        const signal = requestSignal ? AbortSignal.any([extra.signal, requestSignal]) : extra.signal;
+        const result = await this.catalog.callTool(context, request.params.name, request.params.arguments || {}, signal, principal);
         if (Buffer.byteLength(JSON.stringify(result)) > MAX_RESULT_BYTES) {
           return { isError: true, content: [{ type: 'text', text: 'The tool may have completed, but its result exceeded the 16 MiB transport limit. Do not retry automatically.' }] };
         }
@@ -227,6 +235,7 @@ export class McpInboundHttpService {
     connection.lastActivity = Date.now();
     connection.active++;
     if (req.method === 'POST') connection.activePosts++;
+    const requestAbort = req.method === 'POST' ? new AbortController() : undefined;
     if (req.method === 'GET') {
       connection.activeSse = res;
       res.once('close', () => {
@@ -238,17 +247,24 @@ export class McpInboundHttpService {
     }
     const deadline = req.method === 'POST'
       ? setTimeout(() => {
+        requestAbort?.abort();
         sendError(res, 504, 'MCP request timed out; a running tool may have an unknown outcome. Do not retry automatically.');
-        void this.dispose(connection!).catch(() => {});
+        if (!connection!.initialized) void this.dispose(connection!).catch(() => {});
       }, this.postDeadlineMs)
       : undefined;
     deadline?.unref();
     try {
       res.once('close', () => {
-        if (req.method === 'POST' && !res.writableFinished) void this.dispose(connection).catch(() => {});
+        if (req.method === 'POST' && !res.writableFinished) {
+          requestAbort?.abort();
+          if (!connection.initialized) void this.dispose(connection).catch(() => {});
+        }
       });
+      const transportTask = requestAbort
+        ? this.requestSignals.run(requestAbort.signal, () => connection.transport.handleRequest(req, res, req.body))
+        : connection.transport.handleRequest(req, res, req.body);
       await Promise.race([
-        connection.transport.handleRequest(req, res, req.body),
+        transportTask,
         new Promise<void>(resolve => res.once('close', () => resolve())),
       ]);
     } catch {

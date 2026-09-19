@@ -9,12 +9,12 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 ## Key Exports
 
 - `PersistentExecManager` — Main class orchestrating process spawning, tracking, reconciliation, and result formatting
-- `RunningExecEntry` — Interface describing a tracked running process, including its retained exact generated script path
+- `RunningExecEntry` — Interface describing a tracked running process, including its retained exact generated script path and either a Session/Agent or disjoint external owner
 - `ExecStatus` — Interface for process exit status
 - `StartPersistentExecOptions` — Options for starting a new execution
 - `ExecCompletionDispatcher` — Callback type for delivering completion notifications
 - `BACKGROUND_COMPLETION_EVENT_RETENTION_MS` — strict 24-hour lifetime for a background tracking record
-- `PersistentExecManagerOptions` — Configuration including optional target-truthful process-tree, entry-liveness, entry-live-cwd, and post-persistence registry-idle callbacks
+- `PersistentExecManagerOptions` — Configuration including distinct external cwd/artifact callbacks, optional target-truthful process-tree, entry-liveness, entry-live-cwd, post-persistence registry-idle and unknown-exit tracking-expiry callbacks
 - `ProcessOperations`, `nativeProcessOperations` — injected target-local launch, process-snapshot, liveness, and live-cwd primitives plus the native implementation
 - `DEFAULT_EXEC_TIMEOUT_SECONDS`, `MIN_EXEC_TIMEOUT_SECONDS`, `MAX_EXEC_TIMEOUT_SECONDS` — Timeout constants
 - `MAX_FULL_LOG_READ_BYTES` / `OVERSIZED_LOG_SAMPLE_BYTES` — 1 MiB full-read ceiling and 5,000-byte head/tail sampling budget for oversized logs
@@ -22,6 +22,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - `ProcessSnapshotEntry`, `truncateProcessCmdline(...)`, `formatProcessTreeSnapshot(...)` — pure process-snapshot formatting contract used by timeout results
 - `resolveExecTimeoutSeconds(timeoutValue)` / `ResolvedExecTimeout` — validates timeout input, clamps finite values above 60 seconds, and returns requested/effective values with an optional warning
 - `PERSISTENT_EXEC_ID_PATTERN`, `LEGACY_PERSISTENT_EXEC_ID_PATTERN`, `isSupportedPersistentExecId(...)` — current petname grammar plus the read-compatible pre-petname `exec_` grammar
+- `getRunningExec`, `hasRunningExecs`, `getResolvedExecCwd` — owner-local inspection and final cwd for bounded external result lookup and post-exit cleanup.
 
 ## Function Index
 

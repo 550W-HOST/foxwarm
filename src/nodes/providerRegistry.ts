@@ -53,11 +53,15 @@ export type NodeToolRequest = NodeToolRequestBase & ({
     currentNode?: string;
     cwd?: string;
     deferSessionCwdSync?: boolean;
+    externalExec?: never;
   };
 } | {
   owner: ExternalNodeOwner;
   sourceSessionId?: never;
-  context: { agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never };
+  context: {
+    agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never;
+    externalExec?: { execId: string; completionCapability: string };
+  };
 });
 
 export type NodeDefaultCwdRequest = {
@@ -745,7 +749,8 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       );
     }
     if (request.owner) {
-      return nodesManager.executeExternalTool(request.nodeId, request.toolName, request.args, request.owner, request.context.cwd);
+      return nodesManager.executeExternalTool(request.nodeId, request.toolName, request.args, request.owner,
+        request.context.cwd, request.context.externalExec);
     }
     const routingSnapshot = request.context.currentNode
       ? { currentNode: request.context.currentNode, ...(request.context.cwd !== undefined ? { cwd: request.context.cwd } : {}) }

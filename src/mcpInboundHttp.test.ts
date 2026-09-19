@@ -223,7 +223,7 @@ test('SDK and Express admit real-sized requests/results and bound excessive payl
   });
 });
 
-test('a stalled SDK tool request times out, aborts its handler and releases the transport', async () => {
+test('a stalled SDK tool request times out and aborts its handler without discarding the live transport', async () => {
   let aborted = false;
   await withInbound({
     async listTools() { return tools; },
@@ -243,8 +243,8 @@ test('a stalled SDK tool request times out, aborts its handler and releases the 
       assert.equal(response.status, 504);
       await new Promise(resolve => setTimeout(resolve, 30));
       assert.equal(aborted, true);
-      const gone = await fetch(url, { headers: { ...rawHeaders(alphaToken, id), Accept: 'text/event-stream' } });
-      assert.equal(gone.status, 404);
+      const retained = await a.client.listTools();
+      assert.deepEqual(retained.tools.map(tool => tool.name), ['synthetic_context']);
     } finally { await a.client.close(); }
   }, 60_000, 1, 80);
 });

@@ -12,6 +12,7 @@ import { setNodeProcessTitle } from './processTitle';
 import WebSocket from 'ws';
 import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
 import { expandHomePath } from '../../shared/dist/execCwd';
+import { PersistentExecManager } from '../../shared/dist/persistentExec';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import {
@@ -170,6 +171,15 @@ export class NodeClient {
   private explicitlyDisconnected = false;
   private negotiatedNodeProtocol = 0;
   private readonly externalDefaultCwd = process.cwd();
+  private readonly externalExecRuntimes = new Map<string, {
+    manager: PersistentExecManager;
+    completed: Map<string, { output: string; cwd: string }>;
+    released: boolean;
+    root: string;
+    inflight: number;
+    uncertainRunning: boolean;
+  }>();
+  private readonly releasedExternalOwners = new Map<string, NodeJS.Timeout>();
   private localTriggerEnabled = true;
   private localTriggerPort = 0;
   private localTriggerServer: http.Server | null = null;
@@ -208,7 +218,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { remoteExecBackgroundRegistration: true, externalToolOwner: 1 },
+      features: { remoteExecBackgroundRegistration: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -607,6 +617,12 @@ export class NodeClient {
       case 'tool_call':
         await this.handleToolCall(message);
         break;
+      case 'external_exec_result_request':
+        await this.handleExternalExecResultRequest(message);
+        break;
+      case 'external_exec_release':
+        this.handleExternalExecRelease(message.owner);
+        break;
       case 'file_read_request':
         await this.handleFileReadRequest(message);
         break;
@@ -822,6 +838,8 @@ export class NodeClient {
 
   private async handleExternalToolCall(message: any): Promise<void> {
     const callId = message.callId;
+    let execStarted = false;
+    let runtimeForCall: Awaited<ReturnType<NodeClient['getExternalExecRuntime']>> | undefined;
     try {
       const owner: ExternalNodeOwner = message.owner;
       if (this.negotiatedNodeProtocol !== 3 || !owner || owner.kind !== 'external'
@@ -833,12 +851,14 @@ export class NodeClient {
         throw new Error('External Node owner is unsupported or invalid.');
       }
       const tool = message.tool;
-      if (!['read', 'write', 'edit', 'apply_patch', 'get_default_cwd'].includes(tool) || this.toolCallInterceptor) {
+      if (!['read', 'write', 'edit', 'apply_patch', 'exec', 'get_default_cwd'].includes(tool) || this.toolCallInterceptor) {
         throw new Error('This external Node tool is not available.');
       }
       const toolFn = (nodeTools as any)[tool];
       const cwd = typeof message.sessionCwd === 'string' && message.sessionCwd ? message.sessionCwd : this.externalDefaultCwd;
-      const ctx = {
+      let background = false;
+      let execCwd: string | undefined;
+      const ctx: Record<string, any> = {
         runtimeNodeId: this.connectedNodeId || this.requestedName,
         fileOperations: nativeFileOperations,
         resolveFilePath: (filePath: string) => {
@@ -846,10 +866,135 @@ export class NodeClient {
           return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
         },
       };
+      if (tool === 'exec') {
+        if (typeof message.backgroundExecId !== 'string' || !/^[a-z]+-[a-z]+$/.test(message.backgroundExecId)
+          || typeof message.completionCapability !== 'string' || !message.completionCapability) {
+          throw new Error('External exec requires a reserved execution ID and signed completion capability.');
+        }
+        const runtime = await this.getExternalExecRuntime(owner);
+        if (runtime.released) throw new Error('External execution context has expired.');
+        runtime.inflight++;
+        runtimeForCall = runtime;
+        ctx.externalOwner = owner;
+        ctx.externalExecManager = runtime.manager;
+        ctx.externalCwd = cwd;
+        ctx.backgroundExecId = message.backgroundExecId;
+        ctx.completionCapability = message.completionCapability;
+        ctx.onExecStarted = () => { execStarted = true; };
+        ctx.registerBackgroundExec = async ({ execId, completionCapability }: { execId: string; completionCapability: string }) => {
+          this.send({ type: 'external_exec_background', owner, execId, completionCapability });
+        };
+        ctx.onExecBackground = () => { background = true; };
+        ctx.onExecForeground = (execId: string, output: string, cwd: string) => {
+          execCwd = cwd;
+          runtime.completed.set(execId, { output, cwd });
+          if (runtime.completed.size > 20) runtime.completed.delete(runtime.completed.keys().next().value!);
+        };
+      }
       const result = this.normalizeToolResult(await toolFn(message.args, ctx));
-      this.send({ type: 'tool_call_response', callId, result });
+      this.send({ type: 'tool_call_response', callId, result: tool === 'exec'
+        ? { ...result, execId: message.backgroundExecId, background, ...(execCwd ? { cwd: execCwd } : {}) } : result });
     } catch (error: any) {
-      this.send({ type: 'tool_call_error', callId, error: { message: error instanceof Error ? error.message : 'External Node tool failed.' }, execStarted: false });
+      this.send({ type: 'tool_call_error', callId, error: { message: error instanceof Error ? error.message : 'External Node tool failed.',
+        ...(typeof error?.code === 'string' ? { code: error.code } : {}) }, ...(message.tool === 'exec' ? { execStarted } : {}) });
+    } finally {
+      if (runtimeForCall) {
+        runtimeForCall.inflight--;
+        this.cleanupReleasedExternalRuntime(this.externalRuntimeKey(message.owner));
+      }
+    }
+  }
+
+  private externalRuntimeKey(owner: ExternalNodeOwner): string { return `${owner.externalId}\0${owner.contextId}`; }
+
+  private handleExternalExecRelease(owner: ExternalNodeOwner): void {
+    if (this.negotiatedNodeProtocol !== 3 || !owner || owner.kind !== 'external'
+      || typeof owner.externalId !== 'string' || typeof owner.contextId !== 'string') return;
+    const key = this.externalRuntimeKey(owner);
+    if (!this.releasedExternalOwners.has(key)) {
+      const expiry = setTimeout(() => this.releasedExternalOwners.delete(key), 60 * 60_000);
+      expiry.unref?.();
+      this.releasedExternalOwners.set(key, expiry);
+    }
+    const runtime = this.externalExecRuntimes.get(key);
+    if (!runtime) return;
+    runtime.released = true;
+    runtime.completed.clear();
+    this.cleanupReleasedExternalRuntime(key);
+  }
+
+  private cleanupReleasedExternalRuntime(key: string): void {
+    const runtime = this.externalExecRuntimes.get(key);
+    if (!runtime || !runtime.released || runtime.inflight > 0 || runtime.uncertainRunning || runtime.manager.hasRunningExecs()) return;
+    // Removing the registry or log while a command is still running would discard its real result.
+    void runtime.manager.shutdown().then(async () => {
+      if (runtime.manager.hasRunningExecs()) return;
+      await fs.remove(runtime.root);
+      if (this.externalExecRuntimes.get(key) === runtime) this.externalExecRuntimes.delete(key);
+    }).catch(error => logger.warn({ err: error }, 'External exec artifact cleanup deferred'));
+  }
+
+  private async getExternalExecRuntime(owner: ExternalNodeOwner) {
+    const key = this.externalRuntimeKey(owner);
+    if (this.releasedExternalOwners.has(key)) throw new Error('External execution context has expired.');
+    const existing = this.externalExecRuntimes.get(key);
+    if (existing) return existing;
+    const root = path.join(resolveNodeStateDir(this.credentialsFile), 'external-exec',
+      crypto.createHash('sha256').update(owner.externalId).digest('hex'), owner.contextId);
+    const runtime = { manager: undefined as unknown as PersistentExecManager,
+      completed: new Map<string, { output: string; cwd: string }>(), released: false,
+      root, inflight: 0, uncertainRunning: false };
+    runtime.manager = new PersistentExecManager({
+      nodeId: this.connectedNodeId || this.requestedName,
+      registryPath: path.join(root, 'running.json'),
+      getDefaultCwd: () => this.externalDefaultCwd,
+      getExecTempDir: () => { throw new Error('External exec cannot use an Agent directory.'); },
+      getExternalDefaultCwd: () => this.externalDefaultCwd,
+      getExternalExecTempDir: () => path.join(root, 'logs'),
+      onTrackingExpired: () => { runtime.uncertainRunning = true; },
+      onRegistryIdle: () => this.cleanupReleasedExternalRuntime(key),
+      completionDispatcher: async (entry, status) => {
+        if (!entry.externalOwner) throw new Error('External exec lacks its owner.');
+        if (runtime.released) return;
+        const output = await runtime.manager.buildForegroundExecResult(entry, status);
+        const cwd = await runtime.manager.getResolvedExecCwd(entry);
+        runtime.completed.set(entry.id, { output, cwd });
+        if (runtime.completed.size > 20) runtime.completed.delete(runtime.completed.keys().next().value!);
+        await this.request('external_exec_completed', {
+          owner: entry.externalOwner, execId: entry.id, completionCapability: entry.completionCapability, output, cwd,
+        }, 15_000);
+      },
+    });
+    this.externalExecRuntimes.set(key, runtime);
+    await runtime.manager.initialize();
+    return runtime;
+  }
+
+  private async handleExternalExecResultRequest(message: any): Promise<void> {
+    const requestId = message.requestId;
+    try {
+      const owner: ExternalNodeOwner = message.owner;
+      if (this.negotiatedNodeProtocol !== 3 || !owner || owner.kind !== 'external'
+        || typeof owner.externalId !== 'string' || typeof owner.contextId !== 'string'
+        || typeof message.execId !== 'string') throw new Error('Invalid external exec result request.');
+      const runtime = this.externalExecRuntimes.get(this.externalRuntimeKey(owner));
+      if (!runtime || runtime.released) throw new Error('Execution owner is unavailable.');
+      const completed = runtime.completed.get(message.execId);
+      if (completed !== undefined) {
+        this.send({ type: 'external_exec_result_response', requestId, result: { state: 'completed', ...completed } });
+        return;
+      }
+      const entry = runtime.manager.getRunningExec(message.execId);
+      if (!entry || entry.externalOwner?.externalId !== owner.externalId || entry.externalOwner.contextId !== owner.contextId) {
+        throw new Error('Execution ID is unavailable.');
+      }
+      const status = await runtime.manager.waitForExecCompletion(message.execId, 20);
+      const output = status ? await runtime.manager.buildForegroundExecResult(entry, status)
+        : await runtime.manager.buildBackgroundTimeoutResult(entry, 0);
+      const cwd = await runtime.manager.getResolvedExecCwd(entry);
+      this.send({ type: 'external_exec_result_response', requestId, result: { state: status ? 'completed' : 'running', output, cwd } });
+    } catch {
+      this.send({ type: 'external_exec_result_response', requestId, error: 'Execution is unavailable.' });
     }
   }
 
@@ -972,6 +1117,7 @@ export class NodeClient {
       this.ws = null;
     }
     await this.stopLocalTriggerServer();
+    await Promise.all([...this.externalExecRuntimes.values()].map(runtime => runtime.manager.shutdown()));
   }
 }
 
