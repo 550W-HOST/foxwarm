@@ -377,6 +377,36 @@ test('bounded Session-list projection keeps sequence count separate from live hi
   assert.equal(bounded.sequenceMessageCount, 17);
 });
 
+test('sidebar payload carries the session default node and the running tool execution node', () => {
+  const dto = (overrides: Record<string, unknown> = {}) => ({
+    id: 'projection-node', agent: 'main', aliases: [], busy: false, busyStartedAt: null, queueLength: 0,
+    runtimeState: { state: 'idle', busy: false, queueLength: 0 }, displayName: null, archived: false,
+    currentNode: 'master', cwd: null, model: null, effort: null, childModelDefault: null, childEffortDefault: null,
+    compactThresholdTokens: null, isolated: false, parentSessionId: null, pinned: false, sidebarOrder: null,
+    messageCount: 1, historyVersion: 1, lastMessageTime: 10,
+    tokenUsage: { cachedTokens: 0, inputTokens: 0, outputTokens: 0, lastUsage: null }, verbose: false,
+    ...overrides,
+  } as any);
+
+  const remoteDefault = buildWebUiSessionListProjection(dto({ currentNode: 'visualdust-a6000-ws1' }));
+  assert.equal(remoteDefault.currentNode, 'visualdust-a6000-ws1');
+  assert.equal(remoteDefault.runtimeState.tool, undefined);
+
+  const toolNode = buildWebUiSessionListProjection(dto({
+    currentNode: 'visualdust-a6000-ws1',
+    runtimeState: { state: 'running-tool', busy: true, queueLength: 0, tool: { name: 'exec', executionNode: 'gpu-box-2', startedAt: 1 } },
+  }));
+  assert.equal(toolNode.currentNode, 'visualdust-a6000-ws1');
+  assert.equal(toolNode.runtimeState.tool.executionNode, 'gpu-box-2');
+
+  const fallback = buildWebUiSessionListProjection(dto({ currentNode: undefined, runtimeState: undefined }));
+  assert.equal(fallback.currentNode, 'master');
+
+  const built = buildWebUiSessionListProjection({ ...dto({ runtimeState: undefined, currentNode: undefined }), busy: true } as any);
+  assert.equal(built.runtimeState.state, 'requesting-model');
+  assert.equal(typeof built.currentNode, 'string');
+});
+
 test('sidebar focus query keeps comma IDs, repeatable focus values, and a complete 105-deep render path', async () => {
   const prefix = makeSessionId('webui_focus_deep'); const rootId = `${prefix},comma`;
   const ids = [rootId, ...Array.from({ length: 105 }, (_, index) => `${prefix}_d${String(index + 1).padStart(3, '0')}`)];
