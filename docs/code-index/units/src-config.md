@@ -19,6 +19,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - `MCP_INBOUND_CONFIG`, `normalizeMcpInboundConfig`, and `authenticateMcpInboundBearer` — startup-validated inbound identity settings and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-mcp-inbound-config](./src-mcp-inbound-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
 - `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
+- `normalizeProviderImageOutputFormat`, `PROVIDER_IMAGE_OUTPUT_FORMAT` — optimized provider-request output defaults to WebP; optional `llm.providerImageOutputFormat: jpeg` emits PNG when pixels are transparent.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.
 - Resolved path/server/context constants and agent/session path helpers.
 
@@ -146,6 +147,10 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 ### D-config-default-max-output
 
 [2026-08-18] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
+
+### D-config-provider-image-output
+
+[2026-09-19] `llm.providerImageOutputFormat` is one optional application-level provider-request image output setting: `webp` by default, or `jpeg` for opaque images with PNG selected on actual transparency. JPEG mode converts incoming WebP even below size/dimension thresholds so an endpoint lacking WebP support never receives it as ordinary vision input. It does not change hosted image-generation tool settings, original canonical blobs, provider/model inheritance, or the fixed optimization thresholds. The selected format participates in the derived-cache policy key.
 
 ### D-config-chat-history-reasoning-field
 

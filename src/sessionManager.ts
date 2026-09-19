@@ -1714,11 +1714,11 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
@@ -1736,6 +1736,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
 
   const forkedSession: Session = {
     id: newSessionId,
+    ...(options?.displayName !== undefined ? { displayName: options.displayName } : {}),
     history: structuredClone(sourceSession.history),
     systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
@@ -1899,11 +1900,11 @@ export function resolveSpawnedSessionModelEffort(
   return { model: normalized.model, effort: normalized.effort };
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
   assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
   const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
@@ -1945,6 +1946,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       : undefined;
     const newSession: Session = {
       id: childSessionId,
+      ...(options?.displayName !== undefined ? { displayName: options.displayName } : {}),
       agent: targetAgentName,
       history: [],
       systemPromptFiles: inheritedSystemPromptFiles ? [...inheritedSystemPromptFiles] : undefined,

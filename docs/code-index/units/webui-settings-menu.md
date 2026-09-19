@@ -51,6 +51,7 @@ Renders the compact global UI dropdown for color mode, Setup, and reload plus th
 - Code launch actions are intentionally not exposed here; the dedicated sidebar Code split button is the primary entry and owns launch-mode configuration.
 - Designed to sit in a toolbar/header and align its dropdown via the `menuAlign` prop.
 - Placement and authority are canonical in [D-webui-settings-placement](../modules/webui.md#d-webui-settings-placement).
+- The browser preference fixture asserts the React root and visible session-options trigger before reading the effect-published preference probe; document `load` alone does not establish mounted-UI readiness.
 
 ## Design Decisions
 

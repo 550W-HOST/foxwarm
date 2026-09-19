@@ -14,6 +14,7 @@ import {
   normalizeCompactionConfig,
   normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
+  normalizeProviderImageOutputFormat,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
@@ -110,6 +111,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
   normalizeCompactionConfig(config.llm);
+  normalizeProviderImageOutputFormat(config.llm?.providerImageOutputFormat);
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   normalizeHandoffConfirmationEnabled(config.handoffConfirmation);

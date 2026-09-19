@@ -1,6 +1,6 @@
 # Unit: WebUI app
 
-Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/nodeTargets.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
+Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/package.json, packages/webui/package-lock.json, packages/webui/pnpm-lock.yaml, packages/webui/test/reactRendererAliases.mjs, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/nodeTargets.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
 Secondary files: packages/webui/src/realtime.ts, packages/webui/src/boundedSessionList.ts, packages/webui/src/components/CollapsedSidebarContainer.tsx, packages/webui/test/boundedSessionList.test.mjs, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
@@ -25,6 +25,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 
 ## App behavior
 
+- `main.tsx` mounts the normal app or an embedded leaf with ReactDOM 18 `createRoot` and `StrictMode`. Vite resolves WebUI imports against one React 18 runtime rather than an aliased renderer; browser JSX fixtures use that same package-local runtime. The module-level contract is [D-webui-react18-runtime](../modules/webui.md#d-webui-react18-runtime).
 - Hash routing restores normal tabs plus current singleton Agents/Setup tabs; old agents/architecture/setup/oobe hash aliases remain inbound readers.
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.

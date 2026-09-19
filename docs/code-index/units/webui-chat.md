@@ -67,6 +67,8 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolScript progress context, `API_BASE_PATH`, and [webui-realtime](./webui-realtime.md). Model-settings navigation is canonical in [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 
+The browser history fixture verifies that the React root installed its renderer before exercising history and stream races; initial document loading alone does not establish fixture readiness.
+
 ## Design decisions
 
 ### D-chat-queued-preview

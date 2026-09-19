@@ -473,6 +473,7 @@ export const APP_CONFIG_SCHEMA = {
         compactBlockForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         maxOutput: { type: 'integer', minimum: 1, default: 32768, description: 'Maximum provider output tokens. Defaults to 32768.' },
+        providerImageOutputFormat: { enum: ['webp', 'jpeg'], default: 'webp', description: 'Format for optimized provider-bound images. Transparent pixels use PNG when JPEG is selected.' },
         openaiBaseUrl: { type: 'string' },
         openaiApiKey: { type: 'string' },
         anthropicBaseUrl: { type: 'string' },

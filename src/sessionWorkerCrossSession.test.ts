@@ -193,6 +193,11 @@ test('main-management facade forks read-only, rejects stale generations, and val
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /unknown key/.test(error.message),
     );
     await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'bad-name', displayName: null } }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /displayName must be a string/.test(error.message),
+    );
+    assert.equal(sessionManager.getAllSessions().has(`${parentId}_bad-name`), false);
+    await assert.rejects(
       () => client.call('execute', { sourceSessionId: parentId, operation: 'create_session', args: { agentName: 'main', sessionName: 'old-effort', effort: 'high' } }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /forceModel/.test(error.message),
     );
@@ -216,10 +221,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const inheritedResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { suffix: 'mp-new', fork: false, confirmation: TEST_CONFIRMATION },
+      args: { suffix: 'mp-new', displayName: 'Worker child', fork: false, confirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(inheritedResult?.result).includes(inheritedChildId));
     const inheritedChild = await sessionManager.getSession(inheritedChildId);
+    assert.equal(inheritedChild.displayName, 'Worker child');
+    assert.equal(sessionCatalogStore.get(inheritedChildId)?.displayName, 'Worker child');
     assert.equal(inheritedChild.model, undefined);
     assert.equal(inheritedChild.effort, undefined);
     assert.equal(inheritedChild.childModelDefault, undefined);
@@ -242,10 +249,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const crossAgentResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { agentName: targetAgent, suffix: 'worker-child', fork: false, confirmation: TEST_CONFIRMATION },
+      args: { agentName: targetAgent, suffix: 'worker-child', displayName: 'Across agents', fork: false, confirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(crossAgentResult?.result).includes(targetChildId));
     const targetChild = await sessionManager.getSession(targetChildId);
+    assert.equal(targetChild.displayName, 'Across agents');
+    assert.equal(sessionCatalogStore.get(targetChildId)?.displayName, 'Across agents');
     assert.equal(targetChild.agent, targetAgent);
     assert.equal(targetChild.parentSessionId, parentId);
     assert.match(targetChild.persistentMemorySnapshot, /WORKER_TARGET_MEMORY/);
@@ -266,10 +275,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
 
     // fork=true derives from the authority through a strictly read-only detached read.
     const forkResult: any = await client.call('execute',
-      { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-fork', fork: true, confirmation: TEST_CONFIRMATION } });
+      { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-fork', displayName: 'Worker fork', fork: true, confirmation: TEST_CONFIRMATION } });
     assert.ok(String(forkResult?.result).includes(forkChildId));
     const parentHistoryLength = (await sessionManager.getSessionMessages(parentId, 0, 1000)).length;
     const forked = await sessionManager.getSession(forkChildId);
+    assert.equal(forked.displayName, 'Worker fork');
+    assert.equal(sessionCatalogStore.get(forkChildId)?.displayName, 'Worker fork');
     assert.ok(forked.history.length >= parentHistoryLength, 'the fork inherits the authority history');
     assert.ok(JSON.stringify(forked.history.slice(0, parentHistoryLength)).includes('fork parent message one')
       && JSON.stringify(forked.history.slice(0, parentHistoryLength)).includes('fork parent message two'),
