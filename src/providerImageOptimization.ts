@@ -12,7 +12,9 @@ const TARGET_EDGE = 4096;
 const MAX_CACHED_ENTRY = 32 * 1024 * 1024;
 const CACHE_CAPACITY = 512 * 1024 * 1024;
 const CACHE_TRIM_TO = 384 * 1024 * 1024;
-const POLICY_VERSION = 1;
+// Increment when conversion semantics change; old derived bytes must never
+// survive an alpha or format-selection fix via a persistent cache hit.
+const POLICY_VERSION = 2;
 const inFlight = new Map<string, Promise<ProviderImageResult>>();
 const lastCleanupByRoot = new Map<string, number>();
 let cleanupPromise: Promise<void> | undefined;
@@ -226,9 +228,11 @@ async function convert(options: ProviderImageOptions): Promise<ProviderImageResu
 
   if (outputFormat === 'jpeg' && hasTransparency === undefined) {
     const metadata = await input.metadata();
-    hasTransparency = !!metadata.hasAlpha && (await sharp(buffer, {
+    // stats().isOpaque checks the actual alpha channel independently of its
+    // position (gray+alpha has two channels, RGBA has four).
+    hasTransparency = !!metadata.hasAlpha && !(await sharp(buffer, {
       page: 0, pages: 1, limitInputPixels: INPUT_PIXEL_LIMIT,
-    }).stats()).channels[3]?.min < 255;
+    }).stats()).isOpaque;
   }
   if (!isHeif) input = input.rotate();
   if (resize) input = input.resize({ width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)), fit: 'inside', withoutEnlargement: true });

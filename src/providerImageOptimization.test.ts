@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import zlib from 'zlib';
 import sharp from 'sharp';
 import { optimizeProviderImage } from './providerImageOptimization';
 
@@ -21,6 +22,43 @@ async function transparent(): Promise<Buffer> {
   return sharp({ create: { width: 200, height: 100, channels: 4, background: { r: 30, g: 80, b: 120, alpha: 0 } } })
     .composite([{ input: Buffer.from('<svg width="100" height="80"><text x="3" y="32" fill="red" font-size="24">Foxwarm</text></svg>'), left: 40, top: 10 }])
     .png().toBuffer();
+}
+
+// Construct actual PNG color type 4 (gray+alpha), not a Sharp-generated RGBA
+// fixture which would silently hide channel-position regressions.
+function grayscalePng(hasAlpha: boolean, transparentLastPixel: boolean): Buffer {
+  const width = 4100;
+  const crc = (bytes: Buffer): number => {
+    let value = -1;
+    for (const byte of bytes) {
+      value ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
+    }
+    return (value ^ -1) >>> 0;
+  };
+  const chunk = (name: string, data: Buffer): Buffer => {
+    const tag = Buffer.from(name, 'ascii');
+    const output = Buffer.alloc(12 + data.length);
+    output.writeUInt32BE(data.length, 0);
+    tag.copy(output, 4);
+    data.copy(output, 8);
+    output.writeUInt32BE(crc(output.subarray(4, output.length - 4)), output.length - 4);
+    return output;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = hasAlpha ? 4 : 0;
+  const row = Buffer.alloc(1 + width * (hasAlpha ? 2 : 1));
+  for (let index = 0; index < width; index += 1) {
+    row[1 + index * (hasAlpha ? 2 : 1)] = index % 255;
+    if (hasAlpha) row[2 + index * 2] = transparentLastPixel && index === width - 1 ? 0 : 255;
+  }
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(row)), chunk('IEND', Buffer.alloc(0)),
+  ]);
 }
 
 async function entryCount(root: string): Promise<number> {
@@ -85,6 +123,22 @@ test('JPEG option emits JPEG for opaque pixels and PNG for actual transparency',
   assert.equal((await sharp(webp.buffer).metadata()).pages, undefined);
 }));
 
+test('JPEG mode preserves actual grayscale+alpha PNG transparency without misclassifying opaque grayscale', async () => withCache(async root => {
+  for (const [input, channels, expectedMime] of [
+    [grayscalePng(true, true), 2, 'image/png'],
+    [grayscalePng(true, false), 2, 'image/jpeg'],
+    [grayscalePng(false, false), 1, 'image/jpeg'],
+  ] as const) {
+    const metadata = await sharp(input).metadata();
+    assert.equal(metadata.channels, channels, 'fixture must retain its actual gray/alpha layout');
+    assert.equal((await sharp(input).stats()).isOpaque, expectedMime === 'image/jpeg');
+    const result = await optimizeProviderImage({ buffer: input, mimeType: 'image/png', outputFormat: 'jpeg', cacheDir: root });
+    assert.equal(result.mimeType, expectedMime);
+    assert.equal((await sharp(result.buffer).metadata()).format, expectedMime.slice(6));
+    assert.equal((await sharp(result.buffer).stats()).isOpaque, expectedMime === 'image/jpeg');
+  }
+}));
+
 test('JPEG mode converts even small WebP input for endpoints without WebP support', async () => withCache(async root => {
   const opaqueWebp = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).webp({ quality: 20 }).toBuffer();
   const converted = await optimizeProviderImage({ buffer: opaqueWebp, mimeType: 'image/webp', outputFormat: 'jpeg', cacheDir: root });
@@ -111,9 +165,17 @@ test('cache hits skip decode and encode, policy changes invalidate, corruption r
   assert.equal(decodes, 2);
   assert.equal(await entryCount(root), 2);
 
-  const shard = (await fs.readdir(root)).find(name => /^[0-9a-f]{2}$/.test(name))!;
-  const entries = await fs.readdir(path.join(root, shard));
-  await fs.writeFile(path.join(root, shard, entries[0]), 'broken cache');
+  let webpEntry: string | undefined;
+  for (const shard of await fs.readdir(root)) {
+    if (!/^[0-9a-f]{2}$/.test(shard)) continue;
+    for (const name of await fs.readdir(path.join(root, shard))) {
+      const candidate = path.join(root, shard, name);
+      const header = JSON.parse((await fs.readFile(candidate, 'utf8')).split('\n', 1)[0]);
+      if (header.resultMime === 'image/webp') webpEntry = candidate;
+    }
+  }
+  assert.ok(webpEntry);
+  await fs.writeFile(webpEntry, 'broken cache');
   await optimizeProviderImage(options);
   assert.equal(decodes, 3, 'corrupt derived bytes must rebuild');
 }));

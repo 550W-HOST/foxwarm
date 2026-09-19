@@ -44,7 +44,7 @@ bytes; it must not introduce a QQ-specific durable image format.
 
 ## Tests
 
-- Atomic deduplication, traversal rejection, MIME/byte validation, nested single/multiple promotion, idempotence, lazy legacy import, provider/tool association, HEIC/HEIF alias normalization and malformed-input rejection, below-threshold still-image pass-through, GIF first frame, cache hit/corruption/cleanup, provider-only optimization, native replay preservation, failure preservation, live/archive/queue persistence, and fork reference preservation.
+- Atomic deduplication, traversal rejection, MIME/byte validation, nested single/multiple promotion, idempotence, lazy legacy import, provider/tool association, HEIC/HEIF alias normalization and malformed-input rejection, below-threshold still-image pass-through, GIF first frame, real grayscale+alpha PNG transparency versus opaque gray in JPEG mode, cache hit/corruption/cleanup, provider-only optimization, native replay preservation, failure preservation, live/archive/queue persistence, and fork reference preservation.
 
 ## Design decisions
 
