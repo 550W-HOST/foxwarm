@@ -23,6 +23,7 @@ import * as nodeExecution from './nodeExecution';
 import { nodeProviderRegistry } from './nodes/providers';
 import * as mcpExternal from './mcpExternalService';
 import { McpInboundHttpService } from './mcpInboundHttp';
+import { McpInboundMcpCatalog } from './mcpInboundCatalog';
 import * as vector from './vector';
 import { shutdownToolScriptRuntime } from './toolscript';
 import { registerChannel } from './channel';
@@ -424,7 +425,7 @@ async function start() {
         registerNodeWebSocket(httpServerInstance, nodeToken);
         registerNodeHttpRoutes(httpServerInstance);
         if (MCP_INBOUND_CONFIG.enabled) {
-            mcpInboundHttp = new McpInboundHttpService(MCP_INBOUND_CONFIG);
+            mcpInboundHttp = new McpInboundHttpService(MCP_INBOUND_CONFIG, new McpInboundMcpCatalog());
             mcpInboundHttp.register(httpServerInstance);
         }
         

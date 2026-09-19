@@ -261,11 +261,11 @@ vectorMaintenance:
 handoffConfirmation: false
 ```
 
-Inbound MCP listens at the fixed `/mcp` path when explicitly enabled; this
-transport foundation currently advertises **no Foxwarm tools**. Node tool
-execution, outbound MCP forwarding, and Session interactions are not connected
-to inbound MCP yet. This setting is separate from outbound MCP server
-configuration. An omitted block defaults to disabled; malformed blocks fail
+Inbound MCP listens at the fixed `/mcp` path when explicitly enabled. It
+advertises `foxwarm_discover` and `foxwarm_call` for authorized tools on
+configured outbound MCP servers. Node tools and internal Session interactions
+are not connected to inbound MCP yet. This setting is separate from outbound
+MCP server configuration. An omitted block defaults to disabled; malformed blocks fail
 validation even when `enabled: false`. Example shape (replace every placeholder
 with a distinct private token before enabling):
 

@@ -11,11 +11,13 @@ import type { HttpServer } from './httpServer';
 
 const IDLE_MS = 15 * 60_000;
 const MAX_SESSIONS = 32;
-const MAX_REQUEST_BYTES = 64 * 1024;
-const MAX_RESULT_BYTES = 64 * 1024;
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_CATALOG_BYTES = 256 * 1024;
+const MAX_RESULT_BYTES = 16 * 1024 * 1024;
 const MAX_TOOLS = 64;
 const MAX_PARALLEL_REQUESTS = 4;
-const POST_DEADLINE_MS = 60_000;
+// Configured outbound MCP tool timeouts can be as long as one hour; preserve their SDK deadline.
+const POST_DEADLINE_MS = 65 * 60_000;
 
 /** This is not an Agent or a Foxwarm internal Session. Only an authenticated MCP transport owns it. */
 export interface ExternalExecutionContext {
@@ -25,11 +27,14 @@ export interface ExternalExecutionContext {
   cwd: string | null;
 }
 
-/** Future concrete tool adapters connect here; the current application intentionally registers none. */
+/** Trusted process-local catalog; the application registers only implemented capabilities. */
 export interface McpInboundCatalog {
-  listTools(context: ExternalExecutionContext): Promise<Tool[]>;
-  callTool(context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;
+  listTools(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): Promise<Tool[]>;
+  callTool(context: ExternalExecutionContext, name: string, args: Record<string, unknown>, signal: AbortSignal, principal: VerifiedMcpInboundPrincipal): Promise<CallToolResult>;
 }
+
+/** Only the trusted catalog may mark a diagnostic as safe to return to the external client. */
+export class McpInboundSafeError extends Error {}
 
 type Connection = {
   id: string;
@@ -39,6 +44,7 @@ type Connection = {
   transport: StreamableHTTPServerTransport;
   lastActivity: number;
   active: number;
+  activePosts: number;
   activeSse?: Response;
   initialized: boolean;
   disposed: boolean;
@@ -103,7 +109,9 @@ export class McpInboundHttpService {
   private expireIdle(): void {
     const now = Date.now();
     for (const connection of this.live) {
-      if (now - connection.lastActivity >= this.idleMs) void this.dispose(connection).catch(() => {});
+      if (connection.activePosts === 0 && now - connection.lastActivity >= this.idleMs) {
+        void this.dispose(connection).catch(() => {});
+      }
     }
   }
 
@@ -135,8 +143,8 @@ export class McpInboundHttpService {
     const server = new Server({ name: 'foxwarm', version: '1.0.0' }, { capabilities: { tools: {} } });
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       try {
-        const tools = this.catalog ? await this.catalog.listTools(context) : [];
-        if (!Array.isArray(tools) || tools.length > MAX_TOOLS || Buffer.byteLength(JSON.stringify(tools)) > MAX_RESULT_BYTES) {
+        const tools = this.catalog ? await this.catalog.listTools(context, principal) : [];
+        if (!Array.isArray(tools) || tools.length > MAX_TOOLS || Buffer.byteLength(JSON.stringify(tools)) > MAX_CATALOG_BYTES) {
           throw new Error('Tool catalog exceeds size limit.');
         }
         return { tools };
@@ -145,19 +153,22 @@ export class McpInboundHttpService {
       }
     });
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-      if (!this.catalog) throw new McpError(ErrorCode.MethodNotFound, 'No tools are available.');
+      if (!this.catalog) return { isError: true, content: [{ type: 'text', text: 'No tools are available.' }] };
       try {
-        const result = await this.catalog.callTool(context, request.params.name, request.params.arguments || {}, extra.signal);
+        const result = await this.catalog.callTool(context, request.params.name, request.params.arguments || {}, extra.signal, principal);
         if (Buffer.byteLength(JSON.stringify(result)) > MAX_RESULT_BYTES) {
-          throw new Error('Tool result exceeds size limit.');
+          return { isError: true, content: [{ type: 'text', text: 'The tool may have completed, but its result exceeded the 16 MiB transport limit. Do not retry automatically.' }] };
         }
         return result;
-      } catch {
-        throw new McpError(ErrorCode.InternalError, 'Tool invocation failed.');
+      } catch (error) {
+        const detail = error instanceof McpInboundSafeError
+          ? error.message.slice(0, 1_200)
+          : 'Tool outcome unknown; do not retry automatically.';
+        return { isError: true, content: [{ type: 'text', text: detail }] };
       }
     });
     const connection: Connection = {
-      id, principal, context, server, transport, lastActivity: Date.now(), active: 0,
+      id, principal, context, server, transport, lastActivity: Date.now(), active: 0, activePosts: 0,
       initialized: false, disposed: false,
     };
     this.live.add(connection);
@@ -192,7 +203,7 @@ export class McpInboundHttpService {
       if (!connection || connection.disposed || connection.principal.externalId !== principal.externalId) {
         return sendError(res, 404, 'MCP session not found.');
       }
-      if (Date.now() - connection.lastActivity >= this.idleMs) {
+      if (connection.activePosts === 0 && Date.now() - connection.lastActivity >= this.idleMs) {
         await this.dispose(connection).catch(() => {});
         return sendError(res, 404, 'MCP session not found.');
       }
@@ -215,6 +226,7 @@ export class McpInboundHttpService {
     }
     connection.lastActivity = Date.now();
     connection.active++;
+    if (req.method === 'POST') connection.activePosts++;
     if (req.method === 'GET') {
       connection.activeSse = res;
       res.once('close', () => {
@@ -226,12 +238,15 @@ export class McpInboundHttpService {
     }
     const deadline = req.method === 'POST'
       ? setTimeout(() => {
-        sendError(res, 504, 'MCP request timed out.');
+        sendError(res, 504, 'MCP request timed out; a running tool may have an unknown outcome. Do not retry automatically.');
         void this.dispose(connection!).catch(() => {});
       }, this.postDeadlineMs)
       : undefined;
     deadline?.unref();
     try {
+      res.once('close', () => {
+        if (req.method === 'POST' && !res.writableFinished) void this.dispose(connection).catch(() => {});
+      });
       await Promise.race([
         connection.transport.handleRequest(req, res, req.body),
         new Promise<void>(resolve => res.once('close', () => resolve())),
@@ -241,6 +256,10 @@ export class McpInboundHttpService {
     } finally {
       if (deadline) clearTimeout(deadline);
       connection.active--;
+      if (req.method === 'POST') {
+        connection.activePosts--;
+        connection.lastActivity = Date.now();
+      }
       if (req.method === 'DELETE' || (!connection.initialized && !sessionId)) await this.dispose(connection).catch(() => {});
     }
   }

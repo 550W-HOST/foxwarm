@@ -39,6 +39,7 @@ None — this file is the application entry point and does not export any symbol
 - `./config` — all configuration constants and helpers
 - `./httpServer` — HttpServer class, `setHttpServer`
 - `./mcpInboundHttp` — stateful inbound HTTP service with identity-bound contexts and graceful transport shutdown.
+- `./mcpInboundCatalog` — Main-owned outbound MCP discovery/call adapter for verified external contexts.
 - `./nodes/websocket` — `registerNodeWebSocket`
 - `./nodes/httpRoutes` — `registerNodeHttpRoutes`
 - `./nodes/registry` — `initializeNodeRegistry`
@@ -56,7 +57,7 @@ None — this file is the application entry point and does not export any symbol
 - Optionally starts TUI mode and redirects logger output to the TUI screen.
 - Loads sessions and completes startup migrations before entering explicit disabled Vector mode or starting the configured local/child vector owner. Disabled mode does not load the manager/runtime/native LanceDB, start maintenance/backfill, or spawn the `dbWorkers` child. With `sessionWorkers:true`, it opens the durable Worker store, reconciles ownership, creates the supervisor/ingress coordinator with the Main destructive-admission wrapper, initializes Worker-aware SessionRuntime, installs enqueue/delete/fork/fence hooks, and resumes pending mailbox work. With workers disabled, SessionRuntime remains local. After SessionRuntime/Main Management establish catalog and ingress authority, Core awaits every Node provider's initialization before exposing Node execution. Startup failure is observable. Shutdown fences Node execution, then closes providers while Session ingress is still available, before shutting down workers and remaining services.
 - Builds an authorized-users list from all channel configs for the MessageRouter.
-- Starts an HTTP server (Express) with WebSocket upgrade, registers Node routes and WebSocket handlers when WebUI, Trigger, or MCP inbound is enabled. The MCP service registers `/mcp` before HTTP start; WebUIChannel and its SessionRuntime presentation bridge start only if WebUI or Trigger is enabled. An MCP-only deployment retains normal Main and Session initialization, but currently has no inbound Foxwarm tool catalog.
+- Starts an HTTP server (Express) with WebSocket upgrade and Node bootstrap/WS when WebUI, Trigger, or MCP inbound is enabled. The MCP service registers `/mcp` with the production outbound MCP discovery/call catalog before HTTP start; WebUIChannel and its SessionRuntime presentation bridge start only if WebUI or Trigger is enabled. An MCP-only deployment retains normal Main and Session initialization without granting external callers an internal Session or Node adapter.
 - Starts each configured channel (Telegram, Matrix, WebUI, WeWork, Weixin) with retry logic via `startWithRetry`.
 - Resumes busy sessions after all channels are up.
 - Schedules periodic log rotation.

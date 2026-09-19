@@ -178,10 +178,14 @@ test('SSE reconnect stays bound to same owner and sessions expire within a bound
   }, 200, 1);
 });
 
-test('SDK and Express bound request/catalog/results and reject unauthorized or malformed initialization', async () => {
+test('SDK and Express admit real-sized requests/results and bound excessive payloads without repeating effects', async () => {
+  let calls = 0;
   await withInbound({
     async listTools() { return tools; },
-    async callTool() { return { content: [{ type: 'text', text: 'A'.repeat(70 * 1024) }] }; },
+    async callTool(_context, _name, args) {
+      calls++;
+      return { content: [{ type: 'text', text: 'A'.repeat(args.large ? 17 * 1024 * 1024 : 70 * 1024) }] };
+    },
   }, async url => {
     const noSession = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${alphaToken}` } });
     assert.equal(noSession.status, 400);
@@ -200,9 +204,15 @@ test('SDK and Express bound request/catalog/results and reject unauthorized or m
     const a = sdkClient(url, alphaToken);
     await a.client.connect(a.transport);
     try {
-      const result = await a.client.callTool({ name: 'synthetic_context', arguments: {} }).catch(error => error);
-      assert.match(String(result), /Tool invocation failed/);
-      const oversized = await fetch(url, { method: 'POST', headers: rawHeaders(alphaToken, a.transport.sessionId), body: JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/list', params: { bulk: 'B'.repeat(70 * 1024) } }) });
+      const result = await a.client.callTool({ name: 'synthetic_context', arguments: {} });
+      const content = (result as CallToolResult).content;
+      assert.equal(content[0]?.type, 'text');
+      assert.equal((content[0] as any)?.text.length, 70 * 1024);
+      const tooLargeResult = await a.client.callTool({ name: 'synthetic_context', arguments: { large: true } });
+      assert.equal(tooLargeResult.isError, true);
+      assert.match((((tooLargeResult as CallToolResult).content?.[0]) as any)?.text || '', /may have completed.*Do not retry/);
+      assert.equal(calls, 2);
+      const oversized = await fetch(url, { method: 'POST', headers: rawHeaders(alphaToken, a.transport.sessionId), body: JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/list', params: { bulk: 'B'.repeat(8 * 1024 * 1024 + 1) } }) });
       assert.equal(oversized.status, 413);
       const badMedia = await fetch(url, { method: 'POST', headers: { ...rawHeaders(alphaToken, a.transport.sessionId), 'Content-Type': 'text/plain' }, body: '{}' });
       assert.equal(badMedia.status, 415);
@@ -237,6 +247,28 @@ test('a stalled SDK tool request times out, aborts its handler and releases the 
       assert.equal(gone.status, 404);
     } finally { await a.client.close(); }
   }, 60_000, 1, 80);
+});
+
+test('a live outbound call may outlast idle expiry without losing its context, then returns to normal idle timeout', async () => {
+  await withInbound({
+    async listTools() { return tools; },
+    async callTool() {
+      await new Promise(resolve => setTimeout(resolve, 180));
+      return { content: [{ type: 'text', text: 'completed once' }] };
+    },
+  }, async url => {
+    const a = sdkClient(url, alphaToken);
+    await a.client.connect(a.transport);
+    const id = a.transport.sessionId!;
+    try {
+      const result = await a.client.callTool({ name: 'synthetic_context', arguments: {} }) as CallToolResult;
+      assert.equal((result.content[0] as any).text, 'completed once');
+      assert.deepEqual((await a.client.listTools()).tools.map(tool => tool.name), ['synthetic_context']);
+      await new Promise(resolve => setTimeout(resolve, 220));
+      const expired = await fetch(url, { headers: { ...rawHeaders(alphaToken, id), Accept: 'text/event-stream' } });
+      assert.equal(expired.status, 404);
+    } finally { await a.client.close(); }
+  }, 80, 1, 500);
 });
 
 test('bounded MCP session capacity is released on DELETE without adopting another context', async () => {

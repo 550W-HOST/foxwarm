@@ -106,6 +106,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 |----------|-------------|
 | `tool_search_tools` | Unified search across builtin, MCP, and node tool sources |
 | `formatSearchToolsOutput` | Renders bounded copyable TypeScript-like declarations, selected/total counts, schema omission markers, and discovery warnings |
+| `scoreUnifiedToolQuery`, `compareUnifiedSearchResults` | Shared pure ranking and deterministic tie-break for internal search and inbound MCP discovery |
 | `tool_call_tool` | Parses the unified call surface and delegates to the canonical resolved-tool executor |
 
 ### tools/resolvedTools.ts — Canonical invocation resolution
@@ -115,6 +116,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
+| `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
 
 ### tools/definitions.ts — Tool definition array
 | Export | Description |
