@@ -177,6 +177,182 @@ test('a script-returned image reaches the tool result and the session as a Blob 
   }
 });
 
+test('returning the one-shot result object promotes its image parts', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_envelope');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    'result = request_model_without_context("draw a fox")',
+    'return result',
+  ].join('\n')));
+
+  const session = await sessionManager.getSession(sessionId);
+  const png = await makePng(9, 7, { r: 12, g: 120, b: 208 });
+  const ref = await storePng(png, 'ig_envelope', 9, 7);
+  const originalRequestLlmOnce = (llm as any).requestLlmOnce;
+  (llm as any).requestLlmOnce = async () => ({ text: '', allParts: [imagePart(ref)], toolCalls: [] as any[] });
+
+  try {
+    const toolMessage = await executeTools([
+      { id: 'call_envelope', name: 'run_script', args: { filePath: scriptName } },
+    ], { sessionId, session }, session);
+
+    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    assert.equal(imageParts.length, 1);
+    assert.equal(imageParts[0].imageMeta?.imageId, 'call_envelope#1');
+    assert.deepEqual(imageParts[0].inlineDataRef, ref);
+    assert.equal(JSON.stringify(toolMessage).includes(png.toString('base64')), false);
+  } finally {
+    (llm as any).requestLlmOnce = originalRequestLlmOnce;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+    await fs.remove(resolveImageBlobPath(ref.blobId!));
+  }
+});
+
+test('returning an object that carries the one-shot parts promotes its image parts', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_parts_only');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    'result = request_model_without_context("draw a fox")',
+    'return {"parts": result["parts"]}',
+  ].join('\n')));
+
+  const session = await sessionManager.getSession(sessionId);
+  const png = await makePng(4, 3, { r: 208, g: 52, b: 12 });
+  const ref = await storePng(png, 'ig_parts_only', 4, 3);
+  const originalRequestLlmOnce = (llm as any).requestLlmOnce;
+  (llm as any).requestLlmOnce = async () => ({ text: 'ignored text', allParts: [imagePart(ref)], toolCalls: [] as any[] });
+
+  try {
+    const toolMessage = await executeTools([
+      { id: 'call_parts_only', name: 'run_script', args: { filePath: scriptName } },
+    ], { sessionId, session }, session);
+
+    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    assert.equal(imageParts.length, 1);
+    assert.equal(imageParts[0].imageMeta?.imageId, 'call_parts_only#1');
+    assert.deepEqual(imageParts[0].inlineDataRef, ref);
+    assert.equal(responseParts(toolMessage).result.parts, '[1 image part(s) promoted]');
+    assert.equal(JSON.stringify(toolMessage).includes(png.toString('base64')), false);
+  } finally {
+    (llm as any).requestLlmOnce = originalRequestLlmOnce;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+    await fs.remove(resolveImageBlobPath(ref.blobId!));
+  }
+});
+
+test('promoting an inline image keeps unrelated parts JSON untouched', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_inline_parts');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    'return {',
+    '    "inlineData": {"data": args["data"], "mimeType": "image/png"},',
+    '    "parts": [{"text": "KEEP_ME"}, {"note": "ordinary json"}],',
+    '    "status": "kept",',
+    '}',
+  ].join('\n')));
+
+  const session = await sessionManager.getSession(sessionId);
+  const png = await makePng(5, 2, { r: 32, g: 96, b: 192 });
+  try {
+    const toolMessage = await executeTools([
+      { id: 'call_inline_parts', name: 'run_script', args: { filePath: scriptName, args: { data: png.toString('base64') } } },
+    ], { sessionId, session }, session);
+
+    const response = responseParts(toolMessage);
+    assert.deepEqual(response.result.parts, [{ text: 'KEEP_ME' }, { note: 'ordinary json' }]);
+    assert.equal(response.result.status, 'kept');
+    assert.match(String(response.result.inlineData), /^\[image promoted, mimeType=image\/png\]$/);
+    const imageParts = toolMessage.parts.filter(part => part.inlineData);
+    assert.equal(imageParts.length, 1);
+    assert.equal(imageParts[0].imageMeta?.imageId, 'call_inline_parts#1');
+    assert.equal(toolMessage.parts.filter(part => part.inlineDataRef).length, 0);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('promoting inlineDataItems keeps unrelated parts JSON untouched', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_inline_items');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    'return {',
+    '    "inlineDataItems": [{"data": args["data"], "mimeType": "image/png"}],',
+    '    "parts": [{"text": "KEEP_ME_TOO"}],',
+    '}',
+  ].join('\n')));
+
+  const session = await sessionManager.getSession(sessionId);
+  const png = await makePng(6, 4, { r: 96, g: 32, b: 192 });
+  try {
+    const toolMessage = await executeTools([
+      { id: 'call_inline_items', name: 'run_script', args: { filePath: scriptName, args: { data: png.toString('base64') } } },
+    ], { sessionId, session }, session);
+
+    const response = responseParts(toolMessage);
+    assert.deepEqual(response.result.parts, [{ text: 'KEEP_ME_TOO' }]);
+    assert.equal(response.result.inlineDataItems, '[1 image(s) promoted]');
+    const imageParts = toolMessage.parts.filter(part => part.inlineData);
+    assert.equal(imageParts.length, 1);
+    assert.equal(imageParts[0].imageMeta?.imageId, 'call_inline_items#1');
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('a one-shot part carrying both text and an image reference keeps both', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_dual_field');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain('return request_model_without_context("draw and label")'));
+
+  const session = await sessionManager.getSession(sessionId);
+  const png = await makePng(4, 3, { r: 12, g: 120, b: 208 });
+  const ref = await storePng(png, 'ig_dual_field', 4, 3);
+  const originalRequestLlmOnce = (llm as any).requestLlmOnce;
+  (llm as any).requestLlmOnce = async () => ({
+    text: 'here is a fox',
+    allParts: [{ text: 'here is a fox', inlineDataRef: ref }],
+    toolCalls: [] as any[],
+  });
+
+  try {
+    const raw = await tool_run_script({ filePath: scriptName }, { sessionId, session });
+    assert.equal(raw.status, 'completed', String(raw.error));
+    assert.equal((raw as any).imageParts?.length, 1);
+    assert.equal((raw as any).imageParts[0].text, 'here is a fox');
+    assert.deepEqual((raw as any).imageParts[0].inlineDataRef, ref);
+    assert.deepEqual(raw.result, { text: 'here is a fox', parts: [{ text: 'here is a fox' }, '[1 image part(s) promoted]'] });
+
+    const toolMessage = await executeTools([
+      { id: 'call_dual_field', name: 'run_script', args: { filePath: scriptName } },
+    ], { sessionId, session }, session);
+    const imageParts = toolMessage.parts.filter(part => part.inlineDataRef);
+    assert.equal(imageParts.length, 1);
+    assert.deepEqual(imageParts[0].inlineDataRef, ref);
+    assert.equal(responseParts(toolMessage).result.text, 'here is a fox');
+    assert.deepEqual(responseParts(toolMessage).result.parts, [{ text: 'here is a fox' }, '[1 image part(s) promoted]']);
+    assert.equal(JSON.stringify(toolMessage).includes(png.toString('base64')), false);
+  } finally {
+    (llm as any).requestLlmOnce = originalRequestLlmOnce;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+    await fs.remove(resolveImageBlobPath(ref.blobId!));
+  }
+});
+
 test('text plus image returns keep the text and promote only the image parts', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_mixed');

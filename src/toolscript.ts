@@ -649,7 +649,9 @@ function extractAndCleanInlineData(lastResult: any): {
   }
   // Strip raw image bytes and promoted references from result and replace them with
   // bounded placeholders so they do not bloat the text representation seen by the model.
-  const { inlineData, inlineDataItems, parts: _parts, ...rest } = lastResult;
+  // Unrelated result fields, including a `parts` list without promoted image parts,
+  // are preserved verbatim.
+  const { inlineData, inlineDataItems, ...rest } = lastResult;
   if (inlineData) {
     rest.inlineData = `[image promoted, mimeType=${inlineData.mimeType || 'unknown'}]`;
   }
@@ -659,7 +661,13 @@ function extractAndCleanInlineData(lastResult: any): {
   if (promotedImageParts) {
     inlineDataFields.imageParts = promotedImageParts;
     const placeholder = `[${promotedImageParts.length} image part(s) promoted]`;
-    rest.parts = remainingParts && remainingParts.length > 0 ? [...remainingParts, placeholder] : placeholder;
+    // Text that rode along on a promoted part stays visible; only the promoted
+    // image entries themselves are replaced by the bounded placeholder.
+    const retainedTexts = promotedImageParts
+      .filter(part => typeof part.text === 'string' && part.text.length > 0)
+      .map(part => ({ text: part.text }));
+    const survivors = [...(remainingParts || []), ...retainedTexts];
+    rest.parts = survivors.length > 0 ? [...survivors, placeholder] : placeholder;
   }
   return { inlineDataFields, cleanedResult: rest };
 }
@@ -842,17 +850,21 @@ function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtime
 function projectOneShotResultParts(allParts: MessagePart[] | undefined): MessagePart[] {
   const parts: MessagePart[] = [];
   for (const part of allParts || []) {
+    // A provider part is not an exclusive union, so text and an image reference
+    // are projected independently and neither can silently drop the other.
+    const projected: MessagePart = {};
     if (typeof part.text === 'string' && part.text.length > 0) {
-      parts.push({ text: part.text });
-      continue;
+      projected.text = part.text;
     }
     const ref = part.inlineDataRef;
-    if (!ref || typeof ref.blobId !== 'string' || ref.blobId.length === 0) {
-      continue;
+    if (ref && typeof ref.blobId === 'string' && ref.blobId.length > 0) {
+      // `apiPath` is WebUI transport state and never belongs to a canonical part.
+      const { apiPath: _apiPath, ...canonicalRef } = ref;
+      projected.inlineDataRef = canonicalRef;
     }
-    // `apiPath` is WebUI transport state and never belongs to a canonical part.
-    const { apiPath: _apiPath, ...canonicalRef } = ref;
-    parts.push({ inlineDataRef: canonicalRef });
+    if (projected.text !== undefined || projected.inlineDataRef) {
+      parts.push(projected);
+    }
   }
   return parts;
 }
