@@ -9,7 +9,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Key Exports
 
-- `InterleavedToolGroup` — renders grouped tool call/response pairs from adjacent messages
+- `InterleavedToolGroup` — renders model call/response pairs selected by `timelineRows`, including pairs separated only by event rows
 - `ToolCallsBlock` — renders tool calls from a single message (no responses yet)
 - `ToolResponsesBlock` — renders tool responses from a single message (orphaned)
 - `ToolGroupSummaryCard` — collapsed summary card for a group of tool calls

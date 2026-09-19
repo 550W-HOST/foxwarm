@@ -784,7 +784,7 @@ const MessageRow = memo(function MessageRow({
   const {
     key: messageKey,
     msg,
-    nextMsg,
+    pairedToolResponse,
     group,
     collapsedGroup,
     renderSummary,
@@ -892,7 +892,7 @@ const MessageRow = memo(function MessageRow({
             {renderSummary && group && (
               <ToolGroupSummaryCard items={group.summaryItems} onExpand={() => onExpandGroup(group.key)} />
             )}
-            {collapsedGroup ? null : (interleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
+            {collapsedGroup ? null : (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
             {collapsedGroup ? null : (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
             {usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} />}
           </div>
