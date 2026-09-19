@@ -15,6 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
+- `MCP_INBOUND_CONFIG`, `normalizeMcpInboundConfig`, and `authenticateMcpInboundBearer` — startup-validated inbound identity settings and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-mcp-inbound-config](./src-mcp-inbound-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
 - `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.
@@ -52,6 +53,7 @@ Worker placement is startup configuration:
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
 - `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only structured confirmation for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
+- `mcpInbound` is a strict startup-only `{ enabled, identities }` block, disabled when absent. Malformed disabled blocks still fail validation; enabled configurations need independently authenticated external IDs. No inbound listener is registered in this phase. See [D-config-mcp-inbound-foundation](./src-mcp-inbound-config.md#d-config-mcp-inbound-foundation).
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
 - `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. `type: docker-worktree` accepts a fixed Docker launcher/image, canonical allowed roots, allowed network modes, optional state location, and bounded resource defaults. Both variants reject unknown fields and require restart.

@@ -5,6 +5,10 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
+import { normalizeMcpInboundConfig, type McpInboundConfig } from './mcpInboundConfig';
+
+export { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from './mcpInboundConfig';
+export type { McpInboundConfig, NormalizedMcpInboundConfig } from './mcpInboundConfig';
 
 export type ChannelProgressConfig = false | {
   intervalMs: number;
@@ -537,6 +541,7 @@ export function normalizeHandoffConfirmationEnabled(value: unknown): boolean {
 }
 
 export type AppConfig = {
+  mcpInbound?: McpInboundConfig;
   nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
@@ -655,7 +660,13 @@ export function readAppConfigFile(): AppConfig {
     return {};
   }
 
-  const parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
+  let parsed: AppConfig | undefined;
+  try {
+    parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
+  } catch (error) {
+    if (error instanceof yaml.YAMLException) throw new Error('Invalid app config YAML.');
+    throw error;
+  }
   return parsed || {};
 }
 
@@ -715,6 +726,7 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 
 export const APP_CONFIG = loadAppConfig();
 
+export const MCP_INBOUND_CONFIG = normalizeMcpInboundConfig(APP_CONFIG.mcpInbound);
 export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);

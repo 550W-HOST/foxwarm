@@ -261,6 +261,28 @@ vectorMaintenance:
 handoffConfirmation: false
 ```
 
+Inbound MCP configuration currently provides **validation and authorization
+foundation only**; enabling the block does not yet start an MCP listener. The
+future endpoint path is fixed at `/mcp`. It is separate from outbound MCP server
+configuration. An omitted block defaults to disabled; malformed blocks fail
+validation even when `enabled: false`. Example shape (replace every placeholder
+with a distinct private token before enabling):
+
+```yaml
+mcpInbound:
+  enabled: false
+  identities:
+    operatorA: { token: REPLACE_WITH_UNIQUE_SECRET_A }
+    operatorB: { token: REPLACE_WITH_UNIQUE_SECRET_B }
+```
+
+Only an explicit `enabled: true` activates the configuration; there is no
+environment-variable token fallback. Never reuse the WebUI or Node pairing
+token. Ordered tool policy rules in `state/tool-authorization.yaml` may use
+`match.externalId`; externally authenticated calls without a matching allow
+rule are denied even if the policy's default is `allow`. Internal Session policy
+behavior is unchanged. This phase does not expose external tools or Sessions.
+
 `llm.compactKeepPercent` controls the fraction of recent rendered history kept
 by default during compaction. `llm.compactThresholdPercent` controls the
 automatic compaction trigger as a fraction of the resolved model context

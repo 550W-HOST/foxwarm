@@ -4,11 +4,13 @@ import os from 'os';
 import path from 'path';
 import test from 'node:test';
 import {
+  buildExternalToolAuthorizationRequest,
   buildToolAuthorizationRequest,
   evaluateToolAuthorization,
   evaluateToolAuthorizationSync,
   evaluateToolAuthorizationPolicy,
   installToolAuthorizationPolicyBytes,
+  isToolAuthorizationPotentiallyVisibleSync,
   isToolAuthorizationPolicyUnavailable,
   loadToolAuthorizationPolicy,
   loadToolAuthorizationPolicySync,
@@ -27,6 +29,14 @@ import { tool_run_script } from './toolscript';
 import { canonicalPotentialPathSync } from './utils/pathResolve';
 import { getAgentDir } from './config';
 import * as sessionManager from './sessionManager';
+import { authenticateMcpInboundBearer, normalizeMcpInboundConfig } from './mcpInboundConfig';
+
+const principalFor = (externalId: 'alpha' | 'beta') => authenticateMcpInboundBearer(
+  normalizeMcpInboundConfig({ enabled: true, identities: {
+    alpha: { token: 'rule-test-secret-alpha' }, beta: { token: 'rule-test-secret-beta' },
+  } }),
+  `Bearer rule-test-secret-${externalId}`,
+)!;
 
 const allowPolicy = (): ToolAuthorizationPolicy => ({ version: 1, defaultAction: 'allow', rules: [] });
 
@@ -500,4 +510,89 @@ test('foreground ToolScript propagates policy unavailability while background mo
   assert.equal(background.status, 'failed');
   assert.match(String(background.error), /authorization policy is unavailable/i);
   await fs.remove(dir);
+});
+
+test('externalId selector preserves v1 first-match rules and separates external fallthrough from internal', () => {
+  const policy = parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: allow
+rules:
+- id: generic-read-allow
+  match: { tool: { source: node, name: read } }
+  action: allow
+- id: external-read-deny
+  match: { externalId: alpha, tool: { source: node, name: read } }
+  action: deny
+- id: external-exec-allow
+  match: { externalId: alpha, tool: { source: node, name: exec }, targetNode: node-a }
+  action: allow
+- id: agent-exec-allow
+  match: { agent: worker, tool: { source: node, name: exec } }
+  action: allow
+`);
+  const external = (externalId: 'alpha' | 'beta', name: string, targetNode = 'node-a') => buildExternalToolAuthorizationRequest({
+    principal: principalFor(externalId), tool: { source: 'node', name }, targetNode,
+  });
+  assert.deepEqual(evaluateToolAuthorizationPolicy(policy, external('alpha', 'read')).rule?.id, 'generic-read-allow');
+  assert.deepEqual(evaluateToolAuthorizationPolicy(policy, external('alpha', 'exec')).rule?.id, 'external-exec-allow');
+  assert.equal(evaluateToolAuthorizationPolicy(policy, external('beta', 'exec')).action, 'deny');
+  assert.equal(evaluateToolAuthorizationPolicy(policy, external('alpha', 'exec', 'node-b')).action, 'deny');
+  assert.throws(() => buildExternalToolAuthorizationRequest({
+    principal: { externalId: 'alpha' } as any, tool: { source: 'node', name: 'exec' },
+  }), /Verified MCP inbound identity is required/);
+  assert.equal(evaluateToolAuthorizationPolicy(policy, buildToolAuthorizationRequest({
+    session: { id: 'worker/main', agent: 'worker' }, tool: { source: 'node', name: 'exec' }, targetNode: 'node-a',
+  })).rule?.id, 'agent-exec-allow');
+  assert.equal(evaluateToolAuthorizationPolicy(policy, buildToolAuthorizationRequest({
+    session: { id: 'other/main', agent: 'other' }, tool: { source: 'node', name: 'exec' }, targetNode: 'node-a',
+  })).action, 'allow');
+  assert.throws(() => parseToolAuthorizationPolicyBytes('version: 1\nrules:\n- id: obsolete\n  match: { external: alpha }\n  action: allow\n'), /unsupported field/);
+});
+
+test('external requests never acquire absent Agent or Session-target relationship facts', () => {
+  const policy = parseToolAuthorizationPolicyBytes(`
+version: 1
+defaultAction: deny
+rules:
+- id: agent-absent
+  match: { agent: { exists: false }, tool: read }
+  action: allow
+- id: agent-directory
+  match: { tool: read, path: { allWithin: "${'${agent.dir}'}" } }
+  action: allow
+- id: same-agent
+  match: { tool: { source: builtin, name: send_to_session }, args: { sessionId: { session: { sameAgent: true } } } }
+  action: allow
+- id: external-session-fact
+  match: { externalId: alpha, session: external-run-1, tool: { source: node, name: exec } }
+  action: allow
+`);
+  const read = buildExternalToolAuthorizationRequest({ principal: principalFor('alpha'), tool: { source: 'node', name: 'read' }, args: { filePath: 'notes.txt' } });
+  assert.equal(read.agent, undefined);
+  assert.deepEqual(read.paths, []);
+  assert.equal(evaluateToolAuthorizationPolicy(policy, read).action, 'deny');
+  const send: any = buildExternalToolAuthorizationRequest({ principal: principalFor('alpha'), tool: { source: 'builtin', name: 'send_to_session' }, args: { sessionId: 'main' } });
+  send.sessionTargets = { sessionId: { id: 'main', agent: 'main' } };
+  assert.equal(evaluateToolAuthorizationPolicy(policy, send).action, 'deny');
+  assert.equal(evaluateToolAuthorizationPolicy(policy, buildExternalToolAuthorizationRequest({
+    principal: principalFor('alpha'), sessionId: 'external-run-1', tool: { source: 'node', name: 'exec' },
+  })).action, 'allow');
+  assert.equal(evaluateToolAuthorizationPolicy(policy, buildExternalToolAuthorizationRequest({
+    principal: principalFor('alpha'), tool: { source: 'node', name: 'exec' },
+  })).action, 'deny');
+});
+
+test('missing policy denies external requests while preserving internal default and discovery behavior', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-auth-missing-'));
+  try {
+    setToolAuthorizationPolicyPathForTests(path.join(dir, 'absent.yaml'));
+    const external = buildExternalToolAuthorizationRequest({ principal: principalFor('alpha'), tool: { source: 'node', name: 'exec' } });
+    const internal = buildToolAuthorizationRequest({ session: { id: 'main', agent: 'main' }, tool: { source: 'node', name: 'exec' } });
+    assert.equal((await evaluateToolAuthorization(external)).action, 'deny');
+    assert.equal(evaluateToolAuthorizationSync(internal).action, 'allow');
+    assert.equal(isToolAuthorizationPotentiallyVisibleSync(external), false);
+    assert.equal(isToolAuthorizationPotentiallyVisibleSync(internal), true);
+  } finally {
+    await fs.remove(dir);
+  }
 });
