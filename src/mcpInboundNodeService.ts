@@ -160,9 +160,15 @@ export async function externalNodeAction(
   action: 'list' | 'status' | 'select', nodeId?: string,
 ) {
   const effectOwner = owner(principal, context);
+  if (action !== 'select' && nodeId !== undefined) throw new Error(`Node ${action} does not accept nodeId.`);
+  const selectedNodeId = action === 'select' && typeof nodeId === 'string' ? nodeId.trim() : undefined;
+  if (action === 'select' && (!selectedNodeId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(selectedNodeId))) {
+    throw new Error('Select requires an exact valid nodeId.');
+  }
+  const targetNode = action === 'select' ? selectedNodeId : action === 'status' ? context.currentNode : undefined;
   if ((await evaluateToolAuthorization(buildExternalToolAuthorizationRequest({
-    principal, sessionId: context.id, tool: { source: 'builtin', name: 'node' }, targetNode: 'master',
-    args: { action, ...(nodeId === undefined ? {} : { nodeId }) },
+    principal, sessionId: context.id, tool: { source: 'builtin', name: 'node' }, targetNode,
+    args: { action, ...(selectedNodeId === undefined ? {} : { nodeId: selectedNodeId }) },
   }))).action !== 'allow') throw new Error('Node action is not permitted.');
   if (action === 'status') {
     const selected = await nodeProviderRegistry.resolveNode(context.currentNode);
@@ -174,20 +180,19 @@ export async function externalNodeAction(
     const nodes = [...new Set(tools.map(tool => tool.nodeId))];
     return { currentNode: context.currentNode, nodes: nodes.slice(0, MAX_NODES) };
   }
-  if (!nodeId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(nodeId)) throw new Error('Select requires an exact valid nodeId.');
-  const selected = await nodeProviderRegistry.resolveNode(nodeId);
+  const selected = await nodeProviderRegistry.resolveNode(selectedNodeId!);
   if (!selected || selected.descriptor.availability !== 'ready' || selected.descriptor.kind !== 'remote'
-    || !nodesManager.supportsExternalOwner(nodeId) || !selected.descriptor.tools.some(tool =>
+    || !nodesManager.supportsExternalOwner(selectedNodeId!) || !selected.descriptor.tools.some(tool =>
       EXTERNAL_NODE_TOOLS.has(tool.name) && isToolAuthorizationPotentiallyVisibleSync(buildExternalToolAuthorizationRequest({
-        principal, sessionId: context.id, tool: { source: 'node', name: tool.name }, targetNode: nodeId,
+        principal, sessionId: context.id, tool: { source: 'node', name: tool.name }, targetNode: selectedNodeId,
       })))) throw new Error('Node is not available to this external identity.');
-  const result = await nodesManager.executeExternalTool(nodeId, 'get_default_cwd', {}, effectOwner);
+  const result = await nodesManager.executeExternalTool(selectedNodeId!, 'get_default_cwd', {}, effectOwner);
   const raw = result && typeof result === 'object' && 'output' in result ? (result as { output?: unknown }).output : result;
   if (typeof raw !== 'string' || !raw || raw.length > 4096) throw new Error('Node did not return a valid default working directory.');
-  if (context.currentNode !== nodeId) {
-    context.currentNode = nodeId;
+  if (context.currentNode !== selectedNodeId) {
+    context.currentNode = selectedNodeId!;
     context.cwd = raw; // The selected Node supplied its own default; no previous Node cwd is reused.
     context.selectionGeneration++;
   }
-  return { currentNode: nodeId, cwd: context.cwd, defaultCwd: raw };
+  return { currentNode: selectedNodeId, cwd: context.cwd, defaultCwd: raw };
 }

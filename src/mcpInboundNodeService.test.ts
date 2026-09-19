@@ -79,7 +79,32 @@ test('an external context discovers, selects, and uses paired CLI file capabilit
     const tools = await listExternalNodeTools(alpha, a);
     assert.deepEqual(new Set(tools.map(tool => tool.name)), new Set(['read', 'write', 'edit', 'apply_patch', 'exec']));
     assert.equal((await externalNodeAction(alpha, a, 'status')).available, false); // master not yet supported externally.
-    assert.equal((await externalNodeAction(alpha, a, 'select', 'paired-external-node')).currentNode, 'paired-external-node');
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1
+defaultAction: deny
+rules:
+  - id: master-only-node-action
+    match: { externalId: alpha, tool: { source: builtin, name: node }, targetNode: master }
+    action: allow
+  - id: remote-file-is-visible
+    match: { externalId: alpha, tool: { source: node, name: read }, targetNode: paired-external-node }
+    action: allow
+`));
+    assert.equal((await externalNodeAction(alpha, a, 'status')).currentNode, 'master');
+    await assert.rejects(() => externalNodeAction(alpha, a, 'list'), /not permitted/);
+    await assert.rejects(() => externalNodeAction(alpha, a, 'select', 'paired-external-node'), /not permitted/);
+    assert.equal(a.currentNode, 'master');
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1
+defaultAction: deny
+rules:
+  - id: exact-node-select
+    match: { externalId: alpha, tool: { source: builtin, name: node }, targetNode: paired-external-node, args: { action: select, nodeId: paired-external-node } }
+    action: allow
+  - id: remote-file-is-visible
+    match: { externalId: alpha, tool: { source: node, name: read }, targetNode: paired-external-node }
+    action: allow
+`));
+    assert.equal((await externalNodeAction(alpha, a, 'select', ' paired-external-node ')).currentNode, 'paired-external-node');
+    setToolAuthorizationPolicyForTests(policy);
     assert.equal((await externalNodeAction(alpha, a, 'status')).available, true);
     const filePath = path.join(dir, 'test.txt');
     await callExternalNodeTool(alpha, a, 'paired-external-node', 'write', { filePath, content: 'one', createDirs: true });
