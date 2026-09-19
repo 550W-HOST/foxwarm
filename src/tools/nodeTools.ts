@@ -179,13 +179,13 @@ export const tool_node_bootstrap_info = async (args: ToolArgs = {}, ctx?: ToolCo
     return buildNodeBootstrapInfo({ pairingToken: token });
 };
 
-export const tool_node_pair_approve = async (args: ToolArgs, ctx?: ToolContext) => {
+export const tool_node_pair_approve = async (args: ToolArgs, ctx?: ToolContext, assertBeforeApproval?: () => void) => {
     if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_pair_approve', args, ctx);
     const { pendingId, nodeId: requestedNodeId } = args;
     if (!pendingId) throw new Error('Missing required parameter: pendingId');
 
     const { approvePendingPairing } = await import('../nodes/registry');
-    const result = await approvePendingPairing(pendingId, requestedNodeId || undefined);
+    const result = await approvePendingPairing(pendingId, requestedNodeId || undefined, assertBeforeApproval);
     return `✅ Approved node \`${result.nodeId}\` (delivered live: ${result.deliveredLive})`;
 };
 

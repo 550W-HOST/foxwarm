@@ -15,7 +15,7 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 - `createNodeRegistryStore(filePath?)` — factory for the disk-backed store
 - `initializeNodeRegistry()` — loads registry and cleans expired pairings
 - `createPendingPairing(input)` — creates a new pairing request with a 6-digit code
-- `approvePendingPairing(pendingId, requestedNodeId?)` — approves a pairing, generates auth token, notifies via WebSocket
+- `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` — approves a pairing, optionally checks a live external caller after asynchronous lookup and before trust mutation, generates auth token, notifies via WebSocket
 - `rejectPendingPairing(pendingId, reason?)` — rejects and notifies client
 - `claimApprovedPairing(pendingId)` — retrieves credentials for offline-approved pairings
 - `listPendingPairings()` — returns pending pairings with connection status
@@ -60,7 +60,7 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 | `isPendingPairingExpired(record, now)` | ~316 | Checks if a pairing has exceeded TTL |
 | `cleanupExpiredPendingPairings(now)` | ~321 | Removes expired pairings, closes sockets, deletes orphan nodes |
 | `authenticateApprovedNode(nodeId, authToken)` | ~355 | Validates token hash and updates lastSeenAt |
-| `approvePendingPairing(pendingId, requestedNodeId?)` | ~381 | Full approval flow: allocate ID, store node, notify or stash |
+| `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` | ~381 | Full approval flow: allocate ID, run optional pre-mutation external-context fence, store node, notify or stash |
 | `claimApprovedPairing(pendingId)` | ~453 | Returns stored credentials for offline approvals |
 | `rejectPendingPairing(pendingId, reason?)` | ~470 | Deletes pairing and notifies client via WebSocket |
 

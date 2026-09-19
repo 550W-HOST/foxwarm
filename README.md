@@ -269,10 +269,16 @@ External Node support covers read, write, edit, apply_patch, and exec; the
 colocated master, Docker and executable Nodes, browser tabs, and other direct
 Session controls are not available through this inbound endpoint. A Session
 send is ordinary queued input and confirms admission, not a recipient reply.
-Commands that outlive an HTTP request
-remain scoped to their live external context; closing that context makes their
-results unavailable without stopping the command. This setting is separate
-from outbound MCP server configuration. An omitted block defaults to disabled; malformed blocks fail
+Headless Node pairing uses the existing `/node_ws` handshake. An administrator
+reads the existing pairing token from the master's local token file and privately
+provides it to the new Node; inbound MCP does not issue or return that token.
+An externally authorized operator can discover and call only
+`builtin:node_pair_list` and `builtin:node_pair_approve` to review and approve
+its pending request. This does not open other builtins or Node lifecycle
+controls. Commands that outlive an HTTP request remain scoped to their live
+external context; closing that context makes their results unavailable without
+stopping the command. This setting is separate from outbound MCP server
+configuration. An omitted block defaults to disabled; malformed blocks fail
 validation even when `enabled: false`. Example shape (replace every placeholder
 with a distinct private token before enabling):
 

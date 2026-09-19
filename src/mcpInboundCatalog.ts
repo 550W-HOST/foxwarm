@@ -1,6 +1,7 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import * as mcpExternal from './mcpExternalService';
 import * as nodeExternal from './mcpInboundNodeService';
+import * as pairingExternal from './mcpInboundPairingService';
 import * as sessionExternal from './mcpInboundSessionService';
 import type { VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
 import { McpInboundSafeError, type ExternalExecutionContext, type McpInboundCatalog } from './mcpInboundHttp';
@@ -105,7 +106,7 @@ function discoveryArgs(value: Record<string, unknown>): DiscoveryArgs {
   }
   return {
     query: value.query as string || '',
-    sources: value.sources as string[] || ['mcp', 'node'],
+    sources: value.sources as string[] || ['mcp', 'node', 'builtin'],
     server: value.server as string | undefined,
     nodeId: value.nodeId as string | undefined,
     limit: value.limit as number || 5,
@@ -179,6 +180,23 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     const options = discoveryArgs(args);
     const collected: Array<Record<string, any>> = [];
     let totalKnown = true;
+    if (options.sources.includes('builtin')) {
+      let pairings;
+      try { pairings = pairingExternal.listExternalPairingDefinitions(principal, context); }
+      catch (error) {
+        if (isToolAuthorizationPolicyUnavailable(error)) throw new McpInboundSafeError('Tool policy is unavailable; discovery failed closed.');
+        throw error;
+      }
+      for (const definition of pairings) {
+        const score = scoreUnifiedToolQuery(options.query, [definition.name, definition.description]);
+        if (score < 0) continue;
+        collected.push({
+          _score: score, source: 'builtin', toolId: buildUnifiedToolId('builtin', definition.name),
+          name: definition.name, description: definition.description,
+          ...(options.includeSchema ? { inputSchema: definition.parameters } : {}),
+        });
+      }
+    }
     if (options.sources.includes('mcp')) {
       const servers = (await mcpExternal.listMcpServersForExternal(principal))
         .filter(server => server.enabled && (!options.server || server.name === options.server));
@@ -293,10 +311,25 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     let resolved: ReturnType<typeof parseUnifiedToolId>;
     try { resolved = parseUnifiedToolId(args.toolId); }
     catch { return toolError('Invalid tool ID.'); }
-    if (!resolved.name || !['mcp', 'node'].includes(resolved.source)
+    if (!resolved.name || !['mcp', 'node', 'builtin'].includes(resolved.source)
+      || (resolved.source === 'builtin' && (!pairingExternal.isExternalPairingToolName(resolved.name)
+        || buildUnifiedToolId('builtin', resolved.name) !== args.toolId))
       || (resolved.source === 'mcp' && (!resolved.server || buildUnifiedToolId('mcp', resolved.name, { server: resolved.server }) !== args.toolId))
       || (resolved.source === 'node' && (!resolved.nodeId || buildUnifiedToolId('node', resolved.name, { nodeId: resolved.nodeId }) !== args.toolId))) {
       return toolError('Tool source is not available on this inbound endpoint.');
+    }
+    if (resolved.source === 'builtin') {
+      try {
+        const result = await pairingExternal.callExternalPairingTool(principal, context,
+          resolved.name as pairingExternal.ExternalPairingToolName, args.args as Record<string, unknown> || {});
+        return { content: [{ type: 'text', text: result }] };
+      } catch (error) {
+        if (isToolAuthorizationPolicyUnavailable(error)) return toolError('Tool policy is unavailable; no pairing operation was sent.');
+        if (error instanceof pairingExternal.ExternalPairingBeforeEffectError) return toolError(error.message);
+        return toolError(resolved.name === 'node_pair_approve'
+          ? 'Pairing approval may have completed; outcome unknown. Do not retry automatically.'
+          : 'Pairing requests are unavailable.');
+      }
     }
     if (resolved.source === 'node') {
       try {
