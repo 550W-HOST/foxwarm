@@ -82,7 +82,7 @@ function imageOutput(base64: string, id = 'ig_ws'): any[] {
   return [{ type: 'image_generation_call', id, status: 'completed', output_format: 'png', result: base64 }];
 }
 
-function responseSse(output: any[], text?: string): PassThrough {
+function responseSse(output: any[]): PassThrough {
   const stream = new PassThrough();
   process.nextTick(() => {
     stream.write(`data: ${JSON.stringify({ type: 'response.completed', response: {

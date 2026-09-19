@@ -38,8 +38,6 @@ const SAFE_IMAGE_GENERATION_OUTPUT_ITEM_KEYS = [
   'model',
 ] as const;
 
-const SAFE_IMAGE_GENERATION_OUTPUT_ITEM_KEY_SET = new Set<string>(SAFE_IMAGE_GENERATION_OUTPUT_ITEM_KEYS);
-
 export type GeneratedImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
 /**
