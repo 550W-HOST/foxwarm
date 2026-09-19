@@ -176,9 +176,13 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
       if (error?.code === 'MCP_EXTERNAL_TOOL_NOT_FOUND') return toolError('Tool is not available on the configured server.');
       if (error?.code === 'MCP_EXTERNAL_CONFIG_UNAVAILABLE') return toolError('MCP configuration is unavailable; no tool call was sent.');
       if (error?.code === 'MCP_EXTERNAL_OUTPUT_UNAVAILABLE') return toolError('Tool may have completed; its output cannot be safely returned. Do not retry automatically.');
+      if (error?.code === 'MCP_EXTERNAL_OUTPUT_WITHHELD') return toolError('Tool may have completed; remote output echoed a configured credential and was withheld. Do not retry automatically.');
       if (isToolAuthorizationPolicyUnavailable(error)) return toolError('Tool policy is unavailable; no call was sent.');
       if (error?.code === 'MCP_EXTERNAL_CALL_NOT_SENT') {
         return toolError((error as Error).message.slice(0, 600));
+      }
+      if (error?.code === 'MCP_EXTERNAL_CALL_FAILED') {
+        return toolError(`Remote MCP operation failed; the outcome may be unknown. Do not retry automatically. ${(error as Error).message.slice(0, 400)}`);
       }
       if (signal.aborted) return toolError('Tool call was cancelled; the remote outcome may be unknown. Do not retry automatically.');
       const diagnostic = error instanceof Error ? error.message.slice(0, 400) : 'Remote MCP operation failed.';

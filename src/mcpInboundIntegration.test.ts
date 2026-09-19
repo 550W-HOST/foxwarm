@@ -21,6 +21,7 @@ import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests }
 const alpha = 'synthetic-alpha-inbound-credential';
 const beta = 'synthetic-beta-inbound-credential';
 const outboundSecret = 'synthetic-configured-outbound-secret';
+const headerSecret = 'synthetic-configured-auth-header-secret';
 const inboundConfig = normalizeMcpInboundConfig({ enabled: true, identities: {
   alpha: { token: alpha }, beta: { token: beta },
 } });
@@ -31,7 +32,7 @@ rules:
     match: { externalId: beta, tool: { source: mcp, server: local, name: echo_text } }
     action: deny
   - id: common-generic-allow
-    match: { tool: { source: mcp, server: local, name: [echo_text, typed, image, fail, throw, slow, leak] } }
+    match: { tool: { source: mcp, server: local, name: [echo_text, production_probe, typed, image, fail, throw, throw_connection_url, slow, leak, echo_credential, echo_header] } }
     action: allow
   - id: beta-only
     match: { externalId: beta, tool: { source: mcp, server: local, name: only_beta } }
@@ -43,9 +44,9 @@ rules:
     match: { tool: { source: mcp, server: local, name: master_only }, targetNode: master }
     action: allow
 `;
-const names = ['echo_text', 'typed', 'image', 'fail', 'throw', 'slow', 'leak', 'only_beta', 'conditional', 'session_gate', 'master_only', 'no_rule'];
+const names = ['echo_text', 'production_probe', 'typed', 'image', 'fail', 'throw', 'throw_connection_url', 'slow', 'leak', 'echo_credential', 'echo_header', 'only_beta', 'conditional', 'session_gate', 'master_only', 'no_rule'];
 const tools: Tool[] = names.map(name => ({ name, description: `Synthetic ${name} tool.${name === 'leak' ? ` ${outboundSecret}` : ''}`, inputSchema: {
-  type: 'object', additionalProperties: true, properties: { message: { type: 'string' }, enabled: { type: 'boolean' } },
+  type: 'object', additionalProperties: true, properties: { message: { type: 'string' }, enabled: { type: 'boolean' }, mode: { type: 'string', enum: ['production'] } },
 } }));
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -68,9 +69,10 @@ async function fakeOutbound() {
   const calls: Record<string, number> = {};
   const methods: string[] = [];
   let cancelled = false;
+  let connectionUrl = '';
   app.all('/remote', async (req, res) => {
     if (typeof req.body?.method === 'string') methods.push(req.body.method);
-    if (req.headers.authorization !== `Bearer ${outboundSecret}`) { res.status(401).end(); return; }
+    if (req.headers.authorization !== `Bearer ${outboundSecret}` || req.headers['x-api-key'] !== headerSecret) { res.status(401).end(); return; }
     const id = req.headers['mcp-session-id'];
     let connection = typeof id === 'string' ? sessions.get(id) : undefined;
     if (!connection && req.method === 'POST' && req.body?.method === 'initialize') {
@@ -84,11 +86,15 @@ async function fakeOutbound() {
         calls[name] = (calls[name] || 0) + 1;
         const args = request.params.arguments || {};
         if (name === 'echo_text') return { content: [{ type: 'text', text: String(args.message || 'text-result') }] };
+        if (name === 'production_probe') return { content: [{ type: 'text', text: 'production' }], structuredContent: { mode: 'production' } };
         if (name === 'typed') return { content: [{ type: 'text', text: 'visible text' }], structuredContent: { nested: { number: 42 }, source: 'typed' } };
-        if (name === 'image') return { content: [{ type: 'image', mimeType: 'image/png', data: Buffer.alloc(100_000, 17).toString('base64') }] };
+        if (name === 'image') return { content: [{ type: 'image', mimeType: 'image/png', data: Buffer.alloc(100_000, 0xd5).toString('base64') }] };
         if (name === 'fail') return { isError: true, content: [{ type: 'text', text: 'synthetic tool failure' }] };
         if (name === 'throw') throw new Error('synthetic remote crash');
+        if (name === 'throw_connection_url') throw new Error(`synthetic remote crash on ${connectionUrl}`);
         if (name === 'leak') return { content: [{ type: 'text', text: `remote response ${outboundSecret}` }] };
+        if (name === 'echo_credential') return { content: [{ type: 'text', text: `remote response ${outboundSecret}` }] };
+        if (name === 'echo_header') return { content: [{ type: 'text', text: `remote response ${headerSecret}` }] };
         if (name === 'slow') {
           await new Promise<void>(resolve => extra.signal.addEventListener('abort', () => { cancelled = true; resolve(); }, { once: true }));
           return { isError: true, content: [{ type: 'text', text: 'cancelled' }] };
@@ -110,8 +116,9 @@ async function fakeOutbound() {
   await new Promise<void>(resolve => httpServer.once('listening', resolve));
   const address = httpServer.address();
   if (!address || typeof address === 'string') throw new Error('Expected local HTTP address.');
+  connectionUrl = `http://127.0.0.1:${address.port}/remote`;
   return {
-    url: `http://127.0.0.1:${address.port}/remote`, calls, methods,
+    url: connectionUrl, calls, methods,
     wasCancelled: () => cancelled,
     async stop() {
       await Promise.allSettled([...sessions.values()].map(connection => connection.server.close()));
@@ -131,7 +138,7 @@ function callResultText(result: any): string {
 }
 
 async function withIntegratedServices(run: (data: {
-  url: URL; calls: Record<string, number>; methods: string[]; wasCancelled: () => boolean; responses: Array<{ listenerCount: number }>;
+  url: URL; configuredUrl: string; calls: Record<string, number>; methods: string[]; wasCancelled: () => boolean; responses: Array<{ listenerCount: number }>;
 }) => Promise<void>, deadlineMs = 60_000) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-inbound-integration-'));
   const fake = await fakeOutbound();
@@ -148,9 +155,9 @@ async function withIntegratedServices(run: (data: {
   const inbound = new McpInboundHttpService(inboundConfig, new McpInboundMcpCatalog(), 60_000, 32, deadlineMs);
   inbound.register(app);
   try {
-    await mcpClient.upsertServer('local', { transport: 'streamable-http', url: fake.url, token: outboundSecret, timeoutSeconds: 2 });
+    await mcpClient.upsertServer('local', { transport: 'streamable-http', url: fake.url, token: outboundSecret, headers: { 'X-Api-Key': headerSecret }, timeoutSeconds: 2 });
     await app.start();
-    await run({ url: new URL(`http://127.0.0.1:${port}/mcp`), calls: fake.calls, methods: fake.methods, wasCancelled: fake.wasCancelled, responses });
+    await run({ url: new URL(`http://127.0.0.1:${port}/mcp`), configuredUrl: fake.url, calls: fake.calls, methods: fake.methods, wasCancelled: fake.wasCancelled, responses });
   } finally {
     await inbound.stop();
     await app.stop();
@@ -163,7 +170,8 @@ async function withIntegratedServices(run: (data: {
 }
 
 test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves typed text/structured/image/errors', async () => {
-  await withIntegratedServices(async ({ url, calls, responses }) => {
+  await withIntegratedServices(async ({ url, configuredUrl, calls, responses }) => {
+    await mcpClient.upsertServer('local', { env: { NODE_ENV: 'production', DEBUG: '1' }, cwd: '/synthetic/project' });
     const a = client(url, alpha), b = client(url, beta);
     await a.client.connect(a.transport);
     await b.client.connect(b.transport);
@@ -181,11 +189,14 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
       assert.equal(detail.truncated, false);
       const ids = detail.tools.map((entry: any) => entry.toolId);
       assert.ok(ids.includes('mcp:local/echo_text'));
+      assert.ok(ids.includes('mcp:local/production_probe'));
+      assert.equal(detail.tools.find((entry: any) => entry.toolId === 'mcp:local/production_probe')?.inputSchema?.properties?.mode?.enum?.[0], 'production');
       assert.ok(ids.includes('mcp:local/conditional')); // Conditional discovery does not guarantee call permission.
       assert.ok(ids.includes('mcp:local/session_gate'));
       assert.ok(!ids.includes('mcp:local/only_beta'));
       assert.ok(!ids.includes('mcp:local/no_rule'));
       assert.ok(!ids.includes('mcp:local/master_only')); // Non-Node calls have no targetNode fact.
+      assert.ok(!ids.includes('mcp:local/leak')); // Reject a descriptor containing a configured credential; do not mutate the name/schema.
       const filtered = await b.client.callTool({ name: 'foxwarm_discover', arguments: { query: 'echo_text', limit: 50 } });
       assert.equal((filtered.structuredContent as any)?.total, 0);
       const limited = await a.client.callTool({ name: 'foxwarm_discover', arguments: { limit: 1, includeSchema: false } });
@@ -196,6 +207,13 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
       assert.equal((metadata.structuredContent as any)?.total, 0); // Unsupported sources are not advertised.
       const text = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text', args: { message: 'hello', externalId: 'beta', session: b.transport.sessionId } } });
       assert.equal(callResultText(text), 'hello');
+      const production = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/production_probe' } });
+      assert.equal(callResultText(production), 'production');
+      assert.deepEqual(production.structuredContent, { mode: 'production' });
+      const urlResult = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text', args: { message: configuredUrl } } });
+      assert.equal(callResultText(urlResult), configuredUrl);
+      const pathResult = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text', args: { message: '/synthetic/project' } } });
+      assert.equal(callResultText(pathResult), '/synthetic/project');
       const large = 'R'.repeat(100 * 1024);
       const largeText = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text', args: { message: large } } });
       assert.equal(callResultText(largeText), large);
@@ -204,7 +222,7 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
       assert.deepEqual(typed.structuredContent, { nested: { number: 42 }, source: 'typed' });
       const image = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/image' } });
       assert.equal(((image as CallToolResult).content[0] as any)?.mimeType, 'image/png');
-      assert.ok(((image as CallToolResult).content[0] as any)?.data.length > 100_000);
+      assert.equal(((image as CallToolResult).content[0] as any)?.data, Buffer.alloc(100_000, 0xd5).toString('base64'));
       const failure = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/fail' } });
       assert.equal(failure.isError, true);
       assert.match(callResultText(failure), /synthetic tool failure/);
@@ -213,9 +231,13 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
       assert.equal(thrown.isError, true);
       assert.match(callResultText(thrown), /outcome may be unknown.*synthetic remote crash/);
       assert.equal(calls.throw, 1);
+      const urlError = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/throw_connection_url' } });
+      assert.equal(urlError.isError, true);
+      assert.equal(JSON.stringify(urlError).includes(configuredUrl), false);
+      assert.equal(calls.throw_connection_url, 1);
       const rejected = await b.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/echo_text' } });
       assert.equal(rejected.isError, true);
-      assert.equal(calls.echo_text, 2);
+      assert.equal(calls.echo_text, 4);
       const spoof = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/only_beta', args: { externalId: 'beta', session: b.transport.sessionId } } });
       assert.equal(spoof.isError, true);
       assert.equal(calls.only_beta, undefined);
@@ -236,9 +258,17 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
       assert.equal(calls.conditional, undefined);
       const allowed = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/conditional', args: { enabled: true } } });
       assert.equal(callResultText(allowed), 'conditional');
-      const secret = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/leak' } });
-      assert.equal(JSON.stringify(secret).includes(outboundSecret), false);
-      assert.match(callResultText(secret), /\[redacted\]/);
+      const sensitiveDescriptor = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId: 'mcp:local/leak' } });
+      assert.equal(sensitiveDescriptor.isError, true);
+      assert.equal(calls.leak, undefined);
+      for (const [toolId, credential] of [['mcp:local/echo_credential', outboundSecret], ['mcp:local/echo_header', headerSecret]]) {
+        const withheld = await a.client.callTool({ name: 'foxwarm_call', arguments: { toolId } });
+        assert.equal(withheld.isError, true);
+        assert.match(callResultText(withheld), /may have completed.*withheld.*Do not retry/);
+        assert.equal(JSON.stringify(withheld).includes(credential), false);
+      }
+      assert.equal(calls.echo_credential, 1);
+      assert.equal(calls.echo_header, 1);
       const cookie = await fetch(url, { headers: { Cookie: 'foxwarm_token=instance-token' } });
       assert.equal(cookie.status, 401);
       const foreign = await fetch(url, { headers: { Authorization: `Bearer ${beta}`, 'Mcp-Session-Id': a.transport.sessionId!, Accept: 'text/event-stream' } });
