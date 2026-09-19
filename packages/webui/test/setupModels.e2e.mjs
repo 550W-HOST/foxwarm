@@ -252,6 +252,8 @@ async function attachRequestMocks(targetPage, options = {}) {
     if (/\/api\/sessions\/[^/]+\/child-model$/.test(url.pathname) && request.method() === 'POST') {
       const body = JSON.parse(request.postData() || '{}')
       modelUpdateRequests.push({ path: url.pathname, body })
+      if (Object.prototype.hasOwnProperty.call(body, 'model')) mockChildModel = body.model || null
+      if (body.clear) mockChildModel = null
       if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) mockChildModel = body.childModelDefault || null
       if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) mockChildEffort = body.childEffortDefault || null
       void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
@@ -1131,88 +1133,22 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     const configure = await chatFrame.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     assert.equal(await configure.evaluate((button) => button.title), 'Configure models')
-    const popupLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const popupRect = popup.getBoundingClientRect()
-      const settingsRect = popup.querySelector('button[aria-label="Configure models"]')?.getBoundingClientRect()
-      const filterRect = popup.querySelector('input[aria-label="Filter models"]')?.getBoundingClientRect()
+    const popupState = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const rect = popup.getBoundingClientRect()
+      const columns = popup.querySelectorAll('[data-model-column]')
       return {
-        left: popupRect.left,
-        right: popupRect.right,
-        viewportWidth: window.innerWidth,
-        settingsRight: settingsRect?.right || 0,
-        filterLeft: filterRect?.left || 0,
-        filterRight: filterRect?.right || 0,
+        withinViewport: rect.left >= 0 && rect.right <= window.innerWidth,
+        columnCount: columns.length,
+        optionCount: popup.querySelectorAll('[data-model-option-row="true"]').length,
+        currentEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Current effort"]').length,
+        childEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Child effort"]').length,
       }
     })
-    assert.ok(popupLayout.left >= 0)
-    assert.ok(popupLayout.right <= popupLayout.viewportWidth)
-    assert.ok(popupLayout.settingsRight <= popupLayout.filterLeft)
-    assert.ok(popupLayout.filterRight <= popupLayout.right)
-    const alignedEffortLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
-      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
-      const columnRects = (element) => Array.from(element.children).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right, width: rect.width }
-      })
-      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
-        const rect = select.getBoundingClientRect()
-        const style = getComputedStyle(select)
-        const canvas = document.createElement('canvas')
-        const context = canvas.getContext('2d')
-        if (context) context.font = style.font
-        const selectedLabel = select.selectedOptions[0]?.label || ''
-        const textWidth = context?.measureText(selectedLabel).width || 0
-        const description = select.getAttribute('aria-describedby')
-        return {
-          width: rect.width,
-          left: rect.left,
-          right: rect.right,
-          fontSize: Number.parseFloat(style.fontSize),
-          selectedLabel,
-          readable: textWidth + 28 <= rect.width,
-          description: description ? document.getElementById(description)?.textContent : '',
-        }
-      })
-      return {
-        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
-        headerSelectCount: header.querySelectorAll('select').length,
-        footerLabel: footer.firstElementChild?.textContent?.trim(),
-        footerImmediatelyAboveSearch: !!footer.nextElementSibling?.querySelector('input[aria-label="Filter models"]'),
-        headerColumns: columnRects(header),
-        footerColumns: columnRects(footer),
-        rowColumns: Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-          const rect = child.getBoundingClientRect()
-          return { left: rect.left, right: rect.right, width: rect.width }
-        }),
-        footerHeight: footer.getBoundingClientRect().height,
-        selects,
-      }
-    })
-    assert.deepEqual(alignedEffortLayout.headerLabels, ['Model id', 'Current', 'Child'])
-    assert.equal(alignedEffortLayout.headerSelectCount, 0)
-    assert.equal(alignedEffortLayout.footerLabel, 'Effort')
-    assert.equal(alignedEffortLayout.footerImmediatelyAboveSearch, true)
-    assert.ok(alignedEffortLayout.footerHeight <= 36)
-    assert.equal(alignedEffortLayout.selects.length, 2)
-    for (let index = 0; index < 3; index += 1) {
-      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
-      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
-      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
-      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
-    }
-    assert.ok(Math.abs(alignedEffortLayout.headerColumns[1].width - 100) <= 1)
-    assert.ok(Math.abs(alignedEffortLayout.headerColumns[2].width - 100) <= 1)
-    assert.ok(alignedEffortLayout.selects.every(({ left, right, width }, index) => left >= alignedEffortLayout.footerColumns[index + 1].left && right <= alignedEffortLayout.footerColumns[index + 1].right && width >= 76))
-    assert.ok(alignedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
-    assert.deepEqual(alignedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
-    assert.ok(alignedEffortLayout.selects.every(({ readable }) => readable))
-    assert.deepEqual(alignedEffortLayout.selects.map(({ description }) => description), [
-      'Current effort: default (per leaf)',
-      'Child effort: follow/default (per leaf)',
-    ])
+    assert.equal(popupState.withinViewport, true)
+    assert.equal(popupState.columnCount, 1)
+    assert.ok(popupState.optionCount >= 5)
+    assert.equal(popupState.currentEffortCount, 1)
+    assert.equal(popupState.childEffortCount, 0)
 
     const updatesBefore = modelUpdateRequests.length
     await filter.type('LEAF')
@@ -1258,42 +1194,46 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
     assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
-    const currentEffort = await chatFrame.waitForSelector('select[aria-label="Current effort"]')
-    assert.equal(await currentEffort.evaluate(select => select.value), 'max')
-    assert.equal(await currentEffort.$eval('option[value=""]', option => option.textContent), 'default (per leaf)')
-    assert.equal(await currentEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
-    assert.deepEqual(await currentEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
-      text: 'max (unavailable; using per-leaf default)', disabled: true,
-    })
-    assert.equal(await currentEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
-    assert.equal(await currentEffort.evaluate(select => select.title), 'Current effort: max (unavailable; using per-leaf default)')
-    const childEffort = await chatFrame.waitForSelector('select[aria-label="Child effort"]')
-    assert.equal(await childEffort.evaluate(select => select.value), 'max')
-    assert.equal(await childEffort.$eval('option[value=""]', option => option.textContent), 'follow/default (per leaf)')
-    assert.equal(await childEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
-    assert.deepEqual(await childEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
-      text: 'max (unavailable; using per-leaf default)', disabled: true,
-    })
-    assert.equal(await childEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
-    assert.equal(await childEffort.evaluate(select => select.title), 'Child effort: max (unavailable; using per-leaf default)')
+    const currentEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Current effort"]')
+    assert.equal(await currentEffort.evaluate(input => input.value), '0')
+    assert.match(await currentEffort.evaluate(input => input.getAttribute('aria-valuetext') || ''), /unavailable/)
 
     const effortUpdatesBefore = modelUpdateRequests.length
-    await currentEffort.select('low')
+    await currentEffort.evaluate((input) => { input.value = '2'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })) })
     const effortDeadline = Date.now() + 5_000
     while (modelUpdateRequests.length === effortUpdatesBefore && Date.now() < effortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
     assert.deepEqual(modelUpdateRequests.at(-1), {
       path: '/preview/api/sessions/embedded%2Fchat/model',
       body: { effort: 'low' },
     })
-    await childEffort.select('none')
+
+    await chatFrame.click('[data-model-child-mode="specific"]')
+    await chatFrame.waitForSelector('[data-model-child-mode="follow"]')
+    assert.ok(await chatFrame.$('input[aria-label="Filter models"]'))
+    assert.ok(await chatFrame.$('input[aria-label="Filter child models"]'))
+    const childFilter = await chatFrame.$('input[aria-label="Filter child models"]')
+    await childFilter.type('model-b')
+    await chatFrame.waitForFunction(() => document.querySelectorAll('[data-model-column="child"] [data-model-option-row]').length === 1)
+    assert.equal(await chatFrame.$eval('input[aria-label="Filter models"]', input => input.value), '')
+    assert.equal(await chatFrame.$$eval('[data-model-column="current"] [data-model-option-row]', nodes => nodes.length), 5)
+    assert.ok(await chatFrame.$eval('[data-model-selector-popup="true"]', popup => {
+      const rect = popup.getBoundingClientRect()
+      return rect.left >= 0 && rect.right <= innerWidth && popup.scrollWidth <= popup.clientWidth
+    }))
+
+    const childEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Child effort"]')
+    assert.equal(await childEffort.evaluate(input => input.value), '0')
+    assert.match(await childEffort.evaluate(input => input.getAttribute('aria-valuetext') || ''), /unavailable/)
+    await childEffort.evaluate((input) => { input.value = '1'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })) })
     const childEffortDeadline = Date.now() + 5_000
     while (modelUpdateRequests.at(-1)?.body?.childEffortDefault !== 'none' && Date.now() < childEffortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
     assert.deepEqual(modelUpdateRequests.at(-1), {
       path: '/preview/api/sessions/embedded%2Fchat/child-model',
       body: { childEffortDefault: 'none' },
     })
-    await chatFrame.waitForFunction(() => document.querySelector('button[aria-haspopup="dialog"]')?.textContent?.includes('low'))
-    assert.ok((await modelButton.evaluate(button => button.textContent || '')).includes('child follow · none'))
+    await chatFrame.waitForFunction(() => document.querySelector('button[aria-haspopup="dialog"]')?.textContent?.includes('Low'))
+    assert.ok(await chatFrame.$('[data-model-trigger-child="true"]'))
+
     const reopenedConfigure = await chatFrame.waitForSelector('button[aria-label="Configure models"]')
     await reopenedConfigure.click()
     await hostPage.waitForFunction(() => window.embedMessages.some((message) => message?.type === 'open-setup'))
@@ -1357,7 +1297,7 @@ test('embedded Setup defaults to Appearance and explicit host focus activates Mo
   }
 })
 
-test('default desktop model effort footer stays compact and table-aligned', async () => {
+test('model columns preserve child policy and commit effort only after dragging ends', async () => {
   const desktopPage = await browser.newPage()
   await desktopPage.setViewport({ width: 900, height: 700 })
   await attachRequestMocks(desktopPage)
@@ -1367,72 +1307,46 @@ test('default desktop model effort footer stays compact and table-aligned', asyn
     await modelButton.click()
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     await desktopPage.click('button[title="leaf/model-a"]')
-    await desktopPage.waitForFunction(() => document.querySelector('select[aria-label="Current effort"]')?.title === 'Current effort: default (high)')
-    const layout = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
-      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
-      const columns = (element) => Array.from(element.children).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      })
-      const headerColumns = columns(header)
-      const footerColumns = columns(footer)
-      const rowColumns = Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      })
-      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
-        const rect = select.getBoundingClientRect()
-        const style = getComputedStyle(select)
-        const canvas = document.createElement('canvas')
-        const context = canvas.getContext('2d')
-        if (context) context.font = style.font
-        const selectedLabel = select.selectedOptions[0]?.label || ''
-        const description = select.getAttribute('aria-describedby')
-        return {
-          width: rect.width,
-          fontSize: Number.parseFloat(style.fontSize),
-          selectedLabel,
-          readable: (context?.measureText(selectedLabel).width || 0) + 28 <= rect.width,
-          title: select.title,
-          description: description ? document.getElementById(description)?.textContent : '',
-        }
-      })
-      return {
-        selects,
-        aligned: footerColumns.every((column, index) => (
-          Math.abs(column.left - headerColumns[index].left) <= 1
-          && Math.abs(column.right - headerColumns[index].right) <= 1
-          && Math.abs(column.left - rowColumns[index].left) <= 1
-          && Math.abs(column.right - rowColumns[index].right) <= 1
-        )),
-        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
-        footerLabel: footer.firstElementChild?.textContent?.trim(),
-      }
-    })
-    assert.equal(layout.aligned, true)
-    assert.deepEqual(layout.headerLabels, ['Model id', 'Current', 'Child'])
-    assert.equal(layout.footerLabel, 'Effort')
-    assert.deepEqual(layout.selects.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
-    assert.ok(layout.selects.every(({ fontSize }) => fontSize === 11))
-    assert.ok(layout.selects.every(({ width }) => width >= 80))
-    assert.ok(layout.selects.every(({ readable }) => readable))
-    assert.deepEqual(layout.selects.map(({ title }) => title), [
-      'Current effort: default (high)',
-      'Child effort: follow/default (high)',
-    ])
-    assert.deepEqual(layout.selects.map(({ description }) => description), [
-      'Current effort: default (high)',
-      'Child effort: follow/default (high)',
-    ])
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-option-key="leaf/model-a"]')?.getAttribute('data-model-option-selected') === 'true')
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Current effort"]', nodes => nodes.length), 1)
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Child effort"]', nodes => nodes.length), 0)
+
+    const popupHeight = await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height)
+    await desktopPage.click('[data-model-child-mode="specific"]')
+    await desktopPage.waitForSelector('[data-model-column="child"]')
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Current effort"]', nodes => nodes.length), 1)
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Child effort"]', nodes => nodes.length), 1)
+    assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
+    await desktopPage.keyboard.press('Escape')
+    await desktopPage.click('[data-model-trigger-child="true"]')
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter child models"]'))
+    assert.ok(await desktopPage.$('[data-model-column="child"]'))
+    const slider = await desktopPage.$('input[type="range"][aria-label="Child effort"]')
+    const rect = await slider.boundingBox()
+    const beforeDrag = modelUpdateRequests.length
+    await desktopPage.mouse.move(rect.x + 11, rect.y + rect.height / 2)
+    await desktopPage.mouse.down()
+    await desktopPage.mouse.move(rect.x + rect.width * 0.5, rect.y + rect.height / 2, { steps: 4 })
+    assert.equal(modelUpdateRequests.length, beforeDrag)
+    assert.equal(await slider.evaluate(input => input.disabled), false)
+    await desktopPage.mouse.move(rect.x + rect.width - 11, rect.y + rect.height / 2, { steps: 4 })
+    assert.equal(modelUpdateRequests.length, beforeDrag)
+    await desktopPage.mouse.up()
+    await desktopPage.waitForFunction(() => document.querySelector('input[type="range"][aria-label="Child effort"]')?.getAttribute('aria-valuetext')?.toLowerCase().includes('high'))
+    assert.equal(modelUpdateRequests.length, beforeDrag + 1)
+    await desktopPage.waitForSelector('[data-model-child-mode="follow"]:not(:disabled)')
+    await desktopPage.click('[data-model-child-mode="follow"]')
+    await desktopPage.waitForSelector('[data-model-column="child"]', { hidden: true })
+    assert.equal(await desktopPage.$('[data-model-trigger-child="true"]'), null)
+    assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
+
+
   } finally {
     await desktopPage.close()
   }
 })
 
-test('desktop model popup keeps stable 600/100/100 geometry across scroll and current selection', async () => {
+test('desktop model popup remains bounded and supports single-selection rows', async () => {
   const desktopPage = await browser.newPage()
   await desktopPage.setViewport({ width: 1000, height: 700 })
   await attachRequestMocks(desktopPage)
@@ -1440,54 +1354,20 @@ test('desktop model popup keeps stable 600/100/100 geometry across scroll and cu
     await desktopPage.goto(`${baseUrl}/normal/#session/model-popup-geometry`, { waitUntil: 'networkidle2' })
     await desktopPage.click('button[aria-haspopup="dialog"]')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
-
-    const readGeometry = () => desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
+    const bounded = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const rect = popup.getBoundingClientRect()
       const scroll = popup.querySelector('[data-model-selector-scroll="true"]')
-      if (!header || !footer || !row || !scroll) throw new Error('model selector geometry missing')
-      scroll.scrollTop = scroll.scrollHeight
-      const columns = (element) => Array.from(element.children).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right, width: rect.width }
-      })
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
       return {
-        popup: popup.getBoundingClientRect().width,
-        header: columns(header),
-        footer: columns(footer),
-        row: Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-          const rect = child.getBoundingClientRect()
-          return { left: rect.left, right: rect.right, width: rect.width }
-        }),
-        scrollGutter: scroll.getBoundingClientRect().width - scroll.clientWidth,
+        inViewport: rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight,
+        footerOutsideScroll: !!scroll && !!footer && !scroll.contains(footer),
       }
     })
-
-    const before = await readGeometry()
-    assert.ok(Math.abs(before.popup - 600) <= 1)
-    assert.ok(Math.abs(before.header[1].width - 100) <= 1)
-    assert.ok(Math.abs(before.header[2].width - 100) <= 1)
-    const hoverRegions = await desktopPage.$eval('[data-model-selector-row="true"]', (row) => {
-      const current = row.querySelector('[data-model-current-region="true"]')
-      const child = row.querySelector('[data-model-selector-column="child"]')
-      return {
-        currentClasses: current?.className || '',
-        currentColumns: current ? Array.from(current.children).map(cell => cell.getAttribute('data-model-selector-column')) : [],
-        childClasses: child?.className || '',
-        currentTag: current?.tagName,
-        childTag: child?.tagName,
-      }
-    })
-    assert.equal(hoverRegions.currentTag, 'BUTTON')
-    assert.deepEqual(hoverRegions.currentColumns, ['model', 'current'])
-    assert.match(hoverRegions.currentClasses, /hover:bg-fw-accent-surface/)
-    assert.equal(hoverRegions.childTag, 'BUTTON')
-    assert.match(hoverRegions.childClasses, /hover:bg-fw-special-surface/)
+    assert.equal(bounded.inViewport, true)
+    assert.equal(bounded.footerOutsideScroll, true)
     await desktopPage.click('button[title="leaf/model-a"]')
-    await desktopPage.waitForFunction(() => document.querySelector('button[title="leaf/model-a"]')?.className.includes('text-fw-accent'))
-    const after = await readGeometry()
-    assert.deepEqual(after, before)
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-option-key="leaf/model-a"]')?.getAttribute('data-model-option-selected') === 'true')
+    assert.equal(await desktopPage.$$eval('[data-model-option-selected="true"]', nodes => nodes.length), 1)
   } finally {
     await desktopPage.close()
   }
@@ -1506,59 +1386,20 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
-    const themeLayout = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const current = popup.querySelector('select[aria-label="Current effort"]')
-      const child = popup.querySelector('select[aria-label="Child effort"]')
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
-      const columns = (element) => element ? Array.from(element.children).map((cell) => {
-        const rect = cell.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      }) : []
-      const headerColumns = columns(header)
-      const footerColumns = columns(footer)
-      const rowColumns = Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      })
-      return {
-        treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
-        popupWidth: popup.getBoundingClientRect().width,
-        headerContainsCurrent: !!header?.contains(current),
-        headerContainsChild: !!header?.contains(child),
-        footerContainsCurrent: !!footer?.contains(current),
-        footerContainsChild: !!footer?.contains(child),
-        currentWidth: current?.getBoundingClientRect().width || 0,
-        childWidth: child?.getBoundingClientRect().width || 0,
-        currentFontSize: current ? Number.parseFloat(getComputedStyle(current).fontSize) : 0,
-        currentLabel: current?.selectedOptions[0]?.label || '',
-        childLabel: child?.selectedOptions[0]?.label || '',
-        filterBorderColor: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).borderColor,
-        filterBoxShadow: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).boxShadow,
-        themeAccentDim: getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-console-accent-dim').trim(),
-        aligned: footerColumns.length === 3 && footerColumns.every((column, index) => (
-          Math.abs(column.left - headerColumns[index].left) <= 1
-          && Math.abs(column.right - headerColumns[index].right) <= 1
-          && Math.abs(column.left - rowColumns[index].left) <= 1
-          && Math.abs(column.right - rowColumns[index].right) <= 1
-        )),
-      }
-    })
-    assert.equal(themeLayout.treatment, 'console')
-    assert.ok(Math.abs(themeLayout.popupWidth - 600) <= 1)
-    assert.equal(themeLayout.headerContainsCurrent, false)
-    assert.equal(themeLayout.headerContainsChild, false)
-    assert.equal(themeLayout.footerContainsCurrent, true)
-    assert.equal(themeLayout.footerContainsChild, true)
-    assert.ok(themeLayout.currentWidth >= 80)
-    assert.ok(themeLayout.childWidth >= 80)
-    assert.ok(themeLayout.currentFontSize <= 11)
-    assert.equal(themeLayout.currentLabel, 'Per leaf')
-    assert.equal(themeLayout.childLabel, 'Per leaf')
-    assert.equal(themeLayout.filterBorderColor, `rgb(${Number.parseInt(themeLayout.themeAccentDim.slice(1, 3), 16)}, ${Number.parseInt(themeLayout.themeAccentDim.slice(3, 5), 16)}, ${Number.parseInt(themeLayout.themeAccentDim.slice(5, 7), 16)})`)
-    assert.doesNotMatch(themeLayout.filterBoxShadow, /59, 130, 246|96, 165, 250/)
-    assert.equal(themeLayout.aligned, true)
+    const pickerState = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => ({
+      treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
+      columnCount: popup.querySelectorAll('[data-model-column]').length,
+      currentEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Current effort"]').length,
+      childEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Child effort"]').length,
+      configureCount: popup.querySelectorAll('button[aria-label="Configure models"]').length,
+      refreshCount: popup.querySelectorAll('button[aria-label="Refresh models"]').length,
+    }))
+    assert.equal(pickerState.treatment, 'console')
+    assert.equal(pickerState.columnCount, 1)
+    assert.equal(pickerState.currentEffortCount, 1)
+    assert.equal(pickerState.childEffortCount, 0)
+    assert.equal(pickerState.configureCount, 1)
+    assert.equal(pickerState.refreshCount, 1)
     const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     await configure.click()
