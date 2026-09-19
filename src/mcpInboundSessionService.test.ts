@@ -139,6 +139,9 @@ rules:
     const uncertain = await action(alpha.client, { action: 'send', sessionId, message: 'durability-fault-input' });
     assert.equal(uncertain.isError, true, 'ordinary best-effort save cannot report durable accepted');
     assert.match(JSON.stringify(uncertain), /outcome unknown/i);
+    assert.equal(sessionManager.getAllSessions().get(sessionId)?.queue.filter(item =>
+      item.parts?.some(part => part.text === 'durability-fault-input')).length, 1,
+    'a failed local save can leave the input in memory, so its outcome is unknown, not rejected');
     const persisted = await fs.readJson(getSessionHistoryFilePath(sessionId));
     assert.ok(!JSON.stringify(persisted.queue).includes('durability-fault-input'),
       'the authoritative file did not confirm a precommit input');
