@@ -112,7 +112,13 @@ test('real SDK transport binds identity and mutable execution context to one con
 });
 
 test('every POST/GET/DELETE independently authenticates and checks session owner', async () => {
-  await withInbound({ async listTools() { return tools; }, async callTool() { return { content: [] }; } }, async url => {
+  const released: ExternalExecutionContext[] = [];
+  await withInbound({ async listTools() { return tools; }, async callTool() { return { content: [] }; },
+    releaseContext(context) {
+      assert.equal(context.disposed, true, 'the HTTP owner is fenced before async catalog cleanup');
+      released.push(context);
+    },
+  }, async url => {
     const a = sdkClient(url, alphaToken);
     await a.client.connect(a.transport);
     const id = a.transport.sessionId!;
@@ -135,6 +141,7 @@ test('every POST/GET/DELETE independently authenticates and checks session owner
       assert.equal(noNewContext.status, 404);
       assert.deepEqual((await a.client.listTools()).tools.map(tool => tool.name), ['synthetic_context']);
       await a.transport.terminateSession();
+      assert.deepEqual(released.map(context => context.id), [id]);
       const ended = await fetch(sessionUrl, { headers: { ...rawHeaders(alphaToken, id), Accept: 'text/event-stream' } });
       assert.equal(ended.status, 404);
     } finally {

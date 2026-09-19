@@ -72,6 +72,8 @@ export type NodeDefaultCwdRequest = {
 
 export type NodeProviderCallOptions = {
   signal?: AbortSignal;
+  /** Main-local external context fence, checked at the authenticated Node's final send boundary. */
+  assertExternalOwnerActive?: () => void;
 };
 
 export type NodeFilesystemOperation = 'parent' | 'stat' | 'read' | 'readdir' | 'write' | 'mkdir' | 'remove';
@@ -727,7 +729,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
     return this.descriptorForRuntimeNode(nodeId);
   }
 
-  async invokeTool(request: NodeToolRequest): Promise<unknown> {
+  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
     const node: any = nodesManager.getNode(request.nodeId);
     if (!node || request.nodeId === 'master' || !node.ws) {
       throw new NodeProviderError(
@@ -750,7 +752,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
     }
     if (request.owner) {
       return nodesManager.executeExternalTool(request.nodeId, request.toolName, request.args, request.owner,
-        request.context.cwd, request.context.externalExec);
+        request.context.cwd, request.context.externalExec, options?.assertExternalOwnerActive);
     }
     const routingSnapshot = request.context.currentNode
       ? { currentNode: request.context.currentNode, ...(request.context.cwd !== undefined ? { cwd: request.context.cwd } : {}) }

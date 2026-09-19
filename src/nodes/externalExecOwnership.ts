@@ -17,7 +17,7 @@ export type ExternalExecRecord = {
   onCompleted?: (cwd: string) => void;
 };
 
-const MAX_JOBS_PER_CONTEXT = 20;
+const MAX_RETAINED_JOBS_PER_CONTEXT = 20;
 const MAX_SAVED_ARGS_BYTES = 64 * 1024;
 const MAX_COMPLETION_BYTES = 256 * 1024;
 const records = new Map<string, Map<string, ExternalExecRecord>>();
@@ -31,7 +31,16 @@ export function reserveExternalExec(owner: ExternalNodeOwner, nodeId: string, ar
   const key = contextKey(owner);
   let scoped = records.get(key);
   if (!scoped) { scoped = new Map(); records.set(key, scoped); }
-  if (scoped.size >= MAX_JOBS_PER_CONTEXT) throw new Error('Too many executions in this external context.');
+  let oldestCompleted: ExternalExecRecord | undefined;
+  if (scoped.size >= MAX_RETAINED_JOBS_PER_CONTEXT) {
+    for (const candidate of scoped.values()) {
+      if (candidate.state !== 'completed') continue;
+      if (!oldestCompleted || (candidate.completedAt ?? candidate.startedAt) < (oldestCompleted.completedAt ?? oldestCompleted.startedAt)) {
+        oldestCompleted = candidate;
+      }
+    }
+    if (!oldestCompleted) throw new Error('Too many active executions in this external context.');
+  }
   let execId = generatePersistentExecPetname();
   for (let index = 0; scoped.has(execId) && index < 8; index++) execId = generatePersistentExecPetname();
   if (scoped.has(execId)) throw new Error('A unique external exec ID is not available.');
@@ -40,6 +49,7 @@ export function reserveExternalExec(owner: ExternalNodeOwner, nodeId: string, ar
     capability: issueExternalExecCompletionCapability(nodeId, owner.externalId, owner.contextId, execId),
     state: 'reserved', startedAt: Date.now(), onCompleted,
   };
+  if (oldestCompleted) scoped.delete(oldestCompleted.execId);
   scoped.set(execId, record);
   return record;
 }

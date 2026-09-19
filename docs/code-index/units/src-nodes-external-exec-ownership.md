@@ -1,7 +1,7 @@
 # Unit: src-nodes-external-exec-ownership
 
 Files: `src/nodes/externalExecOwnership.ts`
-Secondary files: `src/nodes/sessionEventCapability.ts`, `src/nodes/manager.ts`, `src/mcpInboundNodeService.ts`, `src/mcpInboundNodeService.test.ts`, `packages/cli-node/src/client.ts`, `packages/shared/src/persistentExec.ts`
+Secondary files: `src/nodes/sessionEventCapability.ts`, `src/nodes/manager.ts`, `src/mcpInboundNodeService.ts`, `src/mcpInboundNodeOwnership.test.ts`, `packages/cli-node/src/client.ts`, `packages/shared/src/persistentExec.ts`
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Holds Main-process-only authority for real CLI Node persistent commands started 
 
 ## Key functions
 
-- `reserveExternalExec` allocates a canonical real petname ID and a separate signed completion capability before effect. The signature binds the authenticated Node ID, external identity, context UUID and exact exec ID. Only 20 records and at most 64 KiB of the original arguments are retained per context for later policy checks.
+- `reserveExternalExec` allocates a canonical real petname ID and a separate signed completion capability before effect. The signature binds the authenticated Node ID, external identity, context UUID and exact exec ID. At most 20 records and 64 KiB of original arguments per record are retained for later policy checks. Once full, a new reservation evicts the oldest completed record; 20 unresolved records deny a new effect rather than discarding live ownership.
 - `registerExternalExecBackground` and `completeExternalExec` require the authenticated Node source, original owner, exact ID and matching signed capability. Completion output is bounded to 256 KiB; a trusted final cwd may update the selected context through a generation-checked callback. Repeated identical completion receipts are idempotent.
 - `getExternalExec`/`listExternalExec` return only that context's records. `markExternalExecUnknown` retains uncertainty after an unconfirmed result; `finishExternalExecForeground` releases only definite pre-effect failures. `releaseExternalExecContext` removes authority on transport disposal without killing a process.
 

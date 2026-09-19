@@ -24,6 +24,10 @@ const POST_DEADLINE_MS = 65 * 60_000;
 export interface ExternalExecutionContext {
   readonly id: string;
   readonly externalId: string;
+  /** Set synchronously when the owning transport is disposed; never reset or persisted. */
+  disposed?: boolean;
+  /** Bounded to Nodes used by this live context; release must reach Nodes even after record eviction. */
+  externalExecNodes?: Set<string>;
   currentNode: string;
   cwd: string | null;
   selectionGeneration: number;
@@ -122,6 +126,7 @@ export class McpInboundHttpService {
   private async dispose(connection: Connection): Promise<void> {
     if (connection.disposed) return;
     connection.disposed = true;
+    connection.context.disposed = true;
     this.connections.delete(connection.id);
     this.live.delete(connection);
     try { await this.catalog?.releaseContext?.(connection.context, connection.principal); }
@@ -131,7 +136,7 @@ export class McpInboundHttpService {
   private async open(principal: VerifiedMcpInboundPrincipal): Promise<Connection> {
     const id = randomUUID();
     const context: ExternalExecutionContext = { id, externalId: principal.externalId,
-      currentNode: 'master', cwd: null, selectionGeneration: 0 };
+      currentNode: 'master', cwd: null, selectionGeneration: 0, disposed: false, externalExecNodes: new Set() };
     Object.defineProperties(context, {
       id: { writable: false }, externalId: { writable: false },
     });

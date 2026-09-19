@@ -626,6 +626,7 @@ export class NodesManager {
   async executeExternalTool(
     nodeId: string, toolName: string, args: Record<string, any>, owner: ExternalNodeOwner, cwd?: string,
     exec?: { execId: string; completionCapability: string },
+    assertOwnerActive?: () => void,
   ): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!this.supportsExternalOwner(nodeId) || !node?.ws) {
@@ -635,6 +636,9 @@ export class NodesManager {
       || (toolName === 'exec' && !exec) || (toolName !== 'exec' && exec)) {
       throw new Error(`Tool \`${toolName}\` is not available for external-owner calls on Node \`${nodeId}\`.`);
     }
+    // No await occurs between this fence and the WebSocket send. A disposed
+    // transport cannot dispatch after the provider registry's async lookup.
+    assertOwnerActive?.();
     return new Promise<any>((resolve, reject) => {
       const callId = `call_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
       const timeout = setTimeout(() => {

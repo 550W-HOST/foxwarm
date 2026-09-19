@@ -28,6 +28,10 @@ function owner(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutio
   return { kind: 'external', externalId, contextId: context.id };
 }
 
+function assertContextActive(context: ExternalExecutionContext): void {
+  if (context.disposed) throw new ExternalNodeBeforeEffectError('External execution context is unavailable.');
+}
+
 function pathFacts(nodeId: string, name: string, args: Record<string, unknown>): ToolAuthorizationPathRecord[] {
   const records: ToolAuthorizationPathRecord[] = [];
   const add = (arg: string, value: unknown) => {
@@ -44,8 +48,10 @@ function pathFacts(nodeId: string, name: string, args: Record<string, unknown>):
 /** The Node registry is the only capability and target resolver; no Session-shaped Main RPC call occurs here. */
 export async function listExternalNodeTools(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext) {
   owner(principal, context);
+  assertContextActive(context);
   const result: Array<{ nodeId: string; name: string; description: string; inputSchema?: unknown }> = [];
   for (const node of (await nodeProviderRegistry.listNodes()).slice(0, MAX_NODES)) {
+    assertContextActive(context);
     if (node.kind !== 'remote' || node.availability !== 'ready' || !nodesManager.supportsExternalOwner(node.id)) continue;
     for (const item of node.tools.slice(0, MAX_TOOLS_PER_NODE)) {
       const descriptors = Object.getOwnPropertyDescriptors(item);
@@ -70,29 +76,35 @@ export async function callExternalNodeTool(
   nodeId: string, name: string, args: Record<string, unknown>,
 ): Promise<unknown> {
   const effectOwner = owner(principal, context);
+  assertContextActive(context);
   if (!EXTERNAL_NODE_TOOLS.has(name)) throw new ExternalNodeBeforeEffectError('This Node capability is not available to external callers.');
   const authorization = buildExternalToolAuthorizationRequest({
     principal, sessionId: context.id, tool: { source: 'node', name }, targetNode: nodeId,
     args, paths: pathFacts(nodeId, name, args),
   });
   if ((await evaluateToolAuthorization(authorization)).action !== 'allow') throw new ExternalNodeBeforeEffectError('Node tool is not permitted.');
+  assertContextActive(context);
   const selected = await nodeProviderRegistry.resolveNode(nodeId);
+  assertContextActive(context);
   if (!selected || selected.descriptor.availability !== 'ready' || selected.descriptor.kind !== 'remote'
     || !nodesManager.supportsExternalOwner(nodeId) || !selected.descriptor.tools.some(item => item.name === name)) {
     throw new ExternalNodeBeforeEffectError('Node or Node capability is not available to external callers.');
   }
   const contextSnapshot = nodeId === context.currentNode && context.cwd ? { currentNode: nodeId, cwd: context.cwd } : {};
-  if (name !== 'exec') return nodeProviderRegistry.invokeTool({ owner: effectOwner, nodeId, toolName: name, args, context: contextSnapshot });
+  const assertActive = () => assertContextActive(context);
+  if (name !== 'exec') return nodeProviderRegistry.invokeTool({ owner: effectOwner, nodeId, toolName: name, args, context: contextSnapshot },
+    { assertExternalOwnerActive: assertActive });
   const selectedGeneration = context.selectionGeneration;
   const startedOnCurrentNode = context.currentNode === nodeId;
   let record;
   try { record = reserveExternalExec(effectOwner, nodeId, args, cwd => {
     if (startedOnCurrentNode && context.currentNode === nodeId && context.selectionGeneration === selectedGeneration) context.cwd = cwd;
   }); } catch { throw new ExternalNodeBeforeEffectError('External command could not be reserved; no call was sent.'); }
+  (context.externalExecNodes ??= new Set()).add(nodeId);
   try {
     const result = await nodeProviderRegistry.invokeTool({ owner: effectOwner, nodeId, toolName: name, args,
       context: { ...contextSnapshot, externalExec: { execId: record.execId, completionCapability: record.capability } },
-    });
+    }, { assertExternalOwnerActive: assertActive });
     const response = result && typeof result === 'object' ? result as Record<string, unknown> : {};
     if (response.execId !== record.execId || typeof response.background !== 'boolean' || typeof response.output !== 'string') {
       markExternalExecUnknown(record);
@@ -117,6 +129,7 @@ export async function externalExecResult(
   principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext, execId?: string, limit = 5,
 ): Promise<unknown> {
   const effectOwner = owner(principal, context);
+  assertContextActive(context);
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('Invalid execution list limit.');
   const records = execId === undefined ? listExternalExec(effectOwner, limit) : [getExternalExec(effectOwner, execId)].filter((item): item is NonNullable<typeof item> => !!item);
   if (execId !== undefined && records.length !== 1) throw new Error('Execution ID is unavailable in this context.');
@@ -127,6 +140,7 @@ export async function externalExecResult(
       args: record.args, paths: pathFacts(record.nodeId, 'exec', record.args),
     });
     if ((await evaluateToolAuthorization(request)).action === 'allow') allowed.push(record);
+    assertContextActive(context);
   }
   if (execId === undefined) return { executions: allowed.map(record => ({ execId: record.execId, nodeId: record.nodeId, state: record.state })) };
   if (allowed.length !== 1) throw new Error('Execution result is not permitted.');
@@ -150,8 +164,11 @@ export async function externalExecResult(
 
 export function releaseExternalNodeContext(principal: VerifiedMcpInboundPrincipal, context: ExternalExecutionContext): void {
   const effectOwner = owner(principal, context);
-  const nodes = new Set(listExternalExec(effectOwner, 20).map(record => record.nodeId));
+  context.disposed = true;
+  const nodes = new Set([...(context.externalExecNodes || []),
+    ...listExternalExec(effectOwner, 20).map(record => record.nodeId)]);
   releaseExternalExecContext(effectOwner);
+  context.externalExecNodes?.clear();
   for (const nodeId of nodes) nodesManager.releaseExternalOwner(nodeId, effectOwner);
 }
 
@@ -160,6 +177,7 @@ export async function externalNodeAction(
   action: 'list' | 'status' | 'select', nodeId?: string,
 ) {
   const effectOwner = owner(principal, context);
+  assertContextActive(context);
   if (action !== 'select' && nodeId !== undefined) throw new Error(`Node ${action} does not accept nodeId.`);
   const selectedNodeId = action === 'select' && typeof nodeId === 'string' ? nodeId.trim() : undefined;
   if (action === 'select' && (!selectedNodeId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(selectedNodeId))) {
@@ -170,8 +188,10 @@ export async function externalNodeAction(
     principal, sessionId: context.id, tool: { source: 'builtin', name: 'node' }, targetNode,
     args: { action, ...(selectedNodeId === undefined ? {} : { nodeId: selectedNodeId }) },
   }))).action !== 'allow') throw new Error('Node action is not permitted.');
+  assertContextActive(context);
   if (action === 'status') {
     const selected = await nodeProviderRegistry.resolveNode(context.currentNode);
+    assertContextActive(context);
     return { currentNode: context.currentNode, cwd: context.cwd,
       available: !!selected && selected.descriptor.availability === 'ready' && nodesManager.supportsExternalOwner(context.currentNode) };
   }
@@ -181,12 +201,15 @@ export async function externalNodeAction(
     return { currentNode: context.currentNode, nodes: nodes.slice(0, MAX_NODES) };
   }
   const selected = await nodeProviderRegistry.resolveNode(selectedNodeId!);
+  assertContextActive(context);
   if (!selected || selected.descriptor.availability !== 'ready' || selected.descriptor.kind !== 'remote'
     || !nodesManager.supportsExternalOwner(selectedNodeId!) || !selected.descriptor.tools.some(tool =>
       EXTERNAL_NODE_TOOLS.has(tool.name) && isToolAuthorizationPotentiallyVisibleSync(buildExternalToolAuthorizationRequest({
         principal, sessionId: context.id, tool: { source: 'node', name: tool.name }, targetNode: selectedNodeId,
       })))) throw new Error('Node is not available to this external identity.');
-  const result = await nodesManager.executeExternalTool(selectedNodeId!, 'get_default_cwd', {}, effectOwner);
+  const result = await nodesManager.executeExternalTool(selectedNodeId!, 'get_default_cwd', {}, effectOwner,
+    undefined, undefined, () => assertContextActive(context));
+  assertContextActive(context);
   const raw = result && typeof result === 'object' && 'output' in result ? (result as { output?: unknown }).output : result;
   if (typeof raw !== 'string' || !raw || raw.length > 4096) throw new Error('Node did not return a valid default working directory.');
   if (context.currentNode !== selectedNodeId) {
