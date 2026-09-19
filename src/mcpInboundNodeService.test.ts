@@ -144,7 +144,7 @@ rules:
     await alphaClient.connect(alphaTransport);
     await betaClient.connect(betaTransport);
     assert.deepEqual((await alphaClient.listTools()).tools.map(tool => tool.name),
-      ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result']);
+      ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result', 'foxwarm_session']);
     const selection = await alphaClient.callTool({ name: 'foxwarm_node', arguments: { action: 'select', nodeId: 'paired-external-node' } });
     assert.equal((selection.structuredContent as any)?.currentNode, 'paired-external-node');
     const discovered = await alphaClient.callTool({ name: 'foxwarm_discover', arguments: { sources: ['node'], limit: 20 } });

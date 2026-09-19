@@ -39,7 +39,7 @@ None — this file is the application entry point and does not export any symbol
 - `./config` — all configuration constants and helpers
 - `./httpServer` — HttpServer class, `setHttpServer`
 - `./mcpInboundHttp` — stateful inbound HTTP service with identity-bound contexts and graceful transport shutdown.
-- `./mcpInboundCatalog` — Main-owned outbound MCP discovery/call adapter for verified external contexts.
+- `./mcpInboundCatalog` — Main-owned outbound MCP, compatible CLI Node and bounded Session wrapper adapter for verified external contexts. Worker ingress receives the optional process-local live-context assertion before durable mailbox admission.
 - `./nodes/websocket` — `registerNodeWebSocket`
 - `./nodes/httpRoutes` — `registerNodeHttpRoutes`
 - `./nodes/registry` — `initializeNodeRegistry`

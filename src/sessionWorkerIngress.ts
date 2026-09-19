@@ -364,11 +364,13 @@ export class SessionWorkerIngressCoordinator {
    * runPending queues behind its own in-flight turn). A post-append processing
    * failure leaves the durable intent retryable.
    */
-  async enqueueEnsuringWorker(requestedSessionId: string, item: QueueItem): Promise<{ sessionId: string; mailboxIntentId: number }> {
+  async enqueueEnsuringWorker(requestedSessionId: string, item: QueueItem,
+    assertAdmissionActive?: () => void): Promise<{ sessionId: string; mailboxIntentId: number }> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
       const expected = await this.ensureReadyOwner(sessionId);
       this.supervisor.assertActivatedOwnership(sessionId, expected);
+      assertAdmissionActive?.();
       const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });

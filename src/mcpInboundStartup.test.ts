@@ -69,7 +69,7 @@ test('headless inbound config starts real Main HTTP, Node bootstrap/WS and MCP w
     const client = new Client({ name: 'headless-smoke', version: '1.0.0' });
     await client.connect(transport);
     try {
-      assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result']);
+      assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result', 'foxwarm_session']);
     } finally { await client.close(); }
     await stop(child);
     assert.equal(child.exitCode, 0, `Headless Main failed to shut down cleanly: ${logs.slice(-6_000)}`);

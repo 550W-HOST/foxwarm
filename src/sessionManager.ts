@@ -2514,7 +2514,8 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
-async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
+async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
+  assertAdmissionActive?: () => void): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
   let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
@@ -2550,11 +2551,19 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
     : undefined;
   let persistedAfterExternalReceipt = false;
   const persistSession = async (): Promise<void> => {
-    await saveSession(sessionId);
+    // External inbound send promises awaited durable admission. The ordinary
+    // compatibility save logs/swallow failures, so this producer uses the
+    // existing strict authority writer without changing internal producers.
+    if (assertAdmissionActive) await saveSessionForSessionCritical(session);
+    else await saveSession(sessionId);
     if (item.externalEventId) persistedAfterExternalReceipt = true;
   };
 
   try {
+    // External callers may lose their HTTP context while image preparation,
+    // session hydration or managed-owner reclamation awaits. Nothing below
+    // awaits again before mutating the wait/queue admission state.
+    assertAdmissionActive?.();
     if (receiptPlan) applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
     const waitTransition = applyQueuedItemToWaitState(session, item);
     if (waitTransition.action === 'drop') { await persistSession(); return; }
@@ -2617,13 +2626,13 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
   }
 }
 
-let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined;
+let workerEnqueueSink: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined;
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
 let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
 let workerCatalogFieldsUpdater: ((sessionId: string, patch: { parentSessionId?: string | null; displayName?: string | null }) => Promise<void>) | undefined;
 
-export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
+export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
 }
 
@@ -2700,7 +2709,9 @@ export function assertAgentMetadataMutationAllowed(operation: string): void {
   throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', `${operation} is unavailable while Session-worker placement is enabled.`, true);
 }
 
-export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
+export async function enqueueSessionItem(sessionId: string, item: QueueItem,
+  assertAdmissionActive?: () => void): Promise<void> {
+  assertAdmissionActive?.();
   if (workerEnqueueSink) {
     // Session-worker placement: all Main-side producers share one durable
     // ingress boundary. Managed sessions remain explicitly unsupported there;
@@ -2711,14 +2722,14 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     if (stub && getManagedSessionState(stub as Session)) {
       throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
     }
-    await workerEnqueueSink(canonicalSessionId, item);
+    await workerEnqueueSink(canonicalSessionId, item, assertAdmissionActive);
     return;
   }
   const canonicalSessionId = resolveLoadedSessionId(sessionId);
   const releaseAdmission = await enterStandaloneCompactAdmission(canonicalSessionId);
   try {
     const session = await getSession(canonicalSessionId);
-    await enqueueSessionItemForLoadedSession(session, item);
+    await enqueueSessionItemForLoadedSession(session, item, assertAdmissionActive);
   } finally {
     releaseAdmission();
   }

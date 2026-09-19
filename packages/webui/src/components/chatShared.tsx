@@ -407,6 +407,7 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
   return kind === 'time'
     || kind === 'session'
     || kind === 'channel-mode'
+    || kind === 'external-input'
 }
 
 export const formatStructuredSystemText = (system: string): string => (

@@ -55,6 +55,10 @@ async function buildFixtureBundle() {
       unknown: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="future-system-kind">\\nunknown body\\n</foxwarm-system>' }], __meta: { seq: 24 } }] },
       legacy: { messages: [{ role: 'user', parts: [{ system: 'legacy system notification' }], __meta: { seq: 3 } }] },
       direct: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\ndirect user body\\n</foxwarm-message>\\n<foxwarm-file name="中文测试.txt" node="master" path="/tmp/中文测试.txt" mime="text/plain" />' }, { inlineData: image }], __meta: { seq: 4 } }] },
+      externalInput: { messages: [{ role: 'user', parts: [
+        { system: '<foxwarm-system kind="external-input" externalId="alpha" contextId="fixture" hint="Message from an external MCP client." />' },
+        { text: 'ordinary external user input' },
+      ], __meta: { seq: 25 } }] },
       mixed: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\nold wrapper\\n</foxwarm-message>\\n<foxwarm-system kind="event">\\n' + longBody + '\\n</foxwarm-system>' }], __meta: { seq: 5 } }] },
       nested: { nestedDepth: 1, messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="snapshot">\\nnested system body\\n</foxwarm-system>' }], __meta: { seq: 6 } }] },
       spacing: { messages: [
@@ -101,7 +105,7 @@ async function mountFixture(width = 900, dark = false, style = 'default') {
   await page.evaluate(({ dark, style }) => {
     window.setFixtureTheme(style, dark)
   }, { dark, style })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 11)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 12)
 }
 
 before(async () => {
@@ -113,7 +117,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'mixed', 'nested', 'spacing', 'unknownTool', 'sendToSessionTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'externalInput', 'mixed', 'nested', 'spacing', 'unknownTool', 'sendToSessionTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -165,6 +169,10 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
 
   assert.equal(await page.$$('#direct [data-system-message-card]').then(nodes => nodes.length), 0)
   assert.equal(await page.$$('#direct .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
+  assert.equal(await page.$$('#externalInput [data-system-message-card]').then(nodes => nodes.length), 0,
+    'an external-origin user message must not render as a framework system-delivered card')
+  assert.equal(await page.$$('#externalInput .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
+  assert.match(await page.$eval('#externalInput .foxwarm-user-message-bubble', bubble => bubble.textContent), /ordinary external user input/)
   assert.equal(await page.$eval('#direct .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-end')
   assert.deepEqual(await page.$eval('#direct .foxwarm-lightweight-metadata-line:last-of-type', line => ({
     text: line.textContent,

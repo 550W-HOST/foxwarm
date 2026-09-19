@@ -180,7 +180,7 @@ test('real SDK inbound → Main outbound MCP enforces owner/rules and preserves 
     match: { externalId: alpha, session: ${a.transport.sessionId}, tool: { source: mcp, server: local, name: session_gate } }
     action: allow
 `));
-      assert.deepEqual((await a.client.listTools()).tools.map(tool => tool.name), ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result']);
+      assert.deepEqual((await a.client.listTools()).tools.map(tool => tool.name), ['foxwarm_discover', 'foxwarm_call', 'foxwarm_node', 'foxwarm_exec_result', 'foxwarm_session']);
       const listed = await a.client.callTool({ name: 'foxwarm_discover', arguments: { sources: ['mcp'], limit: 50 } });
       assert.equal(listed.isError, undefined);
       const detail = listed.structuredContent as any;

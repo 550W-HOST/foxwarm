@@ -262,12 +262,14 @@ handoffConfirmation: false
 ```
 
 Inbound MCP listens at the fixed `/mcp` path when explicitly enabled. It
-advertises `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, and
-`foxwarm_exec_result` for authorized tools on configured outbound MCP servers
-and compatible first-party authenticated CLI Nodes. External Node support covers
-read, write, edit, apply_patch, and exec; the colocated master, Docker and
-executable Nodes, browser tabs, and internal Session interactions are not
-available through this inbound endpoint. Commands that outlive an HTTP request
+advertises `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`,
+`foxwarm_exec_result`, and `foxwarm_session` for authorized outbound MCP tools,
+compatible first-party authenticated CLI Nodes, and bounded Session list/read/send.
+External Node support covers read, write, edit, apply_patch, and exec; the
+colocated master, Docker and executable Nodes, browser tabs, and other direct
+Session controls are not available through this inbound endpoint. A Session
+send is ordinary queued input and confirms admission, not a recipient reply.
+Commands that outlive an HTTP request
 remain scoped to their live external context; closing that context makes their
 results unavailable without stopping the command. This setting is separate
 from outbound MCP server configuration. An omitted block defaults to disabled; malformed blocks fail

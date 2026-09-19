@@ -1,6 +1,7 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import * as mcpExternal from './mcpExternalService';
 import * as nodeExternal from './mcpInboundNodeService';
+import * as sessionExternal from './mcpInboundSessionService';
 import type { VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
 import { McpInboundSafeError, type ExternalExecutionContext, type McpInboundCatalog } from './mcpInboundHttp';
 import { buildUnifiedToolId, parseUnifiedToolId } from './tools/resolvedTools';
@@ -59,6 +60,21 @@ const execResultTool: Tool = {
     },
   },
 };
+const sessionTool: Tool = {
+  name: 'foxwarm_session',
+  description: "List Foxwarm Sessions, read a Session's recent messages, or send it a message. A successful send confirms that the message was queued, not that the Session has read or answered it.",
+  inputSchema: {
+    type: 'object', additionalProperties: false, required: ['action'],
+    properties: {
+      action: { type: 'string', enum: ['list', 'read', 'send'], description: 'list shows Sessions; read returns a bounded message preview; send queues a message for an exact Session.' },
+      sessionId: { type: 'string', description: 'Exact internal Session ID for read or send. Current-session and parent aliases are not accepted.' },
+      start: { type: 'integer', description: 'Zero-based offset for list or read. A negative read offset counts from the end. Omit to list from the beginning or read the latest messages.' },
+      count: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum entries to return. Defaults to 20 for list and 10 for read.' },
+      previewLength: { type: 'integer', minimum: 1000, maximum: 20000, description: 'Total character budget for the read preview. Omit to use the normal preview budget.' },
+      message: { type: 'string', description: 'Non-empty message to queue when action is send.' },
+    },
+  },
+};
 
 type DiscoveryArgs = {
   query: string;
@@ -104,7 +120,7 @@ function toolError(message: string): CallToolResult {
 /** Main-owned adapter: never invokes the internal Session RPC service or forges a Session ID. */
 export class McpInboundMcpCatalog implements McpInboundCatalog {
   async listTools(_context: ExternalExecutionContext, _principal: VerifiedMcpInboundPrincipal): Promise<Tool[]> {
-    return [discoverTool, callTool, nodeTool, execResultTool];
+    return [discoverTool, callTool, nodeTool, execResultTool, sessionTool];
   }
 
   async callTool(
@@ -116,11 +132,44 @@ export class McpInboundMcpCatalog implements McpInboundCatalog {
     if (name === callTool.name) return this.call(context, principal, args, signal);
     if (name === nodeTool.name) return this.nodeAction(context, principal, args);
     if (name === execResultTool.name) return this.execResult(context, principal, args);
+    if (name === sessionTool.name) return this.sessionAction(context, principal, args);
     return toolError('Tool is not available.');
   }
 
   releaseContext(context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal): void {
     nodeExternal.releaseExternalNodeContext(principal, context);
+  }
+
+  private async sessionAction(
+    context: ExternalExecutionContext, principal: VerifiedMcpInboundPrincipal, args: Record<string, unknown>,
+  ): Promise<CallToolResult> {
+    const action = args.action;
+    const fields = action === 'list' ? ['action', 'start', 'count']
+      : action === 'read' ? ['action', 'sessionId', 'start', 'count', 'previewLength']
+        : action === 'send' ? ['action', 'sessionId', 'message'] : [];
+    if (!fields.length || !fieldsOnly(args, fields)
+      || (action !== 'list' && (typeof args.sessionId !== 'string' || !args.sessionId))
+      || (action === 'send' && (typeof args.message !== 'string' || !args.message.trim()))
+      || (action !== 'send' && ((args.start !== undefined && (!Number.isSafeInteger(args.start) || (action === 'list' && (args.start as number) < 0)))
+        || (args.count !== undefined && (!Number.isInteger(args.count) || (args.count as number) < 1 || (args.count as number) > 50))
+        || (args.previewLength !== undefined && (!Number.isInteger(args.previewLength) || (args.previewLength as number) < 1000 || (args.previewLength as number) > 20000))))) {
+      return toolError('Invalid Session action arguments.');
+    }
+    try {
+      const result = action === 'list'
+        ? await sessionExternal.listExternalSessions(principal, context, args.start as number | undefined, args.count as number | undefined)
+        : action === 'read'
+          ? await sessionExternal.readExternalSession(principal, context, args.sessionId as string,
+            args.start as number | undefined, args.count as number | undefined, args.previewLength as number | undefined)
+          : await sessionExternal.sendExternalSession(principal, context, args.sessionId as string, args.message as string);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result as Record<string, unknown> };
+    } catch (error) {
+      if (isToolAuthorizationPolicyUnavailable(error)) return toolError('Tool policy is unavailable; Session action failed closed.');
+      if (error instanceof sessionExternal.ExternalSessionBeforeAdmissionError) return toolError(error.message);
+      return toolError(action === 'send'
+        ? 'Session input may have been queued; outcome unknown. Do not retry automatically.'
+        : 'Session information is unavailable.');
+    }
   }
 
   private async discover(
