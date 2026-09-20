@@ -7,19 +7,7 @@ sidebar:
 
 When the active data directory has no `state/models.yaml`, Foxwarm opens first-run Setup and keeps it open until you save a valid model configuration.
 
-## Open the local WebUI
-
-Open the URL printed by the installer. It looks like:
-
-```text
-http://localhost:3001/#token=...
-```
-
-If you lost it, read the token from your data directory:
-
-```bash
-cat foxwarm-data/state/token
-```
+Open the WebUI using the installer's login URL. If you need to recover it, follow [Open the WebUI](/docs/installing/#open-the-webui).
 
 ## Add a provider
 
@@ -71,4 +59,4 @@ The bundled `about-foxwarm` Skill can explain concepts and point to deeper featu
 - If a manually edited config blocks setup, fix or remove `state/models.yaml` in the data directory to return to first-run Setup.
 - If WebUI shows no response, inspect `foxwarm-data/state/logs/`.
 
-For virtual routing and failover, see the repository's [Virtual models guide](https://github.com/550W-HOST/foxwarm/blob/main/docs/virtual-models.md).
+Once basic chat works, see [Model options and routing](/docs/model-options/) for reasoning effort, aliases, failover, hosted search, and image generation.

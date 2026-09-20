@@ -1,115 +1,164 @@
 ---
 title: Connect an external MCP client
-description: Enable Foxwarm's authenticated MCP endpoint and authorize exact tools, Nodes, and Sessions.
+description: Enable Foxwarm's MCP endpoint and grant an external client access to selected tools, Nodes, or Sessions.
 ---
 
-Foxwarm can serve its existing capabilities to an external MCP client over Streamable HTTP. Inbound MCP is separate from the MCP servers that Foxwarm itself connects to. Each external identity has its own Bearer token; authorization rules decide what that identity may discover and call.
+Foxwarm exposes a Streamable HTTP MCP endpoint at `/mcp` on the **same HTTP port as the WebUI**. Each external identity has its own token, and tool rules determine what it can use. The endpoint is disabled by default.
 
-## Enable the endpoint
+This page is for clients connecting **to Foxwarm**. To connect Foxwarm to another tool server, see [outbound MCP](/docs/tools-skills-mcp/#connect-an-mcp-tool-server).
 
-Add this to your data directory's `state/config.yaml` (alongside your normal model and instance settings):
+## Configure an identity
+
+Add this block to `state/config.yaml` in your data directory:
 
 ```yaml
-bot:
-  httpPort: 3001
-  enableWebUI: false
-  enableTrigger: false
 mcpInbound:
   enabled: true
   identities:
-    operatorA: { token: REPLACE_WITH_A_LONG_UNIQUE_PRIVATE_TOKEN_A }
-    operatorB: { token: REPLACE_WITH_A_DIFFERENT_PRIVATE_TOKEN_B }
+    editor:
+      token: REPLACE_WITH_A_LONG_PRIVATE_TOKEN
 ```
 
-The WebUI and trigger can stay enabled in a normal installation. Turning both off leaves the same Foxwarm application serving MCP HTTP and Node pairing/WebSocket connections; it does not install a separate hub. Replace both example tokens with different private values before starting Foxwarm. Do not reuse the WebUI token or the Node pairing token. Omit `mcpInbound` or set `enabled: false` to keep the endpoint disabled. Configuration changes take effect on restart.
+Replace the token before starting Foxwarm. For another client identity, add another named entry with a different token. Do not reuse the WebUI or Node pairing token. These credentials are read from YAML, not from environment variables.
 
-Point a Streamable HTTP MCP client at the deployment-relative `mcp` path. Provide `Authorization: Bearer <your-identity-token>` on **every** MCP request, including POST, GET, and DELETE. If a reverse proxy serves Foxwarm under a path prefix, retain that prefix in the base URL.
+Restart Foxwarm after changing the configuration. With the default port, the endpoint is `http://localhost:3001/mcp`. Behind a reverse proxy, retain the deployment prefix, for example `https://your-host.example/foxwarm/mcp`. Use HTTPS when sending credentials over an untrusted network.
 
-This JavaScript example uses the MCP SDK's Streamable HTTP client and a base URL ending in `/`:
+Configure the client to send `Authorization: Bearer <token>` on every request. WebUI cookies are not used for MCP authentication.
+
+## Grant a capability
+
+Add rules to `state/tool-authorization.yaml`. For an existing policy, preserve its rules and default action; do not replace it with a sample policy.
+
+The following complete example grants `editor` only the `read` tool on a ready Node named `worker-one`. The default action remains `allow` for unmatched **internal** calls; unmatched **external** calls are always denied.
+
+```yaml
+version: 1
+defaultAction: allow
+rules:
+  - id: editor-read-worker
+    match:
+      externalId: editor
+      tool: { source: node, name: read }
+      targetNode: worker-one
+    action: allow
+```
+
+Rules use the first matching entry. A broad existing allow rule can also match external callers, so review the whole policy before enabling the endpoint. A missing policy gives external clients no access, and an unreadable policy fails closed.
+
+The MCP entry points are not separate permission identities. A call through `foxwarm_call` is checked against the concrete tool, its arguments, and its target. Node tools use the actual `targetNode`; Session operations and pairing administration do not have a Node target.
+
+## Connect and call a tool
+
+The example below uses `@modelcontextprotocol/sdk`. Supply your own base URL and token in the client application:
 
 ```js
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const base = new URL(process.env.FOXWARM_BASE_URL ?? 'http://127.0.0.1:3001/');
-if (!base.pathname.endsWith('/')) throw new Error('Base URL must end in /');
-const token = process.env.FOXWARM_MCP_TOKEN;
-if (!token) throw new Error('Provide the external identity token');
+const base = new URL('http://localhost:3001/');
+const token = 'REPLACE_WITH_THE_EDITOR_TOKEN';
 const transport = new StreamableHTTPClientTransport(new URL('mcp', base), {
   requestInit: { headers: { Authorization: `Bearer ${token}` } },
 });
-const client = new Client({ name: 'example-external-client', version: '1.0.0' });
+const client = new Client({ name: 'example-client', version: '1.0.0' });
 await client.connect(transport);
 try {
-  console.log((await client.listTools()).tools.map(tool => tool.name));
   const found = await client.callTool({
     name: 'foxwarm_discover',
     arguments: { sources: ['node'], nodeId: 'worker-one', query: 'read', limit: 5 },
   });
-  if (found.isError) throw new Error('Discovery was denied or unavailable');
+  if (found.isError) throw new Error('Tool discovery failed');
   const read = found.structuredContent?.tools?.find(tool => tool.name === 'read');
-  if (read) {
-    const result = await client.callTool({
-      name: 'foxwarm_call', arguments: { toolId: read.toolId, args: { filePath: 'README.md' } },
-    });
-    console.log(result);
-  }
+  if (!read) throw new Error('No permitted read tool found');
+
+  const result = await client.callTool({
+    name: 'foxwarm_call',
+    arguments: { toolId: read.toolId, args: { filePath: 'README.md' } },
+  });
+  console.log(result);
 } finally {
   await client.close();
 }
 ```
 
-Substitute an already-ready Node ID for `worker-one`. A discovered entry provides its canonical `toolId`; pass that ID unchanged to `foxwarm_call`. You can also discover `sources: ['mcp']` for configured outbound MCP servers or `sources: ['builtin']` for the two available Node pairing actions. Discovery is only a preview: each call checks the current rules again using its exact arguments and target.
+Keep a trailing slash on the base URL, including any deployment prefix. Replace `worker-one` with your Node ID and choose a file on that Node. Pass the discovered `toolId` unchanged; discovery does not guarantee that different arguments will be authorized.
 
-## Grant the concrete capabilities
+## Available entry points
 
-Create `state/tool-authorization.yaml` in the same data directory. For example, this version 1 policy grants `operatorA` a specific Node, one existing Session, one configured outbound MCP tool, and Node-pairing administration. `operatorB` has no matching allow rule:
+| MCP tool | Purpose |
+| --- | --- |
+| `foxwarm_discover` | Find supported tools and inspect their inputs |
+| `foxwarm_call` | Call a concrete tool by its `toolId` |
+| `foxwarm_node` | List, inspect the current selection, or select a Node |
+| `foxwarm_exec_result` | Read command status and bounded output for the current MCP context |
+| `foxwarm_session` | List internal Sessions, read a bounded preview, or queue a message |
 
-```yaml
-version: 1
-defaultAction: deny
-rules:
-  - id: external-node-list
-    match: { externalId: operatorA, tool: { source: builtin, name: node }, args: { action: list } }
-    action: allow
-  - id: external-node-select
-    match: { externalId: operatorA, tool: { source: builtin, name: node }, targetNode: worker-one, args: { action: select, nodeId: worker-one } }
-    action: allow
-  - id: external-node-status
-    match: { externalId: operatorA, tool: { source: builtin, name: node }, targetNode: worker-one, args: { action: status } }
-    action: allow
-  - id: external-node-tools
-    match: { externalId: operatorA, tool: { source: node, name: [read, write, edit, apply_patch, exec] }, targetNode: worker-one }
-    action: allow
-  - id: external-session-list
-    match: { externalId: operatorA, tool: { source: builtin, name: session }, args: { action: list } }
-    action: allow
-  - id: external-session-read
-    match: { externalId: operatorA, tool: { source: builtin, name: get_session_messages }, args: { sessionId: existing-session-id } }
-    action: allow
-  - id: external-session-send
-    match: { externalId: operatorA, tool: { source: builtin, name: send_to_session }, args: { sessionId: existing-session-id } }
-    action: allow
-  - id: external-outbound-tool
-    match: { externalId: operatorA, tool: { source: mcp, server: configured-server, name: allowed_tool } }
-    action: allow
-  - id: external-pending-nodes
-    match: { externalId: operatorA, tool: { source: builtin, name: node_pair_list } }
-    action: allow
-  - id: external-approve-node
-    match: { externalId: operatorA, tool: { source: builtin, name: node_pair_approve }, args: { nodeId: new-worker } }
-    action: allow
+`foxwarm_discover` accepts `sources: ['node']`, `['mcp']`, or `['builtin']`. The supported builtins are currently the two Node pairing actions.
+
+### Additional rule examples
+
+Each row below describes a separate rule. Put the listed fields under `match` alongside `externalId`, then set the rule's `action` to `allow`. Grant only the operations the client needs.
+
+| Operation | Concrete tool match | Other match fields |
+| --- | --- | --- |
+| List Nodes | `{ source: builtin, name: node }` | `args: { action: list }` |
+| Select a Node | `{ source: builtin, name: node }` | `targetNode: worker-one`, `args: { action: select, nodeId: worker-one }` |
+| Inspect the current Node | `{ source: builtin, name: node }` | `targetNode: worker-one`, `args: { action: status }` |
+| Run a command | `{ source: node, name: exec }` | `targetNode: worker-one` |
+| Call an outbound MCP tool | `{ source: mcp, server: configured-server, name: allowed_tool }` | No Node target |
+| List Sessions | `{ source: builtin, name: session }` | `args: { action: list }` |
+| Read a Session | `{ source: builtin, name: get_session_messages }` | `args: { sessionId: existing-session-id }` |
+| Send to a Session | `{ source: builtin, name: send_to_session }` | `args: { sessionId: existing-session-id }` |
+| List pending pairings | `{ source: builtin, name: node_pair_list }` | No Node target |
+| Approve a pairing | `{ source: builtin, name: node_pair_approve }` | `args: { nodeId: new-worker }`; no Node target |
+
+Session-list permission exposes a bounded global catalog, not a list filtered by separate per-Session read permissions. Pairing approval grants trust to a Node and should be reserved for an operator. It does not automatically grant permission to call that Node's tools.
+
+## Send work to a Session
+
+After granting a send rule for the target, call:
+
+```js
+await client.callTool({
+  name: 'foxwarm_session',
+  arguments: {
+    action: 'send',
+    sessionId: 'existing-session-id',
+    message: 'Please check the build.',
+  },
+});
 ```
 
-Replace example identities, IDs, server and tool names with your own. `new-worker` must be an unassigned ID for the pending Node, not the ID of an already-ready Node. Rules are evaluated **in order**, using the first matching rule. `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, and `foxwarm_session` are inbound wrapper names, **not** the tool names to put in `match.tool`. A Node tool call uses `source: node` and its exact `targetNode`; `foxwarm_node` list has no target, while select checks the requested Node and status checks the currently selected Node. Pairing list and approval do not claim a `master` target. A Session send uses the ordinary `send_to_session` authorization with a real `sessionId`, not the permissions of a newly fabricated Agent. External calls without a matching allow rule are denied even when the policy's internal default action is `allow`. A missing or unreadable policy does not give an external caller access.
+A successful result confirms that the message was queued, not that the Session has read or answered it. The Session runs under its own Agent and existing permissions. Reading the response requires a separate read permission and `foxwarm_session` call with `action: 'read'`.
 
-The example grants all five file/exec tools on `worker-one`; narrow tool names, target Node, Session ID, and argument matches to your actual needs. Tool rules do not themselves restrict the Node process, create a sandbox, or start a Node. A Docker-worktree Node also enforces its configured worktree/root and symlink checks, but it is not a malicious-code security boundary.
+## Background commands
 
-## Work with Nodes and Sessions
+An `exec` call returns its actual `execId`. While the same MCP context is alive, pass that ID to `foxwarm_exec_result` to inspect output. Omit the ID to list retained commands. Result reads recheck permission for the original command and Node.
 
-- **First-party CLI Nodes:** an operator obtains the *existing* Node pairing token from the master's private local `state/node_token` file and supplies it privately to the Node. The token is never returned by inbound MCP. After that Node requests pairing, an external operator with the two pairing rules above may discover/call `builtin:node_pair_list` and `builtin:node_pair_approve`. An authenticated CLI Node must negotiate core protocol v3 and advertise external-owner support before its `read`, `write`, `edit`, `apply_patch`, or `exec` is available externally. Pairing approval does not automatically grant Node tool rules.
-- **First-party Docker-worktree Nodes:** a previously created, configured, **ready** Docker-worktree Node exposes the same five file/exec tools under exact Node rules. It is a local resident provider, not a paired CLI Node. External MCP does not create, ensure, inspect, or destroy the container; an internal administrator must prepare it first. External file reads cannot open the provider's execution-artifact directory. A Node tool may still change an authorized worktree or run a command there.
-- **Session input:** `foxwarm_session` supports `list`, `read`, and `send`. For example, call `client.callTool({ name: 'foxwarm_session', arguments: { action: 'send', sessionId: 'existing-session-id', message: 'Please check the build.' } })` after granting that exact Session send rule. An accepted send confirms ordinary durable queue admission, not a reply or completion. The receiving Session continues under its own Agent and existing permissions. Read is a bounded message preview, not a raw queue or current prompt dump.
-- **Background commands:** `foxwarm_call` on `node:<nodeId>/exec` returns a real `execId`. While the **same live MCP connection context** remains available, use `foxwarm_exec_result` with that ID to inspect bounded running/completed output, or omit the ID to list the retained jobs. At most 20 records are retained per context; a new command evicts the oldest completed record when full, while 20 unresolved commands reject another command before effect. Idle contexts expire after about 15 minutes, and closing a connection or restarting Foxwarm loses result ownership. Closing a connection does **not** kill a command that already started; it also does not guarantee that a call whose response was lost did not take effect. Do not retry an uncertain mutation automatically.
+Each context retains up to 20 command records. Starting a new command can evict the oldest completed record; 20 unresolved commands block another start. Contexts expire after 15 minutes of inactivity. Deleting the context or restarting Foxwarm also loses result ownership.
 
-The external endpoint does not currently execute tools on the colocated `master` Node or startup-configured executable providers, use browser tabs, copy between Nodes, run Node lifecycle mutations, or expose general internal-Session/Agent-affine builtins. A configured outbound MCP server's permitted tools remain callable; there is no built-in model-hosted web search endpoint.
+A dropped HTTP connection does not mean the command was cancelled. Already-started commands are not killed when their context is deleted. If a mutation's outcome is unknown, do not automatically repeat it.
+
+## Run without a WebUI
+
+For a headless installation, add these settings to the same app configuration:
+
+```yaml
+bot:
+  enableWebUI: false
+  enableTrigger: false
+```
+
+With inbound MCP enabled, Foxwarm still starts its HTTP server and Node connections. You can leave both settings enabled when MCP shares a normal WebUI installation.
+
+To pair a CLI Node, an administrator supplies the existing token from the instance's private `state/node_token` file to that Node. An authorized MCP operator can then discover and call `node_pair_list` and `node_pair_approve`. The MCP endpoint never returns the bootstrap token. See [Nodes](/docs/nodes/) for client setup.
+
+## Supported execution environments
+
+- **First-party CLI Nodes:** must negotiate protocol v3 and advertise external-owner support. Update older clients before using them through MCP.
+- **First-party Docker-worktree Nodes:** must already be configured, created, and ready. Creation and destruction remain internal administrative operations.
+- **Configured outbound MCP servers:** expose only tools permitted by the external identity's rules.
+
+The supported Node tools are `read`, `write`, `edit`, `apply_patch`, and `exec`. The endpoint does not currently expose execution on `master` or executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general internal Session/Agent tools. Model-hosted search is not a Node capability.
+
+Tool rules do not provide operating-system isolation. Granting `exec` permits commands in the selected environment; review its files, mounts, credentials, and network access accordingly.

@@ -15,6 +15,8 @@ const requiredRoutes = [
   '/docs/',
   '/docs/installing/',
   '/docs/model-setup/',
+  '/docs/model-options/',
+  '/docs/history-search/',
   '/docs/agents-sessions-memory/',
   '/docs/tools-skills-mcp/',
   '/docs/mcp-inbound/',

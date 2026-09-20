@@ -1,35 +1,21 @@
 ---
 title: Install Foxwarm
-description: Install Foxwarm on Linux, macOS, WSL, or Windows and open the local WebUI.
+description: Install Foxwarm, open the WebUI, and manage the running process.
 sidebar:
   order: 1
 ---
 
-The installer creates a program checkout at `./foxwarm` and stores runtime state in `./foxwarm-data`. It then builds Foxwarm, starts it, and prints a local WebUI URL with the login token.
-
-:::note
-This site hosts the installer files. Your Foxwarm WebUI, API, Agents, and data remain on the machine where you install them.
-:::
+The installer creates `./foxwarm` for the program and `./foxwarm-data` for runtime data. It builds and starts the app, then prints a WebUI URL containing the login token.
 
 ## Linux, macOS, or WSL
 
-### Before you run the installer
-
-You will need:
-
-- Git
-- Node.js 20 or newer, including npm
-- tmux
-
-The installer reports missing prerequisites. Install any system packages yourself, then run it again.
+Install Git, Node.js 20 or newer with npm, and tmux. The installer checks for these prerequisites but does not install system packages.
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
 ```
 
-When startup finishes, open the tokenized URL printed by the script, typically on `http://localhost:3001/`.
-
-To choose different locations:
+To choose different directories:
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash -s -- \
@@ -37,21 +23,9 @@ curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash -s -- \
   --data-dir "$PWD/foxwarm-data"
 ```
 
-You can set the same locations and startup options with environment variables:
-
-```bash
-export FOXWARM_DIR="$PWD/foxwarm"
-export FOXWARM_DATA_DIR="$PWD/foxwarm-data"
-export FOXWARM_TMUX_SESSION=foxwarm
-export FOXWARM_BRANCH=main
-curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
-```
-
-Attach to the console with `tmux attach -t foxwarm`. Detach without stopping the app by pressing <kbd>Ctrl</kbd>+<kbd>b</kbd>, then <kbd>d</kbd>.
+You can inspect the [Bash installer](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh) before running it. Run the downloaded script with `--help` for its other options.
 
 ## Windows PowerShell
-
-### Before you run the installer
 
 Install Git for Windows and Node.js 20 or newer with npm, then open PowerShell:
 
@@ -59,48 +33,90 @@ Install Git for Windows and Node.js 20 or newer with npm, then open PowerShell:
 irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
 ```
 
-The Windows installer builds Foxwarm, starts it in the background, and opens the tokenized local WebUI URL when it becomes available. Windows installs do not require tmux or WSL.
+The installer starts Foxwarm in the background and opens the WebUI URL when available. Windows does not require tmux or WSL.
 
-If local script execution is blocked, download the script and run:
+To inspect the script or pass installation paths, download it first:
+
+```powershell
+Invoke-WebRequest https://foxwarm.550w.host/install-foxwarm.ps1 -OutFile install-foxwarm.ps1
+.\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data
+```
+
+If script execution is blocked, run the downloaded file with a process-specific policy:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
 ```
 
-To choose paths or a branch:
+Stop the existing instance with `npm run stop:windows` from its checkout before rerunning the installer. This avoids replacing native dependencies while they are loaded.
 
-```powershell
-.\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data -BranchName main
+## Open the WebUI
+
+Use the URL printed at startup, typically:
+
+```text
+http://localhost:3001/#token=...
 ```
 
-Stop a running Windows instance before rerunning the installer:
+If you no longer have the URL, read `state/token` in your data directory and use it as the token value. For a default install on Linux, macOS, or WSL:
 
-```powershell
+```bash
+cat foxwarm-data/state/token
+```
+
+Treat the token like a password. Once logged in, [configure your first model](/docs/model-setup/).
+
+## Start, stop, and inspect
+
+Run these commands from the program checkout:
+
+| Action | Linux, macOS, WSL | Windows |
+| --- | --- | --- |
+| Start in the background | `npm start` | `npm run start:windows` |
+| Restart | `npm run restart` | `npm run restart:windows` |
+| Stop | `npm run stop` | `npm run stop:windows` |
+| Inspect the running process | `tmux attach -t foxwarm` | `npm run status:windows` |
+
+To detach from tmux without stopping Foxwarm, press <kbd>Ctrl</kbd>+<kbd>b</kbd>, then <kbd>d</kbd>. If you chose a custom tmux session name, use it in the attach command.
+
+Logs are under `state/logs/` in the data directory. See [upgrades and backups](/docs/data-upgrades-backups/) before replacing code or dependencies on an important instance.
+
+## Docker Compose
+
+Install Docker with Compose, then run from a checkout:
+
+```bash
+git clone https://github.com/550W-HOST/foxwarm.git foxwarm
 cd foxwarm
-npm run stop:windows
+mkdir -p foxwarm-data/state foxwarm-data/agents
+docker compose up -d --build foxwarm
 ```
+
+Open `http://localhost:3001/` and read the token from `foxwarm-data/state/token`. The Compose service mounts that host directory at `/data` inside the container. First-run model setup works the same way as a local installation.
+
+This command starts only the `foxwarm` service. The repository also defines an optional paired sandbox client; you do not need it to try the WebUI.
+
+For container logs and shutdown:
+
+```bash
+docker compose logs -f foxwarm
+docker compose down
+```
+
+If you change `bot.httpPort`, update the Compose port mapping and healthcheck as well. For a chat or embedding service on the Docker host, use a host-reachable address; `localhost` inside Foxwarm's container refers to that container.
 
 ## Manual checkout
 
-If you are developing Foxwarm or want to inspect the installer first:
+For development or a manual Linux/macOS/WSL install:
 
 ```bash
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
 cd foxwarm
 npm run build-all
-```
-
-Create an external data directory and a persistent pointer to it:
-
-```bash
 mkdir -p ../foxwarm-data
 printf "%s\n" "$PWD/../foxwarm-data" > data_dir
 export FOXWARM_DATA_DIR="$PWD/../foxwarm-data"
 npm start
 ```
 
-Read the token from `../foxwarm-data/state/token` if the startup output is no longer visible.
-
-## Continue with model setup
-
-When WebUI opens, [set up your first model](/docs/model-setup/).
+The `data_dir` pointer keeps subsequent starts pointed at the same data directory. The installer creates it automatically. For source changes and tests, see the repository's [development guide](https://github.com/550W-HOST/foxwarm/blob/main/docs/development.md).
