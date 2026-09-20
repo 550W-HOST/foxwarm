@@ -471,6 +471,36 @@ test('MessageRouter adds normal channel delivery guidance only to non-WebUI norm
   }
 });
 
+test('MessageRouter preserves WebUI pasted-text bodies in direct channel wrappers', () => {
+  const router = new MessageRouter() as any;
+  const ctx = {
+    channelId: 'webui', channelType: 'webui', platform: 'webui',
+    channelUserId: 'fixture/main', conversationId: 'fixture/main', username: 'webui',
+    reply: async () => {}, sendTyping: async () => {},
+  };
+  const message = (parts: MessagePart[]) => router.buildChannelUserQueueItem(ctx, {
+    parts, channelUserId: ctx.channelUserId, conversationId: ctx.conversationId,
+  }).parts as MessagePart[];
+
+  for (const pasted of ['A'.repeat(2000), `${'A'.repeat(2000)}\n`]) {
+    const body = `<pasted-text>${pasted}</pasted-text>`;
+    const textOnly = message([{ text: body }]);
+    assert.equal(textOnly.length, 1);
+    assert.match(textOnly[0].system || '', /^<foxwarm-message type="channel" channelType="webui" /);
+    assert.equal(textOnly[0].system?.endsWith(`\n${body}\n</foxwarm-message>`), true);
+
+    const file = message([{ text: `${body}<attachment-ref ref="attachment1" />` }, {
+      text: '<foxwarm-file name="attachment1_notes.txt" node="master" path="/fixture/notes.txt" mime="text/plain" />',
+    }]);
+    assert.equal(file.length, 1);
+    assert.equal(file[0].system?.includes(`\n${body}<attachment-ref ref="attachment1" />\n<foxwarm-file `), true);
+
+    const image = message([{ text: body }, { inlineData: { mimeType: 'image/png', data: 'AAAA' } }]);
+    assert.deepEqual(image.map(part => Object.keys(part)), [['system'], ['text'], ['inlineData'], ['system']]);
+    assert.equal(image[1].text, body);
+  }
+});
+
 test('MessageRouter keeps channel ingress metadata in one serializable queued/history user message', async () => {
   const router = new MessageRouter() as any;
   const ctx = {

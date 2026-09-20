@@ -157,6 +157,7 @@ async function buildFixtureBundle() {
       ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
         key: generation + '-' + index,
         sessionId, canonicalSessionId: sessionId, sessionDisplayName: 'Fixture',
+        showUserMessageMetadata: !!window.fixtureShowUserMetadata,
       })),
     ))
     window.renderFixtureChats()
@@ -1395,4 +1396,67 @@ test('repeated pre-open failures retain one transport generation and one eventua
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('committed across pre-open failures')), true)
   await page.close()
+})
+
+test('pasted text survives a direct user send and canonical history reload with or without a final newline', async () => {
+  for (const attachment of ['none', 'file', 'image']) {
+    for (const finalNewline of [false, true]) {
+      for (const showMetadata of [false, true]) {
+        const view = await browser.newPage()
+        try {
+          await view.setViewport({ width: 1000, height: 720 })
+          await view.goto(fixtureUrl, { waitUntil: 'load' })
+          await view.evaluate(() => window.resolveFixtureHistory(0, []))
+          await view.waitForSelector('[role="textbox"][aria-label="Message"]')
+          await view.evaluate(value => { window.fixtureShowUserMetadata = value; window.renderFixtureChats() }, showMetadata)
+          await view.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+
+          const pasted = 'A'.repeat(2000) + (finalNewline ? '\n' : '')
+          await view.$eval('[role="textbox"][aria-label="Message"]', (editor, { pasted, attachment }) => {
+            editor.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+            editor.focus()
+            const text = new DataTransfer()
+            text.setData('text/plain', pasted)
+            editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: text }))
+            if (attachment !== 'none') {
+              const files = new DataTransfer()
+              files.items.add(new File(['contents'], attachment === 'image' ? 'photo.png' : 'notes.txt', {
+                type: attachment === 'image' ? 'image/png' : 'text/plain',
+              }))
+              editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: files }))
+            }
+          }, { pasted, attachment })
+          await view.waitForFunction(hasAttachment => document.querySelectorAll('.foxwarm-composer-pasted-text-chip').length === 1
+            && document.querySelectorAll('.foxwarm-composer-attachment-chip').length === (hasAttachment ? 1 : 0), {}, attachment !== 'none')
+          await view.click('button[aria-label="Send message"]')
+          await view.waitForFunction(() => window.fixtureMessageBodies.length === 1)
+          const sent = await view.evaluate(() => window.fixtureMessageBodies[0])
+          const exactText = `<pasted-text>${pasted}</pasted-text>${attachment === 'none' ? '' : '<attachment-ref ref="attachment1" />'}`
+          assert.deepEqual(sent.parts, [{ text: exactText }])
+          assert.equal(sent.uploadedFiles.length, attachment === 'none' ? 0 : 1)
+          assert.equal(await view.evaluate(() => document.querySelectorAll('.foxwarm-pasted-text-block:not(.foxwarm-composer-pasted-text-chip)').length), 1)
+
+          // Plain WebUI text (including file descriptors) is stored as one source-wrapped system part.
+          const opening = '<foxwarm-message type="channel" channelType="webui" time="2026-09-10 17:31:53 +0800" hint="direct user message via channel">'
+          const descriptor = attachment === 'none' ? '' : `<foxwarm-${attachment} name="attachment1_${attachment === 'image' ? 'photo.png' : 'notes.txt'}" node="master" path="/fixture/upload" mime="${attachment === 'image' ? 'image/png' : 'text/plain'}" />`
+          const parts = attachment === 'image'
+            ? [{ system: opening }, { text: exactText }, { text: descriptor }, { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xx7zWQAAAABJRU5ErkJggg==' } }, { system: '</foxwarm-message>' }]
+            : [{ system: `${opening}\n${exactText}${descriptor ? `\n${descriptor}` : ''}\n</foxwarm-message>` }]
+          await view.evaluate(() => window.resolveFixtureMessages())
+          await view.evaluate(() => window.renderFixtureChats(1, 1))
+          await view.waitForFunction(() => window.fixtureHistoryRequestCount >= 2)
+          await view.evaluate(canonicalParts => window.resolveFixtureHistory(0, [{ role: 'user', parts: canonicalParts, __meta: { seq: 1, timestamp: 1000 } }], 1), parts)
+          await view.waitForSelector('[data-chat-message-anchor-key] .foxwarm-pasted-text-block')
+          const history = await view.$('[data-chat-message-anchor-key]')
+          assert.equal(await history.$eval('.foxwarm-pasted-text-block', chip => chip.textContent.includes('A'.repeat(72))), true)
+          const rawText = await history.evaluate(row => row.textContent)
+          assert.equal(rawText.includes('channelType="webui"'), showMetadata)
+          await history.click('.foxwarm-pasted-text-block')
+          assert.equal(await view.$eval('textarea[aria-label="Full pasted text"]', textarea => textarea.value), pasted)
+        } finally {
+          await view.close()
+        }
+      }
+    }
+  }
 })

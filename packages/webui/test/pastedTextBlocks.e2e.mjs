@@ -49,11 +49,15 @@ await writeFile(entryPath, `
     role: 'user', parts: [{ text: 'literal <pasted-text>unclosed' }], __meta: { seq: 2 },
   }, {
     role: 'user', parts: [{ text: '<pasted-text>outer <pasted-text>inner</pasted-text></pasted-text>' }], __meta: { seq: 3 },
+  }, {
+    role: 'user', parts: [{ system: '<foxwarm-message type="channel">\\n<pasted-text>outer <pasted-text>inner</pasted-text></pasted-text>\\n</foxwarm-message>' }], __meta: { seq: 17 },
   }]} />)
   createRoot(document.getElementById('non-user')).render(<ChatTimeline {...common} messages={[{
     role: 'model', parts: [{ text: '<pasted-text>model text</pasted-text>' }], __meta: { seq: 4 },
   }, {
     role: 'user', parts: [{ system: '<pasted-text>structured system text</pasted-text>' }], __meta: { seq: 5 },
+  }, {
+    role: 'user', parts: [{ system: '<foxwarm-system kind="timer">\\n<pasted-text>structured body</pasted-text>\\n</foxwarm-system>' }], __meta: { seq: 18 },
   }]} />)
   createRoot(document.getElementById('attachments')).render(<ChatTimeline {...common} messages={[{
     role: 'user', parts: [
@@ -187,7 +191,9 @@ for (const browserSpec of browsers) {
 
       assert.equal(await page.$eval('#malformed', node => node.textContent.includes('<pasted-text>unclosed')), true)
       assert.equal(await page.$eval('#malformed', node => node.textContent.includes('outer <pasted-text>inner')), true)
+      assert.equal(await page.$eval('#malformed', node => node.querySelectorAll('.foxwarm-pasted-text-block').length), 0)
       assert.equal(await page.$eval('#non-user', node => node.querySelectorAll('.foxwarm-pasted-text-block').length), 0)
+      assert.equal(await page.$eval('#non-user', node => node.textContent.includes('<pasted-text>structured body</pasted-text>')), true)
       assert.deepEqual(await page.$$eval('#attachments .foxwarm-inline-history-attachment', nodes => nodes.map(node => node.dataset.attachmentRef)), [
         'attachment1', 'attachment2', 'attachment3', 'attachment4',
       ])

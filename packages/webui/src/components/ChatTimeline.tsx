@@ -389,6 +389,14 @@ function getPartDisplayText(part: Message['parts'][number]): string {
   return part.text || (part.system ? formatStructuredSystemText(part.system) : '')
 }
 
+function isWrappedDirectChannelText(system: string): boolean {
+  const opening = parseFoxwarmMetadataLine(system)
+  return opening?.tagName === 'foxwarm-message'
+    && !opening.closing
+    && opening.attrs.type === 'channel'
+    && system.endsWith('\n</foxwarm-message>')
+}
+
 function getStandaloneUserChannelWrapperBoundary(part: Message['parts'][number]): 'open' | 'close' | null {
   if (typeof part.system !== 'string' || part.system.includes('\n') || part.system.trim() !== part.system) return null
   const tag = parseFoxwarmMetadataLine(part.system)
@@ -842,6 +850,7 @@ const MessageRow = memo(function MessageRow({
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.close === partIdx && <UserWrapperBoundaryBreak afterMetadata={false} />}
                 {part.system
                   && !hasInlineAttachmentFlow
+                  && !isWrappedDirectChannelText(part.system)
                   ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
                   : <CollapsibleUserText part={part} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} />}
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.open === partIdx && <UserWrapperBoundaryBreak afterMetadata />}
