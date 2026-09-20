@@ -18,7 +18,7 @@ await build({
   format: 'cjs',
 })
 
-const { filterModelOptions } = await import(pathToFileURL(output).href)
+const { filterModelOptions, resolveModelDisplayName } = await import(pathToFileURL(output).href)
 
 after(async () => {
   await rm(tempDir, { recursive: true, force: true })
@@ -45,4 +45,10 @@ test('empty and unmatched model filters stay exact rather than fuzzy', () => {
 
 test('the visible default suffix participates in natural-text filtering', () => {
   assert.deepEqual(filterModelOptions(options, 'DEFAULT', 'provider/alpha-id'), [options[0], options[1]])
+})
+
+test('model display names fall back to the model id for absent or blank labels', () => {
+  assert.equal(resolveModelDisplayName('provider/family/model', [{ key: 'provider/family/model' }]), 'family/model')
+  assert.equal(resolveModelDisplayName('provider/model', [{ key: 'provider/model', label: '  ' }]), 'model')
+  assert.equal(resolveModelDisplayName('provider/model', [{ key: 'provider/model', label: 'Friendly name' }]), 'Friendly name')
 })
