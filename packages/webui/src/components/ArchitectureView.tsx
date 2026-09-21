@@ -1,5 +1,6 @@
+import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Activity, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
+import { Activity, ArrowDownLeft, ArrowUpRight, Database, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import AgentCreationMenu from './AgentCreationMenu'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -109,6 +110,90 @@ function SummaryMetric({ label, value, detail, icon, active, onClick }: {
   return onClick ? <button type="button" onClick={onClick} className={classes}>{content}</button> : <div className={classes}>{content}</div>
 }
 
+type LoadedUsage = { cachedTokens: number; inputTokens: number; outputTokens: number; count: number }
+
+function addLoadedUsage(total: LoadedUsage, session: Session) {
+  if (!session.tokenUsage) return total
+  total.cachedTokens += session.tokenUsage.cachedTokens || 0
+  total.inputTokens += session.tokenUsage.inputTokens || 0
+  total.outputTokens += session.tokenUsage.outputTokens || 0
+  total.count += 1
+  return total
+}
+
+const emptyLoadedUsage = (): LoadedUsage => ({ cachedTokens: 0, inputTokens: 0, outputTokens: 0, count: 0 })
+
+const usageNumber = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+
+function UsageDetails({ usage, loaded = false, detailed = false }: {
+  usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }
+  loaded?: boolean
+  detailed?: boolean
+}) {
+  const total = usage ? usage.cachedTokens + usage.inputTokens + usage.outputTokens : 0
+  const parts = [
+    { label: 'Cached', value: usage?.cachedTokens || 0, color: 'bg-fw-text-subtle', ink: 'text-fw-text-muted', icon: Database },
+    { label: 'Input', value: usage?.inputTokens || 0, color: 'bg-fw-accent', ink: 'text-fw-accent', icon: ArrowDownLeft },
+    { label: 'Output', value: usage?.outputTokens || 0, color: 'bg-fw-special', ink: 'text-fw-special', icon: ArrowUpRight },
+  ]
+  const label = loaded ? 'Loaded tokens' : 'Tokens'
+  const description = usage ? `${label}: ${total.toLocaleString('en')}. ${parts.map(part => `${part.label}: ${part.value.toLocaleString('en')}`).join(', ')}` : `${label}: unavailable`
+  return (
+    <div className="min-w-0" title={description}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-[10px] text-fw-text-muted"><Layers3 className="h-3 w-3" aria-hidden="true" />{label}</span>
+        <strong className={`${detailed ? 'text-lg' : 'text-sm'} font-semibold tabular-nums leading-none text-fw-text-strong`}>{usage ? usageNumber(total) : '—'}</strong>
+      </div>
+      <div role="img" aria-label={description} className="mt-2 flex h-1 overflow-hidden rounded-full bg-fw-border-muted">
+        {total > 0 ? parts.filter(part => part.value > 0).map(part => <span key={part.label} className={part.color} style={{ width: `${part.value / total * 100}%` }} />) : null}
+      </div>
+      {detailed && usage ? <div className="mt-3 space-y-2">
+        {parts.map(part => <div key={part.label} className="flex min-w-0 items-center gap-2 text-xs tabular-nums">
+          <part.icon className={`h-3 w-3 shrink-0 ${part.ink}`} aria-hidden="true" />
+          <span className="text-fw-text-muted">{part.label}</span>
+          <span className="ml-auto shrink-0 font-medium text-fw-text-strong">{usageNumber(part.value)}</span>
+        </div>)}
+      </div> : null}
+    </div>
+  )
+}
+
+function UsagePie({ usage, loaded = false }: { usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }; loaded?: boolean }) {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const popup = useRef<HTMLDivElement>(null)
+  const total = usage ? usage.cachedTokens + usage.inputTokens + usage.outputTokens : 0
+  const cached = total ? usage!.cachedTokens / total * 100 : 0
+  const inputEnd = cached + (total ? usage!.inputTokens / total * 100 : 0)
+  useEffect(() => {
+    if (!position) return
+    const dismiss = (event: PointerEvent) => {
+      if (!popup.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setPosition(null)
+    }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setPosition(null); trigger.current?.focus() } }
+    const close = () => setPosition(null)
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); window.removeEventListener('resize', close); window.removeEventListener('scroll', close, true) }
+  }, [position])
+  return <>
+    <button ref={trigger} type="button" aria-label={loaded ? 'Loaded token usage' : 'Token usage'} aria-haspopup="dialog" aria-expanded={!!position}
+      title={usage ? `${usageNumber(total)} ${loaded ? 'loaded tokens' : 'tokens'}` : 'Token usage unavailable'}
+      onKeyDown={event => event.stopPropagation()}
+      onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setPosition(position ? null : { left: Math.max(8, Math.min(rect.right - 280, window.innerWidth - 288)), top: rect.bottom + 210 < window.innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 210) }) }}
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring">
+      <span aria-hidden="true" className="h-5 w-5 rounded-full ring-1 ring-inset ring-fw-border/30" style={{ background: total ? `conic-gradient(var(--foxwarm-color-text-subtle) 0% ${cached}%, var(--foxwarm-color-accent) ${cached}% ${inputEnd}%, var(--foxwarm-color-special) ${inputEnd}% 100%)` : 'var(--foxwarm-color-border)' }} />
+    </button>
+    {position ? createPortal(<div ref={popup} role="dialog" aria-label="Token usage" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
+      className="fixed z-[1000] w-[280px] max-w-[calc(100vw-16px)] rounded-xl border border-fw-border bg-fw-surface p-4 shadow-xl" style={position}>
+      <UsageDetails usage={usage} loaded={loaded} detailed />
+    </div>, document.body) : null}
+  </>
+}
+
+
 function SessionOperationRow({ session, selected, current, now, onInspect, onOpen }: {
   session: Session
   selected: boolean
@@ -153,7 +238,9 @@ function SessionOperationRow({ session, selected, current, now, onInspect, onOpe
             {queueLength > 0 ? <span className="text-fw-warning dark:text-fw-warning">queued {queueLength}</span> : null}
             {model ? <span className="max-w-[180px] truncate" title={model}>model {model}</span> : null}
           </div>
+
         </div>
+        <UsagePie usage={session.tokenUsage} />
         <button
           type="button"
           onClick={(event) => { event.stopPropagation(); onOpen() }}
@@ -177,6 +264,7 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
   onOpen: (sessionId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const usage = useMemo(() => rows.reduce(addLoadedUsage, emptyLoadedUsage()), [rows])
   const activeCount = rows.filter(isSessionRuntimeActive).length
   const waitingCount = rows.filter(session => getSessionRuntimeStateName(session) === 'waiting').length
   const serviceCount = Object.keys(node.services || {}).length
@@ -204,12 +292,14 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
         </div>
         <div className="flex items-center gap-3 text-[11px] text-fw-text-muted">
           <span>{rows.length} loaded</span>
+          <UsagePie usage={usage.count ? usage : undefined} loaded />
           {activeCount > 0 ? <span className="text-fw-accent dark:text-fw-accent">{activeCount} active</span> : null}
           {waitingCount > 0 ? <span className="text-fw-warning dark:text-fw-warning">{waitingCount} waiting</span> : null}
         </div>
       </header>
       {rows.length > 0 ? (
         <>
+
           <div data-architecture-node-session-scroll className="max-h-[360px] overflow-y-auto overscroll-contain">
             <div className="grid gap-2 p-3 lg:grid-cols-2">
               {visibleRows.map(session => (
@@ -379,10 +469,12 @@ const formatBytes = (size: number) => {
   return `${size} B`
 }
 
-function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistryEntry; selected: boolean; onSelect: () => void }) {
+function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent: AgentRegistryEntry; usage?: LoadedUsage; selected: boolean; onSelect: () => void }) {
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
+      onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect() } }}
       data-architecture-agent-id={agent.id}
       data-architecture-agent-selected={selected ? 'true' : 'false'}
       onClick={onSelect}
@@ -398,6 +490,7 @@ function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistry
             <p className="mt-0.5 truncate text-[11px] text-fw-text-muted">{agent.inherit ? `inherits ${agent.inherit}` : 'independent memory'}</p>
           </div>
         </div>
+        <UsagePie usage={usage?.count ? usage : undefined} loaded />
         {agent.isolated ? renderMetaBadge(agent.isolatedNode ? `isolated · ${agent.isolatedNode}` : 'isolated', 'warning') : null}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
@@ -405,11 +498,12 @@ function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistry
         <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-accent dark:text-fw-accent">{agent.activeSessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">active</div></div>
         <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.memoryFileCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">memory</div></div>
       </div>
+
       <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-fw-text-muted">
         <span>{agent.queuedSessionCount > 0 ? `${agent.queuedSessionCount} queued` : 'queue clear'}</span>
         <span>{agent.memoryLastModified ? `memory ${formatRelativeTime(agent.memoryLastModified)}` : 'no memory files'}</span>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -735,6 +829,17 @@ export default function ArchitectureView({
     return map
   }, [childIds, sessionMap, filteredSessionSet, focusPathIds])
 
+  const loadedAgentUsage = useMemo(() => {
+    const totals = new Map<string, LoadedUsage>()
+    for (const session of sessions) {
+      const agent = session.agent || 'main'
+      const total = totals.get(agent) || emptyLoadedUsage()
+      addLoadedUsage(total, session)
+      totals.set(agent, total)
+    }
+    return totals
+  }, [sessions])
+
   const summary = {
     agentCount: agentCounts.length,
     sessionCount: globalSummary.total,
@@ -975,7 +1080,7 @@ export default function ArchitectureView({
               </div>
               {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{agentRegistryError}</div> : null}
               <div className="grid gap-3 md:grid-cols-2">
-                {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
+                {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} usage={loadedAgentUsage.get(agent.id)} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
                 {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted dark:border-fw-border">No agents found.</div> : null}
               </div>
             </main>
