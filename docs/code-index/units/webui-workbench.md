@@ -76,6 +76,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.
+- Context menus also expose `Move to new window` for every tab type. A terminal draft keeps the item disabled until it has a backend terminal ID. The App owns popup/confirmation/route behavior; the workbench store's move-out action only removes layout/tab state and has no resource-close side effects.
 - Bulk close operations still run each tab's ordinary resource and component close lifecycle. `Close others` preserves its target tab, while `Close all` may leave the pane empty and a forced Setup tab remains protected. Route fencing and final publication are canonical in [D-webui-app-route-close](./webui-app.md#d-webui-app-route-close).
 - Tab-level pinning has been removed. Persisted v4 and migrated v3 records may still contain a legacy `pinned` key; normalization accepts the record, strips that key, and future writes preserve the existing tab order in one row.
 - Persisted state normalization intentionally drops old `workspace` and `file` tab records; preserves current `vscode`, `agents`, and `setup` tabs (normalizing the Code title); and prunes panes that only referenced removed tab types.
@@ -85,5 +86,6 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - `WorkbenchLayout` is the top-level layout renderer, receiving a `renderPane` callback that connects pane IDs to actual content components elsewhere in the app.
 - `useWorkbenchStore` is consumed by parent orchestration components to open chat, terminal, Agents, Setup, and Code tabs, manage focus, and handle drag-end events that call `moveTabToPane`, `dockTabToPaneEdge`, or `splitPaneWithTab`.
 - The `reconcileTabs` action allows external systems (e.g., session managers) to bulk-update tabs and layout atomically.
+- `moveTabOut` removes a tab using the same immutable layout fallback rules as ordinary removal, but gives App a move-specific path that cannot be confused with terminal DELETE or other close lifecycle.
 - `getWorkbenchTabById` provides non-reactive access for imperative code outside React components.
 - Drop target types (`WorkbenchDropTarget`) define the contract between drag-end handlers and store actions.

@@ -61,6 +61,7 @@ export type WorkbenchStoreState = WorkbenchPersistedState & {
   upsertTab: (tab: WorkbenchTab, options?: { paneId?: string; activate?: boolean; index?: number }) => void
   updateTab: (tabId: string, updater: (tab: WorkbenchTab) => WorkbenchTab) => void
   removeTab: (tabId: string) => void
+  moveTabOut: (tabId: string) => void
   replaceTabId: (oldTabId: string, tab: WorkbenchTab) => void
   reorderTabs: (paneId: string, activeTabId: string, overTabId: string) => void
   moveTabToPane: (tabId: string, targetPaneId: string, options?: { beforeTabId?: string | null; activate?: boolean }) => void
@@ -97,6 +98,32 @@ function getPaneAfterTabRemoval(pane: WorkbenchPaneNode, tabId: string): Workben
     ...pane,
     tabIds: next,
     activeTabId: pane.activeTabId === tabId ? fallbackActive : (pane.activeTabId && next.includes(pane.activeTabId) ? pane.activeTabId : fallbackActive),
+  }
+}
+
+function getStateAfterTabRemoval(state: WorkbenchPersistedState, tabId: string) {
+  const pane = findPaneContainingTab(state.root, tabId)
+  if (!pane) return null
+
+  let nextRoot = mapLayoutTree(state.root, (node) => {
+    if (node.kind !== 'pane' || node.id !== pane.id) return node
+    return getPaneAfterTabRemoval(node, tabId)
+  })
+
+  const updatedPane = findPaneNode(nextRoot, pane.id)
+  if (updatedPane && updatedPane.tabIds.length === 0 && getPaneIds(nextRoot).length > 1) {
+    nextRoot = removePaneFromLayout(nextRoot, pane.id).node
+  }
+
+  const nextPaneIds = getPaneIds(nextRoot)
+  const nextTabsById = { ...state.tabsById }
+  delete nextTabsById[tabId]
+  return {
+    tabsById: nextTabsById,
+    root: nextRoot,
+    focusedPaneId: state.focusedPaneId && nextPaneIds.includes(state.focusedPaneId)
+      ? state.focusedPaneId
+      : (nextPaneIds[0] || null),
   }
 }
 
@@ -203,33 +230,12 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
 
   removeTab: (tabId) => {
     set((state) => {
-      const pane = findPaneContainingTab(state.root, tabId)
-      if (!pane) return state
-
-      let nextRoot = mapLayoutTree(state.root, (node) => {
-        if (node.kind !== 'pane' || node.id !== pane.id) return node
-        return getPaneAfterTabRemoval(node, tabId)
-      })
-
-      const updatedPane = findPaneNode(nextRoot, pane.id)
-      if (updatedPane && updatedPane.tabIds.length === 0 && getPaneIds(nextRoot).length > 1) {
-        nextRoot = removePaneFromLayout(nextRoot, pane.id).node
-      }
-
-      const nextPaneIds = getPaneIds(nextRoot)
-      const focusedPaneId = state.focusedPaneId && nextPaneIds.includes(state.focusedPaneId)
-        ? state.focusedPaneId
-        : (nextPaneIds[0] || null)
-
-      const nextTabsById = { ...state.tabsById }
-      delete nextTabsById[tabId]
-
-      return {
-        tabsById: nextTabsById,
-        root: nextRoot,
-        focusedPaneId,
-      }
+      return getStateAfterTabRemoval(state, tabId) || state
     })
+  },
+
+  moveTabOut: (tabId) => {
+    set((state) => getStateAfterTabRemoval(state, tabId) || state)
   },
 
   replaceTabId: (oldTabId, tab) => {

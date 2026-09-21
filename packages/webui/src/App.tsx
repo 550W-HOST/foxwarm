@@ -21,6 +21,7 @@ import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import { useChatPreferences } from './chatPreferences'
+import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 
 type AppView = 'session' | 'agents' | 'setup'
 
@@ -461,6 +462,7 @@ function App() {
   const upsertTab = useWorkbenchStore((state) => state.upsertTab)
   const updateTab = useWorkbenchStore((state) => state.updateTab)
   const removeTab = useWorkbenchStore((state) => state.removeTab)
+  const moveTabOut = useWorkbenchStore((state) => state.moveTabOut)
   const replaceTabId = useWorkbenchStore((state) => state.replaceTabId)
   const moveTabToPane = useWorkbenchStore((state) => state.moveTabToPane)
   const dockTabToPaneEdge = useWorkbenchStore((state) => state.dockTabToPaneEdge)
@@ -475,6 +477,7 @@ function App() {
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
+  const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -729,6 +732,9 @@ function App() {
     })
 
     activeTerminals.forEach((terminal) => {
+      if (movedOutTerminalIdsRef.current.has(terminal.id)) {
+        return
+      }
       const existing = terminalTabs.find((tab) => tab.terminalId === terminal.id)
       if (existing) {
         return
@@ -1104,6 +1110,71 @@ function App() {
         || getPaneNodes(stateAfterClose.root)[0]?.activeTabId
         || null
 
+      if (nextTabId) {
+        navigateToTab(nextTabId)
+      } else {
+        pendingRouteTabIdRef.current = null
+        currentRouteTabIdRef.current = null
+        localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
+        setRoute({ view: 'tab', tabId: null })
+        setTabHash(null)
+      }
+    }
+  }
+
+  const moveWorkbenchTabToNewWindow = (tabId: string) => {
+    const targetTab = tabsById[tabId]
+    if (!targetTab) return
+    if (targetTab.type === 'terminal' && !targetTab.terminalId) return
+
+    if (targetTab.type === 'setup' && !window.confirm('Unsaved changes will be lost. Open Setup in a new window?')) return
+    if (targetTab.type === 'agents' && !window.confirm('Unsaved changes will be lost. Open Agents in a new window?')) return
+
+    let url: URL
+    if (targetTab.type === 'vscode') {
+      url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: codeNodeId, path: codePath })
+    } else {
+      const popupTarget: FoxwarmPopupTarget = targetTab.type === 'chat'
+        ? { kind: 'chat', sessionId: targetTab.sessionId, title: targetTab.title }
+        : targetTab.type === 'terminal'
+          ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
+          : targetTab.type === 'agents'
+            ? { kind: 'agents' }
+            : { kind: 'setup' }
+      url = makeFoxwarmPopupUrl(window.location.href, popupTarget)
+    }
+
+    const popup = window.open(url.toString(), '_blank', 'popup')
+    if (!popup) {
+      window.alert('The browser blocked the new window. Allow pop-ups and try again.')
+      return
+    }
+    try { popup.opener = null } catch {}
+
+    const stateBeforeMove = useWorkbenchStore.getState()
+    const paneBeforeMove = findPaneContainingTab(stateBeforeMove.root, tabId)
+    const wasFocusedActiveTab = paneBeforeMove?.activeTabId === tabId
+      && stateBeforeMove.focusedPaneId === paneBeforeMove.id
+
+    if (targetTab.type === 'vscode') {
+      setVscodeFrameStarted(false)
+    }
+    if (targetTab.type === 'terminal' && targetTab.terminalId) {
+      movedOutTerminalIdsRef.current.add(targetTab.terminalId)
+    }
+    if (currentRouteTabIdRef.current === tabId) {
+      closingRouteTabIdsRef.current.add(tabId)
+    }
+    moveTabOut(tabId)
+
+    if (route.tabId === tabId || wasFocusedActiveTab) {
+      const stateAfterMove = useWorkbenchStore.getState()
+      const focusedPaneAfterMove = stateAfterMove.focusedPaneId
+        ? findPaneNode(stateAfterMove.root, stateAfterMove.focusedPaneId)
+        : null
+      const nextTabId = focusedPaneAfterMove?.activeTabId
+        || getPaneNodes(stateAfterMove.root)[0]?.activeTabId
+        || null
       if (nextTabId) {
         navigateToTab(nextTabId)
       } else {
@@ -1571,6 +1642,11 @@ function App() {
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
+        onMoveTabToNewWindow={moveWorkbenchTabToNewWindow}
+        canMoveTabToNewWindow={(tabId) => {
+          const tab = tabsById[tabId]
+          return !!tab && (tab.type !== 'terminal' || !!tab.terminalId)
+        }}
         onCloseOtherTabs={(tabId) => { void closePaneTabsByPredicate(paneId, (tab) => tab.id !== tabId) }}
         onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
         onSplitRight={() => handleSplit('right')}

@@ -29,6 +29,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - `makeApiUrl` returns a URL object; `makeWebSocketUrl` changes its protocol to `ws:`/`wss:`.
 - Code routes remove the `/api` suffix and append deployment-relative `/vscode-web/`.
 - Main WebUI and the persistent Code frame validate exact origin plus window source. Nested Foxwarm leaf iframes post to their parent with `'*'`; the outer Code extension validates exact source plus channel/version/random nonce (not `event.origin`), then sends outer-to-inner messages to the exact leaf `frameOrigin`. These bridges are not API URL transport.
+- Top-level tab popups use a separate versioned same-origin URL mode. They mount one Chat, terminal, Agents, or Setup leaf without the workbench store; Code uses its existing standalone `/vscode-web/` URL. Popup target IDs may be URL parameters, but authentication tokens never are.
 - Download and extension routes preserve reverse-proxy prefixes and do not assume site root.
 
 ## State ownership
@@ -82,6 +83,10 @@ All REST, SSE, WebSocket, download, Code, extension, and embedded URLs derive fr
 ### D-webui-workbench-shell
 
 Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and Setup are singleton tabs; forced initial Setup is non-closable.
+
+### D-webui-tab-popout
+
+[2026-09-21] Every workbench tab exposes `Move to new window`. A successful synchronous browser popup opens a real same-origin single-leaf URL and then removes the source tab through a move-only store path; a blocked popup or cancelled Setup/Agents unsaved-state warning leaves the source tab unchanged. Popup windows do not mount or persist the normal workbench, do not synchronize state back, and do not restore the source tab when closed. Chat relies only on its existing browser draft persistence and does not transfer page-memory files. Terminal popout requires an existing terminal ID, reattaches to that backend PTY, and never uses the terminal-delete close path. Code uses its existing standalone launch URL rather than moving the embedded iframe.
 
 ### D-webui-node-aware-launchers
 
