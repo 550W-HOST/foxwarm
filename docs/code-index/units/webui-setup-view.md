@@ -19,6 +19,7 @@ All requests append to `API_BASE_PATH` and use normal authenticated WebUI routes
 |---|---|
 | `GET /setup/status` | OOBE flag, model diagnostics/raw YAML, full app-config YAML, and channel runtime status |
 | `POST /setup/models` | Validate and save raw models YAML byte-for-byte |
+| `POST /setup/models/list` | List model IDs for one transient known concrete-provider connection during Monaco completion |
 | `POST /setup/config` | Validate/write full app config and call `reloadManagedChannels` |
 | `POST /setup/weixin/login/start` | Start or replace a QR login session |
 | `POST /setup/weixin/login/wait` | Check one login session; on success update channel config and reload |
@@ -34,7 +35,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Setup presents Appearance, Models, and Config as an accessible three-tab surface. Appearance is first and selected by default. Inactive panels are hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
 - The former checklist is removed. Completion/attention icons appear in the tab labels: Models reflects usable model configuration; Config reflects enabled channel health and omits its icon when no enabled channel provides a meaningful status. Disabled channels do not create attention state.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
-- Both YAML editor wrappers use the exact responsive height `calc(min(600px, 80vh))`; the same wrapper height applies to Monaco and the plain-text fallback without widening the mobile layout.
+- Models and Config use the full available Setup card width and a flex-owned editor region that grows with the active workbench/embedded pane instead of a fixed viewport cap. The active panel is the single Setup content scroller, keeps a bounded small-window editor minimum, and leaves Save/status and Config's later channel/Weixin sections scroll-reachable. Monaco and the plain-text fallback share the same container contract; Appearance keeps its narrower reading width.
 - Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only.
 - App-config save reloads every managed channel and reports started results.
 - Weixin login is the final section in the Config tab. Start renders image/base64/pairing payloads as a QR code without exposing internal session keys or pairing payload text; wait persists connected token/user/channel fields server-side.
@@ -77,7 +78,7 @@ The visible Models workflow is raw YAML only. Keep structured request parsing/he
 
 ### D-setup-editor-height
 
-The Models YAML and app-config YAML areas both use the exact CSS height `calc(min(600px, 80vh))`. Keep that contract for desktop, mobile, and the controlled plain-text fallback.
+[Updated 2026-09-21] The Models YAML and app-config YAML areas fill the width and remaining height of the active Setup pane through CSS flex ownership, with no JavaScript size calculation or fixed desktop cap. Keep one active-panel content scrollbar, a practical small-window editor minimum, reachable Save/status and later Config sections, and the same sizing contract for Monaco and the controlled plain-text fallback. Appearance remains reading-width bounded.
 
 ### D-setup-save-feedback
 

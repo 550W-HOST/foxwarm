@@ -1,5 +1,6 @@
-import { createModelsYamlCompletionProvider, YAML_SCALAR_WORD_PATTERN } from './modelsYamlCompletions'
+import { createModelsYamlCompletionProvider, YAML_SCALAR_WORD_PATTERN, type ProviderModelConnection } from './modelsYamlCompletions'
 import { MODELS_YAML_MODEL_URI, YAML_CONFIG_SCHEMAS } from './yamlConfigSchemas'
+import { API_BASE_PATH } from './config'
 
 type MonacoModule = typeof import('monaco-editor')
 type ModelsCompletionSupport = ReturnType<typeof createModelsYamlCompletionProvider>
@@ -14,6 +15,21 @@ let supportPromise: Promise<YamlMonacoSupport> | null = null
 let editorWorkerConstructor: (new () => Worker) | null = null
 let yamlWorkerConstructor: (new () => Worker) | null = null
 let completionSupport: ModelsCompletionSupport | null = null
+
+async function listProviderModels(
+  connection: ProviderModelConnection,
+  signal: AbortSignal,
+): Promise<string[]> {
+  const response = await fetch(`${API_BASE_PATH}/setup/models/list`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(connection),
+    signal,
+  })
+  if (!response.ok) throw new Error(`Failed to list provider models (${response.status})`)
+  const payload = await response.json().catch(() => ({}))
+  return Array.isArray(payload?.models) ? payload.models.filter((item: unknown): item is string => typeof item === 'string') : []
+}
 
 function installWorkerDispatcher() {
   window.MonacoEnvironment = {
@@ -55,7 +71,7 @@ export function loadYamlMonacoSupport(): Promise<YamlMonacoSupport> {
       schemas: YAML_CONFIG_SCHEMAS as never,
       yamlVersion: '1.2',
     })
-    completionSupport = createModelsYamlCompletionProvider(monaco)
+    completionSupport = createModelsYamlCompletionProvider(monaco, listProviderModels)
 
     return {
       monaco,

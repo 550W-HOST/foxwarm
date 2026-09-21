@@ -50,7 +50,6 @@ interface SetupViewProps {
 }
 
 const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.6-sol')
-const SETUP_EDITOR_HEIGHT = 'calc(min(600px, 80vh))'
 
 const DEFAULT_CONFIG_YAML = `# Foxwarm settings.
 # bot:
@@ -409,13 +408,13 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
-        <div className="mx-auto max-w-5xl">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
+        <div className="flex min-h-0 w-full flex-1 flex-col">
           {loading && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:text-fw-text">Loading setup status…</div>}
           {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div>}
 
-          <div className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border-muted">
-            <div className="border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border-muted">
+            <div className="shrink-0 border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
               <div role="tablist" aria-label="Setup sections" className="flex gap-1">
                 <button
                   ref={appearanceTabRef}
@@ -475,46 +474,50 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
               </div>
             </div>
 
-            <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="p-4 md:p-5">
-              <ThemeManager />
-              {webUiSettings && onInstanceNameChange && onTabIconChange && (
-                <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
-              )}
+            <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+              <div className="mx-auto w-full max-w-5xl">
+                <ThemeManager />
+                {webUiSettings && onInstanceNameChange && onTabIconChange && (
+                  <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
+                )}
+              </div>
             </section>
 
-            <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className="scroll-mt-4 p-4 md:p-5">
-              <div>
+            <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
+              <div className="shrink-0">
                 <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
                 <p className="mt-1 text-sm text-fw-text">Configure model providers, routing, and your default model in YAML.</p>
               </div>
 
-              <div className="mt-4">
+              <div className="mt-4 min-h-72 flex-1">
                 <SimpleCodeEditor
                   value={rawModelsYaml}
                   onChange={updateModelsYaml}
                   language="yaml"
-                  height={SETUP_EDITOR_HEIGHT}
+                  height="100%"
                   modelUri={MODELS_YAML_MODEL_URI}
                   focusRequest={modelsEditorFocusRequest}
                   ariaLabel="Models YAML editor"
                 />
               </div>
 
-              <div className="mt-4 flex flex-wrap items-center gap-2">
+              <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
                 <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
                 <SaveFeedback section="models" result={modelsSaveResult} />
                 {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
               </div>
             </section>
 
-            <section id="setup-panel-config" role="tabpanel" aria-labelledby="setup-tab-config" data-setup-section="config" hidden={activeTab !== 'config'} className="p-4 md:p-5">
-              <h2 className="text-base font-semibold text-fw-text-strong">App and channel settings</h2>
-              <p className="mt-1 text-sm text-fw-text">Manage Foxwarm and channel settings in YAML.</p>
-
-              <div className="mt-4">
-                <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height={SETUP_EDITOR_HEIGHT} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+            <section id="setup-panel-config" role="tabpanel" aria-labelledby="setup-tab-config" data-setup-section="config" hidden={activeTab !== 'config'} className={`${activeTab === 'config' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-5`}>
+              <div className="shrink-0">
+                <h2 className="text-base font-semibold text-fw-text-strong">App and channel settings</h2>
+                <p className="mt-1 text-sm text-fw-text">Manage Foxwarm and channel settings in YAML.</p>
               </div>
-              <div className="mt-4 flex flex-wrap items-center gap-2">
+
+              <div className="mt-4 min-h-72 flex-1">
+                <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+              </div>
+              <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
                 <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
                 <SaveFeedback section="config" result={configSaveResult} />
               </div>

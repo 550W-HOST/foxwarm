@@ -54,6 +54,7 @@ import {
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
+import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
@@ -1087,6 +1088,35 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to save models setup');
             res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/models/list',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          let providerType = '';
+          try {
+            const request = parseProviderModelListRequest(req.body);
+            providerType = request.providerType;
+            const models = await listProviderModels(request);
+            res.json({ models });
+          } catch (error) {
+            if (error instanceof ProviderModelListError) {
+              logger.warn({
+                providerType,
+                code: error.code,
+                upstreamStatus: error.upstreamStatus,
+              }, 'Failed to list provider models');
+              res.status(error.statusCode).json({ error: error.message });
+              return;
+            }
+            logger.error({
+              providerType,
+              errorName: error instanceof Error ? error.name : typeof error,
+            }, 'Unexpected provider model list failure');
+            res.status(500).json({ error: 'Failed to list provider models.' });
           }
         },
       });

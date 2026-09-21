@@ -55,23 +55,32 @@ test('static config schemas are distinct, permissive, and omit the removed model
 })
 
 test('app config schema suggests all managed channel types and QQ credential keys while accepting custom types', () => {
-  const channel = schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties
+  const channels = schemas.APP_CONFIG_SCHEMA.properties.channels
+  const channel = channels.additionalProperties
+  const channelBranch = (type) => channel.allOf.find((entry) => entry.if?.properties?.type?.pattern === `^\\s*${type}\\s*$`).then
+  const qqbot = channelBranch('qqbot')
   assert.deepEqual(channel.properties.type.anyOf[0].enum, ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'])
-  assert.equal(channel.properties.appId.type, 'string')
-  assert.equal(channel.properties.clientSecret.type, 'string')
-  assert.equal(channel.properties.requireMention.type, 'boolean')
-  assert.equal(channel.properties.groupContextLimit.minimum, 0)
-  assert.equal(channel.properties.groupContextLimit.maximum, 50)
-  assert.equal(channel.properties.groupBatchWindowMs.anyOf[0].const, 0)
-  assert.equal(channel.properties.groupBatchWindowMs.anyOf[1].minimum, 250)
-  assert.equal(channel.properties.groupBatchWindowMs.anyOf[1].maximum, 30000)
-  assert.equal(channel.properties.media.properties.imageMaxBytes.maximum, 20971520)
-  assert.equal(channel.properties.media.properties.fileMaxBytes.maximum, 209715200)
-  assert.match(channel.properties.media.properties.fileMaxBytes.description, /100 MiB/)
-  assert.equal(channel.properties.media.properties.maxTotalBytes.maximum, 209715200)
-  assert.equal(channel.properties.media.properties.maxAttachments.maximum, 16)
+  assert.equal(qqbot.properties.appId.type, 'string')
+  assert.equal(qqbot.properties.clientSecret.type, 'string')
+  assert.equal(qqbot.properties.requireMention.type, 'boolean')
+  assert.equal(qqbot.properties.groupContextLimit.minimum, 0)
+  assert.equal(qqbot.properties.groupContextLimit.maximum, 50)
+  assert.equal(qqbot.properties.groupBatchWindowMs.anyOf[0].const, 0)
+  assert.equal(qqbot.properties.groupBatchWindowMs.anyOf[1].minimum, 250)
+  assert.equal(qqbot.properties.groupBatchWindowMs.anyOf[1].maximum, 30000)
+  assert.equal(qqbot.properties.media.properties.imageMaxBytes.maximum, 20971520)
+  assert.equal(qqbot.properties.media.properties.fileMaxBytes.maximum, 209715200)
+  assert.match(qqbot.properties.media.properties.fileMaxBytes.description, /100 MiB/)
+  assert.equal(qqbot.properties.media.properties.maxTotalBytes.maximum, 209715200)
+  assert.equal(qqbot.properties.media.properties.maxAttachments.maximum, 16)
   assert.equal(channel.properties.allowedUsers.items.type, 'string')
-  assert.equal(channel.properties.allowAllUsers.type, 'boolean')
+  assert.equal(qqbot.properties.allowAllUsers.type, 'boolean')
+  assert.deepEqual(Object.keys(channels.patternProperties), ['^telegram$', '^matrix$', '^wework$', '^weixin$', '^qqbot$'])
+  const telegramByKey = channels.patternProperties['^telegram$']
+  const keyFallback = telegramByKey.allOf.at(-1)
+  assert.equal(keyFallback.if.anyOf[0].not.required[0], 'type')
+  assert.equal(keyFallback.if.anyOf[1].properties.type.pattern, '^\\s*$')
+  assert.equal(keyFallback.then.properties.botToken.type, 'string')
   const vectorMaintenance = schemas.APP_CONFIG_SCHEMA.properties.vectorMaintenance
   assert.equal(vectorMaintenance.oneOf.some((entry) => entry.type === 'boolean'), true)
   assert.equal(vectorMaintenance.oneOf.find((entry) => entry.type === 'object').properties.retentionHours.minimum, 1)
@@ -176,6 +185,10 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ channels: { qq: { type: 'qqbot', groupContextLimit: 51 } } }), false)
   assert.equal(validateAppConfigSchema({ channels: { qq: { type: 'qqbot', groupBatchWindowMs: 249 } } }), false)
   assert.equal(validateAppConfigSchema({ channels: { qq: { type: 'qqbot', groupBatchWindowMs: 0 } } }), true)
+  assert.equal(validateAppConfigSchema({ channels: { qqbot: { groupContextLimit: 51 } } }), false)
+  assert.equal(validateAppConfigSchema({ channels: { qqbot: { type: '', groupContextLimit: 51 } } }), false)
+  assert.equal(validateAppConfigSchema({ channels: { qqbot: { type: ' matrix ', groupContextLimit: 51, homeserver: 'https://matrix.example' } } }), true)
+  assert.equal(validateAppConfigSchema({ channels: { custom: { type: 'custom-platform', groupContextLimit: 51, extension: true } } }), true)
 })
 
 test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {
@@ -276,10 +289,11 @@ test('Monaco stays on the worker-compatible pinned release used by the real-work
   assert.equal(packageJson.version, '0.54.0')
 })
 
-test('Setup gives both YAML editors the exact responsive height contract', async () => {
+test('Setup lets both YAML editors fill their flex-owned panel space', async () => {
   const setupSource = await readFile(path.join(webuiRoot, 'src/components/SetupView.tsx'), 'utf8')
-  assert.match(setupSource, /SETUP_EDITOR_HEIGHT\s*=\s*['"]calc\(min\(600px, 80vh\)\)['"]/)
-  assert.equal((setupSource.match(/height=\{SETUP_EDITOR_HEIGHT\}/g) || []).length, 2)
+  assert.doesNotMatch(setupSource, /SETUP_EDITOR_HEIGHT|calc\(min\(600px, 80vh\)\)/)
+  assert.equal((setupSource.match(/height="100%"/g) || []).length, 2)
+  assert.equal((setupSource.match(/mt-4 min-h-72 flex-1/g) || []).length, 2)
 })
 
 test('models schema suggests known provider types while accepting custom strings and documents legacy readers', () => {
@@ -361,4 +375,199 @@ test('YAML scalar completion words retain model punctuation', () => {
     '    providerType: openai-completions # comment'.match(completions.YAML_SCALAR_WORD_PATTERN),
     ['providerType', 'openai-completions', 'comment'],
   )
+})
+
+test('provider model completion context uses only the current concrete provider and preserves scalar quotes', () => {
+  const yaml = `providers:
+  open:
+    providerType: openai-completions
+    baseUrl: https://open.test/v1
+    apiKey: open-secret
+    extraHeaders:
+      X-Project: project-a
+    models:
+      - 'gpt-5.6/x'
+  anthropic:
+    providerType: anthropic
+    apiKey: anthropic-secret
+    models:
+      - id: claude-
+  route:
+    providerType: failover
+    targets: [open]
+    models:
+      - should-not-request
+`
+  const quotedStart = yaml.indexOf("'gpt-5.6/x'")
+  const open = completions.getProviderModelCompletionContext(yaml, quotedStart + 5)
+  assert.deepEqual(open, {
+    providerKey: 'open',
+    connection: {
+      providerType: 'openai-completions',
+      baseUrl: 'https://open.test/v1',
+      apiKey: 'open-secret',
+      extraHeaders: { 'X-Project': 'project-a' },
+    },
+    replaceStartOffset: quotedStart + 1,
+    replaceEndOffset: quotedStart + "'gpt-5.6/x'".length - 1,
+  })
+  const anthropicOffset = yaml.indexOf('claude-') + 'claude-'.length
+  assert.equal(completions.getProviderModelCompletionContext(yaml, anthropicOffset).providerKey, 'anthropic')
+  assert.equal(completions.getProviderModelCompletionContext(yaml, yaml.indexOf('should-not-request') + 3), null)
+  assert.equal(completions.getProviderModelCompletionContext(yaml, yaml.indexOf('targets:') + 2), null)
+})
+
+test('provider model completion context handles empty, partial, and legacy model values without stale fallback', () => {
+  const current = `providers:
+  partial:
+    providerType: openai-responses
+    models:
+      - ft:gpt-5.6/
+      - id:\x20
+`
+  const partialOffset = current.indexOf('ft:gpt-5.6/') + 'ft:gpt-5.6/'.length
+  const partial = completions.getProviderModelCompletionContext(current, partialOffset)
+  assert.equal(current.slice(partial.replaceStartOffset, partial.replaceEndOffset), 'ft:gpt-5.6/')
+  const emptyOffset = current.indexOf('      - id: ') + '      - id: '.length
+  const empty = completions.getProviderModelCompletionContext(current, emptyOffset)
+  assert.equal(empty.providerKey, 'partial')
+  assert.equal(empty.replaceStartOffset, empty.replaceEndOffset)
+
+  const legacy = `models:
+  old:
+    provider: anthropic
+    model:\x20
+`
+  const legacyOffset = legacy.indexOf('    model: ') + '    model: '.length
+  assert.deepEqual(completions.getProviderModelCompletionContext(legacy, legacyOffset).connection, { providerType: 'anthropic' })
+  assert.equal(completions.getProviderModelCompletionContext('providers:\n  broken: [\n', 20), null)
+
+  const ambiguous = `providers:
+  valid:
+    providerType: openai
+    apiKey: saved-looking-key
+    models: [one]
+  invalid:
+    providerType: openai
+    apiKey: [not, scalar]
+    models: [two]
+`
+  assert.equal(completions.getProviderModelCompletionContext(ambiguous, ambiguous.indexOf('two') + 2), null)
+  const duplicate = `providers:
+  repeated:
+    providerType: openai
+    apiKey: first
+    apiKey: second
+    models: [three]
+`
+  assert.equal(completions.getProviderModelCompletionContext(duplicate, duplicate.indexOf('three') + 3), null)
+})
+
+test('provider model requests are completion-time only, cache successes and failures, and isolate connection changes', async () => {
+  let provider
+  const monaco = {
+    languages: {
+      CompletionItemKind: { Value: 12 },
+      registerCompletionItemProvider(_language, value) {
+        provider = value
+        return { dispose() {} }
+      },
+    },
+  }
+  const calls = []
+  let fail = false
+  const support = completions.createModelsYamlCompletionProvider(monaco, async (connection) => {
+    calls.push(connection)
+    if (fail) throw new Error('unavailable')
+    return ['gpt-5.6/x', 'gpt-5.6/x', 'ft:gpt-5.6']
+  })
+  assert.equal(calls.length, 0)
+
+  const makeModel = (apiKey) => {
+    const value = `providers:\n  open:\n    providerType: openai-completions\n    apiKey: ${apiKey}\n    models:\n      - gpt-5.\n`
+    return {
+      uri: { toString: () => schemas.MODELS_YAML_MODEL_URI },
+      getLinesContent: () => value.split('\n'),
+      getValue: () => value,
+      getVersionId: () => 1,
+      getOffsetAt: () => value.indexOf('gpt-5.') + 'gpt-5.'.length,
+      getPositionAt(offset) {
+        const before = value.slice(0, offset).split('\n')
+        return { lineNumber: before.length, column: before.at(-1).length + 1 }
+      },
+    }
+  }
+  const position = { lineNumber: 6, column: 15 }
+  const token = { isCancellationRequested: false }
+  let result = await provider.provideCompletionItems(makeModel('first-secret'), position, { triggerKind: 0 }, token)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(result.suggestions.map(item => item.label), ['gpt-5.6/x', 'ft:gpt-5.6'])
+  assert.equal(result.suggestions[0].range.startColumn, 9)
+  await provider.provideCompletionItems(makeModel('first-secret'), position, { triggerKind: 0 }, token)
+  assert.equal(calls.length, 1)
+  await provider.provideCompletionItems(makeModel('second-secret'), position, { triggerKind: 0 }, token)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].apiKey, 'second-secret')
+
+  fail = true
+  result = await provider.provideCompletionItems(makeModel('failure-secret'), position, { triggerKind: 0 }, token)
+  assert.deepEqual(result.suggestions, [])
+  await provider.provideCompletionItems(makeModel('failure-secret'), position, { triggerKind: 0 }, token)
+  assert.equal(calls.length, 3)
+  support.dispose()
+})
+
+test('provider model inflight requests merge and editor removal aborts late results', async () => {
+  let provider
+  const monaco = {
+    languages: {
+      CompletionItemKind: { Value: 12 },
+      registerCompletionItemProvider(_language, value) {
+        provider = value
+        return { dispose() {} }
+      },
+    },
+  }
+  let calls = 0
+  let release
+  let aborted = false
+  const support = completions.createModelsYamlCompletionProvider(monaco, (_connection, signal) => {
+    calls += 1
+    return new Promise((resolve, reject) => {
+      release = resolve
+      signal.addEventListener('abort', () => {
+        aborted = true
+        reject(new Error('aborted'))
+      }, { once: true })
+    })
+  })
+  const value = 'providers:\n  open:\n    providerType: openai\n    models:\n      - gpt\n'
+  const model = {
+    uri: { toString: () => schemas.MODELS_YAML_MODEL_URI },
+    getLinesContent: () => value.split('\n'),
+    getValue: () => value,
+    getVersionId: () => 1,
+    getOffsetAt: () => value.indexOf('gpt') + 3,
+    getPositionAt: () => ({ lineNumber: 5, column: 9 }),
+  }
+  const token = { isCancellationRequested: false }
+  const first = provider.provideCompletionItems(model, { lineNumber: 5, column: 12 }, { triggerKind: 0 }, token)
+  const second = provider.provideCompletionItems(model, { lineNumber: 5, column: 12 }, { triggerKind: 0 }, token)
+  assert.equal(calls, 1)
+  release(['one'])
+  assert.deepEqual((await first).suggestions.map(item => item.label), ['one'])
+  assert.deepEqual((await second).suggestions.map(item => item.label), ['one'])
+
+  const changedValue = value.replace('openai', 'openai-responses')
+  const late = provider.provideCompletionItems({
+    ...model,
+    getValue: () => changedValue,
+    getLinesContent: () => changedValue.split('\n'),
+    getOffsetAt: () => changedValue.indexOf('gpt') + 3,
+  }, { lineNumber: 5, column: 12 }, { triggerKind: 0 }, token)
+  assert.equal(calls, 2)
+  support.remove(schemas.MODELS_YAML_MODEL_URI)
+  assert.equal(aborted, true)
+  assert.deepEqual((await late).suggestions, [])
+  support.dispose()
 })
