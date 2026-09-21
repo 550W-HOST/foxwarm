@@ -6,7 +6,6 @@ import test from 'node:test';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { createSessionWorkerPresentationServiceHandler } from './sessionWorkerPresentationService';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { LocalRpcTransport, RpcServiceRegistry } from './rpc';
@@ -47,7 +46,6 @@ function baseSession(id: string): Session {
 
 function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const receivedMessages: any[] = [];
   const receivedBatches: any[] = [];
   const receivedEvents: any[] = [];
@@ -56,7 +54,6 @@ function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...extraEnv },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
     presentationSink: {
       broadcastMessage: (_sessionId, message) => { receivedMessages.push(message); receivedPresentation.push({ kind: 'message', value: message }); },
       broadcastQueueHistoryAppend: (_sessionId, append) => { receivedBatches.push(append); receivedPresentation.push({ kind: 'batch', value: append }); },
@@ -64,8 +61,8 @@ function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
     },
     onWorkerReady: sessionId => { readySessions.push(sessionId); },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
-  return { store, sourceContexts, supervisor, ingress, receivedMessages, receivedBatches, receivedEvents, receivedPresentation, readySessions };
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  return { store, supervisor, ingress, receivedMessages, receivedBatches, receivedEvents, receivedPresentation, readySessions };
 }
 
 test('subscribed workers forward appended messages and coalesced stream deltas as pure presentation', async () => {

@@ -18,8 +18,7 @@ import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPresentationServiceHandler, sessionWorkerPresentationServiceDescriptor, type WorkerQueueHistoryAppend } from './sessionWorkerPresentationService';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor,
   SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
-import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
-  type ExactFinalSourceContextResolver } from './sessionTurnDelivery';
+import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
 import { VECTOR_ENABLED } from './config';
 import type { AgentMetadata } from './session/agentMetadata';
 
@@ -36,7 +35,6 @@ export type SessionWorkerSupervisorOptions = {
   shouldRestart?: (sessionId: string) => boolean | Promise<boolean>;
   readProcessIdentity?: (pid: number) => string | null;
   projectionRegistry?: SessionWorkerProjectionRegistry;
-  resolveExactFinalSourceContext?: ExactFinalSourceContextResolver;
   handbackWorker?: (identity: Pick<SessionWorkerIdentity, 'sessionId' | 'generation' | 'incarnationId'>) => Promise<void>;
   /** Called after a worker activates and becomes ready (used to re-push Main-owned transient presentation subscriptions). */
   onWorkerReady?: (sessionId: string) => void;
@@ -199,7 +197,6 @@ export class SessionWorkerSupervisor {
   async retryActivated(
     sessionId: string,
     expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
-    source?: import('./types').QueueSource,
   ) {
     this.assertActivatedOwnership(sessionId, expected);
     const entry = this.entries.get(sessionId)!;
@@ -208,7 +205,7 @@ export class SessionWorkerSupervisor {
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
       try {
-        return await runtime.call('retry', { ...(source ? { source } : {}) });
+        return await runtime.call('retry', {});
       } catch (error: any) {
         const transportCode = typeof error?.code === 'string' ? error.code : '';
         if (['RPC_UNAVAILABLE', 'RPC_SEND_FAILED', 'RPC_CLOSED'].includes(transportCode)) {
@@ -603,7 +600,6 @@ export class SessionWorkerSupervisor {
       reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({
         expectedSourceSessionId: sessionId,
-        resolveExactSourceContext: this.options.resolveExactFinalSourceContext,
       }));
       reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({
         expected: publicationIdentity, registry: this.projectionRegistry,

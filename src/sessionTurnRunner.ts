@@ -15,7 +15,7 @@ import { buildSessionRuntimeState } from './sessionRuntimeState';
 import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
 import { applyChildHandoffQueueItem, resolveChildHandoffBoundary, shouldQueueChildHandoffReminder } from './session/childHandoffState';
 import * as sessionManager from './sessionManager';
-import { decorateChannelProgressText, finishChannelTurnProgress, reportChannelTurnProgress } from './session/channels';
+import { finishChannelTurnProgress, reportChannelTurnProgress } from './session/channels';
 import { armMainWaitLiveness } from './mainManagementTools';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
@@ -30,11 +30,6 @@ export function formatTerminalSessionError(error: any): string {
     ? `⚠️ LLM request failed: ${error?.message || 'Unknown error'}`
     : `Error: ${error?.message || 'Unknown error'}`;
 }
-
-type SourceMergeBoundary = {
-  streamKey?: string;
-  preferDirectReply: boolean;
-};
 
 function formatRetryDelay(delayMs: number): string {
   const seconds = Math.max(1, Math.ceil(delayMs / 1000));
@@ -104,11 +99,10 @@ export interface SessionTurnHost {
   sendTyping(sourceCtx: ChannelContext): Promise<void>;
   hasBroadcast(session: Session): boolean;
   broadcast(session: Session, text: string, options?: any): void;
-  sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply?: boolean): Promise<void>;
   ingestPendingQueue?(session: Session): Promise<void>;
-  deliverIntermediateText?(session: Session, source: QueueSource, text: string, turnId: string): Promise<void>;
-  deliverCommittedFinal?(session: Session, source: QueueSource, text: string, outcome: SessionTurnFinalKind, turnId: string): Promise<void>;
-  reportChannelProgress?(session: Session, turnId: string, source: QueueSource | undefined, progress: ChannelTurnProgress): void | Promise<void>;
+  deliverIntermediateText?(session: Session, text: string, turnId: string): Promise<void>;
+  deliverCommittedFinal?(session: Session, text: string, outcome: SessionTurnFinalKind, turnId: string): Promise<void>;
+  reportChannelProgress?(session: Session, turnId: string, progress: ChannelTurnProgress): void | Promise<void>;
   finishChannelProgress?(session: Session, turnId: string): Promise<void>;
 }
 
@@ -236,13 +230,13 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   }
 
   async sendTyping(sourceCtx: ChannelContext): Promise<void> { await sourceCtx.sendTyping(); }
-  reportChannelProgress(session: Session, turnId: string, source: QueueSource | undefined, progress: ChannelTurnProgress): void {
+  reportChannelProgress(session: Session, turnId: string, progress: ChannelTurnProgress): void {
     this.assertOwnerSession(session);
     if (this.overrides.reportChannelProgress) {
-      this.overrides.reportChannelProgress(session, turnId, source, progress);
+      this.overrides.reportChannelProgress(session, turnId, progress);
       return;
     }
-    reportChannelTurnProgress(session.id, turnId, source, progress);
+    reportChannelTurnProgress(session.id, turnId, progress);
   }
   finishChannelProgress(session: Session, turnId: string): Promise<void> {
     this.assertOwnerSession(session);
@@ -252,19 +246,6 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   hasBroadcast(session: Session): boolean { this.assertOwnerSession(session); return !!session.broadcast; }
   broadcast(session: Session, text: string, options?: any): void { this.assertOwnerSession(session); session.broadcast?.(text, options); }
 
-  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply = false): Promise<void> {
-    this.assertOwnerSession(session);
-    if (preferDirectReply && sourceCtx?.reply) {
-      const deliveredText = decorateChannelProgressText({ channelId: getChannelId(sourceCtx), conversationId: getConversationId(sourceCtx) }, text, options);
-      await sourceCtx.reply(deliveredText, options);
-      return;
-    }
-    if (session.broadcast) {
-      session.broadcast(text, options);
-      return;
-    }
-    if (sourceCtx?.reply) await sourceCtx.reply(text, options);
-  }
 }
 
 export class SessionTurnRunner {
@@ -276,73 +257,12 @@ export class SessionTurnRunner {
     return snapshotQueueSource(ctx);
   }
 
-  private getSourceStreamKey(source?: QueueSource): string | undefined {
-    if (source?.weworkStreamId) return `wework:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
-    if (source?.qqbotMessageId) return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
-    return undefined;
-  }
-
-  private getSourceMergeBoundary(source?: QueueSource): SourceMergeBoundary {
-    return {
-      streamKey: this.getSourceStreamKey(source),
-      preferDirectReply: source?.preferDirectReply === true,
-    };
-  }
-
-  private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
-    const streamId = sourceCtx?.weworkStreamId || source?.weworkStreamId;
-    const channelId = sourceCtx ? getChannelId(sourceCtx) : (source?.channelId || source?.platform);
-    const conversationId = sourceCtx ? getConversationId(sourceCtx) : (source?.conversationId || source?.channelUserId);
-    const options: Record<string, any> = {};
-    if (streamId) {
-      options.weworkStreamId = streamId;
-      if (channelId && conversationId) {
-        options.weworkStreamChannelId = channelId;
-        options.weworkStreamConversationId = conversationId;
-      }
-    }
-    const qqbotMessageId = sourceCtx?.qqbotMessageId || source?.qqbotMessageId;
-    if (qqbotMessageId && channelId && conversationId) {
-      options.qqbotMessageId = qqbotMessageId;
-      options.qqbotChannelId = channelId;
-      options.qqbotConversationId = conversationId;
-    }
-    return options;
-  }
-
-  private mergeTurnOptions(turnOptions: Record<string, any>, options?: any): any {
-    return Object.keys(turnOptions).length > 0
-      ? { ...turnOptions, ...(options || {}) }
-      : options;
-  }
-
-  private getTurnTargetChannel(turnOptions: Record<string, any>): { channelId: string; conversationId: string } | undefined {
-    if (!turnOptions.weworkStreamChannelId || !turnOptions.weworkStreamConversationId) {
-      return undefined;
-    }
-    return {
-      channelId: turnOptions.weworkStreamChannelId,
-      conversationId: turnOptions.weworkStreamConversationId,
-    };
-  }
-
   private async emitTurnProgress(
-    broadcast: Session['broadcast'] | undefined,
-    turnOptions: Record<string, any>,
     progress: ChannelTurnProgress,
     session?: Session,
     turnId?: string,
-    source?: QueueSource,
   ): Promise<void> {
-    if (session && turnId) await this.host.reportChannelProgress?.(session, turnId, source, progress);
-    if (!broadcast || !turnOptions.weworkStreamId) {
-      return;
-    }
-    broadcast('', {
-      allowEmptyBroadcast: true,
-      channelTurnProgress: progress,
-      ...(this.getTurnTargetChannel(turnOptions) ? { targetChannel: this.getTurnTargetChannel(turnOptions) } : {}),
-    });
+    if (session && turnId) await this.host.reportChannelProgress?.(session, turnId, progress);
   }
 
   private getTurnToolCalls(toolCalls: FunctionCall[], iteration: number): FunctionCall[] {
@@ -362,20 +282,9 @@ export class SessionTurnRunner {
       }));
   }
 
-  private buildToolBroadcast(broadcast: Session['broadcast'] | undefined, turnOptions: Record<string, any>): Session['broadcast'] | undefined {
-    if (!broadcast || !turnOptions.weworkStreamChannelId) {
-      return broadcast;
-    }
-    return (text: string, options?: any) => {
-      const excludePlatforms = Array.from(new Set([...(options?.excludePlatforms || []), turnOptions.weworkStreamChannelId]));
-      broadcast(text, { ...(options || {}), excludePlatforms });
-    };
-  }
-
   private createLlmRetryNotifier(
     session: Session,
     broadcast: Session['broadcast'] | undefined,
-    getCurrentTurnChannelOptions: () => Record<string, any> = () => ({}),
   ): (event: llm.LlmRetryEvent) => Promise<void> {
     let retryMessage: Message | null = null;
     let previousError: RetryErrorDescriptor | undefined;
@@ -433,30 +342,10 @@ export class SessionTurnRunner {
       if (!broadcast) return;
 
       const channelSnippet = formatRetryChannelSnippet(displayEvent);
-      const channelOptions = getCurrentTurnChannelOptions();
-      const targetChannel = this.getTurnTargetChannel(channelOptions);
       if (initial || event.final === true) {
-        // The ordinary broadcast is intentionally sent only for the first
-        // attempt and terminal failure. Its existing turn binding naturally
-        // includes an active WeWork stream when one is present.
         broadcast(channelSnippet, mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
-      } else if (channelOptions.weworkStreamId && targetChannel) {
-        // Intermediate retry updates are meaningful only for the active
-        // WeWork stream-card target. Avoid sending them to every attached
-        // non-streaming channel.
-        this.host.broadcast(session, channelSnippet, {
-          ...channelOptions,
-          parse_mode: 'Markdown',
-          excludePlatforms: ['webui'],
-          targetChannel,
-        });
       }
     };
-  }
-
-  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, source?: QueueSource): Promise<void> {
-    const effectiveSource = source ?? (sourceCtx ? this.snapshotSource(sourceCtx) : undefined);
-    await this.host.sendSessionReply(session, sourceCtx, text, options, effectiveSource?.preferDirectReply === true);
   }
 
   private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
@@ -476,10 +365,8 @@ export class SessionTurnRunner {
     return finalParts;
   }
 
-  private drainLeadingQueuedTurnInputs(session: Session): { items: QueueItem[]; broadcastSource?: QueueSource } {
+  private drainLeadingQueuedTurnInputs(session: Session): QueueItem[] {
     const items: QueueItem[] = [];
-    let broadcastSource: QueueSource | undefined;
-    let sourceBoundary: SourceMergeBoundary | undefined;
 
     while (session.queue[0]) {
       if (!isQueueItem(session.queue[0])) {
@@ -489,36 +376,23 @@ export class SessionTurnRunner {
       if (session.queue[0].type === 'compact-commit') {
         break;
       }
-      const nextBoundary = this.getSourceMergeBoundary(session.queue[0].source);
-      if (sourceBoundary
-        && (sourceBoundary.streamKey !== nextBoundary.streamKey
-          || sourceBoundary.preferDirectReply !== nextBoundary.preferDirectReply)) {
-        break;
-      }
       const item = session.queue.shift();
       if (!item) continue;
       if (!item.message && !item.parts?.length) continue;
-
-      if (items.length === 0) {
-        broadcastSource = item.source;
-        sourceBoundary = nextBoundary;
-      }
-
       items.push(item);
     }
 
-    return { items, broadcastSource };
+    return items;
   }
 
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
-    turnBoundary: SourceMergeBoundary,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
     let parts = pendingParts;
     let consumedInput = false;
 
-    if (parts?.length && this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).hasInput) {
+    if (parts?.length && this.inspectLeadingQueuedTurnInputs(session)) {
       await this.appendUserMessage(session, parts);
       parts = null;
     }
@@ -531,14 +405,6 @@ export class SessionTurnRunner {
       if (session.queue[0].type === 'compact-commit') {
         break;
       }
-      const queuedBoundary = this.getSourceMergeBoundary(session.queue[0].source);
-      // A different passive-source conversation or final-delivery intent owns
-      // a separate turn. Message/card IDs within one conversation do not.
-      if (queuedBoundary.preferDirectReply !== turnBoundary.preferDirectReply
-        || (queuedBoundary.streamKey && queuedBoundary.streamKey !== turnBoundary.streamKey)) {
-        break;
-      }
-
       const item = session.queue.shift();
       if (!item) {
         continue;
@@ -558,23 +424,14 @@ export class SessionTurnRunner {
     };
   }
 
-  private inspectLeadingCompatibleQueuedTurnInputs(
-    session: Session,
-    turnBoundary: SourceMergeBoundary,
-  ): { hasInput: boolean; latestSource?: QueueSource } {
-    let hasInput = false;
-    let latestSource: QueueSource | undefined;
+  private inspectLeadingQueuedTurnInputs(session: Session): boolean {
     for (const item of session.queue) {
       if (!isQueueItem(item)) continue;
       if (item.type === 'compact-commit') break;
-      const queuedBoundary = this.getSourceMergeBoundary(item.source);
-      if (queuedBoundary.preferDirectReply !== turnBoundary.preferDirectReply
-        || (queuedBoundary.streamKey && queuedBoundary.streamKey !== turnBoundary.streamKey)) break;
       if (!item.message && !item.parts?.length) continue;
-      hasInput = true;
-      if (item.source) latestSource = item.source;
+      return true;
     }
-    return { hasInput, latestSource };
+    return false;
   }
 
   private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[], firstStartsTurn = true): Promise<void> {
@@ -723,7 +580,7 @@ export class SessionTurnRunner {
       await this.host.applyCompletedCompactJob(sessionId);
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
-      await this.sendSessionError(session, undefined, e);
+      await this.sendSessionError(session, e);
     }
 
     return 'continued';
@@ -755,7 +612,7 @@ export class SessionTurnRunner {
       await this.host.applyCompletedCompactJob(sessionId);
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'Queued compaction failed');
-      await this.sendSessionError(session, undefined, e);
+      await this.sendSessionError(session, e);
     }
   }
 
@@ -897,90 +754,70 @@ export class SessionTurnRunner {
 
   private async deliverIntermediateModelText(
     session: Session,
-    source: QueueSource | undefined,
     text: string,
     broadcast: Session['broadcast'] | undefined,
-    turnOptions: Record<string, any>,
     turnId: string,
   ): Promise<boolean> {
     if (!shouldBroadcastChannelText(text)) return false;
-    if (source && this.host.deliverIntermediateText) {
-      await this.host.deliverIntermediateText(session, source, text, turnId);
+    if (this.host.deliverIntermediateText) {
+      await this.host.deliverIntermediateText(session, text, turnId);
       return true;
     }
     if (!broadcast) return false;
-    const excludePlatforms = Array.from(new Set([
-      'webui',
-      ...(turnOptions.weworkStreamChannelId ? [turnOptions.weworkStreamChannelId] : []),
-    ]));
-    broadcast(text, { parse_mode: 'Markdown', excludePlatforms });
+    broadcast(text, { parse_mode: 'Markdown', excludePlatforms: ['webui'] });
     return true;
   }
 
   private async deliverProviderResultText(
     session: Session,
-    sourceCtx: ChannelContext | undefined,
-    source: QueueSource | undefined,
     text: string,
     willContinue: boolean,
     broadcast: Session['broadcast'] | undefined,
-    turnOptions: Record<string, any>,
     turnId: string,
   ): Promise<boolean> {
     if (willContinue) {
-      return this.deliverIntermediateModelText(session, source, text, broadcast, turnOptions, turnId);
+      return this.deliverIntermediateModelText(session, text, broadcast, turnId);
     }
-    if (source && this.host.deliverCommittedFinal) {
+    if (this.host.deliverCommittedFinal) {
       if (shouldBroadcastChannelText(text)) {
-        await this.host.deliverCommittedFinal(session, source, text, 'response', turnId);
+        await this.host.deliverCommittedFinal(session, text, 'response', turnId);
         return true;
       }
-      if (source.weworkStreamId) {
-        await this.host.deliverCommittedFinal(session, source, '', 'empty-final', turnId);
-      }
+      await this.host.deliverCommittedFinal(session, '', 'empty-final', turnId);
       return false;
     }
     if (shouldBroadcastChannelText(text)) {
-      await this.sendSessionReply(
-        session,
-        sourceCtx,
-        text,
-        this.mergeTurnOptions(turnOptions, { excludePlatforms: ['webui'], turnFinal: true }),
-        source,
-      );
+      if (!broadcast) return false;
+      broadcast(text, { excludePlatforms: ['webui'], turnFinal: true });
       return true;
     }
-    this.sendEmptyTurnFinal(broadcast, turnOptions);
+    this.sendEmptyTurnFinal(broadcast);
     return false;
   }
 
   private async finishTurnAfterIntermediate(
     session: Session,
-    source: QueueSource | undefined,
     broadcast: Session['broadcast'] | undefined,
-    turnOptions: Record<string, any>,
     turnId: string,
   ): Promise<void> {
-    if (source?.weworkStreamId && this.host.deliverCommittedFinal) {
-      await this.host.deliverCommittedFinal(session, source, '', 'empty-final', turnId);
+    if (this.host.deliverCommittedFinal) {
+      await this.host.deliverCommittedFinal(session, '', 'empty-final', turnId);
       return;
     }
-    this.sendEmptyTurnFinal(broadcast, turnOptions);
+    this.sendEmptyTurnFinal(broadcast);
   }
 
-  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>, source?: QueueSource): Promise<void> {
+  private async sendSessionError(session: Session, error: any, broadcast: Session['broadcast'] | undefined = undefined): Promise<void> {
     const text = formatTerminalSessionError(error);
-    await this.sendSessionReply(session, sourceCtx, text, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }), source);
+    if (broadcast) broadcast(text, { turnFinal: true });
+    else if (this.host.hasBroadcast(session)) this.host.broadcast(session, text, { turnFinal: true });
   }
 
-  private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined, turnOptions: Record<string, any>): void {
-    if (!turnOptions.weworkStreamId || !broadcast) {
-      return;
-    }
+  private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined): void {
+    if (!broadcast) return;
     broadcast('', {
       turnFinal: true,
       allowEmptyBroadcast: true,
-      ...(this.getTurnTargetChannel(turnOptions) ? { targetChannel: this.getTurnTargetChannel(turnOptions) } : {}),
     });
   }
 
@@ -992,7 +829,6 @@ export class SessionTurnRunner {
       message?: Message;
       queuedItems?: QueueItem[];
       sourceCtx?: ChannelContext;
-      source?: QueueSource;
       sendTyping?: boolean;
       session?: Session;
       outerQueueBoundary?: QueueItem;
@@ -1005,22 +841,19 @@ export class SessionTurnRunner {
     }
     await maybeRefreshStaleSessionSnapshot(session, this.host.refreshSessionSnapshot);
 
-    let turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
     // One ephemeral identity covers the complete provider/tool loop for this
     // invocation. A queued item consumed by this loop stays in the same turn;
     // a later runSessionTurn invocation receives a new identity.
     const turnId = randomUUID();
-    let turnChannelOptions: Record<string, any> = { ...this.getTurnChannelOptions(undefined, turnSource), channelProgressTurnId: turnId };
-    const turnBoundary = this.getSourceMergeBoundary(turnSource);
     const broadcast = this.host.hasBroadcast(session)
-      ? (text: string, broadcastOptions?: any) => this.host.broadcast(session, text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
+      ? (text: string, broadcastOptions?: any) => this.host.broadcast(session, text, { channelProgressTurnId: turnId, ...(broadcastOptions || {}) })
       : undefined;
 
     const queuedItemPartCount = options.queuedItems?.reduce(
       (count, item) => count + (item.message?.parts?.length ?? item.parts?.length ?? 0),
       0,
     );
-    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? queuedItemPartCount ?? 0 }, 'Session turn processing');
+    logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : 'session-event', partCount: options.message?.parts?.length ?? options.parts?.length ?? queuedItemPartCount ?? 0 }, 'Session turn processing');
 
     let stoppedByUser = false;
     let fencedMaintenanceError: unknown;
@@ -1054,27 +887,21 @@ export class SessionTurnRunner {
         if (queuedItems?.length) {
           // Keep a drained batch unsent across the pre-LLM compaction safe
           // point. Once that boundary is clear, persist its individual queue
-          // records before consuming any additional compatible follow-ups.
+          // records before consuming any additional follow-ups.
           await this.appendQueuedTurnInputs(session, sessionId, queuedItems);
           queuedItems = undefined;
           parts = null;
         }
 
-        const queuedBeforeSource = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).latestSource;
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnBoundary);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts);
         parts = queuedBeforeLlm.parts;
-        if (queuedBeforeSource) {
-          turnSource = queuedBeforeSource;
-          turnChannelOptions = { ...this.getTurnChannelOptions(undefined, turnSource), channelProgressTurnId: turnId };
-        }
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
           stoppedByUser = true;
           await this.host.saveSession(session);
           await this.deliverProviderResultText(
-            session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
-            turnId,
+            session, '_[Execution stopped by user]_', false, broadcast, turnId,
           );
           break;
         }
@@ -1084,7 +911,7 @@ export class SessionTurnRunner {
         // an interval reminder cannot split a function call from its result.
         await this.maybeAppendGoalIntervalReminder(session);
 
-        await this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' }, session, turnId, turnSource);
+        await this.emitTurnProgress({ type: 'llm-start' }, session, turnId);
         this.host.setActiveSessionRuntimeState(session.id, {
           state: 'requesting-model',
           since: Date.now(),
@@ -1097,7 +924,7 @@ export class SessionTurnRunner {
         let result;
         try {
           result = await this.host.chat(parts, session, iteration, {
-            onRetry: this.createLlmRetryNotifier(session, broadcast, () => turnChannelOptions),
+            onRetry: this.createLlmRetryNotifier(session, broadcast),
             turnId,
           });
         } catch (e: any) {
@@ -1106,8 +933,7 @@ export class SessionTurnRunner {
             stoppedByUser = true;
             await this.host.saveSession(session);
             await this.deliverProviderResultText(
-              session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
-              turnId,
+              session, '_[Execution stopped by user]_', false, broadcast, turnId,
             );
             break;
           }
@@ -1127,7 +953,7 @@ export class SessionTurnRunner {
 
         // A Worker turn cannot accept a second runPending call while this turn
         // owns the serial lane. Pull newly durable mailbox inputs at this safe
-        // point so compatible follow-ups received during the provider request
+        // point so follow-ups received during the provider request
         // participate in the same canonical runner semantics as local queues.
         await this.host.ingestPendingQueue?.(session);
         // Dequeue may arrive while the awaited Worker ingestion is publishing
@@ -1135,35 +961,28 @@ export class SessionTurnRunner {
         // result after the stop override has claimed them for the outer loop.
         const stopOverrideAfterProviderIngest = !!session.meta?.runQueuedAfterStop;
         const providerTimeQueue = stopOverrideAfterProviderIngest
-          ? { hasInput: false, latestSource: undefined }
-          : this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary);
-        if (providerTimeQueue.latestSource) {
-          turnSource = providerTimeQueue.latestSource;
-          turnChannelOptions = { ...this.getTurnChannelOptions(undefined, turnSource), channelProgressTurnId: turnId };
-        }
+          ? false
+          : this.inspectLeadingQueuedTurnInputs(session);
         // Decide this result's finality from a non-mutating queue view. Queue
         // rows append only after this text and, for tools, after the tool row.
         const hasTools = !!result.toolCalls?.length;
-        const willContinue = hasTools || providerTimeQueue.hasInput;
+        const willContinue = hasTools || providerTimeQueue;
         if (!willContinue && isNoActionSignalText(result.text) && resolveChildHandoffBoundary(session)) {
           await this.host.saveSession(session);
         }
         const iterationTextHandled = await this.deliverProviderResultText(
           session,
-          options.sourceCtx,
-          turnSource,
           result.text,
           willContinue,
           broadcast,
-          turnChannelOptions,
           turnId,
         );
 
         if (!hasTools) {
-          if (providerTimeQueue.hasInput) {
-            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
+          if (providerTimeQueue) {
+            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null);
             if (!queuedAfterLlm.consumedInput) {
-              await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions, turnId);
+              await this.finishTurnAfterIntermediate(session, broadcast, turnId);
               break;
             }
             await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
@@ -1175,13 +994,10 @@ export class SessionTurnRunner {
 
         const turnToolCalls = this.getTurnToolCalls(result.toolCalls!, iteration);
 
-        const hasBroadcastableToolText = shouldBroadcastChannelText(result.text);
-
-        await this.emitTurnProgress(broadcast, turnChannelOptions, {
+        await this.emitTurnProgress({
           type: 'tool-calls-start',
           calls: turnToolCalls.map(call => ({ id: call.id, name: call.name })),
-          ...(hasBroadcastableToolText ? { text: result.text } : {}),
-        }, session, turnId, turnSource);
+        }, session, turnId);
 
         this.host.setActiveSessionRuntimeState(session.id, {
           state: 'running-tool',
@@ -1203,14 +1019,7 @@ export class SessionTurnRunner {
           sessionId: session.id,
           session,
           previousLlmRequest: result.previousLlmRequest,
-          broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
-          ...(turnChannelOptions.qqbotMessageId && turnChannelOptions.qqbotChannelId && turnChannelOptions.qqbotConversationId
-            ? { channelReplyMetadata: {
-              qqbotMessageId: turnChannelOptions.qqbotMessageId,
-              qqbotChannelId: turnChannelOptions.qqbotChannelId,
-              qqbotConversationId: turnChannelOptions.qqbotConversationId,
-            } }
-            : {}),
+          broadcast,
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             this.host.setActiveSessionRuntimeState(session.id, {
               state: 'running-tool',
@@ -1241,10 +1050,10 @@ export class SessionTurnRunner {
         }
 
         await this.appendToolMessage(session, toolResultMsg.parts);
-        await this.emitTurnProgress(broadcast, turnChannelOptions, {
+        await this.emitTurnProgress({
           type: 'tool-calls-finish',
           results: this.getToolResultProgress(toolResultMsg),
-        }, session, turnId, turnSource);
+        }, session, turnId);
 
         const fatalToolError = (toolResultMsg as any).__toolLoopControl?.fatalError;
         if (fatalToolError && typeof fatalToolError.code === 'string' && typeof fatalToolError.message === 'string') {
@@ -1274,7 +1083,7 @@ export class SessionTurnRunner {
           };
           setManagedSessionState(session, managedStateAfterTools);
           managedStepYieldReason = 'tool';
-          await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions, turnId);
+          await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           break;
         }
 
@@ -1286,11 +1095,10 @@ export class SessionTurnRunner {
           // no non-empty model text to handle. This flag is iteration-local;
           // it never participates in ordinary final-response suppression.
           if (iterationTextHandled) {
-            await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions, turnId);
+            await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           } else {
             await this.deliverProviderResultText(
-              session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
-              turnId,
+              session, '_[Execution stopped by user]_', false, broadcast, turnId,
             );
           }
           break;
@@ -1298,13 +1106,13 @@ export class SessionTurnRunner {
 
         if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
-          await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions, turnId);
+          await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           break;
         }
 
         if (waitForReply) {
           logger.info({ sessionId: session.id, iteration }, 'Successful handoff requested an activity wait');
-          await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions, turnId);
+          await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           break;
         }
 
@@ -1324,21 +1132,15 @@ export class SessionTurnRunner {
           stoppedByUser = true;
           await this.host.saveSession(session);
           if (iterationTextHandled) {
-            await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions, turnId);
+            await this.finishTurnAfterIntermediate(session, broadcast, turnId);
           } else {
             await this.deliverProviderResultText(
-              session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
-              turnId,
+              session, '_[Execution stopped by user]_', false, broadcast, turnId,
             );
           }
           break;
         }
-        const toolTimeSource = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).latestSource;
-        if (toolTimeSource) {
-          turnSource = toolTimeSource;
-          turnChannelOptions = { ...this.getTurnChannelOptions(undefined, turnSource), channelProgressTurnId: turnId };
-        }
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null);
         parts = queuedAfterTools.parts;
 
         await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
@@ -1349,12 +1151,9 @@ export class SessionTurnRunner {
       if (iteration >= 500) {
         await this.deliverProviderResultText(
           session,
-          options.sourceCtx,
-          turnSource,
           'Error: Too many tool call iterations',
           false,
           broadcast,
-          turnChannelOptions,
           turnId,
         );
       }
@@ -1390,26 +1189,26 @@ export class SessionTurnRunner {
         // The required archive boundary already restored/resynced the owner.
         // Do not try to append another semantic error row through the same
         // failed archive. Make at most one presentation-only final attempt.
-        if (this.host.deliverCommittedFinal && turnSource) {
-          await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error', turnId);
+        if (this.host.deliverCommittedFinal) {
+          await this.host.deliverCommittedFinal(session, errorText, 'error', turnId);
         } else {
-          await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
+          await this.sendSessionError(session, e, broadcast);
         }
         return 'suppress-trailing-handoff';
       }
       if (mutationFencedMaintenance) {
         fencedMaintenanceError = e;
-        if (this.host.deliverCommittedFinal && turnSource) {
+        if (this.host.deliverCommittedFinal) {
           fencedMaintenanceDirect = true;
-          await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error', turnId);
+          await this.host.deliverCommittedFinal(session, errorText, 'error', turnId);
           return;
         }
       } else if (!llm.isLlmRequestError(e)) {
         await this.appendTerminalModelMessage(session, errorText);
       }
-      if (!mutationFencedMaintenance && this.host.deliverCommittedFinal && turnSource) {
+      if (!mutationFencedMaintenance && this.host.deliverCommittedFinal) {
         await this.maybeQueueChildReminder(session);
-        await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error', turnId);
+        await this.host.deliverCommittedFinal(session, errorText, 'error', turnId);
         return;
       }
       if (mutationFencedMaintenance) {
@@ -1418,13 +1217,13 @@ export class SessionTurnRunner {
       } else if (llm.isLlmRequestError(e)) {
         await this.maybeQueueChildReminder(session);
         if (this.host.hasBroadcast(session)) {
-          this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
+          this.sendEmptyTurnFinal(broadcast);
         } else {
-          await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
+          await this.sendSessionError(session, e, broadcast);
         }
       } else {
         await this.maybeQueueChildReminder(session);
-        await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
+        await this.sendSessionError(session, e, broadcast);
       }
     } finally {
       try { await this.host.finishChannelProgress?.(session, turnId); }
@@ -1460,11 +1259,11 @@ export class SessionTurnRunner {
     }
   }
 
-  async processSessionRetry(sessionId: string, source?: QueueSource): Promise<void> {
-    await this.processSessionQueue(sessionId, { retry: true, retrySource: source });
+  async processSessionRetry(sessionId: string): Promise<void> {
+    await this.processSessionQueue(sessionId, { retry: true });
   }
 
-  async processSessionQueue(sessionId: string, options: { retry?: boolean; retrySource?: QueueSource } = {}): Promise<void> {
+  async processSessionQueue(sessionId: string, options: { retry?: boolean } = {}): Promise<void> {
     if (this.processingSessions.has(sessionId)) {
       if (options.retry) {
         throw new Error('Session is already busy');
@@ -1506,7 +1305,6 @@ export class SessionTurnRunner {
           const outcome = await this.runSessionTurn(sessionId, {
             parts: null,
             session,
-            source: options.retrySource,
             onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
           });
           suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';
@@ -1526,7 +1324,7 @@ export class SessionTurnRunner {
         }
 
         // Preserve the durable queue before selecting the next owned action.
-        // The selected compact or source turn then commits its own mutation.
+        // The selected compact or ordinary turn then commits its own mutation.
         await this.host.saveSession(session);
 
         if (session.queue[0]?.type === 'compact-commit') {
@@ -1535,15 +1333,14 @@ export class SessionTurnRunner {
           continue;
         }
 
-        const queuedTurn = this.drainLeadingQueuedTurnInputs(session);
-        if (queuedTurn.items.length === 0) {
+        const queuedItems = this.drainLeadingQueuedTurnInputs(session);
+        if (queuedItems.length === 0) {
           break;
         }
         const outcome = await this.runSessionTurn(sessionId, {
           parts: null,
-          queuedItems: queuedTurn.items,
+          queuedItems,
           session,
-          source: queuedTurn.broadcastSource,
           ...(session.queue[0] ? { outerQueueBoundary: session.queue[0] } : {}),
           onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
         });

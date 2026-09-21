@@ -8,7 +8,7 @@ import {
   RpcServiceHandler,
 } from './rpc';
 import * as sessionManager from './sessionManager';
-import type { Message, QueueHistoryAppendPresentation, QueueItem, QueueSource, Session, SessionStreamEvent, TokenUsage } from './types';
+import type { Message, QueueHistoryAppendPresentation, QueueItem, Session, SessionStreamEvent, TokenUsage } from './types';
 import { isQueueItem } from './types';
 import { buildQueuedPreviewMessages } from './channels/webuiQueuePreview';
 import { getEffectiveSessionQueueLength, type SessionRuntimeState } from './sessionRuntimeState';
@@ -19,7 +19,6 @@ import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
-import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import { sessionCatalogStore } from './session/catalogStore';
 import { runBtwRequest } from './btw';
 import { MODEL_EFFORTS, type ModelEffort } from './config';
@@ -185,7 +184,6 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   control: rpcMethod<{
     sessionId: string;
     action: SessionRuntimeControlAction;
-    source?: QueueSource;
   }, SessionRuntimeControlResultDto>(),
   startEvents: rpcMethod<Record<string, never>, { started: true }>(),
   stopEvents: rpcMethod<Record<string, never>, { stopped: true }>(),
@@ -985,11 +983,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         if (input.action === 'retry') {
           sessionManager.assertSessionDestructiveMutationAllowed([sessionId], 'start retry work');
           if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker retry is unavailable.', true);
-          const source = input.source === undefined ? undefined : normalizeSessionTurnDeliverySource(input.source);
-          await options.worker.ingress.retryEnsuringWorker(sessionId, source);
+          await options.worker.ingress.retryEnsuringWorker(sessionId);
           return { action: 'retry' };
         }
-        if (input.source !== undefined) throw new RpcError('SESSION_RUNTIME_INVALID_CONTROL', 'source is supported only for retry.');
         if (input.action === 'dequeue') {
           sessionManager.assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
           if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker dequeue is unavailable.', true);

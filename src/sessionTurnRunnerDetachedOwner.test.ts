@@ -125,7 +125,7 @@ test('detached exact owner completes canonical foreground provider turn', async 
   }
 });
 
-test('selected compatible prefix commits one complete authority batch before postcommit interruption', async () => {
+test('selected ordinary prefix commits one complete authority batch before postcommit interruption', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_partial_prefix_${Date.now()}`, 'first queued input');
   session.busy = true;
@@ -153,11 +153,11 @@ test('selected compatible prefix commits one complete authority batch before pos
   }, () => {}); };
   const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
 
-  const selected = (runner as any).drainLeadingQueuedTurnInputs(session) as { items: QueueItem[] };
-  assert.equal(selected.items.length, 2);
+  const selected = (runner as any).drainLeadingQueuedTurnInputs(session) as QueueItem[];
+  assert.equal(selected.length, 2);
   assert.equal(session.queue.length, 0);
   await assert.rejects(
-    () => (runner as any).appendQueuedTurnInputs(session, session.id, selected.items),
+    () => (runner as any).appendQueuedTurnInputs(session, session.id, selected),
     error => error instanceof SessionAuthorityPostCommitError,
   );
 
@@ -166,7 +166,7 @@ test('selected compatible prefix commits one complete authority batch before pos
   assert.deepEqual((authority?.history || []).map((message: Message) => message.parts.find(part => part.text)?.text), ['first queued input', 'second queued input']);
 });
 
-test('one owned processor iterates many source turns with fresh TURN_IDs and one busy claim/release', async () => {
+test('one owned processor sends many different-source rows in one provider turn and one busy claim/release', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_many_sources_${Date.now()}`, 'unused');
   session.queue = Array.from({ length: 128 }, (_, index) => ({
@@ -191,9 +191,9 @@ test('one owned processor iterates many source turns with fresh TURN_IDs and one
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
-    assert.equal(turnIds.length, 128);
-    assert.equal(new Set(turnIds).size, 128);
-    assert.equal(session.history.length, 256);
+    assert.equal(turnIds.length, 1);
+    assert.equal(new Set(turnIds).size, 1);
+    assert.equal(session.history.length, 129);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2, 'one busy claim and one release own all turns');
@@ -236,7 +236,7 @@ test('one owned processor sequences compact turn compact without another busy cl
   }
 });
 
-test('retry and a different-source queued turn share ownership but receive fresh TURN_IDs', async () => {
+test('retry consumes a later different-source queued row in the same provider turn', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_retry_then_queue_${Date.now()}`, 'unused');
   session.history = [{
@@ -245,8 +245,8 @@ test('retry and a different-source queued turn share ownership but receive fresh
   }];
   session.queue = [{
     type: 'user',
-    source: { platform: 'qqbot', channelId: 'qq', channelUserId: 'c2c:later', conversationId: 'c2c:later', qqbotMessageId: 'later-message' },
-    parts: [{ text: 'later source turn' }],
+    source: { platform: 'qqbot', channelId: 'qq', channelUserId: 'c2c:later', conversationId: 'c2c:later', qqbotMessageId: 'later-message' } as any,
+    parts: [{ text: 'later queued turn' }],
   }];
   const events: string[] = [];
   const effects = createEffects(session, events);
@@ -262,9 +262,8 @@ test('retry and a different-source queued turn share ownership but receive fresh
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionRetry(session.id));
-    assert.equal(turnIds.length, 2);
-    assert.notEqual(turnIds[0], turnIds[1]);
-    assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'user', 'model']);
+    assert.equal(turnIds.length, 1);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'user', 'model']);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
     assert.equal(session.busy, false);
   } finally {

@@ -14,7 +14,6 @@ import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } fr
 import { teardownSessionWorkerForDelete } from './sessionWorkerDelete';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { performSessionWorkerHandback } from './sessionWorkerHandback';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { getModelStreamDraft } from './modelStreamDraft';
@@ -226,7 +225,6 @@ async function start() {
     if (SESSION_WORKERS_ENABLED) {
         sessionWorkerStore = new SessionWorkerStore();
         sessionWorkerStore.open();
-        const sourceContexts = new SessionWorkerSourceContextRegistry();
         sessionWorkerSupervisor = new SessionWorkerSupervisor({
             store: sessionWorkerStore,
             getCatalogStub: sessionId => {
@@ -245,7 +243,6 @@ async function start() {
             },
             idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
             shouldRestart: () => true,
-            resolveExactFinalSourceContext: sourceContexts.resolve,
             readSessionHistory: sessionId => sessionRuntime.getHistory(sessionId),
             // Transient presentation channel: pure pass-through into the WebUI
             // SSE fan-out and the stream-event bus; never writes semantic state.
@@ -281,7 +278,6 @@ async function start() {
         sessionWorkerIngress = new SessionWorkerIngressCoordinator(
             sessionWorkerStore,
             sessionWorkerSupervisor,
-            sourceContexts,
             (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
             (sessionId) => !!sessionManager.getSessionCatalog(sessionId),
             (sessionId, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([sessionId], operation, admit),
@@ -383,7 +379,7 @@ async function start() {
     const router = new MessageRouter(
         authorizedUsers,
         SESSION_WORKERS_ENABLED
-            ? (sessionId, item, ctx) => sessionRuntime.submitAndRun(sessionId, item, ctx)
+            ? (sessionId, item) => sessionRuntime.submitAndRun(sessionId, item)
             : undefined,
     );
     const commandHandler = new CommandHandler(router);

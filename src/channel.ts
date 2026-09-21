@@ -39,9 +39,6 @@ export interface ChannelContext {
   sendTyping: () => Promise<void>;
   platform: string; // Legacy alias of channelType
   senderId?: string; // Actual sender/user identity, used for allowlist checks when available
-  preferDirectReply?: boolean; // Prefer the source reply path instead of session broadcast for this turn
-  weworkStreamId?: string; // WeWork intelligent-bot stream id for this inbound turn, when applicable
-  qqbotMessageId?: string; // QQ Bot inbound msg_id retained for a passive reply to this exact turn
   selfName?: string; // Optional channel-configured bot/self display name for stripping leading @mentions before command parsing
   // `sessionId` is set in handleMessage internal only for tools that need it.
   // If you want to specify the session, should use `attachChannel(channelId, conversationId, targetSession)`.
@@ -92,6 +89,12 @@ export interface Channel {
    * Send a message to a user
    */
   sendMessage(channelUserId: string, text: string, options?: any): Promise<void>;
+
+  /** Handle automatic Session turn lifecycle without requiring an empty platform message. */
+  handleTurnLifecycle?(channelUserId: string, options: any): Promise<void>;
+
+  /** Whether native lifecycle presentation currently replaces generic progress text. */
+  isTurnLifecycleActive?(channelUserId: string): boolean;
 
   /**
    * Send a local file to a user/channel. Optional because some channels only

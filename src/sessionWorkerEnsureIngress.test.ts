@@ -9,7 +9,6 @@ import * as sessionManager from './sessionManager';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -32,20 +31,19 @@ function baseSession(id: string): Session {
 async function createFixture(sessionId: string, options: { resolveAlias?: boolean } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-ensure-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    workerEnv: { FOXWARM_DATA_DIR: root },
   });
   const ingress = new SessionWorkerIngressCoordinator(
-    store, supervisor, sourceContexts,
+    store, supervisor,
     options.resolveAlias ? (id => (id === 'alias' ? sessionId : id)) : (id => id),
     id => id === sessionId,
   );
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   return {
-    root, store, sourceContexts, supervisor, ingress, statePath,
+    root, store, supervisor, ingress, statePath,
     async close() {
       await supervisor.shutdown(5_000).catch(() => {});
       store.close(); await fs.remove(root);

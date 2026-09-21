@@ -32,6 +32,7 @@ import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
+import { registerChannel, unregisterChannel } from './channel';
 
 function baseSession(id: string): Session {
   return {
@@ -78,8 +79,12 @@ async function withLocalHost(
       writeState: async session => { durable = structuredClone(serializeSessionHistoryPayload(session)); },
     },
     publishCommitted,
-    deliverIntermediateText,
-    deliverCommittedFinal,
+    deliverIntermediateText: deliverIntermediateText
+      ? (text) => deliverIntermediateText(undefined, text)
+      : undefined,
+    deliverCommittedFinal: deliverCommittedFinal
+      ? (text, outcome) => deliverCommittedFinal(undefined, text, outcome)
+      : undefined,
   });
   try {
     await (host as any).ensureLoaded();
@@ -286,7 +291,7 @@ test('worker delivers canonical model text before multiple tool iterations and o
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('worker publishes a no-tool result once when a compatible QQ follow-up arrives during the provider request', async () => {
+test('worker publishes a no-tool result once when a different-source follow-up arrives during the provider request', async () => {
   const initial = baseSession('worker-no-tool-compatible-followup');
   const originalChat = llm.chat;
   const intermediate: Array<{ source: any; text: string }> = [];
@@ -295,7 +300,7 @@ test('worker publishes a no-tool result once when a compatible QQ follow-up arri
     platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
     channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'qq-first',
   };
-  const latestSource = { ...firstSource, qqbotMessageId: 'qq-latest' };
+  const latestSource = { platform: 'wework', channelId: 'wework-other', channelUserId: 'other-room', conversationId: 'other-room' };
   let storeRef: SessionWorkerStore | undefined;
   let readDurableRef: (() => Record<string, any>) | undefined;
   let latestProjection: any;
@@ -324,8 +329,8 @@ test('worker publishes a no-tool result once when a compatible QQ follow-up arri
       });
       await host.runPending(8);
       assert.equal(chatCalls, 2);
-      assert.deepEqual(intermediate.map(item => [item.text, item.source.qqbotMessageId]), [['seq604 no-tool text', 'qq-latest']]);
-      assert.deepEqual(finals.map(item => [item.text, item.outcome, item.source.qqbotMessageId]), [['provider-call-2 final', 'response', 'qq-latest']]);
+      assert.deepEqual(intermediate.map(item => [item.text, item.source]), [['seq604 no-tool text', undefined]]);
+      assert.deepEqual(finals.map(item => [item.text, item.outcome, item.source]), [['provider-call-2 final', 'response', undefined]]);
       assert.deepEqual(readDurable().history.map((message: any) => message.role), ['user', 'model', 'user', 'model']);
       const durableText = JSON.stringify(readDurable().history);
       for (const expectedText of ['initial request', 'seq604 no-tool text', 'compatible follow-up', 'provider-call-2 final']) {
@@ -488,7 +493,7 @@ test('worker tool-stop finalizes the iteration without a duplicate model-text de
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
       store.enqueueIntent(initial.id, 'stop-after-text', 'enqueue', { type: 'user', source: { platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'inbound' }, parts: [{ text: 'stop' }] });
       await host.runPending(8);
-      assert.equal(intermediateCalls, 1); assert.equal(finalCalls, 0); assert.equal(readDurable().busy, false);
+      assert.equal(intermediateCalls, 1); assert.equal(finalCalls, 1, 'one empty lifecycle final closes capable attachments without resending model text'); assert.equal(readDurable().busy, false);
     }, true, undefined,
       async () => { finalCalls += 1; },
       async () => { intermediateCalls += 1; });
@@ -586,25 +591,37 @@ test('pre-final automatic compact poison stops before a second provider call and
     compactCalls += 1; deps.getSessionById(id).displayName = 'partial compact mutation'; throw new Error('pre-final compact failed');
   };
   try {
-    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+    await withLocalHost(initial, async ({ host, store, readDurable, turnHost }) => {
+      turnHost.deliverCommittedFinal = async (_session: Session, text: string, outcome: any) => {
+        deliveries += 1;
+        if (deliveries === 1) {
+          assert.equal(outcome, 'error'); assert.match(text, /Automatic Worker compaction failed/);
+        } else {
+          assert.equal(outcome, 'response'); assert.equal(text, 'recovered turn');
+        }
+      };
+      assert.equal((host as any).runner.host, turnHost);
+      assert.equal(typeof (host as any).runner.host.deliverCommittedFinal, 'function');
       (host as any).resyncAfterFailure = async () => {
         (host as any).poison = { original: new Error('pre-final compact failed'), resync: new Error('reload failed') };
         throw new Error('reload failed');
       };
       store.enqueueIntent(initial.id, 'pre-final-fail', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }] });
-      store.enqueueIntent(initial.id, 'pre-final-deferred', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'other-room', preferDirectReply: true }, parts: [{ text: 'must remain queued' }] });
       await host.runPending(8);
       await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
       assert.equal(chatCalls, 1); assert.equal(deliveries, 1); assert.equal(compactCalls, 1);
-      assert.equal(readDurable().queue.length, 1); assert.equal(readDurable().busy, false);
+      assert.equal(readDurable().queue.length, 0); assert.equal(readDurable().busy, false);
       (sessionHistory as any).processSessionCompactionRequest = originalCompact; (host as any).session.compactThresholdTokens = 999999;
+      store.enqueueIntent(initial.id, 'pre-final-recovered', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'recover' }],
+      });
       await host.runPending(8);
       assert.equal(chatCalls, 2); assert.equal(deliveries, 2); assert.equal(readDurable().queue.length, 0); assert.equal(readDurable().busy, false);
-    }, true, undefined, async (_source, text, outcome) => { deliveries += 1; assert.equal(outcome, 'error'); assert.match(text, /Automatic Worker compaction failed/); });
+    }, true);
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
 });
 
-test('source-less pre-final compact fatal skips history reminder and delivery branches without masking', async () => {
+test('source-less pre-final compact fatal skips history reminder and makes one attachment final attempt', async () => {
   const initial = baseSession('worker-source-less-compact-fatal'); initial.compactThresholdTokens = 1; initial.parentSessionId = 'parent';
   const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
   let chatCalls = 0; let reminderEffects = 0; let deliveries = 0;
@@ -616,17 +633,20 @@ test('source-less pre-final compact fatal skips history reminder and delivery br
   };
   (sessionHistory as any).processSessionCompactionRequest = async () => { throw new Error('source-less compact failed'); };
   try {
-    await withLocalHost(initial, async ({ host, store, session }) => {
+    await withLocalHost(initial, async ({ host, store, session, turnHost }) => {
+      turnHost.deliverCommittedFinal = async (_session: Session, text: string, outcome: any) => {
+        deliveries += 1; assert.equal(outcome, 'error'); assert.match(text, /Automatic Worker compaction failed/);
+      };
       (host as any).runner.maybeQueueChildReminder = async () => { reminderEffects += 1; };
       (host as any).resyncAfterFailure = async () => {
         (host as any).poison = { original: new Error('source-less compact failed'), resync: new Error('source-less reload failed') };
         throw new Error('source-less reload failed');
       };
       store.enqueueIntent(initial.id, 'source-less-fatal', 'enqueue', { type: 'background', parts: [{ system: 'background maintenance turn' }] });
-      await assert.rejects(() => host.runPending(8), (error: any) => error?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL');
-      assert.equal(chatCalls, 1); assert.equal(reminderEffects, 0); assert.equal(deliveries, 0);
+      await host.runPending(8);
+      assert.equal(chatCalls, 1); assert.equal(reminderEffects, 0); assert.equal(deliveries, 1);
       assert.equal(session.history.some(message => JSON.stringify(message.parts).includes('Automatic Worker compaction failed')), false);
-    }, true, undefined, async () => { deliveries += 1; });
+    }, true);
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
 });
 
@@ -855,7 +875,7 @@ test('dequeue during post-tool ingestion leaves new rows for the same outer acti
       assert.equal(JSON.stringify(durable.history).split('queued after tool').length - 1, 1);
       assert.equal(JSON.stringify(durable.history).split('queued turn final').length - 1, 1);
       assert.equal(chatCalls, 2);
-      assert.equal(ingestCalls, 4, 'post-tool recheck leaves the row for finalization and the next outer source turn');
+      assert.equal(ingestCalls, 4, 'post-tool recheck leaves the row for finalization and the next outer turn');
       assert.deepEqual(finalDeliveries, [
         { text: '_[Execution stopped by user]_', outcome: 'response' },
         { text: 'queued turn final', outcome: 'response' },
@@ -926,7 +946,7 @@ test('idle worker BTW snapshots exact owner state, persists cache lineage, and a
       assert.equal(success.projection.messageCount, 2);
       assert.equal(failed.projection.messageCount, 4);
       assert.equal(deliveries.length, 3);
-      assert.ok(deliveries.every(item => item.source.platform === 'btw' && item.source.channelUserId === 'btw'));
+      assert.ok(deliveries.every(item => item.source === undefined));
     }, false, undefined, undefined, async (source, text) => { deliveries.push({ source, text }); });
   } finally {
     (llm as any).chat = originalChat;
@@ -1172,17 +1192,14 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
   const committedFinals: any[] = [];
-  reverseRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({
-    expectedSourceSessionId: sessionId,
-    resolveExactSourceContext: async () => ({
-      platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'conversation', conversationId: 'conversation',
-      preferDirectReply: true, username: undefined, senderId: undefined,
-      reply: async (text: string, options?: any) => {
-        committedFinals.push({ text, options, authority: await fs.readJson(statePath), projection: projectionRegistry.get(sessionId)?.projection });
-      },
-      sendTyping: async () => {},
-    }),
-  }));
+  registerChannel('test', {
+    name: 'test', platform: 'test', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (_conversationId, text, options) => {
+      committedFinals.push({ text, options, authority: await fs.readJson(statePath), projection: projectionRegistry.get(sessionId)?.projection });
+    },
+  });
+  sessionManager.attachChannel('test', 'conversation', sessionId);
+  reverseRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({ expected: publicationIdentity, registry: projectionRegistry }));
   reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
@@ -1204,7 +1221,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
 
     const intent = store.enqueueIntent(sessionId, 'first-input', 'enqueue', {
       type: 'user',
-      source: { platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'conversation', conversationId: 'conversation', preferDirectReply: true },
+      source: { platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'conversation', conversationId: 'conversation' },
       parts: [{ text: 'child input' }],
     });
     await assert.rejects(() => runtime.call('runPending', { limit: 8 }), /test write failure 2/);
@@ -1325,6 +1342,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     try { await reverseServer.drain(2_000); } catch {}
     reverseServer.close();
     transport.close();
+    unregisterChannel('test');
+    sessionManager.detachChannel('test', 'conversation');
     if (child.exitCode === null && child.signalCode === null) {
       const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

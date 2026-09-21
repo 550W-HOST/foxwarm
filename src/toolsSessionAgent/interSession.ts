@@ -235,34 +235,14 @@ export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
   }
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
-  const turnReplyMetadata = ctx?.channelReplyMetadata;
-  const sendOptions = {
-    caption,
-    ...(turnReplyMetadata?.qqbotMessageId && turnReplyMetadata.qqbotChannelId && turnReplyMetadata.qqbotConversationId
-      ? {
-        qqbotMessageId: turnReplyMetadata.qqbotMessageId,
-        qqbotChannelId: turnReplyMetadata.qqbotChannelId,
-        qqbotConversationId: turnReplyMetadata.qqbotConversationId,
-      }
-      : {}),
-  };
+  const sendOptions = { caption };
 
   if (normalizedChannelTargetId) {
     if (normalizedChannelTargetId.startsWith('webui:')) {
       return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
     }
 
-    const matchesTurnSource = Boolean(
-      turnReplyMetadata?.qqbotMessageId
-      && turnReplyMetadata.qqbotChannelId
-      && turnReplyMetadata.qqbotConversationId
-      && normalizedChannelTargetId === `${turnReplyMetadata.qqbotChannelId}:${turnReplyMetadata.qqbotConversationId}`,
-    );
-    await sessionManager.sendFileToChannelTargetId(
-      normalizedChannelTargetId,
-      file,
-      matchesTurnSource ? sendOptions : { caption },
-    );
+    await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, sendOptions);
     return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 

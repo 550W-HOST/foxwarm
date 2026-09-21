@@ -88,20 +88,18 @@ upload flow.
   `MessageRouter` only when authorization was true at ingress; unauthorized
   and first guest messages therefore perform zero media fetch/write operations.
   The hook is never persisted or copied to a queue item.
-- An inbound context preserves its QQ `msg_id` in the serializable queue source
-  as a restart/missing-map fallback. The adapter also retains a bounded latest
-  message ID per scoped conversation; normal source-bound typing/progress/final
-  delivery uses that live ID for the matching configured instance and
-  conversation, while other session attachments retain ordinary delivery.
-  When a compatible follow-up arrives during a no-tool provider request, the
+- The adapter retains a bounded latest message ID per scoped conversation.
+  Automatic typing, progress, intermediate, and final delivery resolves that
+  adapter-local ID for each attached QQ conversation; `ChannelContext`,
+  `QueueSource`, Worker RPC, and tool context do not carry or persist it.
+  When any ordinary follow-up arrives during a no-tool provider request, the
   runner's pre-final safe point publishes the completed result once as
-  intermediate output using this latest ID, then continues the turn; the later
-  genuine final advances the same conversation's monotonic sequence normally.
-- Session-worker intermediate model-text delivery uses the same source metadata
-  and attachment path with `turnFinal` unset, so each continuing-result text uses the
-  current/latest passive `msg_id` and the adapter's monotonic `msg_seq`; WebUI
-  and active WeWork stream aggregation are excluded by the turn runner before
-  this channel is called.
+  intermediate output to every eligible attachment, then continues the turn;
+  QQ uses its current latest passive ID and monotonic sequence independently.
+- Session-worker intermediate model-text delivery uses the same source-blind
+  attachment path with `turnFinal` unset. Each continuing-result text uses the
+  adapter's current/latest passive `msg_id` and monotonic `msg_seq`; WebUI is
+  excluded by the turn runner before this channel is called.
 - The gateway retains the latest dispatch sequence and READY session ID in
   memory. HELLO resumes only when both are present; RECONNECT, resumable and
   non-resumable INVALID_SESSION frames, documented close classes, heartbeat
@@ -194,7 +192,7 @@ second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
 
 ### D-qqbot-passive-reply-fallback
 
-For a source-bound QQ reply, Foxwarm follows the Tencent/OpenClaw local policy
+For an adapter-selected passive QQ reply, Foxwarm follows the Tencent/OpenClaw local policy
 instead of inferring a server error: from the inbound/first-seen `msg_id`, at
 most four **successful passive text/image/file replies** are sent in three
 minutes. The next reply after that count or age boundary makes exactly one
@@ -216,7 +214,7 @@ Text retries omit `msg_id`; media retries reuse the just-uploaded same-target
 reuse the outgoing message's allocated `msg_seq`. Future
 operations for that ID remain proactive. No other API failure, generic HTTP
 failure, network/auth/rate-limit failure, or proactive failure triggers a
-fallback loop or retry; a source-bound text final delivery logs and completes
+fallback loop or retry; an automatic text final delivery logs and completes
 rather than making the runner send another error through the same passive context.
 
 ### D-qqbot-inbound-media-boundary

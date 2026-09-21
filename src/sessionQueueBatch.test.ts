@@ -10,7 +10,7 @@ function makeSession(id: string): Session {
   return { id, agent: 'main', history: [], queue: [], busy: true, persistentMemorySnapshot: '', systemPromptFiles: [], snapshotUpdatedAt: Date.now(), stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, meta: { lastMessageTime: Date.now() } } as Session;
 }
 
-test('selected compatible prefix appends once with separate canonical rows and client identities', async () => {
+test('selected ordinary prefix appends once with separate canonical rows and client identities', async () => {
   await initArchiveStore();
   const session = makeSession(`queue-batch-${Date.now()}`);
   const items: QueueItem[] = [
@@ -30,8 +30,8 @@ test('selected compatible prefix appends once with separate canonical rows and c
     registerAbortController: () => {}, clearAbortController: () => {}, clearWaitById: async () => false,
   } as unknown as CurrentSessionTurnEffects;
   const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
-  const selected = (runner as any).drainLeadingQueuedTurnInputs(session) as { items: QueueItem[] };
-  await (runner as any).appendQueuedTurnInputs(session, session.id, selected.items);
+  const selected = (runner as any).drainLeadingQueuedTurnInputs(session) as QueueItem[];
+  await (runner as any).appendQueuedTurnInputs(session, session.id, selected);
   assert.equal(persists, 1);
   assert.equal(session.history.length, 2);
   assert.equal(published.length, 2);

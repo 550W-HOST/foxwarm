@@ -3,15 +3,14 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import type { ChannelContext } from './channel';
+import { registerChannel, unregisterChannel, type ChannelContext } from './channel';
 import { SESSIONS_FILE } from './config';
 import { MessageRouter } from './messageRouter';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
-import { createChannelsStore, resetChannelsForTests, setChannelsStoreForTests } from './session/channels';
+import { attachChannel, createChannelsStore, resetChannelsForTests, setChannelsStoreForTests } from './session/channels';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -30,7 +29,6 @@ function makeCtx(replies: any[], platform = 'test'): ChannelContext {
   return {
     platform, channelId: platform === 'webui' ? 'webui' : 'test-channel', channelType: platform,
     channelUserId: 'room', conversationId: 'room', username: 'user', senderId: 'sender-1',
-    preferDirectReply: true,
     reply: async (text: string, options: any) => { replies.push({ text, options }); },
     sendTyping: async () => {},
   } as ChannelContext;
@@ -40,12 +38,11 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-router-ingress-'));
   const sessionId = 'router-worker-session';
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    workerEnv: { FOXWARM_DATA_DIR: root },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => id === sessionId);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => id === sessionId);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   await fs.ensureFile(SESSIONS_FILE); const sessionsBefore = await fs.readFile(SESSIONS_FILE);
@@ -67,9 +64,15 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
   (sessionManager as any).requestSessionDequeue = async () => { mainLocalMutationCalls += 1; throw new Error('Main dequeue forbidden'); };
   (sessionManager as any).retrySession = async () => { mainLocalMutationCalls += 1; throw new Error('Main retry forbidden'); };
   setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
+  const deliveries: any[] = [];
+  registerChannel('test-channel', {
+    name: 'test-channel', platform: 'test', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (conversationId, text, options) => { deliveries.push({ conversationId, text, options }); },
+  });
+  attachChannel('test-channel', 'room', sessionId);
   const router = new MessageRouter(
     [{ platform: 'test-channel', userId: 'sender-1' }],
-    (id, item, ctx) => sessionRuntime.submitAndRun(id, item, ctx),
+    (id, item) => sessionRuntime.submitAndRun(id, item),
   );
   let localRuns = 0;
   (router as any).turnRunner.processSessionQueue = async () => { localRuns += 1; throw new Error('local runner forbidden'); };
@@ -80,7 +83,7 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     await sessionRuntime.initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
 
     await router.handleMessage(makeCtx(replies), { parts: [{ text: 'router worker ingress' }], clientMessageId: 'router-client-1' } as any);
-    assert.equal(replies.length, 1); assert.equal(replies[0].text, 'deterministic child answer');
+    assert.equal(replies.length, 0); assert.equal(deliveries[0].text, 'deterministic child answer');
     const ownership = store.getOwnership(sessionId);
     assert.equal(ownership.state, 'ready'); assert.equal(ownership.generation, 1);
     assert.equal(supervisor.getStatus(sessionId)?.ready, true);
@@ -94,7 +97,7 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     // Busy Main stubs must not divert input to a local queue: the mailbox owns queuing.
     stubSession.busy = true;
     await router.handleMessage(makeCtx(replies), { parts: [{ text: 'busy router worker ingress' }], clientMessageId: 'router-client-2' } as any);
-    assert.equal(replies.length, 2); assert.equal(replies[1].text, 'deterministic child answer');
+    assert.equal(replies.length, 0); assert.equal(deliveries[1].text, 'deterministic child answer');
     assert.equal(store.countMailboxIntents(), 2);
     authority = await fs.readJson(statePath);
     assert.equal(authority.history.length, 4);
@@ -114,21 +117,20 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(authority.history.length, 4);
     assert.equal(authority.history[3].role, 'model');
     assert.equal(store.countMailboxIntents(), 2, 'continue does not invent a queue/mailbox intent');
-    assert.equal(replies.length, 4);
-    assert.equal(replies[2].text, '▶️ Continuing interrupted turn...');
-    assert.equal(replies[3].text, 'deterministic child answer');
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].text, '▶️ Continuing interrupted turn...');
+    assert.equal(deliveries[2].text, 'deterministic child answer');
     await COMMANDS['/continue'].handler(continueCtx, [], sessionId, stubSession);
     authority = await fs.readJson(statePath);
     assert.equal(authority.history.length, 4, 'a completed Worker answer cannot be continued again');
-    assert.equal(replies[4].text, '▶️ Continuing interrupted turn...');
-    assert.equal(replies[5].text, '⚠️ Session has no interrupted turn to continue.');
+    assert.equal(replies[1].text, '▶️ Continuing interrupted turn...');
+    assert.equal(replies[2].text, '⚠️ Session has no interrupted turn to continue.');
     assert.deepEqual(await sessionRuntime.control(sessionId, 'dequeue'), {
       action: 'dequeue', queuedItems: 0, stoppedCurrent: false, abortedInFlight: false,
     });
-    await assert.rejects(() => sessionRuntime.control(`${sessionId}-unknown`, 'retry', makeCtx(replies)),
+    await assert.rejects(() => sessionRuntime.control(`${sessionId}-unknown`, 'retry'),
       (error: any) => error?.code === 'SESSION_WORKER_SESSION_NOT_FOUND');
     assert.equal(store.findOwnership(`${sessionId}-unknown`), undefined);
-    assert.equal(sourceContexts.size, 0);
     assert.equal(mainLocalMutationCalls, 0);
   } finally {
     (sessionManager as any).getOrCreateSessionForChannel = originals.getOrCreateSessionForChannel;
@@ -139,6 +141,7 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     (sessionManager as any).retrySession = originals.retrySession;
     await sessionRuntime.shutdownSessionRuntime().catch(() => {});
     await supervisor.shutdown(5_000).catch(() => {}); store.close();
+    unregisterChannel('test-channel');
     resetChannelsForTests(); setChannelsStoreForTests(null);
     await fs.remove(root);
     sessionManager.getAllSessions().delete(sessionId);
@@ -153,16 +156,21 @@ test('Worker retry response loss is reported as ambiguous after exactly one comm
   authority.nextMessageSeq = 2;
   const stubSession = { ...baseSession(sessionId), history: authority.history.slice() } as Session;
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_DROP_RETRY_RESPONSE_AFTER_COMMIT: '1' },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => id === sessionId);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => id === sessionId);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   const replies: any[] = [];
+  const deliveries: any[] = [];
   try {
+    setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
+    registerChannel('test-channel', {
+      name: 'test-channel', platform: 'test', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+      sendMessage: async (conversationId, text, options) => { deliveries.push({ conversationId, text, options }); },
+    });
+    attachChannel('test-channel', 'room', sessionId);
     await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
     sessionManager.getAllSessions().set(sessionId, stubSession);
     await supervisor.reconcileStartupOwnerships();
@@ -175,13 +183,13 @@ test('Worker retry response loss is reported as ambiguous after exactly one comm
     assert.equal(committed.history.filter((message: any) => message.role === 'model').length, 1);
     assert.equal(committed.history.at(-1)?.parts?.[0]?.text, 'deterministic child answer');
     assert.equal(store.countMailboxIntents(), 0, 'retry ambiguity does not create or replay a mailbox intent');
-    assert.equal(replies.filter(reply => reply.text === 'deterministic child answer').length, 1, 'the committed final was delivered exactly once before response loss');
+    assert.equal(deliveries.filter(reply => reply.text === 'deterministic child answer').length, 1, 'the committed final was delivered exactly once before response loss');
     assert.ok(replies.some(reply => String(reply.text).startsWith('⚠️ Continue outcome is unknown:')));
     assert.ok(!replies.some(reply => String(reply.text).startsWith('❌ Continue failed:')));
-    assert.equal(sourceContexts.size, 0);
   } finally {
     await sessionRuntime.shutdownSessionRuntime().catch(() => {});
     await supervisor.shutdown(5_000).catch(() => {}); store.close();
+    unregisterChannel('test-channel'); resetChannelsForTests(); setChannelsStoreForTests(null);
     sessionManager.getAllSessions().delete(sessionId);
     await fs.remove(root);
   }
@@ -196,13 +204,11 @@ test('serialized retry handler cancellation and deadline rejections remain defin
     authority.nextMessageSeq = 2;
     const stubSession = { ...baseSession(sessionId), history: authority.history.slice() } as Session;
     const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-    const sourceContexts = new SessionWorkerSourceContextRegistry();
-    const supervisor = new SessionWorkerSupervisor({
+      const supervisor = new SessionWorkerSupervisor({
       store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
       workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_REJECT_RETRY_CODE: code },
-      resolveExactFinalSourceContext: sourceContexts.resolve,
-    });
-    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => id === sessionId);
+      });
+    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => id === sessionId);
     const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
     try {
       await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
@@ -211,14 +217,13 @@ test('serialized retry handler cancellation and deadline rejections remain defin
       await sessionRuntime.initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
 
       await assert.rejects(
-        () => sessionRuntime.control(sessionId, 'retry', makeCtx([], 'webui')),
+        () => sessionRuntime.control(sessionId, 'retry'),
         (error: any) => error?.code === code && error?.code !== 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN',
       );
       const unchanged = await fs.readJson(statePath);
       assert.equal(unchanged.history.filter((message: any) => message.role === 'model').length, 0);
       assert.equal(store.countMailboxIntents(), 0);
-      assert.equal(sourceContexts.size, 0);
-    } finally {
+      } finally {
       await sessionRuntime.shutdownSessionRuntime().catch(() => {});
       await supervisor.shutdown(5_000).catch(() => {}); store.close();
       sessionManager.getAllSessions().delete(sessionId);

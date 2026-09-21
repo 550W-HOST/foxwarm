@@ -48,9 +48,9 @@ async function start(): Promise<void> {
   const host = new SessionWorkerHost(identity, store, {
     catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
-    deliverIntermediateText: (source, text, turnId) => deliverIntermediateText({ sourceSessionId: sessionId, source, text, ...(turnId ? { turnId } : {}) }).then(() => {}),
-    deliverCommittedFinal: (source, text, outcome, turnId) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome, ...(turnId ? { turnId } : {}) }).then(() => {}),
-    reportChannelProgress: (turnId, source, progress) => reportChannelProgress({ sourceSessionId: sessionId, turnId, ...(source ? { source } : {}), progress }),
+    deliverIntermediateText: (text, turnId) => deliverIntermediateText({ sourceSessionId: sessionId, text, ...(turnId ? { turnId } : {}) }).then(() => {}),
+    deliverCommittedFinal: (text, outcome, turnId) => deliverCommittedFinal({ sourceSessionId: sessionId, text, outcome, ...(turnId ? { turnId } : {}) }).then(() => {}),
+    reportChannelProgress: (turnId, progress) => reportChannelProgress({ sourceSessionId: sessionId, turnId, progress }),
     finishChannelProgress: turnId => finishChannelProgress({ sourceSessionId: sessionId, turnId }),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
     publishPresentationQueueHistoryAppend: append => publishPresentationQueueHistoryAppend(identity, append),

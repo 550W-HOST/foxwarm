@@ -28,10 +28,8 @@ import {
   sessionRuntimeServiceDescriptor,
 } from './sessionRuntimeService';
 import type { QueueItem } from './types';
-import type { ChannelContext } from './channel';
 import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
-import { snapshotQueueSource } from './sessionTurnDelivery';
 
 export type SessionRuntimeEventListener = RpcEventListener<typeof sessionRuntimeServiceDescriptor>;
 
@@ -91,15 +89,12 @@ export async function enqueue(sessionId: string, item: QueueItem): Promise<void>
 export async function submitAndRun(
   sessionId: string,
   item: QueueItem,
-  sourceContext?: ChannelContext,
 ): Promise<SessionWorkerIngressResult> {
   const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item });
   sessionId = normalized.sessionId; item = normalized.item;
   const runtimeClient = await getClient();
   if (!workerIngress) throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
-  const cleanup = workerIngress.registerSourceContext(sessionId, item, sourceContext);
-  try { return await runtimeClient.call('submitAndRun', { sessionId, item }); }
-  finally { cleanup(); }
+  return runtimeClient.call('submitAndRun', { sessionId, item });
 }
 
 export async function queueEvent(
@@ -160,15 +155,8 @@ export async function notifyManualForkCreated(
 export async function control(
   sessionId: string,
   action: SessionRuntimeControlAction,
-  sourceContext?: ChannelContext,
 ): Promise<SessionRuntimeControlResultDto> {
-  if (action !== 'retry' || !workerIngress || !sourceContext) {
-    return (await getClient()).call('control', { sessionId, action });
-  }
-  const source = snapshotQueueSource(sourceContext);
-  const cleanup = workerIngress.registerRetrySourceContext(sessionId, source, sourceContext);
-  try { return await (await getClient()).call('control', { sessionId, action, source }); }
-  finally { cleanup(); }
+  return (await getClient()).call('control', { sessionId, action });
 }
 
 export function subscribe(listener: SessionRuntimeEventListener): () => void {

@@ -46,6 +46,7 @@ type PendingWebSocketRequest = {
 
 const DEFAULT_WEWORK_DEDUP_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_WEWORK_WEBSOCKET_ACK_TIMEOUT_MS = 10000;
+const MAX_WEWORK_RESPONSE_CONTEXTS = 1024;
 const WEWORK_AIBOT_UPLOAD_CHUNK_BYTES = 512 * 1024;
 const WEWORK_AIBOT_UPLOAD_MAX_CHUNKS = 100;
 const WEWORK_AIBOT_UPLOAD_MAX_BYTES = WEWORK_AIBOT_UPLOAD_CHUNK_BYTES * WEWORK_AIBOT_UPLOAD_MAX_CHUNKS;
@@ -187,6 +188,7 @@ export class WeWorkWebhookChannel implements Channel {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly processedMsgIds = new Map<string, { processedAt: number; result: WeWorkInboundProcessResult }>();
+  private readonly latestResponseUrls = new Map<string, string>();
   private readonly dedupTtlMs = DEFAULT_WEWORK_DEDUP_TTL_MS;
   private stopped = false;
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
@@ -319,6 +321,7 @@ export class WeWorkWebhookChannel implements Channel {
       this.ws = undefined;
     }
     this.rejectAllPendingWebSocketRequests(new Error('WeWork AIBot WebSocket stopped'));
+    this.latestResponseUrls.clear();
     if (this.server) {
       this.server.close();
     }
@@ -648,6 +651,21 @@ export class WeWorkWebhookChannel implements Channel {
     return this.streamAggregator.begin(conversationId, { mode: 'webhook', responseUrl: delivery.responseUrl });
   }
 
+  private rememberLatestResponseUrl(conversationId: string, responseUrl: string): void {
+    this.latestResponseUrls.delete(conversationId);
+    if (this.latestResponseUrls.size >= MAX_WEWORK_RESPONSE_CONTEXTS) {
+      const oldestConversationId = this.latestResponseUrls.keys().next().value;
+      if (oldestConversationId) this.latestResponseUrls.delete(oldestConversationId);
+    }
+    this.latestResponseUrls.set(conversationId, responseUrl);
+  }
+
+  private takeLatestResponseUrl(conversationId: string): string | undefined {
+    const responseUrl = this.latestResponseUrls.get(conversationId);
+    if (responseUrl) this.latestResponseUrls.delete(conversationId);
+    return responseUrl;
+  }
+
   private handleAIBotStreamRefresh(body: any): WeWorkInboundProcessResult {
     const streamId = body?.stream?.id;
     const snapshot = typeof streamId === 'string' ? this.streamAggregator.getByStreamId(streamId) : undefined;
@@ -776,6 +794,11 @@ export class WeWorkWebhookChannel implements Channel {
       const streamSnapshot = useAIBotStream
         ? this.beginAIBotStream(channelUserId, delivery.mode === 'webhook' ? { mode: 'webhook', responseUrl } : delivery)
         : undefined;
+      if (streamSnapshot) {
+        this.latestResponseUrls.delete(channelUserId);
+      } else if (responseUrl) {
+        this.rememberLatestResponseUrl(channelUserId, responseUrl);
+      }
 
       if (supersededStream?.delivery.mode === 'websocket') {
         void this.pushWebSocketStream(supersededStream).catch(err => {
@@ -798,9 +821,7 @@ export class WeWorkWebhookChannel implements Channel {
           username: userName,
           platform: 'wework',
           senderId: userId, // 发送者用户ID，用于权限检查
-          weworkStreamId: streamSnapshot?.streamId,
           selfName: isNonEmptyString(this.config.selfName) ? this.config.selfName.trim() : undefined,
-          preferDirectReply: !!responseUrl || !!streamSnapshot,
           reply: async (text: string, options?: any) => {
             logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');
             if (streamSnapshot) {
@@ -1165,7 +1186,12 @@ export class WeWorkWebhookChannel implements Channel {
       return false;
     }
 
-    const streamId = typeof options?.weworkStreamId === 'string' ? options.weworkStreamId : undefined;
+    const explicitStreamId = typeof options?.weworkStreamId === 'string' ? options.weworkStreamId : undefined;
+    const automaticTurnDelivery = typeof options?.channelProgressTurnId === 'string'
+      || options?.turnFinal === true
+      || options?.channelTurnProgress !== undefined;
+    const latestStream = automaticTurnDelivery ? this.streamAggregator.getByConversation(userId) : undefined;
+    const streamId = explicitStreamId || latestStream?.streamId;
     if (!streamId) {
       return false;
     }
@@ -1198,6 +1224,20 @@ export class WeWorkWebhookChannel implements Channel {
     // Webhook mode is pull-based: WeWork fetches the latest snapshot through
     // subsequent msgtype=stream callbacks, so updating local state is enough.
     return true;
+  }
+
+  async handleTurnLifecycle(userId: string, options: any): Promise<void> {
+    const active = this.streamAggregator.getByConversation(userId);
+    if (!active || active.finish) return;
+    await this.maybeAggregateStreamMessage(userId, '', {
+      ...options,
+      weworkStreamId: active.streamId,
+    });
+  }
+
+  isTurnLifecycleActive(userId: string): boolean {
+    const active = this.streamAggregator.getByConversation(userId);
+    return !!active && !active.finish;
   }
 
   private normalizeChannelTurnProgress(value: unknown): ChannelTurnProgress | undefined {
@@ -1359,6 +1399,15 @@ export class WeWorkWebhookChannel implements Channel {
       }
 
       const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
+      if (!explicitWebhookUrl && options?.turnFinal === true) {
+        // Take-before-await prevents a newer inbound response_url for the same
+        // conversation from being deleted after this terminal attempt settles.
+        const responseUrl = this.takeLatestResponseUrl(userId);
+        if (responseUrl) {
+          await this.sendAIBotResponse(responseUrl, text);
+          return;
+        }
+      }
       if (!explicitWebhookUrl && this.websocketConfig?.enabled) {
         const websocketPayload = {
           msgtype: 'markdown',

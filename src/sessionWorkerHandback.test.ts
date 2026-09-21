@@ -8,7 +8,6 @@ import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './ses
 import { performSessionWorkerHandback } from './sessionWorkerHandback';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -76,7 +75,6 @@ async function createFixture(sessionId: string, options: {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const persistentCatalog = options.persistCatalog ? new SessionCatalogStore(path.join(root, 'catalog.sqlite')) : undefined;
   persistentCatalog?.initializeEmpty();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const catalog = new Map<string, Session>();
   const statesAtCatalogSave: string[] = [];
   let catalogSaves = 0;
@@ -98,14 +96,14 @@ async function createFixture(sessionId: string, options: {
     }, identity);
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: options.idleMs ?? 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root, ...options.workerEnv }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    workerEnv: { FOXWARM_DATA_DIR: root, ...options.workerEnv },
     handbackWorker,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   return {
-    root, store, sourceContexts, supervisor, ingress, statePath, catalog, persistentCatalog,
+    root, store, supervisor, ingress, statePath, catalog, persistentCatalog,
     get catalogSaves() { return catalogSaves; },
     statesAtCatalogSave,
     async close() {
@@ -411,13 +409,12 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
   const sessionId = `mc-stale-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stale-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   const realStatePath = getSessionHistoryFilePath(sessionId);
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 150, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    workerEnv: { FOXWARM_DATA_DIR: root },
     handbackWorker: identity => performSessionWorkerHandback({
       store,
       getCatalogSession: id => sessionManager.getAllSessions().get(id),
@@ -426,7 +423,7 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
       stateFilePath: () => statePath,
     }, identity),
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   try {
     // A stub polluted by a past Main-side hydration: 16 fake stale messages.
     const polluted = baseSession(sessionId);
@@ -502,13 +499,12 @@ test('rehydration after release preserves the Main-owned displayName (rename and
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-rehydrate-'));
     roots.push(root);
     const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open(); stores.push(store);
-    const sourceContexts = new SessionWorkerSourceContextRegistry();
-    const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+      const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
     const authority = { ...baseSession(sessionId), displayName: authorityDisplayName } as Session;
     await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
     const supervisor = new SessionWorkerSupervisor({
       store, idleMs: 150, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-      workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+      workerEnv: { FOXWARM_DATA_DIR: root },
       handbackWorker: identity => performSessionWorkerHandback({
         store,
         getCatalogSession: id => sessionManager.getAllSessions().get(id),
@@ -518,7 +514,7 @@ test('rehydration after release preserves the Main-owned displayName (rename and
       }, identity),
     });
     supervisors.push(supervisor);
-    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
     const stub = baseSession(sessionId);
     if (stubDisplayName !== undefined) stub.displayName = stubDisplayName;
     sessionManager.getAllSessions().set(sessionId, stub);

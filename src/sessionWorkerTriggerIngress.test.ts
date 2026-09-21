@@ -8,7 +8,6 @@ import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { QueueItem, Session } from './types';
@@ -34,22 +33,21 @@ async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 5_00
 async function createFixture(sessionId: string, workerEnv: Record<string, string> = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-trigger-ingress-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const catalogSession = baseSession(sessionId);
   sessionManager.getAllSessions().set(sessionId, catalogSession);
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv },
   });
   const ingress = new SessionWorkerIngressCoordinator(
-    store, supervisor, sourceContexts,
+    store, supervisor,
     id => sessionManager.resolveLoadedSessionId(id),
     id => !!sessionManager.getSessionCatalog(id),
   );
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(catalogSession));
   return {
-    root, store, sourceContexts, supervisor, ingress, statePath, catalogSession,
+    root, store, supervisor, ingress, statePath, catalogSession,
     async close() {
       await sessionRuntime.shutdownSessionRuntime().catch(() => {});
       sessionManager.setSessionWorkerEnqueueSink(undefined);
@@ -111,7 +109,6 @@ test('timer, wait-timeout, ONBOOT, and node event triggers share the durable Wor
     assert.equal(systemEvents.length, 3, 'each event is appended as its own canonical message; the unmatched wait-timeout is dropped by the canonical wait transition');
     assert.ok(authority.history.some((message: any) => message.role === 'model'));
     // Events carry no live source: delivery resolves to the attachment fallback semantics.
-    assert.equal(fixture.sourceContexts.size, 0);
     // Nothing bypassed the durable boundary into Main-local queue/wait/trigger state.
     assert.equal(mainLocalSaves, 0); assert.equal(localTriggerCalls, 0);
     assert.equal(fixture.catalogSession.history.length, 0);
@@ -153,7 +150,7 @@ test('high-level persisted alias queueing canonicalizes only the target before e
   const source = {
     platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
     channelUserId: 'c2c:openid', conversationId: 'c2c:openid',
-    qqbotMessageId: 'alias-message-id', preferDirectReply: true,
+    qqbotMessageId: 'alias-message-id',
   };
   const ordinaryItem: QueueItem = { type: 'user', source, parts: [{ text: 'alias ordinary queue' }] };
   try {

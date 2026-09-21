@@ -751,7 +751,6 @@ test('command and unauthorized notices reply immediately, while busy enqueue sta
       conversationId: busySessionId,
       senderId: 'webui-user',
       username: 'webui-user',
-      preferDirectReply: true,
       reply: async (text: string) => { busyReplies.push(text); },
       sendTyping: async () => {},
     }, {

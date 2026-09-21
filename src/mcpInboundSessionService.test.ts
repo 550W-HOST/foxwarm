@@ -16,7 +16,6 @@ import { initializeSessionRuntime, shutdownSessionRuntime } from './sessionRunti
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
 
 const config = normalizeMcpInboundConfig({ enabled: true, identities: {
@@ -178,7 +177,7 @@ test('SDK Session read/send use actual Worker owner and durable mailbox, with a 
     workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: process.env.FOXWARM_DATA_DIR! },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, new SessionWorkerSourceContextRegistry(),
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor,
     id => sessionManager.resolveLoadedSessionId(id), id => !!sessionManager.getSessionCatalog(id),
     (id, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([id], operation, admit));
   setToolAuthorizationPolicyForTests(policyFor(sessionId));

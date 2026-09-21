@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import fs from 'fs-extra';
-import type { ChannelContext } from './channel';
 import { logger } from './common';
 import { RpcError } from './rpc';
 import { getSessionHistoryFilePath } from './session/metadataStore';
@@ -8,10 +7,9 @@ import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { SessionWorkerCatalogFieldsPatch } from './sessionWorkerRuntimeService';
 import type { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
-import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem, QueueSource } from './types';
+import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
 import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
@@ -198,23 +196,10 @@ export class SessionWorkerIngressCoordinator {
   constructor(
     private readonly store: SessionWorkerStore,
     private readonly supervisor: SessionWorkerSupervisor,
-    readonly sourceContexts: SessionWorkerSourceContextRegistry,
     private readonly resolveCanonicalSessionId: (sessionId: string) => string,
     private readonly hasCatalogSession: (sessionId: string) => boolean,
     private readonly withMutationAdmission: SessionWorkerMutationAdmission = async (_sessionId, _operation, admit) => admit(),
   ) {}
-
-  registerSourceContext(sessionId: string, item: QueueItem, context?: ChannelContext): () => void {
-    if (!context || !item.source) return () => {};
-    return this.sourceContexts.register(sessionId, normalizeIngressSource(item.source), context);
-  }
-
-  registerRetrySourceContext(requestedSessionId: string, source: QueueSource, context?: ChannelContext): () => void {
-    if (!context) return () => {};
-    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
-    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'Session worker retry requires an exact canonical session ID.');
-    return this.sourceContexts.register(sessionId, normalizeIngressSource(source), context);
-  }
 
   subscribeDurableIntentAccepted(callback: (sessionId: string, intentId: number) => void): () => void {
     this.durableIntentSubscribers.add(callback);
@@ -282,14 +267,14 @@ export class SessionWorkerIngressCoordinator {
     return { sessionId, ...expected };
   }
 
-  async retryEnsuringWorker(requestedSessionId: string, source?: QueueSource): Promise<SessionWorkerProjection> {
+  async retryEnsuringWorker(requestedSessionId: string): Promise<SessionWorkerProjection> {
     const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
     if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'Session worker retry requires an exact canonical session ID.');
     const admitted = await this.withMutationAdmission(sessionId, 'start retry work', async () => {
       this.supervisor.assertRetryAdmissionAvailable(sessionId);
       const expected = await this.ensureWorkerOwnerWithinAdmission(sessionId);
       this.supervisor.assertRetryAdmissionAvailable(sessionId);
-      return { completion: this.supervisor.retryActivated(sessionId, expected, source) };
+      return { completion: this.supervisor.retryActivated(sessionId, expected) };
     });
     return admitted.completion;
   }

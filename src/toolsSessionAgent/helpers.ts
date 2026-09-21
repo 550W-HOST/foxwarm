@@ -21,12 +21,6 @@ export interface ToolContext {
   execRuntime?: import('../execManager').ExecRuntime;
   /** Internal tool-result metadata request used by the canonical turn runner. */
   captureSuccessfulSendToSessionTarget?: boolean;
-  /** Current in-process turn reply metadata; never persisted or sent to remote tools. */
-  channelReplyMetadata?: {
-    qqbotMessageId?: string;
-    qqbotChannelId?: string;
-    qqbotConversationId?: string;
-  };
 }
 
 export type ToolArgs = Record<string, any>;

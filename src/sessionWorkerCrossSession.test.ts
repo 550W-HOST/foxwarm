@@ -8,7 +8,6 @@ import { createMainManagementToolServiceHandler, mainManagementToolServiceDescri
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -44,13 +43,11 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
   const childId = `${parentId}_mp-child`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-cross-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_CROSS_SESSION: 'create-child,reply,query' },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   const parentStatePath = path.join(root, 'state', 'sessions', `${parentId}.json`);
   await fs.outputJson(parentStatePath, serializeSessionHistoryPayload(baseSession(parentId)));
   // Production Main and Worker share this authority path; mirror the split test
@@ -316,7 +313,6 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   const approvedNodeId = `mc-node-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-main-tools-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(root, 'nodes.json')));
   const pending = await createPendingPairing({ requestedName: 'worker-fixture', nodeType: 'cli', capabilities: { tools: [] } });
   const calls = [
@@ -332,9 +328,8 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_MAIN_TOOLS: JSON.stringify(calls) },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => sessionManager.getAllSessions().has(id));
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => sessionManager.getAllSessions().has(id));
   const sourcePath = path.join(root, 'state', 'sessions', `${sourceId}.json`);
   const originalBootstrap = (nodeTools as any).tool_node_bootstrap_info;
   (nodeTools as any).tool_node_bootstrap_info = async () => ({ kind: 'disposable-bootstrap-fixture' });

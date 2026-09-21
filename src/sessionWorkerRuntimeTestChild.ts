@@ -264,7 +264,7 @@ async function start(): Promise<void> {
         catch (error: any) { fenceErrors.push(error?.code); }
         try { await deliverFile({ sourceSessionId: 'wrong-source', intent: { filePath: 'x' }, routing: { runtimeNodeId: 'master', currentNode: 'master' } }); }
         catch (error: any) { fenceErrors.push(error?.code); }
-        try { await deliverCommittedFinal({ sourceSessionId: 'wrong-source', source: { platform: 'test', channelUserId: 'conversation' }, outcome: 'response', text: 'wrong' }); }
+        try { await deliverCommittedFinal({ sourceSessionId: 'wrong-source', outcome: 'response', text: 'wrong' }); }
         catch (error: any) { fenceErrors.push(error?.code); }
         try { await listMcpServers('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }
@@ -333,8 +333,8 @@ async function start(): Promise<void> {
   const host = new SessionWorkerHost(identity, store, {
     catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
-    deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
-    deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
+    deliverIntermediateText: (text) => deliverIntermediateText({ sourceSessionId: sessionId, text }).then(() => {}),
+    deliverCommittedFinal: (text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, text, outcome }).then(() => {}),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
     publishPresentationQueueHistoryAppend: append => publishPresentationQueueHistoryAppend(identity, append),
     publishPresentationStream: event => publishPresentationModelStream(identity, event),
