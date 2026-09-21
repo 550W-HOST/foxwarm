@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUp, Check, ChevronDown, GitBranch, Link2, SlidersHorizontal, Mic, Paperclip, Plus, RefreshCw, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -283,7 +283,7 @@ function ModelSelector({
   const [activeScope, setActiveScope] = useState<ModelSelectorScope>('current')
   const [filterQuery, setFilterQuery] = useState('')
   const [childFilterQuery, setChildFilterQuery] = useState('')
-  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed', visibility: 'hidden' })
   const [scrollbarWidth] = useState(() => getBrowserScrollbarWidth())
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -352,7 +352,7 @@ function ModelSelector({
     }
     setActiveScope(scope)
     setOpen(true)
-    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus())
+    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
   }, [activeScope, onRefreshModels, open])
 
   const updatePopupPosition = useCallback(() => {
@@ -384,9 +384,12 @@ function ModelSelector({
     }
   }, [childFollows])
 
+  useLayoutEffect(() => {
+    if (open) updatePopupPosition()
+  }, [open, updatePopupPosition])
+
   useEffect(() => {
     if (!open) return
-    updatePopupPosition()
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node
@@ -423,10 +426,10 @@ function ModelSelector({
     let focusFrame = 0
     if (open) {
       focusFrame = requestAnimationFrame(() => {
-        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus()
+        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
     } else if (!open && wasOpenRef.current) {
-      ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus()
+      ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus({ preventScroll: true })
     }
     wasOpenRef.current = open
     return () => {
