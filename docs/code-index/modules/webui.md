@@ -86,7 +86,7 @@ Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and S
 
 ### D-webui-tab-popout
 
-[2026-09-21] Every workbench tab exposes `Move to new window`. A successful synchronous browser popup opens a real same-origin single-leaf URL and then removes the source tab through a move-only store path; a blocked popup or cancelled Setup/Agents unsaved-state warning leaves the source tab unchanged. Popup windows do not mount or persist the normal workbench, do not synchronize state back, and do not restore the source tab when closed. Chat relies only on its existing browser draft persistence and does not transfer page-memory files. Terminal popout requires an existing terminal ID, reattaches to that backend PTY, and never uses the terminal-delete close path. Code uses its existing standalone launch URL rather than moving the embedded iframe.
+[2026-09-21] Every workbench tab exposes `Move to new window`. A successful synchronous browser popup opens a real same-origin single-leaf URL and then removes the source tab through the ordinary layout-only store action; a blocked popup or cancelled Setup/Agents unsaved-state warning leaves the source tab unchanged. Popup windows do not mount or persist the normal workbench, do not synchronize state back, and do not restore the source tab when closed. Chat relies only on its existing browser draft persistence and does not transfer page-memory files. Terminal popout requires an existing terminal ID, reattaches to that backend PTY, and never uses the terminal-delete close path. Code uses its existing standalone launch URL rather than moving the embedded iframe.
 
 ### D-webui-node-aware-launchers
 

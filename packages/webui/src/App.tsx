@@ -462,7 +462,6 @@ function App() {
   const upsertTab = useWorkbenchStore((state) => state.upsertTab)
   const updateTab = useWorkbenchStore((state) => state.updateTab)
   const removeTab = useWorkbenchStore((state) => state.removeTab)
-  const moveTabOut = useWorkbenchStore((state) => state.moveTabOut)
   const replaceTabId = useWorkbenchStore((state) => state.replaceTabId)
   const moveTabToPane = useWorkbenchStore((state) => state.moveTabToPane)
   const dockTabToPaneEdge = useWorkbenchStore((state) => state.dockTabToPaneEdge)
@@ -1165,7 +1164,7 @@ function App() {
     if (currentRouteTabIdRef.current === tabId) {
       closingRouteTabIdsRef.current.add(tabId)
     }
-    moveTabOut(tabId)
+    removeTab(tabId)
 
     if (route.tabId === tabId || wasFocusedActiveTab) {
       const stateAfterMove = useWorkbenchStore.getState()
