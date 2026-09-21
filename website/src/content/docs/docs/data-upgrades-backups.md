@@ -21,15 +21,14 @@ Back up the whole data directory as one restore set. Along with YAML configurati
 - `agents/` memory and workspaces
 - `state/models.yaml` and `state/config.yaml`
 - access and Node tokens
-- Session metadata and archives
-- SQLite databases, reservation records, and recovery journals
-- optional derived vector data
+- Session histories, archives, and recovery data
+- optional search indexes
 
 Logs are only one part of the state. Restore the databases and the rest of the data directory from the same snapshot.
 
 ## SQLite consistency
 
-A live instance needs a SQLite-consistent online backup. A simpler option is to stop Foxwarm cleanly, confirm that it has stopped, and copy the complete data directory. A `.sqlite` file copied while its WAL writer is active is incomplete.
+A live instance needs a SQLite-consistent online backup. A simpler option is to stop Foxwarm cleanly, confirm that it has stopped, and copy the complete data directory. Copying only a `.sqlite` file while its writer is active can omit committed data still in the WAL.
 
 ## Upgrade
 

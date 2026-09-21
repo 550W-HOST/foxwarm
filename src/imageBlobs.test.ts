@@ -105,12 +105,12 @@ test('provider hydration normalizes real HEIC bytes for both MIME aliases withou
     {
       buffer: await fs.readFile(SYNTHETIC_HEIC_FIXTURE),
       mimeType: 'image/heic',
-      expectedProviderMime: 'image/jpeg',
+      expectedProviderMime: 'image/webp',
     },
     {
       buffer: await fs.readFile(SYNTHETIC_ALPHA_HEIC_FIXTURE),
       mimeType: 'image/heif',
-      expectedProviderMime: 'image/png',
+      expectedProviderMime: 'image/webp',
     },
   ];
   const refs = await Promise.all(cases.map((item, index) => (
@@ -140,9 +140,9 @@ test('provider hydration normalizes real HEIC bytes for both MIME aliases withou
       assert.deepEqual({ width: metadata.width, height: metadata.height, format: metadata.format }, {
         width: 3,
         height: 2,
-        format: cases[index].expectedProviderMime === 'image/png' ? 'png' : 'jpeg',
+        format: 'webp',
       });
-      if (cases[index].expectedProviderMime === 'image/png') {
+      if (index === 1) {
         assert.equal(metadata.hasAlpha, true);
         assert.ok(Array.from(pixels).filter((_value, offset) => offset % 4 === 3).some(alpha => alpha === 0));
       } else {
@@ -182,6 +182,20 @@ test('provider hydration rejects malformed claimed HEIC before serialization', a
   }
 });
 
+test('provider hydration still rejects malformed assistant HEIC even when Responses does not send that image', async () => {
+  const ref = await putImageBlob({ buffer: Buffer.from('bad HEIF'), mimeType: 'image/heif', imageId: 'bad-assistant' });
+  try {
+    await assert.rejects(
+      () => hydrateMessagesForProvider([{ role: 'model', parts: [{ inlineDataRef: ref }] }], {
+        protocol: 'openai-responses', concreteModelId: 'other/model',
+      }),
+      /Unable to normalize HEIC\/HEIF image bad-assistant for provider/,
+    );
+  } finally {
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
 test('provider dedup compares HEIF references after provider-safe normalization', async () => {
   const buffer = await fs.readFile(SYNTHETIC_HEIC_FIXTURE);
   const first = await putImageBlob({ buffer, mimeType: 'image/heic', imageId: 'heic-first' });
@@ -198,7 +212,7 @@ test('provider dedup compares HEIF references after provider-safe normalization'
     const hydrated = await hydrateMessagesForProvider(canonical);
     const payload = convertToOpenAIFormat(hydrated);
     const serialized = JSON.stringify(payload);
-    assert.equal(serialized.match(/data:image\/jpeg;base64,/g)?.length, 1);
+    assert.equal(serialized.match(/data:image\/webp;base64,/g)?.length, 1);
     assert.match(serialized, /\[IMAGE: deduplicated=true\] Identical image bytes were present earlier/);
     assert.deepEqual(canonical, snapshot);
   } finally {
@@ -206,7 +220,7 @@ test('provider dedup compares HEIF references after provider-safe normalization'
   }
 });
 
-test('provider hydration leaves native provider raster formats byte-identical', async () => {
+test('provider hydration leaves small still images intact but converts even small GIFs to one frame', async () => {
   const formats = [
     { mimeType: 'image/png', buffer: await sharp({ create: { width: 2, height: 1, channels: 4, background: '#123456' } }).png().toBuffer() },
     { mimeType: 'image/jpeg', buffer: await sharp({ create: { width: 2, height: 1, channels: 3, background: '#123456' } }).jpeg().toBuffer() },
@@ -225,8 +239,13 @@ test('provider hydration leaves native provider raster formats byte-identical', 
     }]);
     for (let index = 0; index < formats.length; index += 1) {
       const inline = hydrated[0].parts[index].inlineData!;
-      assert.equal(inline.mimeType, formats[index].mimeType);
-      assert.deepEqual(Buffer.from(inline.data, 'base64'), formats[index].buffer);
+      if (formats[index].mimeType === 'image/gif') {
+        assert.equal(inline.mimeType, 'image/webp');
+        assert.equal((await sharp(Buffer.from(inline.data, 'base64')).metadata()).pages, undefined);
+      } else {
+        assert.equal(inline.mimeType, formats[index].mimeType);
+        assert.deepEqual(Buffer.from(inline.data, 'base64'), formats[index].buffer);
+      }
     }
   } finally {
     for (const ref of refs) {

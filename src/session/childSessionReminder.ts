@@ -1,4 +1,4 @@
-import { Message, MessagePart } from '../types';
+import { MessagePart } from '../types';
 import { formatFoxwarmSystem } from '../utils/promptWrappers';
 import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
 import {
@@ -19,10 +19,6 @@ export function isNoActionSignalText(text: string): boolean {
 
 export function partsContainNoActionSignal(parts?: MessagePart[]): boolean {
   return !!parts?.some(part => typeof part.text === 'string' && isNoActionSignalText(part.text));
-}
-
-export function isModelNoActionSignal(message?: Pick<Message, 'role' | 'parts'> | null): boolean {
-  return message?.role === 'model' && partsContainNoActionSignal(message.parts);
 }
 
 export function buildChildCompletionInstruction(parentSessionId: string): string {

@@ -5,7 +5,16 @@ import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
 import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
-import { loadModelsConfigFromObject, normalizeHandoffConfirmationEnabled, normalizeNodeProvidersConfig } from './config';
+import { loadModelsConfigFromObject, normalizeHandoffConfirmationEnabled, normalizeNodeProvidersConfig, normalizeProviderImageOutputFormat } from './config';
+
+test('provider image output format accepts WebP or JPEG and rejects unsupported values', () => {
+  assert.equal(normalizeProviderImageOutputFormat(undefined), 'webp');
+  assert.equal(normalizeProviderImageOutputFormat('jpeg'), 'jpeg');
+  assert.equal(validateAppConfigYaml('llm:\n  providerImageOutputFormat: jpeg\n').llm?.providerImageOutputFormat, 'jpeg');
+  for (const invalid of ['png', 'JPEG', 'true', '25']) {
+    assert.throws(() => validateAppConfigYaml(`llm:\n  providerImageOutputFormat: ${invalid}\n`), /providerImageOutputFormat.*webp.*jpeg/);
+  }
+});
 
 test('handoff confirmation config defaults off and accepts only booleans', () => {
   assert.equal(normalizeHandoffConfirmationEnabled(undefined), false);

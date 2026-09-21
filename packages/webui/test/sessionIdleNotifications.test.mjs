@@ -63,6 +63,45 @@ test('queue-only canonical idle state never arms or fires an idle notification',
   assert.deepEqual(tracker.observe([session('queued', { state: 'idle' })], modes), [])
 })
 
+test('queued wake after waiting does not notify or consume once before the resumed turn completes', () => {
+  const tracker = new notifications.SessionIdleNotificationTracker()
+  const modes = { task: 'once' }
+
+  tracker.arm(session('task', { state: 'running-tool' }))
+  assert.deepEqual(tracker.observe([session('task', { state: 'waiting' })], modes), [])
+  assert.deepEqual(tracker.observe([session('task', { state: 'idle', queueLength: 1 })], modes), [])
+  assert.deepEqual(tracker.observe([session('task', { state: 'idle' })], modes), [], 'removing the queue without new active work is not a completion')
+  assert.deepEqual(tracker.observe([session('task', { state: 'requesting-model' })], modes), [])
+  assert.deepEqual(tracker.observe([session('task', { state: 'idle' })], modes).map(item => item.id), ['task'])
+  assert.deepEqual(tracker.observe([session('task', { state: 'idle' })], modes), [])
+})
+
+test('idle notification queue length prefers runtime state, falls back to the top level, and preserves missing legacy fields', () => {
+  const modes = { runtimeBusy: 'always', runtimeIdle: 'always', legacyQueued: 'always', legacyMissing: 'always' }
+
+  const runtimeBusy = new notifications.SessionIdleNotificationTracker()
+  runtimeBusy.arm(session('runtimeBusy', { state: 'running-tool' }))
+  assert.deepEqual(runtimeBusy.observe([{
+    ...session('runtimeBusy', { state: 'idle', queueLength: 2 }),
+    queueLength: 0,
+  }], modes), [], 'runtime queue length remains authoritative when it is positive')
+
+  const runtimeIdle = new notifications.SessionIdleNotificationTracker()
+  runtimeIdle.arm(session('runtimeIdle', { state: 'running-tool' }))
+  assert.deepEqual(runtimeIdle.observe([{
+    ...session('runtimeIdle', { state: 'idle', queueLength: 0 }),
+    queueLength: 2,
+  }], modes).map(item => item.id), ['runtimeIdle'], 'runtime queue length remains authoritative when it is zero')
+
+  const legacyQueued = new notifications.SessionIdleNotificationTracker()
+  legacyQueued.arm(session('legacyQueued', { busy: true }))
+  assert.deepEqual(legacyQueued.observe([session('legacyQueued', { queueLength: 1 })], modes), [])
+
+  const legacyMissing = new notifications.SessionIdleNotificationTracker()
+  legacyMissing.arm({ id: 'legacyMissing', busy: true })
+  assert.deepEqual(legacyMissing.observe([{ id: 'legacyMissing', busy: false }], modes).map(item => item.id), ['legacyMissing'])
+})
+
 test('idle notification tracker seeds a first accepted snapshot without a notification', () => {
   const tracker = new notifications.SessionIdleNotificationTracker()
   const modes = { task: 'always' }

@@ -25,7 +25,7 @@ test('compatible Node registration advertises negotiated protocol and remains ex
   const compatibility = negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE);
   manager.registerNodeWithTools(ws as any, {} as http.IncomingMessage, 'cli-node', capabilities, 'current-client', compatibility);
   assert.equal(ws.sent[0]?.type, 'registered');
-  assert.deepEqual(ws.sent[0]?.nodeProtocol, { negotiated: 2, master: { min: 1, max: 2 } });
+  assert.deepEqual(ws.sent[0]?.nodeProtocol, { negotiated: 3, master: { min: 1, max: 3 } });
   assert.equal(manager.listNodesWithTools().some(node => node.id === 'current-client'), true);
   manager.setCurrentNode('source', 'current-client');
   manager.unregisterNode('current-client');
@@ -42,7 +42,7 @@ test('legacy Node negotiates v1, remains selectable, and keeps tool, file, servi
     session.currentNode = 'legacy-client';
     await sessionManager.saveSession(sessionId);
     assert.equal(ws.readyState, WebSocket.OPEN);
-    assert.deepEqual(ws.sent[0]?.nodeProtocol, { negotiated: 1, master: { min: 1, max: 2 } });
+    assert.deepEqual(ws.sent[0]?.nodeProtocol, { negotiated: 1, master: { min: 1, max: 3 } });
     assert.equal(manager.listNodes().find(node => node.id === 'legacy-client')?.protocolCompatibility.status, 'compatible');
     assert.equal(manager.listNodesWithTools().some(node => node.id === 'legacy-client'), true);
     assert.deepEqual(manager.listNodeServiceSummaries().find(node => node.id === 'legacy-client')?.services, { 'vscode-fs': 1 });
@@ -68,7 +68,7 @@ test('legacy Node negotiates v1, remains selectable, and keeps tool, file, servi
 test('explicit disjoint Node range stays connected in quarantine and all execution gates remain blocked', async () => {
   const manager = new NodesManager();
   const ws = new FakeSocket();
-  const compatibility = negotiateNodeProtocol({ min: 3, max: 3 }, CURRENT_NODE_PROTOCOL_RANGE);
+  const compatibility = negotiateNodeProtocol({ min: 4, max: 4 }, CURRENT_NODE_PROTOCOL_RANGE);
   manager.registerIncompatibleNodeWithTools(ws as any, {} as http.IncomingMessage, 'cli-node', capabilities, compatibility, 'future-client');
   assert.equal(ws.sent[0]?.type, 'node_incompatible');
   assert.equal(manager.listNodesWithTools().some(node => node.id === 'future-client'), false);

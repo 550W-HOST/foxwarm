@@ -8,6 +8,7 @@ import { canonicalPotentialPathSync, resolveAgentPath } from './utils/pathResolv
 import { RpcError } from './rpc';
 import { resolveNodeTransferPath } from './nodeFileTransfer';
 import { parseApplyPatchInput } from './applyPatch';
+import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
 
 export const TOOL_AUTH_CONFIG_PATH = path.join(STATE_DIR, 'tool-authorization.yaml');
 export const TOOL_AUTH_POLICY_UNAVAILABLE = 'TOOL_AUTH_POLICY_UNAVAILABLE';
@@ -40,6 +41,7 @@ export type PathMatcher = {
 export interface ToolAuthorizationRuleMatch {
   agent?: ScalarMatcher;
   session?: ScalarMatcher;
+  externalId?: ScalarMatcher;
   tool?: ToolMatcher;
   targetNode?: ScalarMatcher;
   args?: Record<string, ArgumentMatcher>;
@@ -68,16 +70,16 @@ export interface ToolAuthorizationPathRecord {
   resolved?: string;
   targetNode: string;
 }
-export interface ToolAuthorizationRequest {
-  agent: string;
-  session: string;
+export type ToolAuthorizationRequest = {
   tool: ToolAuthorizationToolRef;
-  targetNode: string;
   args: Record<string, any>;
   paths: ToolAuthorizationPathRecord[];
   sourceParentSessionId?: string;
   sessionTargets?: Record<string, ToolAuthorizationSessionTarget | undefined>;
-}
+} & (
+  | { principal: 'internal'; agent: string; session: string; targetNode: string; externalId?: never }
+  | { principal: 'external'; externalId: string; session?: string; agent?: never; targetNode?: string }
+);
 export interface ToolAuthorizationSessionTarget {
   id: string;
   agent: string;
@@ -300,9 +302,10 @@ export function parseToolAuthorizationPolicyBytes(bytes: Buffer | string): ToolA
     const match: ToolAuthorizationRuleMatch = {};
     if (rawRule.match !== undefined) {
       if (!isPlainRecord(rawRule.match)) throw new Error(`${label}.match must be an object.`);
-      assertExactFields(rawRule.match, ['agent', 'session', 'tool', 'targetNode', 'args', 'path'], `${label}.match`);
+      assertExactFields(rawRule.match, ['agent', 'session', 'externalId', 'tool', 'targetNode', 'args', 'path'], `${label}.match`);
       if (rawRule.match.agent !== undefined) match.agent = normalizeScalarMatcher(rawRule.match.agent, `${label}.match.agent`);
       if (rawRule.match.session !== undefined) match.session = normalizeScalarMatcher(rawRule.match.session, `${label}.match.session`);
+      if (rawRule.match.externalId !== undefined) match.externalId = normalizeScalarMatcher(rawRule.match.externalId, `${label}.match.externalId`);
       if (rawRule.match.tool !== undefined) match.tool = normalizeToolMatcher(rawRule.match.tool, `${label}.match.tool`);
       if (rawRule.match.targetNode !== undefined) match.targetNode = normalizeScalarMatcher(rawRule.match.targetNode, `${label}.match.targetNode`);
       if (rawRule.match.args !== undefined) {
@@ -412,7 +415,7 @@ function getValueByPath(input: Record<string, any>, dottedPath: string): unknown
   return current;
 }
 function matchesSessionTarget(matcher: SessionTargetMatcher, source: ToolAuthorizationRequest, target: ToolAuthorizationSessionTarget | undefined): boolean {
-  if (!target) return false;
+  if (!target || source.principal !== 'internal') return false;
   if (matcher.self && target.id !== source.session) return false;
   if (matcher.sameAgent && target.agent !== source.agent) return false;
   if (matcher.relation) {
@@ -432,13 +435,16 @@ function matchesArgs(matchers: Record<string, ArgumentMatcher> | undefined, requ
     return matchesScalar(matcher as ScalarMatcher, getValueByPath(request.args, key));
   });
 }
-function expandPathVariables(value: string, agentName: string): string {
-  return value.replace(/\$\{agent\.dir\}/g, getAgentDir(agentName))
-    .replace(/\$\{agent\.memoryDir\}/g, getAgentMemoryDir(agentName))
-    .replace(/\$\{workspace\}/g, WORKSPACE_DIR);
+function expandPathVariables(value: string, request: ToolAuthorizationRequest): string | null {
+  if (request.principal === 'external' && /\$\{agent\.(?:dir|memoryDir)\}/.test(value)) return null;
+  return (request.principal === 'internal'
+    ? value.replace(/\$\{agent\.dir\}/g, getAgentDir(request.agent))
+      .replace(/\$\{agent\.memoryDir\}/g, getAgentMemoryDir(request.agent))
+    : value).replace(/\$\{workspace\}/g, WORKSPACE_DIR);
 }
-function normalizeBasePath(value: string, agentName: string): string {
-  return canonicalPotentialPathSync(expandPathVariables(value, agentName));
+function normalizeBasePath(value: string, request: ToolAuthorizationRequest): string | null {
+  const expanded = expandPathVariables(value, request);
+  return expanded === null ? null : canonicalPotentialPathSync(expanded);
 }
 function isWithinPath(candidate: string | undefined, base: string): boolean {
   if (!candidate) return false;
@@ -451,26 +457,26 @@ function matchesPath(matcher: PathMatcher | undefined, request: ToolAuthorizatio
   const records = args ? request.paths.filter(record => args.includes(record.arg)) : request.paths;
   if (!records.length) return false;
   if (matcher.allWithin !== undefined) {
-    const base = normalizeBasePath(matcher.allWithin, request.agent);
+    const base = normalizeBasePath(matcher.allWithin, request);
+    if (base === null) return false;
     if (!records.every(record => record.targetNode === 'master' && isWithinPath(record.resolved, base))) return false;
   }
   if (matcher.anyNotWithin !== undefined) {
-    const base = normalizeBasePath(matcher.anyNotWithin, request.agent);
+    const base = normalizeBasePath(matcher.anyNotWithin, request);
+    if (base === null) return false;
     if (!records.some(record => record.targetNode !== 'master' || !isWithinPath(record.resolved, base))) return false;
   }
   return true;
 }
 function matchesRule(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest): boolean {
-  return matchesScalar(rule.match.agent, request.agent)
-    && matchesScalar(rule.match.session, request.session)
-    && matchesTool(rule.match.tool, request.tool)
-    && matchesScalar(rule.match.targetNode, request.targetNode)
+  return matchesRuleIdentity(rule, request)
     && matchesArgs(rule.match.args, request)
     && matchesPath(rule.match.path, request);
 }
 function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest): boolean {
-  return matchesScalar(rule.match.agent, request.agent)
+  return (rule.match.agent === undefined || (request.principal === 'internal' && matchesScalar(rule.match.agent, request.agent)))
     && matchesScalar(rule.match.session, request.session)
+    && (rule.match.externalId === undefined || (request.principal === 'external' && matchesScalar(rule.match.externalId, request.externalId)))
     && matchesTool(rule.match.tool, request.tool)
     && matchesScalar(rule.match.targetNode, request.targetNode);
 }
@@ -493,14 +499,14 @@ export function isToolAuthorizationPotentiallyVisibleSync(request: ToolAuthoriza
     if (!conditional) return rule.action === 'allow';
     if (rule.action === 'allow') return true;
   }
-  return policy.defaultAction === 'allow';
+  return request.principal === 'external' ? false : policy.defaultAction === 'allow';
 }
 export function evaluateToolAuthorizationPolicy(policy: ToolAuthorizationPolicy, request: ToolAuthorizationRequest): ToolAuthorizationEvaluation {
   for (const rule of policy.rules) {
     if (!rule.enabled || !matchesRule(rule, request)) continue;
     return { action: rule.action, matched: true, rule };
   }
-  return { action: policy.defaultAction, matched: false };
+  return { action: request.principal === 'external' ? 'deny' : policy.defaultAction, matched: false };
 }
 
 const NODE_FILE_PATH_TOOLS = new Set(['read', 'write', 'edit']);
@@ -567,7 +573,26 @@ export function buildToolAuthorizationRequest(options: {
       agentName, session: options.session, memory: options.tool.name === 'apply_patch_memory',
     });
   }
-  return { agent: agentName, session: sessionId, tool: options.tool, targetNode, args, paths };
+  return { principal: 'internal', agent: agentName, session: sessionId, tool: options.tool, targetNode, args, paths };
+}
+
+/** Construct trusted external identity facts; execution-session and path context arrive in later integration. */
+export function buildExternalToolAuthorizationRequest(options: {
+  principal: VerifiedMcpInboundPrincipal;
+  sessionId?: string;
+  tool: ToolAuthorizationToolRef;
+  targetNode?: string;
+  args?: Record<string, any>;
+  /** Trusted execution-bound path facts; never accepted directly from external request JSON. */
+  paths?: ToolAuthorizationPathRecord[];
+}): ToolAuthorizationRequest {
+  const externalId = requireVerifiedMcpInboundExternalId(options.principal);
+  return {
+    principal: 'external', externalId,
+    ...(options.sessionId ? { session: options.sessionId } : {}),
+    tool: options.tool, ...(options.targetNode ? { targetNode: options.targetNode } : {}),
+    args: options.args || {}, paths: options.paths || [],
+  };
 }
 
 export async function installToolAuthorizationPolicyBytes(bytes: Buffer): Promise<void> {

@@ -25,6 +25,7 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - The dedicated journal SQLite/WAL database is the sole runtime authority, isolated from ordinary conversation archive locks.
 - Prompt, full tool schema, and each canonical message use type-namespaced SHA-256 object IDs.
 - Same-session manifests use the longest common message prefix against the latest request. Chains checkpoint after a maximum depth of eight.
+- Journaled request and result content is the canonical, pre-hydration shape: image bytes appear only as content-addressed blob references, so provider image base64 and defensive partial-image payloads never reach the journal or its WAL.
 - Request records store only a hash of the prompt-cache key.
 - Attempt records store a hash, not the body, of the provider-specific semantic payload. Attempt 1 must use the request prompt. A nullable prompt-object reference records only a later effective prompt that differs; old/null attempts inherit the request prompt, while a present empty reference is invalid rather than equivalent to NULL.
 - Initialization adds the nullable attempt prompt column inside the existing immediate SQLite transaction boundary. The busy timeout is installed before WAL/schema setup so concurrent server and CLI owners can serialize the additive migration.

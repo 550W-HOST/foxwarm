@@ -3,7 +3,7 @@ title: Agents, Sessions, and memory
 description: Learn how Foxwarm separates Agent identity, Session threads, curated memory, and archived context.
 ---
 
-Foxwarm gives long-lived identity and conversation history different homes.
+An Agent keeps reusable instructions and project knowledge. Its Sessions hold the individual conversations and tasks.
 
 ## Agent
 
@@ -31,14 +31,14 @@ Common commands:
 
 ## Where context lives
 
-| Context | Purpose | Ownership |
+| Context | Use it for | Where to find it |
 | --- | --- | --- |
 | Agent memory files | Curated, long-lived knowledge and instructions | `agents/<agent>/memory/` |
-| Session history | The active, model-visible conversation and tool loop | Persisted `Session.history` |
-| Archive and recall | Older source context, lineage, and audit history | SQLite archive |
-| Vector memory | Optional semantic retrieval over archived context | Derived index; disabled by default |
+| Session history | The current conversation and tool results | The Session timeline |
+| Archive and recall | Earlier messages and compacted source material | Recall tools and expanded context blocks |
+| Vector search | Finding earlier context by topic | Optional [history search](/docs/history-search/) |
 
-Each source has a different job. Keep routine progress in the Session instead of copying it into Agent memory. Foxwarm can compact older Session history into traceable layers and recall archived source when needed.
+Keep routine progress in the Session instead of copying it into Agent memory. Foxwarm can compact older Session history into traceable layers and recall archived source when needed.
 
 ## Child Sessions
 

@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import sharp from 'sharp';
 import { IMAGE_BLOBS_DIR, STATE_DIR } from './config';
+import { optimizeProviderImage, ProviderImageOutputFormat } from './providerImageOptimization';
 import { InlineData, InlineDataRef, Message, MessagePart, QueueItem } from './types';
 
 const BLOB_ID_RE = /^([a-f0-9]{64})\.(png|jpg|gif|webp|svg|bin)$/;
@@ -125,7 +126,9 @@ function isLibHeifError(value: object | LibHeifError): value is LibHeifError {
   return Object.prototype.hasOwnProperty.call(value, 'code');
 }
 
-async function normalizeHeifForProvider(buffer: Buffer, imageId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+async function decodeHeifForProvider(buffer: Buffer, imageId: string): Promise<{
+  rgba: Buffer; width: number; height: number; hasTransparency: boolean;
+}> {
   let context: object | undefined;
   let handle: object | undefined;
   let decodedImage: object | undefined;
@@ -192,17 +195,7 @@ async function normalizeHeifForProvider(buffer: Buffer, imageId: string): Promis
       }
     }
 
-    const raster = sharp(rgba, {
-      raw: { width, height, channels: 4 },
-      limitInputPixels: MAX_IMAGE_PIXELS,
-    });
-    if (hasTransparency) {
-      return { buffer: await raster.png().toBuffer(), mimeType: 'image/png' };
-    }
-    return {
-      buffer: await raster.jpeg({ quality: 90, chromaSubsampling: '4:4:4' }).toBuffer(),
-      mimeType: 'image/jpeg',
-    };
+    return { rgba, width, height, hasTransparency };
   } catch (error: any) {
     const detail = typeof error?.message === 'string' && error.message
       ? error.message
@@ -500,18 +493,69 @@ export async function externalizeQueueItems(items: QueueItem[]): Promise<{ items
   return changed ? { items: converted, changed } : { items, changed };
 }
 
-export async function hydrateMessagesForProvider(messages: Message[]): Promise<Message[]> {
+export async function hydrateMessagesForProvider(messages: Message[], options: {
+  protocol?: 'openai-responses' | 'openai-chat-completions' | 'anthropic';
+  concreteModelId?: string;
+  outputFormat?: ProviderImageOutputFormat;
+} = {}): Promise<Message[]> {
   const hydrated: Message[] = [];
   for (const message of messages) {
     let changed = false;
     const parts: MessagePart[] = [];
     for (const part of message.parts) {
-      if (!part.inlineData && part.inlineDataRef) {
-        const buffer = await readImageRef(part.inlineDataRef);
-        const declaredMimeType = normalizeMimeType(part.inlineDataRef.mimeType);
-        const providerImage = PROVIDER_NORMALIZED_HEIF_MIME_TYPES.has(declaredMimeType)
-          ? await normalizeHeifForProvider(buffer, part.inlineDataRef.imageId)
-          : { buffer, mimeType: declaredMimeType };
+      if (part.inlineDataRef || part.inlineData?.data) {
+        // Always check a referenced original, including image history that the
+        // selected serializer later describes with a text-only placeholder.
+        let buffer: Buffer;
+        if (part.inlineDataRef) {
+          buffer = await readImageRef(part.inlineDataRef);
+        } else {
+          // Historical low-level callers can supply inline image payloads
+          // without going through canonical raster validation. Leave invalid
+          // legacy inline bytes to the old serializer rather than introducing
+          // a new local decode error for a previously accepted request.
+          try {
+            buffer = decodeInlineData(part.inlineData!);
+          } catch {
+            parts.push(part);
+            continue;
+          }
+        }
+        const declaredMimeType = normalizeMimeType(part.inlineDataRef?.mimeType || part.inlineData?.mimeType);
+        const nativeReplay = message.role === 'model'
+          && options.protocol === 'openai-responses'
+          && part.providerMeta?.openaiResponses?.sourceModelId === options.concreteModelId
+          && part.providerMeta?.openaiResponses?.outputItem?.type === 'image_generation_call';
+        // A generated assistant image on another concrete model is rendered
+        // as a text-only placeholder. Responses drops other assistant images.
+        // Still read references above to preserve the existing unreadable-blob
+        // failure contract; do not optimize pixels the protocol cannot send.
+        const nonVisualAssistant = message.role === 'model' && !nativeReplay
+          && (part.imageMeta?.origin === 'generated' || options.protocol === 'openai-responses');
+        if (nonVisualAssistant && PROVIDER_NORMALIZED_HEIF_MIME_TYPES.has(declaredMimeType)) {
+          // Earlier hydration validated every referenced HEIF even when the
+          // serializer later dropped that assistant image. Keep that local
+          // malformed/oversized-input failure without emitting a variant.
+          await decodeHeifForProvider(buffer, part.inlineDataRef?.imageId || part.imageMeta?.imageId || '');
+        }
+        let providerImage = { buffer, mimeType: declaredMimeType };
+        if (!nativeReplay && !nonVisualAssistant) {
+          try {
+            providerImage = await optimizeProviderImage({
+              buffer,
+              mimeType: declaredMimeType,
+              imageId: part.inlineDataRef?.imageId || part.imageMeta?.imageId,
+              outputFormat: options.outputFormat,
+              ...(PROVIDER_NORMALIZED_HEIF_MIME_TYPES.has(declaredMimeType) ? {
+                decodeHeif: () => decodeHeifForProvider(buffer, part.inlineDataRef?.imageId || part.imageMeta?.imageId || ''),
+              } : {}),
+            });
+          } catch (error) {
+            if (part.inlineDataRef || PROVIDER_NORMALIZED_HEIF_MIME_TYPES.has(declaredMimeType)) throw error;
+            // Unvalidated legacy inline bytes used to pass directly to the
+            // serializer. Do not turn their invalid raster into a new error.
+          }
+        }
         const stripped = stripProviderImageHelperFields(part).part;
         parts.push({
           ...stripped,

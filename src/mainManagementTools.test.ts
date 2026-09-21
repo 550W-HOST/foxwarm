@@ -28,6 +28,7 @@ import {
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
 } from './toolCallControls';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from './toolAuthorization';
+import { sessionCatalogStore } from './session/catalogStore';
 
 const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
@@ -192,6 +193,55 @@ test('direct and unified send_to_session share delivery and afterSend control se
     assert.match(queuedText, /unified management delivery/);
   } finally {
     await cleanup(sourceId, targetId);
+  }
+});
+
+test('child display name is durable before initial delivery and independent of its session ID', async () => {
+  const sourceId = makeId('management_named_child');
+  const source = await sessionManager.getSession(sourceId);
+  const directId = `${sourceId}_direct`;
+  const forkId = `${sourceId}_fork`;
+  const unifiedId = `${sourceId}_unified`;
+  const unnamedForkId = `${sourceId}_unnamed-fork`;
+  const blankId = `${sourceId}_blank`;
+  const spacedId = `${sourceId}_spaced`;
+  const ctx: any = { sessionId: sourceId, session: source };
+  const originalSend = sessionManager.sendToSession;
+  (sessionManager as any).sendToSession = async (targetId: string, message: string, fromId: string) => {
+    assert.equal(targetId, directId);
+    assert.equal(sessionCatalogStore.get(targetId)?.displayName, 'Direct child');
+    assert.equal((await sessionManager.getSession(targetId)).displayName, 'Direct child');
+    return originalSend(targetId, message, fromId);
+  };
+  try {
+    await create_child_session({ suffix: 'direct', displayName: 'Direct child', message: 'start now', afterSend: 'finish', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+  } finally {
+    (sessionManager as any).sendToSession = originalSend;
+  }
+  try {
+    assert.equal(sessionManager.getSessionCatalog(directId)?.displayName, 'Direct child');
+    assert.equal(sessionCatalogStore.get(directId)?.displayName, 'Direct child');
+    const forkResult = await create_child_session({ suffix: 'fork', fork: true, displayName: 'Fork child', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    assert.match(String(forkResult), /Child session created/);
+    assert.equal(sessionCatalogStore.get(forkId)?.displayName, 'Fork child');
+    assert.equal((await sessionManager.getSession(forkId)).displayName, 'Fork child');
+    source.displayName = 'Parent name';
+    await sessionManager.saveSession(sourceId);
+    await create_child_session({ suffix: 'unnamed-fork', fork: true, confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    assert.equal((await sessionManager.getSession(unnamedForkId)).displayName, undefined);
+    await call_tool({ source: 'builtin', name: 'create_child_session', args: { suffix: 'unified', displayName: 'Unified child', confirmation: TEST_HANDOFF_CONFIRMATION } }, ctx);
+    assert.equal(sessionCatalogStore.get(unifiedId)?.displayName, 'Unified child');
+    await create_child_session({ suffix: 'blank', displayName: '', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    assert.equal((await sessionManager.getSession(blankId)).displayName, '');
+    await create_child_session({ suffix: 'spaced', displayName: '  Kept spaces  ', confirmation: TEST_HANDOFF_CONFIRMATION }, ctx);
+    assert.equal(sessionCatalogStore.get(spacedId)?.displayName, '  Kept spaces  ');
+    for (const invalid of [null, 42, {}, []]) {
+      const before = sessionManager.getAllSessions().size;
+      await assert.rejects(() => create_child_session({ suffix: 'invalid', displayName: invalid, confirmation: TEST_HANDOFF_CONFIRMATION }, ctx), /displayName must be a string/);
+      assert.equal(sessionManager.getAllSessions().size, before);
+    }
+  } finally {
+    await cleanup(sourceId, directId, forkId, unnamedForkId, unifiedId, blankId, spacedId);
   }
 });
 

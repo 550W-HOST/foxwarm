@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -15,6 +15,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - `buildWebUiSessionState(sessionDto)` — canonical single-session runtime/model/effort/node/cwd payload shared by list, history, and streams.
 - `buildWebUiModelsPayload(currentModel?)` — model selector capability payload including virtual routing metadata and allowed/default effort presentation.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
+- `composeQueuedPreviewProjection(...)` — combines a Worker hot preview with later durable mailbox input while preserving the global preview cap and queue indices.
 - `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — parity delivery to current multiplexed WebSocket and compatibility SSE clients.
 - `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
 
@@ -72,7 +73,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
   cross-agent forest contract rather than Sidebar pinned elevation.
 - Session list, agent-tree, state, history, model, child-model, cwd, and display-name routes use SessionRuntime DTO calls. The existing model and child-model POST routes accept property-presence model/effort pairs and return canonical raw/effective/capability state from the exact owner; legacy `clear` remains model-only. History canonicalization rejects a concurrent history replacement retryably rather than overwriting newer live messages.
 - `GET /api/sessions/:id/history` keeps its query-agnostic full-snapshot compatibility when no recognized range key is present and accepts one mutually exclusive range mode otherwise. `tail` returns the newest bounded rows and a guarded prefix boundary; `prefixLength` plus `historyVersion` returns exactly the older prefix; `afterSeq` plus `historyVersion` returns newly appended sequence-bearing rows while retaining current session/snapshot/queue metadata. Range requests reject unknown/mixed keys, and every form exposes the exact-owner `latestSeq` frontier. Prefix and suffix requests reject a changed history version retryably, and slicing occurs before WebUI image materialization. Queue previews remain separate from committed history; normal Chat bootstrap does not need the full debug-file route.
-- History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
+- History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Provider-hosted generated images use the same reference-to-API-path materialization, so they reload after refresh, history paging, and server restart without any provider-specific transport. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). It remains an authenticated lightweight state API and compatibility surface; current WebSocket Chat reconnect receives existence/state through its revisioned subscription snapshot.
 - `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
 - Each per-session SSE connection sends an immediate SessionRuntime state snapshot, then cloned history/state events plus router-owned transient stream and deletion updates for that session.
@@ -106,6 +107,8 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 ### D-webui-channel-queue-preview
 
 Queued content is returned as a separate render-only array in the normal history payload. It is not a second queue API and is never mixed into committed messages.
+
+Current WebSocket clients also receive one queue-origin `history-append` delta containing the canonical appended rows and the same bounded queue-preview representation. Legacy SSE retains individual `message` frames. Queue previews remain presentation-only and inline attachment bodies are omitted.
 
 ### D-webui-channel-workspace-removal
 

@@ -69,6 +69,30 @@ const openaiWebSearchConfig = {
   description: 'Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers.',
 }
 
+const openaiImageGenerationOptions = {
+  type: 'object',
+  additionalProperties: true,
+  description: 'Opt-in OpenAI Responses hosted image generation settings. Ignored by non-Responses providers.',
+  properties: {
+    enabled: { type: 'boolean', description: 'Enable the hosted image_generation tool for eligible Responses requests.' },
+    model: { type: 'string', minLength: 1, description: 'Optional hosted image model override. Omitted uses the provider default.' },
+    action: { enum: ['auto', 'generate', 'edit'], description: 'Hosted image action. Defaults to auto.' },
+    size: { type: 'string', minLength: 1, description: 'Requested output size for the hosted image model.' },
+    quality: { enum: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Requested output quality.' },
+    background: { enum: ['auto', 'opaque', 'transparent'], description: 'Requested output background.' },
+    outputFormat: { enum: ['png', 'jpeg', 'webp'], description: 'Requested output image format.' },
+    outputCompression: { type: 'integer', minimum: 0, maximum: 100, description: 'Output compression percentage where the provider supports it.' },
+  },
+}
+
+const openaiImageGenerationConfig = {
+  oneOf: [
+    { type: 'boolean' },
+    openaiImageGenerationOptions,
+  ],
+  description: 'Opt-in OpenAI Responses hosted image generation settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers.',
+}
+
 const modelEffortConfig = {
   type: 'object',
   additionalProperties: true,
@@ -99,6 +123,7 @@ const modelOverrideProperties = {
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
   webSearch: openaiWebSearchConfig,
+  imageGeneration: openaiImageGenerationConfig,
 }
 
 const modelItem = {
@@ -151,6 +176,7 @@ const providerObjectEntry = {
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
     webSearch: modelOverrideProperties.webSearch,
+    imageGeneration: modelOverrideProperties.imageGeneration,
     targets: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true, description: 'Concrete model keys used by a virtual provider.' },
     failureThreshold: { ...positiveInteger, description: 'Consecutive failures before a non-final failover target cools down.' },
     cooldownMs: { ...positiveInteger, description: 'Failover cooldown duration in milliseconds.' },
@@ -161,7 +187,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -169,7 +195,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -449,6 +475,7 @@ export const APP_CONFIG_SCHEMA = {
         compactBlockForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         maxOutput: { type: 'integer', minimum: 1, default: 32768, description: 'Maximum provider output tokens. Defaults to 32768.' },
+        providerImageOutputFormat: { enum: ['webp', 'jpeg'], default: 'webp', description: 'Format for optimized provider-bound images. Transparent pixels use PNG when JPEG is selected.' },
         openaiBaseUrl: { type: 'string' },
         openaiApiKey: { type: 'string' },
         anthropicBaseUrl: { type: 'string' },

@@ -21,7 +21,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 | `generateGuestAgentName(baseAgentId)` | Allocates a directory-safe inherited guest name. |
 | `MessageRouter.addSourceSystemParts(parts, source, ingressMetadataParts)` | Adds current channel/time wrappers and any ephemeral structured ingress metadata exactly once before enqueue. |
 | `MessageRouter.prepareUserParts(parts, source, ingressMetadataParts)` | Clones user parts and applies source wrappers plus structured ingress metadata. |
-| `MessageRouter.buildChannelUserQueueItem(ctx, message)` | Builds the canonical prompt-ready channel queue item and preserves `clientMessageId`, true direct-reply routing intent, and platform turn bindings such as QQ Bot `msg_id`. |
+| `MessageRouter.buildChannelUserQueueItem(ctx, message)` | Builds the canonical prompt-ready channel queue item and preserves `clientMessageId` plus content/provenance source identity; platform reply receipts remain adapter-local. |
 | `MessageRouter.maybeCreateGuestSessionForUnauthorizedMessage(ctx)` | Resolves configured guest access without bypassing authorization policy. |
 | `MessageRouter.createGuestSession(config)` | Creates single/inherited guest sessions with current isolation semantics. |
 | `MessageRouter.handleCommandIfNeeded(ctx, text)` | Parses and dispatches slash commands with raw multiline arguments. |
@@ -41,13 +41,14 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 
 - Authorization and command dispatch complete before ordinary session queue insertion. Deferred channel media is materialized only after the original ingress is canonically authorized and its session is resolved; unauthorized and first-message guest fallback paths remain metadata-only and perform no media fetch/write.
 - Source wrappers are created once at ingress. Queue processing receives prompt-ready parts and does not reconstruct channel metadata.
+- Text-only WebUI ingress, including ordinary file descriptor text parts, is persisted as one source-wrapped `system` part in the user message; image data keeps separate wrapper and content parts. User-authored pasted-text wrappers remain exact text inside either shape and do not change ingress authority.
 - Current non-WebUI channel ingress with a conversation identity includes normal-mode guidance in the existing source-wrapper hint when its attachment is not `send-only`; WebUI keeps the base source hint, while `send-only` keeps its separate explicit-tool notice unchanged.
 - Slash-command detection reads the original message parts before ephemeral
   ingress metadata is inserted. Non-command metadata is placed inside the same
   canonical channel wrapper and thereafter survives as ordinary serializable
   message parts; canonical semantics:
   [D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
-- QueueSource snapshots persist `preferDirectReply` only when true and retain current platform turn identities including WeWork stream ID and QQ Bot inbound `msg_id`; queue JSON round trips retain those IDs as restart/fallback delivery metadata, while the canonical runner uses channel instance plus scoped conversation rather than message/card ID as the passive-source merge boundary.
+- QueueSource snapshots retain content/provenance identity only. Current writes omit WeWork stream IDs, QQ Bot message IDs, and reply-path preferences; actual persisted legacy readers accept and drop those fields. The runner never uses source metadata for batching or delivery control.
 - WebUI `clientMessageId` remains queue/transport metadata and is copied to canonical history by the turn runner.
 - Active managed sessions route input through the existing SessionRuntime enqueue path and receive the existing manager-facing acknowledgement.
 - Busy input is enqueued silently. Idle input is enqueued and then invokes the same local turn runner.

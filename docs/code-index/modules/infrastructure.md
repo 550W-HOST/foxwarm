@@ -16,6 +16,10 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - [src-session-worker-publication](../units/src-session-worker-publication.md) — awaited complete committed projection publication and Main lifecycle staleness coordinator.
 - [src-http-server](../units/src-http-server.md) — authenticated HTTP and WebSocket server.
 - [src-config](../units/src-config.md) — YAML configuration loading, validation, paths, and migrations.
+- [src-mcp-inbound-config](../units/src-mcp-inbound-config.md) — startup-only inbound identity configuration and Bearer principal verification.
+- [src-mcp-inbound-http](../units/src-mcp-inbound-http.md) — identity-bound Streamable HTTP ingress and ephemeral external execution context.
+- [src-mcp-inbound-session-service](../units/src-mcp-inbound-session-service.md) — verified external Session list/read/send with exact builtin policy and ordinary durable ingress.
+- [src-mcp-inbound-pairing-service](../units/src-mcp-inbound-pairing-service.md) — two exact authorized Main-owned Node pairing builtins for headless external operators.
 - [src-misc](../units/src-misc.md) — logging, retries, ASR client, JSON arguments, and node transfer helpers.
 - [src-types](../units/src-types.md) — shared runtime interfaces.
 - [src-utils](../units/src-utils.md) — durable JSON, time, prompt wrappers, message formatting, and Unicode helpers.

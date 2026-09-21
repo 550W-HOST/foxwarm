@@ -13,7 +13,6 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `ToolCallsBlock` — renders tool calls from a single message (no responses yet)
 - `ToolResponsesBlock` — renders tool responses from a single message (orphaned)
 - `ToolGroupSummaryCard` — collapsed summary card for a group of tool calls
-- `getToolResponseStatus` — determines success/error status of a tool response
 - `OpenCodeFileHandler` / `ToolCodePath` — callback contract and plain-path wrapper with a keyboard-accessible Code icon action for supported direct file-tool paths
 - `ExecCommandText` — syntax-highlighted shell command with heredoc support
 - `ExecOutputText` — syntax-highlighted or ANSI-parsed command output
@@ -26,11 +25,12 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
 | `ToolDownloadButton({ url, fileName })` | ~15 | Renders a styled download button that triggers browser download |
-| `ToolGroupSummaryCard({ items, onExpand })` | ~15 | Collapsed card showing tool tags with expand toggle |
+| `ToolGroupSummaryCard({ items, onExpand })` | ~15 | Collapsed card showing tool tags counted per tag (`exec ×4`), failed calls counted in their own entry, most frequent first, with expand toggle |
 | `getToolDisplayLabel(call)` | ~1 | Formats a human-readable label for a tool call |
-| `getToolResponseStatus(resp)` | ~8 | Returns 'success' or 'error' based on response content |
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
-| `truncatePreviewText(text, maxLength)` | ~3 | Truncates text with ellipsis at max length |
+| `truncateToolResultPreview(text)` | ~3 | Truncates a collapsed tool result to the shared 800-character sample |
+| `renderTextResult(text, expanded)` | ~3 | Renders a plain tool result line with the shared collapsed sample |
+| `ToolScriptSubCallTag({ subCall })` | ~10 | Shared running indicator plus counted tag for one tool script sub-call |
 | `isLegacyDiffToolName(name)` | ~1 | Checks if tool name is legacy edit/edit_memory |
 | `isPatchToolName(name)` | ~1 | Checks if tool name is apply_patch/apply_patch_memory |
 | `hasLegacyDiffPayload(call)` | ~2 | Checks if call has oldText/newText args |
@@ -58,7 +58,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Dependencies
 
-- `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`, `ToolViewMode`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
+- `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`, `ToolViewMode`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`, `summarizeToolTagCounts`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
 - `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`
 - `../../../shared/src/webuiToolRendering` — pure helpers for streaming partial-tool guards and session-link text parsing tests
 - `./ImageParts` — renders image message parts

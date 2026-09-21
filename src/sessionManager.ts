@@ -685,6 +685,7 @@ let onSessionRetryRequested: ((sessionId: string) => void | Promise<void>) | nul
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
+let onQueueHistoryAppended: ((session: Session, messages: Message[]) => void) | null = null;
 
 // Callback when transient session events are updated (for SSE broadcasting)
 let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => void) | null = null;
@@ -776,6 +777,10 @@ function completeStandaloneCompactRelease(sessionId: string): void {
 
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
+}
+
+export function setOnQueueHistoryAppended(callback: (session: Session, messages: Message[]) => void) {
+  onQueueHistoryAppended = callback;
 }
 
 export function setOnSessionEventUpdated(callback: (sessionId: string, event: SessionStreamEvent) => void) {
@@ -1709,11 +1714,11 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
@@ -1731,6 +1736,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
 
   const forkedSession: Session = {
     id: newSessionId,
+    ...(options?.displayName !== undefined ? { displayName: options.displayName } : {}),
     history: structuredClone(sourceSession.history),
     systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
@@ -1899,11 +1905,11 @@ export function resolveSpawnedSessionModelEffort(
   return { model: normalized.model, effort: normalized.effort };
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
   assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
   const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
@@ -1945,6 +1951,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       : undefined;
     const newSession: Session = {
       id: childSessionId,
+      ...(options?.displayName !== undefined ? { displayName: options.displayName } : {}),
       agent: targetAgentName,
       history: [],
       systemPromptFiles: inheritedSystemPromptFiles ? [...inheritedSystemPromptFiles] : undefined,
@@ -2519,7 +2526,8 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
-async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
+async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
+  assertAdmissionActive?: () => void): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
   let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
@@ -2555,11 +2563,19 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
     : undefined;
   let persistedAfterExternalReceipt = false;
   const persistSession = async (): Promise<void> => {
-    await saveSession(sessionId);
+    // External inbound send promises awaited durable admission. The ordinary
+    // compatibility save logs/swallow failures, so this producer uses the
+    // existing strict authority writer without changing internal producers.
+    if (assertAdmissionActive) await saveSessionForSessionCritical(session);
+    else await saveSession(sessionId);
     if (item.externalEventId) persistedAfterExternalReceipt = true;
   };
 
   try {
+    // External callers may lose their HTTP context while image preparation,
+    // session hydration or managed-owner reclamation awaits. Nothing below
+    // awaits again before mutating the wait/queue admission state.
+    assertAdmissionActive?.();
     if (receiptPlan) applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
     const waitTransition = applyQueuedItemToWaitState(session, item);
     if (waitTransition.action === 'drop') { await persistSession(); return; }
@@ -2622,13 +2638,13 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
   }
 }
 
-let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined;
+let workerEnqueueSink: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined;
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
 let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
 let workerCatalogFieldsUpdater: ((sessionId: string, patch: { parentSessionId?: string | null; displayName?: string | null }) => Promise<void>) | undefined;
 
-export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
+export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
 }
 
@@ -2705,7 +2721,9 @@ export function assertAgentMetadataMutationAllowed(operation: string): void {
   throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', `${operation} is unavailable while Session-worker placement is enabled.`, true);
 }
 
-export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
+export async function enqueueSessionItem(sessionId: string, item: QueueItem,
+  assertAdmissionActive?: () => void): Promise<void> {
+  assertAdmissionActive?.();
   if (workerEnqueueSink) {
     // Session-worker placement: all Main-side producers share one durable
     // ingress boundary. Managed sessions remain explicitly unsupported there;
@@ -2716,14 +2734,14 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     if (stub && getManagedSessionState(stub as Session)) {
       throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
     }
-    await workerEnqueueSink(canonicalSessionId, item);
+    await workerEnqueueSink(canonicalSessionId, item, assertAdmissionActive);
     return;
   }
   const canonicalSessionId = resolveLoadedSessionId(sessionId);
   const releaseAdmission = await enterStandaloneCompactAdmission(canonicalSessionId);
   try {
     const session = await getSession(canonicalSessionId);
-    await enqueueSessionItemForLoadedSession(session, item);
+    await enqueueSessionItemForLoadedSession(session, item, assertAdmissionActive);
   } finally {
     releaseAdmission();
   }
@@ -2938,6 +2956,10 @@ export function notifyHistoryUpdate(sessionId: string, message: Message) {
   }
 }
 
+export function notifyQueueHistoryAppend(session: Session, messages: Message[]): void {
+  onQueueHistoryAppended?.(session, messages);
+}
+
 export function notifySessionEvent(sessionId: string, event: SessionStreamEvent) {
   if (onSessionEventUpdated) {
     onSessionEventUpdated(sessionId, event);
@@ -2962,10 +2984,10 @@ export async function appendSessionMessagesForSession(
   messages: Message[],
   persistSession: () => Promise<void>,
   notifyMessage: (sessionId: string, message: Message) => void = notifyHistoryUpdate,
-): Promise<void> {
+): Promise<Message[]> {
 
   if (messages.length === 0) {
-    return;
+    return [];
   }
 
   const before = captureSessionSemanticState(session);
@@ -2995,6 +3017,26 @@ export async function appendSessionMessagesForSession(
   for (const message of messagesToNotify) {
     notifyMessage(session.id, message);
   }
+  return messagesToNotify;
+}
+
+export async function appendQueuedSessionMessagesForSession(
+  session: Session,
+  messages: Message[],
+  persistSession: () => Promise<void>,
+  notifyBatch: (session: Session, messages: Message[]) => void = notifyQueueHistoryAppend,
+): Promise<void> {
+  const canonical = await appendSessionMessagesForSession(session, messages, persistSession, () => {});
+  try {
+    notifyBatch(session, canonical);
+  } catch (error) {
+    logger.warn({ err: error, sessionId: session.id }, 'Queue history presentation notification failed after commit');
+  }
+}
+
+export async function appendQueuedSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
+  const session = typeof sessionOrId === 'string' ? await getSession(sessionOrId) : sessionOrId;
+  await appendQueuedSessionMessagesForSession(session, messages, () => saveSessionForSessionCritical(session));
 }
 
 export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {

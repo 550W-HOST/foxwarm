@@ -49,6 +49,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - Missing model configuration forces the singleton Setup tab and prevents it from closing until setup status clears.
 - Models/app YAML assistance uses frontend-owned static schemas and local unsaved-document suggestions; canonical saves remain backend-validated.
 - Built-in and imported themes share one strict manifest/runtime path; theme IDs are not component-rendering branches. Canonical contract: [D-webui-theme-runtime-parity](../units/webui-theme-system.md#d-webui-theme-runtime-parity).
+- The browser application and its browser component fixtures use the same React 18 runtime; this does not change the separate CLI/TUI dependencies. See [D-webui-react18-runtime](#d-webui-react18-runtime).
 
 ## Canonical threads
 
@@ -65,6 +66,10 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - Old `#agents`/`#architecture` and `#setup`/`#oobe` hashes hydrate current singleton system tabs.
 
 ## Design decisions
+
+### D-webui-react18-runtime
+
+[2026-09-19] The WebUI uses its locked React and ReactDOM 18.3.1 packages directly for JSX, hooks, and `createRoot`; Vite does not alias React to Preact. Browser component fixtures also resolve the WebUI's React 18 packages, including when their generated entry files live outside the package directory. Vite deduplicates `react` and `react-dom` so shared imports do not bring a second React runtime into the page. Server-side/CLI renderers retain their own dependency boundaries. This keeps production and browser tests on the same rendering semantics without changing application state, message, or tool contracts.
 
 ### D-webui-product-language
 

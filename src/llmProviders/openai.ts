@@ -7,6 +7,12 @@ import { appendImageGuidanceText } from '../toolImages';
 import { deduplicateProviderRequestImages } from '../providerImageDedup';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSystemPartForModel } from '../utils/promptWrappers';
+import {
+    buildImageGenerationReplayItem,
+    formatGeneratedImageModelPlaceholder,
+    GeneratedImageReplayError,
+    OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE,
+} from './openaiImages';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -76,6 +82,8 @@ type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     onMeaningfulProgress?: () => void;
     onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
+    /** Hosted image generation lifecycle; used for watchdog state only. */
+    onImageGenerationActivity?: (state: 'begin' | 'end', itemId: string) => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -414,12 +422,19 @@ export function convertToOpenAIFormat(
             }
 
             if (part.inlineData) {
-                content.push({
-                    type: 'image_url',
-                    image_url: {
-                        url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/jpeg'};base64,${part.inlineData.data}`
-                    }
-                });
+                if (role === 'assistant' && part.imageMeta?.origin === 'generated') {
+                    // Hosted image generation is Responses-only; describe a
+                    // generated image honestly instead of replaying it as an
+                    // assistant image_url on Chat Completions.
+                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                } else {
+                    content.push({
+                        type: 'image_url',
+                        image_url: {
+                            url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/jpeg'};base64,${part.inlineData.data}`
+                        }
+                    });
+                }
             }
         }
 
@@ -629,10 +644,23 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
 
         for (const part of msg.parts || []) {
             const responsesMeta = getCompatibleResponsesMeta(part);
+            let inlineConsumed = false;
 
             if (responsesMeta?.outputItem) {
                 flushMessageContent(role, content);
-                responseInput.push(structuredClone(responsesMeta.outputItem));
+                if (responsesMeta.outputItem.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                    // Same-concrete-model native replay. The hydrated image
+                    // bytes must be filled back into the call so `store:false`
+                    // replay never depends on provider-side history.
+                    if (role === 'assistant' && typeof part.inlineData?.data === 'string' && part.inlineData.data.length > 0) {
+                        responseInput.push(buildImageGenerationReplayItem(responsesMeta.outputItem, part.inlineData.data));
+                        inlineConsumed = true;
+                    } else {
+                        throw new GeneratedImageReplayError('Cannot replay a generated image call: the local image bytes are missing or unreadable.');
+                    }
+                } else {
+                    responseInput.push(structuredClone(responsesMeta.outputItem));
+                }
             }
 
             if (part.system) {
@@ -664,9 +692,16 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                 content.push(outputTextPart);
             }
 
-            if (part.inlineData) {
+            if (part.inlineData && !inlineConsumed) {
                 if (role === 'assistant') {
-                    logger.warn('Dropping assistant inlineData for Responses API history');
+                    if (part.imageMeta?.origin === 'generated') {
+                        // Incompatible concrete model: keep honest text context
+                        // without leaking provider metadata or faking vision.
+                        prepareMessageContent(role, content, part, fallbackPhase);
+                        content.push({ type: 'output_text', text: formatGeneratedImageModelPlaceholder() });
+                    } else {
+                        logger.warn('Dropping assistant inlineData for Responses API history');
+                    }
                 } else {
                     content.push({
                         type: 'input_image',
@@ -893,6 +928,13 @@ export async function collectOpenAIResponsesStream(
 
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
+            const imageItemId = (() => {
+                if (typeof event.item_id === 'string' && event.item_id.trim()) return event.item_id.trim();
+                if (event.item && typeof event.item === 'object' && typeof event.item.id === 'string' && event.item.id.trim()) {
+                    return event.item.id.trim();
+                }
+                return typeof event.output_index === 'number' ? `image_output_${event.output_index}` : 'image_generation';
+            })();
 
             switch (event.type) {
                 case 'response.output_item.added':
@@ -901,8 +943,28 @@ export async function collectOpenAIResponsesStream(
                         && typeof event.item === 'object' && !Array.isArray(event.item)) {
                         options?.onMeaningfulProgress?.();
                         ensureOutputItem(event.output_index, event.item);
+                        if (event.item.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                            options?.onImageGenerationActivity?.(
+                                event.type === 'response.output_item.added' ? 'begin' : 'end',
+                                imageItemId,
+                            );
+                        }
                         emitProgressUpdate();
                     }
+                    return;
+                case 'response.image_generation_call.in_progress':
+                case 'response.image_generation_call.generating':
+                    // Lifecycle-only activity. The final bytes always come from
+                    // the complete output item, never from these events.
+                    options?.onImageGenerationActivity?.('begin', imageItemId);
+                    return;
+                case 'response.image_generation_call.completed':
+                    options?.onImageGenerationActivity?.('end', imageItemId);
+                    return;
+                case 'response.image_generation_call.partial_image':
+                    // Defensive: V1 never persists or forwards partial previews.
+                    // Track activity only; the base64 preview is discarded.
+                    options?.onImageGenerationActivity?.('begin', imageItemId);
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':

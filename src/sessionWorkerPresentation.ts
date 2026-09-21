@@ -2,6 +2,7 @@ import { RpcClient, RpcError, type RpcTransport } from './rpc';
 import { sessionWorkerPresentationServiceDescriptor } from './sessionWorkerPresentationService';
 import type { SessionWorkerPublicationIdentity } from './sessionWorkerPublicationService';
 import type { Message, SessionStreamEvent } from './types';
+import type { WorkerQueueHistoryAppend } from './sessionWorkerPresentationService';
 
 /** Child-side client for the transient presentation channel. Borrowed reverse transport only. */
 
@@ -22,6 +23,12 @@ export async function publishPresentationMessage(identity: SessionWorkerPublicat
   assertLive();
   if (!client) throw new RpcError('SESSION_WORKER_PRESENTATION_UNAVAILABLE', 'Presentation channel is unavailable.', true);
   await client.call('message', { sessionId: identity.sessionId, generation: identity.generation, incarnationId: identity.incarnationId, message });
+}
+
+export async function publishPresentationQueueHistoryAppend(identity: SessionWorkerPublicationIdentity, append: WorkerQueueHistoryAppend): Promise<void> {
+  assertLive();
+  if (!client) throw new RpcError('SESSION_WORKER_PRESENTATION_UNAVAILABLE', 'Presentation channel is unavailable.', true);
+  await client.call('queueHistoryAppend', { sessionId: identity.sessionId, generation: identity.generation, incarnationId: identity.incarnationId, append });
 }
 
 export async function publishPresentationModelStream(identity: SessionWorkerPublicationIdentity, event: SessionStreamEvent): Promise<void> {

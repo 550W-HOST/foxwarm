@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts
+Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -15,14 +15,17 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
+- `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
+- `MCP_INBOUND_CONFIG`, `normalizeMcpInboundConfig`, and `authenticateMcpInboundBearer` — startup-validated inbound identity settings and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-mcp-inbound-config](./src-mcp-inbound-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
 - `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
+- `normalizeProviderImageOutputFormat`, `PROVIDER_IMAGE_OUTPUT_FORMAT` — optimized provider-request output defaults to WebP; optional `llm.providerImageOutputFormat: jpeg` emits PNG when pixels are transparent.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.
 - Resolved path/server/context constants and agent/session path helpers.
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort and web-search forms.
+- `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` and hosted `imageGeneration` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` and `imageGeneration` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort, web-search, and image-generation forms.
 - `MODEL_EFFORTS`, `ModelEffort`, `DEFAULT_MODEL_EFFORT`, `normalizeModelEffortConfig`, and `getConcreteModelEffortConfig`.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
@@ -52,6 +55,7 @@ Worker placement is startup configuration:
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
 - `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only structured confirmation for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
+- `mcpInbound` is a strict startup-only `{ enabled, identities }` block, disabled when absent. Malformed disabled blocks still fail validation; enabled configurations need independently authenticated external IDs. Enabling it starts `/mcp` on the existing HTTP listener; the available verified-external tool mappings are documented in [tool dispatch](../threads/tool-dispatch.md). See [D-config-mcp-inbound-foundation](./src-mcp-inbound-config.md#d-config-mcp-inbound-foundation) and [D-mcp-inbound-http-transport](./src-mcp-inbound-http.md#d-mcp-inbound-http-transport).
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
 - `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. `type: docker-worktree` accepts a fixed Docker launcher/image, canonical allowed roots, allowed network modes, optional state location, and bounded resource defaults. Both variants reject unknown fields and require restart.
@@ -89,7 +93,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Preferred provider field is `models`; legacy `model` remains a reader.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
-- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum.
+- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` and `imageGeneration` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum. Each `imageGeneration` side is normalized before merging, and the merged configuration is checked again for field combinations that only become contradictory through inheritance, so a provider background and a model output format cannot combine into an unsupported request.
 - Provider-scoped `disallowEmptyResponse` inherits from the provider entry to each concrete model entry, is rejected on virtual entries, participates in the route fingerprint, and controls whether empty/reasoning-only completions are retryable failures.
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
 - `openai`, `openai-responses`, `openai-ws`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings. `openai-ws` rejects request compression because compression is an HTTP-body setting.
@@ -102,7 +106,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - App YAML missing at read time yields an empty config.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
 - Setup writes validate by parsing through the same current config readers before replacing files.
-- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort` and `webSearch` are removed before the result is reparsed.
+- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).
@@ -134,13 +138,19 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-feature-toggle-shorthand
 
-[2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
+[2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` and `imageGeneration` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
+
+[2026-09-19] Hosted image generation is a normalized provider/model toggle with `model`, `action`, `size`, `quality`, `background`, `output_format`, and `output_compression` tuning. Validation rejects unknown enum values, a non-integer or out-of-range compression, an empty model string, and the contradictory `output_format: jpeg` with `background: transparent` combination. Each side is normalized on its own and the merged configuration is validated again, so a combination that only becomes contradictory through provider-to-model inheritance fails resolution instead of sending an unsupported request, while a legitimate model override that resolves the combination still wins. The normalized form participates in concrete and virtual routing fingerprints and is rejected on virtual provider entries, while the raw value stays byte-preserving for Models Setup. The runtime rejects an effective enabled config on a protocol that cannot carry the hosted tool.
 
 `vector` therefore deliberately does not accept `true`: it is a connection object requiring `baseUrl`, with only `false` as the disable shorthand.
 
 ### D-config-default-max-output
 
 [2026-08-18] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
+
+### D-config-provider-image-output
+
+[2026-09-19] `llm.providerImageOutputFormat` is one optional application-level provider-request image output setting: `webp` by default, or `jpeg` for opaque images with PNG selected on actual transparency. JPEG mode converts incoming WebP even below size/dimension thresholds so an endpoint lacking WebP support never receives it as ordinary vision input. It does not change hosted image-generation tool settings, original canonical blobs, provider/model inheritance, or the fixed optimization thresholds. The selected format participates in the derived-cache policy key.
 
 ### D-config-chat-history-reasoning-field
 

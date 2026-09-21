@@ -1,6 +1,7 @@
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { nodesManager } from './manager';
 import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
+import type { ExternalNodeOwner } from '../../packages/shared/dist/nodeProtocol';
 import { describeNodeProtocolCompatibility, type NodeProtocolCompatibility } from '../../packages/shared/dist/nodeProtocol';
 import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
 import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
@@ -38,18 +39,33 @@ export type NodeDescriptor = {
 /** Descriptor shape implemented by providers; primitive providers never supply model tool definitions. */
 export type NodeProviderDescriptor = Omit<NodeDescriptor, 'tools'> & { tools?: NodeCapabilityDescriptor[] };
 
-export type NodeToolRequest = {
-  sourceSessionId: string;
+type NodeToolRequestBase = {
   nodeId: string;
   toolName: string;
   args: Record<string, unknown>;
+};
+
+export type NodeToolRequest = NodeToolRequestBase & ({
+  sourceSessionId: string;
+  owner?: never;
   context: {
     agent: string;
     currentNode?: string;
     cwd?: string;
     deferSessionCwdSync?: boolean;
+    externalExec?: never;
   };
-};
+} | {
+  owner: ExternalNodeOwner;
+  sourceSessionId?: never;
+  context: {
+    agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never;
+    externalExec?: { execId: string; completionCapability: string };
+  };
+});
+
+/** In-process opt-in only: executable providers cannot claim external primitive ownership. */
+export const FIRST_PARTY_DOCKER_EXTERNAL_OWNER = Symbol('foxwarm.first-party-docker-external-owner');
 
 export type NodeDefaultCwdRequest = {
   sourceSessionId: string;
@@ -59,11 +75,14 @@ export type NodeDefaultCwdRequest = {
 
 export type NodeProviderCallOptions = {
   signal?: AbortSignal;
+  /** Main-local external context fence, checked immediately before a provider effect. */
+  assertExternalOwnerActive?: () => void;
+  /** Resident Docker-only: bind a Main-owned result to the exact runtime generation. */
+  bindExternalGeneration?: (generation: string) => void;
 };
 
 export type NodeFilesystemOperation = 'parent' | 'stat' | 'read' | 'readdir' | 'write' | 'mkdir' | 'remove';
 export type NodeFilesystemRequest = {
-  sourceSessionId: string;
   nodeId: string;
   operation: NodeFilesystemOperation;
   path: string;
@@ -71,10 +90,21 @@ export type NodeFilesystemRequest = {
   count?: number;
   contentBase64?: string;
   flag?: 'w' | 'wx';
-  context: NodeToolRequest['context'];
-};
+} & ({
+  sourceSessionId: string; owner?: never;
+  context: Extract<NodeToolRequest, { sourceSessionId: string }>['context'];
+} | {
+  owner: ExternalNodeOwner; sourceSessionId?: never;
+  context: Extract<NodeToolRequest, { owner: ExternalNodeOwner }>['context'];
+});
 
-export type NodeExecRequest = Omit<NodeToolRequest, 'toolName'>;
+export type NodeExecRequest = Omit<NodeToolRequestBase, 'toolName'> & ({
+  sourceSessionId: string; owner?: never;
+  context: Extract<NodeToolRequest, { sourceSessionId: string }>['context'];
+} | {
+  owner: ExternalNodeOwner; sourceSessionId?: never;
+  context: Extract<NodeToolRequest, { owner: ExternalNodeOwner }>['context'];
+});
 
 export type NodeLifecycleAction = 'create' | 'ensure' | 'inspect' | 'destroy';
 
@@ -108,6 +138,7 @@ export type NodeLifecycleProviderSummary = {
 
 export interface NodeProvider {
   readonly id: string;
+  readonly [FIRST_PARTY_DOCKER_EXTERNAL_OWNER]?: true;
   initialize?(): Promise<void>;
   shutdown?(): Promise<void>;
   /** Expensive/failure-prone discovery is consulted only when fixed in-process providers do not own the exact Node ID. */
@@ -315,28 +346,44 @@ export class NodeProviderRegistry {
     request: NodeToolRequest,
     options?: NodeProviderCallOptions,
   ): Promise<unknown> {
+    if (request.owner && (provider[FIRST_PARTY_DOCKER_EXTERNAL_OWNER] !== true
+      || descriptor.kind !== 'sandbox' || descriptor.type !== 'docker-worktree')) {
+      throw new NodeProviderError('NODE_EXTERNAL_OWNER_UNSUPPORTED', `Node \`${request.nodeId}\` does not yet support external-owner primitive tools.`);
+    }
+    const source = request.owner ? { owner: request.owner } : { sourceSessionId: request.sourceSessionId };
     if (request.toolName === 'exec') {
       if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
         throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`exec\` not available on node \`${request.nodeId}\`.`);
       }
-      return provider.invokeExec({ sourceSessionId: request.sourceSessionId, nodeId: request.nodeId, args: request.args, context: request.context }, options);
+      return provider.invokeExec({ ...source, nodeId: request.nodeId, args: request.args, context: request.context } as NodeExecRequest, options);
     }
     const access = descriptor.primitiveBackends?.filesystem;
     const mutation = request.toolName === 'write' || request.toolName === 'edit' || request.toolName === 'apply_patch';
     if (!access || (mutation && access !== 'read-write') || !provider.invokeFilesystem) {
       throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
     }
-    const call = (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => provider.invokeFilesystem!({
-      sourceSessionId: request.sourceSessionId,
-      nodeId: request.nodeId,
-      operation,
-      path: fields.path!,
-      ...(fields.offset === undefined ? {} : { offset: fields.offset }),
-      ...(fields.count === undefined ? {} : { count: fields.count }),
-      ...(fields.contentBase64 === undefined ? {} : { contentBase64: fields.contentBase64 }),
-      ...(fields.flag === undefined ? {} : { flag: fields.flag }),
-      context: request.context,
-    }, options);
+    let externalMutationAttempted = false;
+    const call = async (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => {
+      if (request.owner && ['write', 'mkdir', 'remove'].includes(operation)) externalMutationAttempted = true;
+      try {
+        return await provider.invokeFilesystem!({
+          ...source,
+          nodeId: request.nodeId,
+          operation,
+          path: fields.path!,
+          ...(fields.offset === undefined ? {} : { offset: fields.offset }),
+          ...(fields.count === undefined ? {} : { count: fields.count }),
+          ...(fields.contentBase64 === undefined ? {} : { contentBase64: fields.contentBase64 }),
+          ...(fields.flag === undefined ? {} : { flag: fields.flag }),
+          context: request.context,
+        } as NodeFilesystemRequest, options);
+      } catch (error) {
+        if (externalMutationAttempted) {
+          throw new NodeProviderError('NODE_FILE_EFFECT_UNCERTAIN', 'Node file effect may have completed or partially completed; do not retry automatically.');
+        }
+        throw error;
+      }
+    };
     const operations: FileOperations = {
       stat: async filePath => this.normalizeFileStat(await call('stat', { path: filePath })),
       read: async (filePath, offset, count) => {
@@ -368,8 +415,9 @@ export class NodeProviderRegistry {
       return (result as any).path;
     };
     const context = {
-      sessionId: request.sourceSessionId,
-      session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId },
+      ...(request.owner
+        ? { externalOwner: request.owner, externalCwd: request.context.cwd }
+        : { sessionId: request.sourceSessionId, session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId } }),
       fileOperations: operations,
       resolveFilePath: (filePath: string) => filePath,
       dirnameFilePath: providerParent,
@@ -711,7 +759,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
     return this.descriptorForRuntimeNode(nodeId);
   }
 
-  async invokeTool(request: NodeToolRequest): Promise<unknown> {
+  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
     const node: any = nodesManager.getNode(request.nodeId);
     if (!node || request.nodeId === 'master' || !node.ws) {
       throw new NodeProviderError(
@@ -731,6 +779,10 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
         'NODE_EXECUTION_TOOL_UNAVAILABLE',
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
+    }
+    if (request.owner) {
+      return nodesManager.executeExternalTool(request.nodeId, request.toolName, request.args, request.owner,
+        request.context.cwd, request.context.externalExec, options?.assertExternalOwnerActive);
     }
     const routingSnapshot = request.context.currentNode
       ? { currentNode: request.context.currentNode, ...(request.context.cwd !== undefined ? { cwd: request.context.cwd } : {}) }

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { registerChannel, unregisterChannel, type ChannelContext } from './channel';
+import { registerChannel, unregisterChannel } from './channel';
 import { SESSIONS_FILE } from './config';
 import { shutdownSessionRuntime, initializeSessionRuntime, requestCompaction, submitAndRun } from './sessionRuntime';
 import { createSessionRuntimeServiceHandler, sessionRuntimeServiceDescriptor } from './sessionRuntimeService';
@@ -13,7 +13,6 @@ import { createChannelsStore, attachChannel, resetChannelsForTests, saveChannels
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import * as sessionManager from './sessionManager';
 import { normalizeSessionWorkerIngressRequest, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
@@ -26,16 +25,6 @@ function baseSession(id: string): Session {
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
   } as Session;
-}
-
-function sourceContext(source: QueueSource, replies: any[]): ChannelContext {
-  return {
-    platform: source.platform, channelId: source.channelId, channelType: source.channelType,
-    channelUserId: source.channelUserId, conversationId: source.conversationId,
-    username: source.username, senderId: source.senderId, weworkStreamId: source.weworkStreamId,
-    qqbotMessageId: source.qqbotMessageId, preferDirectReply: source.preferDirectReply,
-    reply: async (text, options) => { replies.push({ text, options }); }, sendTyping: async () => {},
-  };
 }
 
 const itemFor = (text: string, source: QueueSource, clientMessageId: string) => ({
@@ -66,7 +55,6 @@ test('all Worker ingress variants use external event identity while ordinary ing
   const ingress = new SessionWorkerIngressCoordinator(
     store,
     supervisor,
-    new SessionWorkerSourceContextRegistry(),
     id => id,
     id => id === sessionId,
   );
@@ -92,7 +80,6 @@ test('Worker admission that starts before a delete claim cannot spawn or append 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-claim-crossing-'));
   const sessionId = `worker-claim-crossing-${Date.now()}`;
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root },
@@ -104,7 +91,6 @@ test('Worker admission that starts before a delete claim cannot spawn or append 
   const ingress = new SessionWorkerIngressCoordinator(
     store,
     supervisor,
-    sourceContexts,
     id => id,
     id => id === sessionId,
     async (id, operation, admit) => {
@@ -181,14 +167,13 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
   initial.nextMessageSeq = 13; initial.nextBlockId = 1; initial.meta.messageCount = 12;
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`); await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const plan = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 8,
     summary: 'Canonical compacted summary.' }] };
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_SEED_ARCHIVE: '1', FOXWARM_TEST_COMPACT_PLAN: JSON.stringify(plan) },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   const catalog = sessionManager.getAllSessions(); catalog.set(sessionId, { ...initial, history: [] });
   const sessionsBefore = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
   const originals = { getExistingSession: sessionManager.getExistingSession, saveSession: sessionManager.saveSession,
@@ -220,7 +205,7 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
     assert.equal(toolNoise.kind, 'tool-noise');
     assert.equal(toolNoise.kind === 'tool-noise' ? toolNoise.result.replacedFunctionCalls : -1, 0);
     assert.equal(toolNoise.kind === 'tool-noise' ? toolNoise.result.replacedFunctionResponses : -1, 0);
-    assert.equal(mainSemanticCalls, 0); assert.equal(sourceContexts.size, 0);
+    assert.equal(mainSemanticCalls, 0);
     const sessionsAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null; assert.deepEqual(sessionsAfter, sessionsBefore);
   } finally {
     (sessionManager as any).getExistingSession = originals.getExistingSession; (sessionManager as any).saveSession = originals.saveSession;
@@ -233,12 +218,11 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-ingress-'));
   const sessionId = 'worker-ingress-real';
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    workerEnv: { FOXWARM_DATA_DIR: root },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   await fs.ensureFile(SESSIONS_FILE); const sessionsBefore = await fs.readFile(SESSIONS_FILE);
@@ -250,30 +234,41 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
   (sessionManager as any).getExistingSession = async () => { mainSemanticCalls += 1; throw new Error('Main hydration forbidden'); };
   (sessionManager as any).enqueueSessionItem = async () => { mainSemanticCalls += 1; throw new Error('Main enqueue forbidden'); };
   (sessionManager as any).saveSession = async () => { mainSemanticCalls += 1; throw new Error('Main save forbidden'); };
-  const replies: any[] = []; const attachmentSends: any[] = [];
+  const attachmentSends: any[] = [];
+  let observeAttachmentSend: (() => Promise<void>) | undefined;
   setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
   registerChannel('telegram-stage3', {
     name: 'telegram-stage3', platform: 'telegram', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
-    sendMessage: async (conversationId, text, options) => { attachmentSends.push({ conversationId, text, options }); },
+    sendMessage: async (conversationId, text, options) => {
+      attachmentSends.push({ conversationId, text, options });
+      await observeAttachmentSend?.();
+    },
   });
   try {
     await supervisor.reconcileStartupOwnerships();
-    let invalidRunCalls = 0; let invalidOwnershipLookups = 0; let invalidEnqueueCalls = 0; let invalidRegistryCalls = 0;
+    let invalidRunCalls = 0; let invalidOwnershipLookups = 0; let invalidEnqueueCalls = 0;
     const originalPrecheckRun = supervisor.runPendingActivated.bind(supervisor);
     const originalFindOwnership = store.findOwnership.bind(store); const originalEnqueueIntent = store.enqueueIntent.bind(store);
-    const originalRegisterSource = sourceContexts.register.bind(sourceContexts);
     (supervisor as any).runPendingActivated = async (...args: any[]) => { invalidRunCalls += 1; return originalPrecheckRun(args[0], args[1], args[2]); };
     (store as any).findOwnership = (...args: any[]) => { invalidOwnershipLookups += 1; return originalFindOwnership(args[0]); };
     (store as any).enqueueIntent = (...args: any[]) => { invalidEnqueueCalls += 1; return originalEnqueueIntent(args[0], args[1], args[2], args[3]); };
-    (sourceContexts as any).register = (...args: any[]) => { invalidRegistryCalls += 1; return originalRegisterSource(args[0], args[1], args[2]); };
     const validRef = { imageId: 'image-ref', blobId: 'blob-ref', mimeType: 'image/png', byteLength: 12, sha256: 'a'.repeat(64), width: 2, height: 3 };
     const validMeta = { imageId: 'image-ref', mimeType: 'image/png', width: 2, height: 3, sizeBytes: 12, sha256: 'a'.repeat(64) };
     const validPartsItem = itemFor('valid normalized parts', {
       platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'room', conversationId: 'room',
       username: 'name', senderId: 'sender', weworkStreamId: 'stream', qqbotMessageId: 'message', preferDirectReply: true,
-    }, 'valid-client');
+    } as any, 'valid-client');
     (validPartsItem.parts[0] as any).inlineDataRef = validRef; validPartsItem.parts[0].imageMeta = validMeta;
-    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validPartsItem }), { sessionId, item: validPartsItem });
+    const {
+      preferDirectReply: _legacyDirectReply,
+      weworkStreamId: _legacyStreamId,
+      qqbotMessageId: _legacyMessageId,
+      ...currentSource
+    } = validPartsItem.source as any;
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validPartsItem }), {
+      sessionId,
+      item: { ...validPartsItem, source: currentSource },
+    });
     const validMessageItem = { type: 'intersession' as const, sourceSessionId: 'origin', sourceSessionRelation: 'parent' as const, message: {
       role: 'user' as const, parts: [{ system: 'canonical message' }], modelVisible: true, __meta: { timestamp: 1, seq: 2 },
     } };
@@ -329,10 +324,9 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
     const symbolSource: any = { platform: 'test', channelUserId: 'room' }; symbolSource[Symbol('extra')] = true;
     const nonEnumerableSource: any = { platform: 'test', channelUserId: 'room' };
     Object.defineProperty(nonEnumerableSource, 'hidden', { enumerable: false, value: true });
-    const probeContext = sourceContext({ platform: 'test', channelUserId: 'room', preferDirectReply: true }, replies);
     for (const source of [getterSource, symbolSource, nonEnumerableSource]) {
       await assert.rejects(
-        () => submitAndRun(sessionId, { type: 'user', parts: [{ text: 'source probe' }], source } as any, probeContext),
+        () => submitAndRun(sessionId, { type: 'user', parts: [{ text: 'source probe' }], source } as any),
         (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID',
       );
     }
@@ -346,39 +340,39 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
         (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID',
       );
     } finally { requestTransport.close(); }
-    assert.equal(store.countMailboxIntents(), 0); assert.equal(sourceContexts.size, 0);
-    assert.equal(invalidRunCalls, 0); assert.equal(invalidOwnershipLookups, 0); assert.equal(invalidEnqueueCalls, 0); assert.equal(invalidRegistryCalls, 0);
+    assert.equal(store.countMailboxIntents(), 0);
+    assert.equal(invalidRunCalls, 0); assert.equal(invalidOwnershipLookups, 0); assert.equal(invalidEnqueueCalls, 0);
     assert.equal(mainSemanticCalls, 0);
     (supervisor as any).runPendingActivated = originalPrecheckRun;
     (store as any).findOwnership = originalFindOwnership; (store as any).enqueueIntent = originalEnqueueIntent;
-    (sourceContexts as any).register = originalRegisterSource;
     await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
     await assert.rejects(
       () => submitAndRun(sessionId, { type: 'compact-commit', parts: [{ text: 'compact' }] } as any),
       (error: any) => error?.code === 'SESSION_WORKER_QUEUE_UNSUPPORTED',
     );
     assert.equal(store.countMailboxIntents(), 0); assert.equal(mainSemanticCalls, 0);
-    const qqSource: QueueSource = {
+    attachChannel('telegram-stage3', 'room', sessionId); await saveChannels();
+    const qqSource: any = {
       platform: 'qqbot', channelId: 'qq-main', channelType: 'qqbot', channelUserId: 'c2c:user', conversationId: 'c2c:user',
-      senderId: 'sender-qq', qqbotMessageId: 'qq-inbound-1', preferDirectReply: true,
+      senderId: 'sender-qq', qqbotMessageId: 'qq-inbound-1',
     };
     let firstDeliveryObservation: any;
-    const firstContext = sourceContext(qqSource, replies);
-    firstContext.reply = async (text, options) => {
-      replies.push({ text, options });
+    observeAttachmentSend = async () => {
       firstDeliveryObservation = {
         authority: await fs.readJson(statePath), ownership: store.getOwnership(sessionId),
         projection: supervisor.projectionRegistry.get(sessionId)?.projection,
       };
     };
     // The first ordinary submission ensures and spawns the inactive exact Worker itself.
-    const first = await submitAndRun(sessionId, itemFor('first ingress', qqSource, 'client-1'), firstContext);
+    const first = await submitAndRun(sessionId, itemFor('first ingress', qqSource, 'client-1'));
+    observeAttachmentSend = undefined;
     const activated = supervisor.getStatus(sessionId)!;
     assert.equal(activated.ready, true); assert.equal(store.getOwnership(sessionId).state, 'ready');
     assert.equal(first.generation, activated.generation); assert.equal(first.busy, false); assert.equal(first.messageCount, 2);
     assert.equal(store.countMailboxIntents(), 1); assert.equal(store.listPendingIntents(sessionId).length, 0);
-    assert.equal(replies.length, 1); assert.equal(replies[0].text, 'deterministic child answer');
-    assert.equal(replies[0].options.qqbotMessageId, 'qq-inbound-1');
+    assert.equal(attachmentSends.length, 1); assert.equal(attachmentSends[0].text, 'deterministic child answer');
+    assert.equal(attachmentSends[0].options.turnFinal, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(attachmentSends[0].options, 'qqbotMessageId'), false);
     const firstAuthority = await fs.readJson(statePath);
     assert.equal(firstAuthority.lastAppliedMailboxId, first.mailboxIntentId);
     assert.equal(firstAuthority.history[0].__meta.clientMessageId, 'client-1');
@@ -389,34 +383,23 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
     assert.equal(firstDeliveryObservation.ownership.mailboxCursor, first.mailboxIntentId);
     assert.equal(firstDeliveryObservation.projection.messageCount, 2);
     assert.equal(firstDeliveryObservation.projection.busy, true, 'final delivery precedes existing busy release');
-    assert.equal(sourceContexts.size, 0); assert.equal(mainSemanticCalls, 0);
+    assert.equal(mainSemanticCalls, 0);
     assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
 
-    const sourceA: QueueSource = { platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'a', conversationId: 'a', senderId: 'a', preferDirectReply: true };
-    const sourceB: QueueSource = { platform: 'wework', channelId: 'wework', channelType: 'wework', channelUserId: 'b', conversationId: 'b', senderId: 'b', weworkStreamId: 'stream-b', preferDirectReply: true };
+    const sourceA: QueueSource = { platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'a', conversationId: 'a', senderId: 'a' };
+    const sourceB: any = { platform: 'wework', channelId: 'wework', channelType: 'wework', channelUserId: 'b', conversationId: 'b', senderId: 'b', weworkStreamId: 'stream-b' };
     const [concurrentA, concurrentB] = await Promise.all([
-      submitAndRun(sessionId, itemFor('concurrent a', sourceA, 'client-a'), sourceContext(sourceA, replies)),
-      submitAndRun(sessionId, itemFor('concurrent b', sourceB, 'client-b'), sourceContext(sourceB, replies)),
+      submitAndRun(sessionId, itemFor('concurrent a', sourceA, 'client-a')),
+      submitAndRun(sessionId, itemFor('concurrent b', sourceB, 'client-b')),
     ]);
     assert.equal(concurrentA.generation, activated.generation); assert.equal(concurrentB.generation, activated.generation);
     assert.equal(supervisor.listStatuses().length, 1); assert.equal(supervisor.getStatus(sessionId)?.pid, activated.pid);
-    assert.equal(store.countMailboxIntents(), 3); assert.equal((await fs.readJson(statePath)).history.length, 6);
-    assert.equal(replies.length, 3); assert.equal(sourceContexts.size, 0);
+    assert.equal(store.countMailboxIntents(), 3); assert.equal((await fs.readJson(statePath)).history.length, 5);
+    assert.equal(attachmentSends.length, 2, 'different ingress sources share one ordinary Worker provider turn');
 
-    attachChannel('telegram-stage3', 'room', sessionId); await saveChannels();
-    const fallbackSource: QueueSource = { platform: 'telegram', channelId: 'telegram-stage3', channelType: 'telegram', channelUserId: 'room', conversationId: 'room', senderId: 'fallback', preferDirectReply: true };
-    const wrongContext = sourceContext({ ...fallbackSource, conversationId: 'wrong', channelUserId: 'wrong' }, replies);
-    await submitAndRun(sessionId, itemFor('fallback ingress', fallbackSource, 'client-fallback'), wrongContext);
-    assert.equal(attachmentSends.length, 1); assert.equal(attachmentSends[0].text, 'deterministic child answer');
-    assert.equal(replies.length, 3); assert.equal(sourceContexts.size, 0);
-
-    const extraRegistration = sourceContexts.register(sessionId, fallbackSource, sourceContext(fallbackSource, replies));
-    try {
-      await submitAndRun(sessionId, itemFor('ambiguous context ingress', fallbackSource, 'client-context-ambiguous'), sourceContext(fallbackSource, replies));
-      assert.equal(attachmentSends.length, 2); assert.equal(replies.length, 3);
-      assert.equal(sourceContexts.size, 1, 'submit cleanup must leave only the deliberately ambiguous registration');
-    } finally { extraRegistration(); }
-    assert.equal(sourceContexts.size, 0);
+    const fallbackSource: QueueSource = { platform: 'telegram', channelId: 'telegram-stage3', channelType: 'telegram', channelUserId: 'room', conversationId: 'room', senderId: 'fallback' };
+    await submitAndRun(sessionId, itemFor('attachment ingress', fallbackSource, 'client-attachment'));
+    assert.equal(attachmentSends.length, 3); assert.equal(attachmentSends.at(-1).text, 'deterministic child answer');
 
     const ambiguousSource: QueueSource = { ...sourceA, channelUserId: 'ambiguous', conversationId: 'ambiguous', senderId: 'ambiguous' };
     const originalRun = supervisor.runPendingActivated.bind(supervisor);
@@ -424,14 +407,14 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
       await originalRun(args[0], args[1], args[2]);
       throw new Error('injected ambiguous reply loss');
     };
-    const repliesBeforeAmbiguity = replies.length; const cursorBeforeAmbiguity = store.getOwnership(sessionId).mailboxCursor;
-    await assert.rejects(() => submitAndRun(sessionId, itemFor('ambiguous ingress', ambiguousSource, 'client-ambiguous'), sourceContext(ambiguousSource, replies)), /ambiguous reply loss/);
+    const sendsBeforeAmbiguity = attachmentSends.length; const cursorBeforeAmbiguity = store.getOwnership(sessionId).mailboxCursor;
+    await assert.rejects(() => submitAndRun(sessionId, itemFor('ambiguous ingress', ambiguousSource, 'client-ambiguous')), /ambiguous reply loss/);
     (supervisor as any).runPendingActivated = originalRun;
     const afterAmbiguity = await fs.readJson(statePath);
     assert.ok(afterAmbiguity.lastAppliedMailboxId > cursorBeforeAmbiguity);
     assert.equal(store.getOwnership(sessionId).mailboxCursor, afterAmbiguity.lastAppliedMailboxId);
-    assert.equal(replies.length, repliesBeforeAmbiguity + 1); assert.equal(attachmentSends.length, 2);
-    assert.equal(sourceContexts.size, 0); assert.equal(mainSemanticCalls, 0);
+    assert.equal(attachmentSends.length, sendsBeforeAmbiguity + 1);
+    assert.equal(mainSemanticCalls, 0);
     assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
 
     const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });

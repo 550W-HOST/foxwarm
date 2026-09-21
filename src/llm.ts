@@ -9,7 +9,7 @@ import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
@@ -26,6 +26,15 @@ import {
 import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
 import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
 import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
+import {
+    buildOpenAIImageGenerationTool,
+    externalizeGeneratedImageItems,
+    formatGeneratedImageFailureNote,
+    formatGeneratedImageModelPlaceholder,
+    GeneratedImageReplayError,
+    isImageGenerationCallItem,
+    isCompletedImageGenerationItem,
+} from './llmProviders/openaiImages';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -260,6 +269,7 @@ export interface CurrentSessionEffects {
 
 export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
     appendMessages(session: Session, messages: Message[]): Promise<void>;
+    appendQueuedMessages(session: Session, messages: Message[]): Promise<void>;
     updateBusy(session: Session, busy: boolean): Promise<void>;
     startWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
     notifyHistoryUpdate(sessionId: string, message: Message): void;
@@ -283,6 +293,7 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
         placement: 'local',
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
+        appendQueuedMessages: (session, messages) => sessionManager.appendQueuedSessionMessages(session, messages),
         persistSession,
         persistSessionStrict,
         updateBusy: (session, busy) => {
@@ -386,7 +397,13 @@ function summarizeRetryReason(value: unknown, maxGraphemes = 240): string {
     return truncateUnicodeSafeWithEllipsis(text.replace(/\s+/g, ' ').trim(), maxGraphemes);
 }
 
-function createRawStreamLogCapture(maxChars = MAX_RAW_STREAM_LOG_CHARS) {
+type RawStreamCapture = {
+    appendChunk(text: string): void;
+    appendSseBlock(block: string): void;
+    snapshot(): any;
+};
+
+function createRawStreamLogCapture(maxChars = MAX_RAW_STREAM_LOG_CHARS): RawStreamCapture {
     let rawBody = '';
     let rawBodyChars = 0;
     let rawBodyTruncated = false;
@@ -448,6 +465,56 @@ function createRawStreamLogCapture(maxChars = MAX_RAW_STREAM_LOG_CHARS) {
                 sseBlocks,
                 truncated: rawBodyTruncated || sseBlocksTruncated,
                 maxChars,
+            };
+        },
+    };
+}
+
+/**
+ * Content-free raw-stream capture used when a request declares the hosted
+ * image generation tool. Base64 may span many chunks, so truncation plus
+ * post-hoc redaction cannot prove that no image payload was persisted. Only
+ * bounded structural diagnostics are retained.
+ */
+function createRawStreamDiagnosticsCapture(): RawStreamCapture {
+    let chunkCount = 0;
+    let chunkCharCount = 0;
+    let sseBlockCount = 0;
+    let nonJsonBlockCount = 0;
+    const eventTypes = new Map<string, number>();
+
+    return {
+        appendChunk(text: string) {
+            if (!text) return;
+            chunkCount += 1;
+            chunkCharCount += text.length;
+        },
+        appendSseBlock(block: string) {
+            if (!block) return;
+            sseBlockCount += 1;
+            for (const rawLine of block.replace(/\r/g, '').split('\n')) {
+                if (!rawLine.startsWith('data:')) continue;
+                const payload = rawLine.slice(5).trim();
+                if (!payload || payload === '[DONE]') continue;
+                try {
+                    const event = JSON.parse(payload);
+                    const type = typeof event?.type === 'string' && event.type ? event.type.slice(0, 80) : 'unknown';
+                    eventTypes.set(type, (eventTypes.get(type) || 0) + 1);
+                } catch {
+                    nonJsonBlockCount += 1;
+                }
+            }
+        },
+        snapshot() {
+            return {
+                format: 'sse-diagnostics',
+                hostedImageGeneration: true,
+                contentOmitted: true,
+                chunkCount,
+                chunkCharCount,
+                sseBlockCount,
+                nonJsonBlockCount,
+                eventTypes: Object.fromEntries([...eventTypes.entries()].sort(([left], [right]) => left.localeCompare(right))),
             };
         },
     };
@@ -1155,6 +1222,15 @@ async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFi
     }
 }
 
+function isRedactableImagePayloadField(owner: Record<string, any>, key: string, entry: unknown): boolean {
+    if (typeof entry !== 'string' || entry.length === 0) return false;
+    // Partial-preview and Images-API fields are always binary payloads.
+    if (key === 'partial_image_b64' || key === 'b64_json') return true;
+    // A `result` string is image data only on a hosted image generation item;
+    // unrelated business function responses keep their own `result` fields.
+    return key === 'result' && owner.type === 'image_generation_call';
+}
+
 export function redactProviderImagesForLog(value: any): any {
     if (typeof value === 'string') {
         return /^data:image\/[a-z0-9.+-]+;base64,/iu.test(value)
@@ -1172,6 +1248,10 @@ export function redactProviderImagesForLog(value: any): any {
             && typeof value.media_type === 'string'
             && value.media_type.startsWith('image/')) {
             result[key] = '[image omitted from diagnostics]';
+        } else if (isRedactableImagePayloadField(value, key, entry)) {
+            // Hosted image payloads must never reach persisted diagnostics,
+            // regardless of whether image generation is currently enabled.
+            result[key] = '[image omitted from diagnostics]';
         } else {
             result[key] = redactProviderImagesForLog(entry);
         }
@@ -1184,7 +1264,7 @@ async function logResponse(data: any, logFiles: LlmInteractionLogFiles | null) {
 
     try {
         logFiles.responsePath = await getRecentLogPath(LOGS_DIR, path.basename(logFiles.responsePath));
-        await fs.writeJson(logFiles.responsePath, data, { spaces: 2 });
+        await fs.writeJson(logFiles.responsePath, redactProviderImagesForLog(data), { spaces: 2 });
     } catch (e) {
         logger.error({ err: e }, 'Failed to log LLM response');
     }
@@ -1467,6 +1547,12 @@ export function convertToAnthropicFormat(contents: Message[], config: ModelConfi
                 if (msg.role === 'tool' && part.toolUseId) {
                     // Tool-result images are emitted with their matching result
                     // above, so an annotated prefix remains first-visible.
+                    continue;
+                }
+                if (msg.role === 'model' && part.imageMeta?.origin === 'generated') {
+                    // Cross-provider edit is out of V1 scope. Describe the image
+                    // honestly instead of sending an assistant image block.
+                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
                     continue;
                 }
                 content.push({
@@ -2231,6 +2317,13 @@ type ConcreteRequestPlan = {
     useOpenAIResponsesWs: boolean;
     useOpenAIChatCompletionsApi: boolean;
     useStreamingApi: boolean;
+    /** True when the physical request declares the hosted image_generation tool. */
+    usesHostedImageGeneration: boolean;
+    /**
+     * True when raw stream content must not be captured because the physical
+     * request can carry or receive hosted image payloads.
+     */
+    rawStreamDiagnosticsOnly: boolean;
 };
 
 function normalizeRequestedEffort(value: unknown): ModelEffort | undefined {
@@ -2422,6 +2515,19 @@ function buildOpenAIWebSearchTool(config: NormalizedOpenAIWebSearchConfig | unde
     return tool;
 }
 
+function arrayContainsImageGenerationTool(value: unknown): boolean {
+    return Array.isArray(value) && value.some(item => (
+        !!item && typeof item === 'object' && !Array.isArray(item)
+        && (item as Record<string, any>).type === 'image_generation'
+    ));
+}
+
+function toolChoiceReferencesImageGeneration(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const type = (value as Record<string, any>).type;
+    return type === 'image_generation' || type === 'image_generation_preview';
+}
+
 function buildConcreteRequestPlan(options: {
     request: RequestLlmOnceOptions;
     fixedContents: Message[];
@@ -2438,7 +2544,9 @@ function buildConcreteRequestPlan(options: {
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
     const modelId = getModelIdForMetadata(modelEntry, modelKey);
-    const providerContents = prepareHistoryForConcreteModel(fixedContents, modelId);
+    // Compatibility filtering and provider-only hydration have already been
+    // performed for this exact concrete attempt. Do not prepare history twice.
+    const providerContents = fixedContents;
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIResponsesWs = providerType === 'openai-ws';
@@ -2458,6 +2566,17 @@ function buildConcreteRequestPlan(options: {
         && (webSearchConfig?.toolChoice === 'required' || webSearchConfig?.toolChoice === 'auto')
         ? webSearchConfig.toolChoice
         : 'auto';
+    if (modelEntry.imageGeneration?.enabled === true && !useOpenAIResponsesApi) {
+        // Only the Responses protocol carries the hosted image_generation tool.
+        // Fail loudly instead of silently dropping an enabled capability.
+        throw new Error(`Model \`${modelKey}\` enables imageGeneration, but provider type \`${providerType}\` does not support the OpenAI Responses image_generation tool.`);
+    }
+    const imageGenerationConfig: NormalizedOpenAIImageGenerationConfig | undefined = useOpenAIResponsesApi
+        && request.purpose !== 'compact-plan'
+        && request.purpose !== 'setup-test'
+        ? modelEntry.imageGeneration
+        : undefined;
+    const imageGenerationTool = buildOpenAIImageGenerationTool(imageGenerationConfig);
     const effortConfig = getConcreteModelEffortConfig(modelEntry);
     const effectiveEffort = requestedEffort && effortConfig.allowed.includes(requestedEffort)
         ? requestedEffort
@@ -2493,7 +2612,7 @@ function buildConcreteRequestPlan(options: {
             model: modelName,
             instructions: request.systemPrompt,
             input: [...messages],
-            tools: availableToolDefinitions.length > 0 || webSearchTool ? [
+            tools: availableToolDefinitions.length > 0 || webSearchTool || imageGenerationTool ? [
                 ...availableToolDefinitions.map(fd => ({
                     type: 'function',
                     name: fd.name,
@@ -2502,6 +2621,7 @@ function buildConcreteRequestPlan(options: {
                     strict: false,
                 })),
                 ...(webSearchTool ? [webSearchTool] : []),
+                ...(imageGenerationTool ? [imageGenerationTool] : []),
             ] : undefined,
             tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
@@ -2574,6 +2694,21 @@ function buildConcreteRequestPlan(options: {
         TURN_ID: turnId,
     };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
+    if (useOpenAIResponsesApi) {
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'tools')) {
+            if (imageGenerationTool) {
+                throw new Error(`Model \`${modelKey}\` enables imageGeneration, so extraFields.tools cannot replace the tool list; configure hosted tools with the first-class config fields instead.`);
+            }
+            if (arrayContainsImageGenerationTool(extraFields.tools)) {
+                throw new Error(`Model \`${modelKey}\` extraFields.tools must not declare the hosted image_generation tool; use the imageGeneration config field instead.`);
+            }
+        }
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'tool_choice')
+            && toolChoiceReferencesImageGeneration(extraFields.tool_choice)
+            && !imageGenerationTool) {
+            throw new Error(`Model \`${modelKey}\` extraFields.tool_choice references the image_generation tool, but no image generation tool is enabled for this request.`);
+        }
+    }
     if (useOpenAIResponsesWs) {
         const reserved = ['input', 'previous_response_id', 'stream', 'type', 'background', 'context_management', 'conversation', 'stream_id'].filter(field =>
             Object.prototype.hasOwnProperty.call(extraFields, field));
@@ -2622,17 +2757,43 @@ function buildConcreteRequestPlan(options: {
         useOpenAIResponsesWs,
         useOpenAIChatCompletionsApi,
         useStreamingApi,
+        usesHostedImageGeneration: !!imageGenerationTool,
+        // Raw content capture is disabled whenever the request can carry or
+        // receive hosted image bytes: either the tool is declared for this
+        // purpose, the effective config enables it, or history replays a
+        // native generated-image call. This keeps the log policy aligned with
+        // the real request instead of the UI-level enablement alone.
+        rawStreamDiagnosticsOnly: useOpenAIResponsesApi && (
+            modelEntry.imageGeneration?.enabled === true
+            || (Array.isArray(messages) && messages.some((item: any) => item?.type === 'image_generation_call'))
+        ),
     };
 }
 
-function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): ChatResult {
+async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Promise<ChatResult> {
     let responseText = '';
     const allParts: Message['parts'] = [];
     let messageProviderMeta: ChatResult['providerMeta'];
+    let successfulImageCount = 0;
+    let imageFailureNote: string | undefined;
+    let imageFailureCount = 0;
 
     if (plan.useOpenAIResponsesApi) {
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
-        for (const item of outputItems) {
+        // Externalize hosted image results before any logging or journaling so
+        // only Blob references survive past this await boundary.
+        const generatedImages = await externalizeGeneratedImageItems(outputItems, { sourceModelId: plan.modelId });
+        const generatedImagePartByIndex = new Map(generatedImages.images.map(entry => [entry.index, entry.part]));
+        for (let outputIndex = 0; outputIndex < outputItems.length; outputIndex += 1) {
+            const item = outputItems[outputIndex];
+            if (isImageGenerationCallItem(item)) {
+                // Hosted image tools are completed by OpenAI inside this
+                // request. Keep the safe output metadata for same-model replay
+                // and never expose it as a Foxwarm function call.
+                const imagePart = generatedImagePartByIndex.get(outputIndex);
+                if (imagePart) allParts.push(imagePart);
+                continue;
+            }
             if (item.type === 'web_search_call') {
                 // Hosted Responses tools are completed by OpenAI inside this
                 // request. Keep the output item for same-model history replay,
@@ -2698,6 +2859,18 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 allParts.push({ functionCall: { id: callId, name: item.name, ...parsedArgs } });
             }
         }
+        successfulImageCount = generatedImages.images.length;
+        imageFailureCount = generatedImages.failures.length;
+        imageFailureNote = formatGeneratedImageFailureNote(generatedImages.failures);
+        if (successfulImageCount > 0 && imageFailureNote) {
+            allParts.push({ text: imageFailureNote });
+            logger.warn({
+                providerType: plan.providerType,
+                modelId: plan.modelId,
+                failureCount: generatedImages.failures.length,
+                successCount: successfulImageCount,
+            }, 'Some hosted image generation items could not be externalized');
+        }
     } else if (plan.useOpenAIChatCompletionsApi) {
         const choice = resp?.choices?.[0];
         const message = choice?.message;
@@ -2760,7 +2933,16 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     }
 
     const toolCalls = allParts.filter(part => !!part.functionCall).map(part => part.functionCall!);
-    if (!responseText.trim() && toolCalls.length === 0) {
+    if (!responseText.trim() && toolCalls.length === 0 && successfulImageCount === 0) {
+        if (imageFailureCount > 0) {
+            // A failed image attempt is not an empty completion. Report the
+            // real cause and never silently retry a possibly billed request.
+            throw new ConcreteAttemptFailure(imageFailureNote || 'Hosted image generation produced no usable image.', {
+                kind: 'response-error',
+                retryable: false,
+                countable: false,
+            });
+        }
         if (plan.modelEntry.disallowEmptyResponse === true) {
             throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
                 kind: 'response-error',
@@ -2828,7 +3010,6 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     const canonicalContents = stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     );
-    const fixedContents = await hydrateMessagesForProvider(canonicalContents);
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
@@ -2940,6 +3121,17 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             }
 
             const concreteModelId = getModelIdForMetadata(modelEntry, modelKey);
+            const requestApi = getOpenAIRequestApi(modelEntry.providerType || 'openai');
+            const providerContents = prepareHistoryForConcreteModel(canonicalContents, concreteModelId);
+            // This runs outside the transport retry catch: unreadable original
+            // blobs and local decoding failures cannot fail over or count as
+            // model/provider health failures.
+            const fixedContents = await hydrateMessagesForProvider(providerContents, {
+                protocol: requestApi === 'responses' ? 'openai-responses'
+                    : requestApi === 'chat-completions' ? 'openai-chat-completions' : 'anthropic',
+                concreteModelId,
+                outputFormat: PROVIDER_IMAGE_OUTPUT_FORMAT,
+            });
             const effectiveSystemPrompt = options.resolveSystemPromptForModel
                 ? await options.resolveSystemPromptForModel(concreteModelId)
                 : options.systemPrompt || '';
@@ -3015,8 +3207,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 logFiles = await logRequest(plan.data, iteration);
             }
 
-            let attemptRawStreamLog: ReturnType<typeof createRawStreamLogCapture> | null = null;
+            let attemptRawStreamLog: RawStreamCapture | null = null;
             let attemptHistoryAppendFinalizer: OpenAIWsHistoryAppendFinalizer | undefined;
+            let attemptImageGenerationStarted = false;
             let resp: any;
             let response: AxiosResponse | undefined;
             let responseStatus = '';
@@ -3028,11 +3221,14 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     requestStartedAt = performance.now();
                 }
                 attemptRawStreamLog = (plan.useStreamingApi || plan.useOpenAIResponsesWs)
-                    ? createRawStreamLogCapture()
+                    ? plan.rawStreamDiagnosticsOnly
+                        ? createRawStreamDiagnosticsCapture()
+                        : createRawStreamLogCapture()
                     : null;
                 let attemptSignal = abortController.signal;
                 let markMeaningfulProgress: (() => void) | undefined;
                 let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
+                let imageGenerationWatchdog: { beginImageGeneration(id: string): void; endImageGeneration(id: string): void } | undefined;
                 if (plan.useStreamingApi) {
                     const attemptAbortController = new AbortController();
                     const abortAttemptFromOuter = () => attemptAbortController.abort();
@@ -3048,6 +3244,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     });
                     attemptSignal = attemptAbortController.signal;
                     markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
+                    imageGenerationWatchdog = watchdog;
                     handleSafetyBuffering = metadata => {
                         const boundedMetadata = boundSafetyBufferingMetadata(metadata);
                         const inactivityTimeoutMs = watchdog.enterSafetyBuffering(boundedMetadata);
@@ -3071,6 +3268,14 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         : undefined,
                     onMeaningfulProgress: markMeaningfulProgress,
                     onSafetyBuffering: handleSafetyBuffering,
+                    onImageGenerationActivity: (state: 'begin' | 'end', itemId: string) => {
+                        if (state === 'begin') {
+                            attemptImageGenerationStarted = true;
+                            imageGenerationWatchdog?.beginImageGeneration(itemId);
+                        } else {
+                            imageGenerationWatchdog?.endImageGeneration(itemId);
+                        }
+                    },
                     onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                     onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
                 };
@@ -3094,6 +3299,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             attempt,
                         },
                         onProgress: streamCollectOptions.onProgress,
+                        onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
                         onRawFrame: frame => {
                             attemptRawStreamLog?.appendChunk(`${frame}\n`);
                             attemptRawStreamLog?.appendSseBlock(frame);
@@ -3114,8 +3320,14 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                                     || !!parseFunctionCallArgs(item.arguments).argsParseError
                                 )
                         ));
+                    // A response that produced a hosted image cannot reuse the
+                    // WebSocket chain: the finalizer projects the committed
+                    // message without the hydrated native image data, so the
+                    // next turn must send the full local history instead.
+                    const responseHasGeneratedImages = Array.isArray(resp?.output)
+                        && resp.output.some((item: any) => isCompletedImageGenerationItem(item));
                     attemptHistoryAppendFinalizer = outcome => {
-                        if (!outcome.appended || unsafeReplayProjection) {
+                        if (!outcome.appended || unsafeReplayProjection || responseHasGeneratedImages) {
                             pending.finalize(false);
                             return;
                         }
@@ -3162,7 +3374,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 }
 
                 cleanupStreamingAttempt();
-                const result = parseConcreteProviderResponse(plan, resp);
+                const result = await parseConcreteProviderResponse(plan, resp);
                 const completedAt = Date.now();
                 const durationMs = Math.max(0, performance.now() - requestStartedAt);
                 if (virtualRoutingRequest && selection) {
@@ -3222,8 +3434,19 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     throw error;
                 }
 
-                const failure = error instanceof ConcreteAttemptFailure
+                let failure = error instanceof ConcreteAttemptFailure
                     ? error
+                    : error instanceof GeneratedImageReplayError
+                    // Local recovery failure: the stored bytes for an already
+                    // generated image are gone, so the provider was never
+                    // called. Retrying cannot restore them and failing over
+                    // could pay for a duplicate generation.
+                    ? new ConcreteAttemptFailure(error.message, {
+                        kind: 'request-error',
+                        retryable: false,
+                        countable: false,
+                        logDetail: { error: error.message, name: error.name },
+                    })
                     : new ConcreteAttemptFailure(summarizeRetryReason(error), {
                         kind: 'request-error',
                         status: (error as AxiosResponse)?.status ? String((error as AxiosResponse).status) : undefined,
@@ -3236,6 +3459,21 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                         },
                     });
+                if (attemptImageGenerationStarted && failure.retryable) {
+                    // The provider already began a hosted image call, so the
+                    // outcome (and any cost) is unconfirmed. Never transparently
+                    // retry or fail over into a possible duplicate generation.
+                    failure = new ConcreteAttemptFailure(
+                        `Hosted image generation had already started before this attempt failed; the result is unconfirmed and was not retried. ${failure.message}`,
+                        {
+                            kind: failure.kind,
+                            status: failure.status,
+                            retryable: false,
+                            countable: false,
+                            logDetail: failure.logDetail,
+                        },
+                    );
+                }
 
                 responseAttempts.push({
                     attempt,

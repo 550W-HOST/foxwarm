@@ -45,6 +45,7 @@ Provides a unified HTTP server with Express, WebSocket support, and instance-tok
 - Authenticated route middleware returns 401 for missing or invalid auth.
 - WebSocket upgrade requests are matched by path; unmatched connections are destroyed.
 - Compression is enabled for all responses except streaming endpoints (`/stream`).
+- Compression also excludes the inbound MCP endpoint `/mcp`, which uses the SDK's GET SSE response stream and JSON POST responses. The shared JSON and cookie parsers skip `/mcp`, allowing the dedicated inbound Bearer check to precede its bounded parser; all other routes keep their prior middleware. Request-level Bearer authentication and Session-ID ownership for `/mcp` belong to [src-mcp-inbound-http](./src-mcp-inbound-http.md); its `noAuth: true` route only bypasses the unrelated instance-token middleware.
 - Route handlers are wrapped in try/catch, returning 500 on unhandled errors.
 
 ## Design Decisions

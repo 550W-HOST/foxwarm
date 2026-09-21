@@ -4,7 +4,6 @@ import {
   NO_ACTION_MARKER,
   buildChildCompletionInstructionForMode,
   buildChildReminderForMode,
-  isModelNoActionSignal,
   isNoActionSignalText,
   partsContainNoActionSignal,
 } from './childSessionReminder';
@@ -23,11 +22,6 @@ test('does not treat ordinary mentions as no-action signals', () => {
 test('checks message parts for the no-action signal', () => {
   assert.equal(partsContainNoActionSignal([{ text: 'done' }, { text: `summary\n${NO_ACTION_MARKER}` }]), true);
   assert.equal(partsContainNoActionSignal([{ text: 'done without marker' }]), false);
-});
-
-test('only model messages suppress child reminder via no-action signal', () => {
-  assert.equal(isModelNoActionSignal({ role: 'model', parts: [{ text: NO_ACTION_MARKER }] }), true);
-  assert.equal(isModelNoActionSignal({ role: 'tool', parts: [{ text: NO_ACTION_MARKER }] }), false);
 });
 
 test('child instructions and reminders distinguish final reports from reply waits', () => {

@@ -46,16 +46,75 @@ test('WeWorkStreamAggregator aggregates model text and tool progress into one st
   });
   updated = aggregator.appendByStreamId('stream-1', 'model 文本消息 2', { finish: true });
   assert.equal(updated?.finish, true);
-  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | ☑️ exec\n\nmodel 文本消息 2');
+  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec ×2 | ☑️ read\n\nmodel 文本消息 2');
 
   assert.deepEqual(buildWeWorkStreamResponse(updated!), {
     msgtype: 'stream',
     stream: {
       id: 'stream-1',
       finish: true,
-      content: 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | ☑️ exec\n\nmodel 文本消息 2',
+      content: 'model 文本消息 1\n\n> ☑️ exec ×2 | ☑️ read\n\nmodel 文本消息 2',
     },
   });
+});
+
+test('WeWorkStreamAggregator groups non-adjacent tool calls by name and status', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+
+  let updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [
+      { id: 'call-1', name: 'exec' },
+      { id: 'call-2', name: 'read' },
+      { id: 'call-3', name: 'exec' },
+      { id: 'call-4', name: 'write' },
+      { id: 'call-5', name: 'exec' },
+    ],
+  });
+  assert.equal(updated?.content, '> ⌛️ exec ×3 | ⌛️ read | ⌛️ write');
+
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [{ id: 'call-5', name: 'exec' }],
+  });
+  assert.equal(updated?.content, '> ⌛️ exec ×3 | ⌛️ read | ⌛️ write');
+
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-finish',
+    results: [
+      { id: 'call-1', name: 'exec', status: 'success' },
+      { id: 'call-2', name: 'read', status: 'error' },
+      { id: 'call-3', name: 'exec', status: 'success' },
+    ],
+  });
+  assert.equal(updated?.content, '> ☑️ exec ×2 | ❌ read | ⌛️ write | ⌛️ exec');
+});
+
+test('WeWorkStreamAggregator keeps tool aggregation within each text-delimited block', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [{ id: 'call-1', name: 'exec' }],
+  });
+  aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-finish',
+    results: [{ id: 'call-1', name: 'exec', status: 'success' }],
+  });
+
+  let updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    text: 'model text between tool batches',
+    calls: [{ id: 'call-2', name: 'exec' }],
+  });
+  assert.equal(updated?.content, '> ☑️ exec\n\nmodel text between tool batches\n\n> ⌛️ exec');
+
+  updated = aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-finish',
+    results: [{ id: 'call-2', name: 'exec', status: 'success' }],
+  });
+  assert.equal(updated?.content, '> ☑️ exec\n\nmodel text between tool batches\n\n> ☑️ exec');
 });
 
 test('WeWorkStreamAggregator can apply model text and running tools atomically', () => {

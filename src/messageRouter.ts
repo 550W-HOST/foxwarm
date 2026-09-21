@@ -19,7 +19,6 @@ export { shouldBroadcastChannelText } from './sessionTurnRunner';
 export type SessionWorkerSubmitHandler = (
   sessionId: string,
   item: QueueItem,
-  context: ChannelContext,
 ) => Promise<SessionWorkerIngressResult>;
 
 function formatCurrentTimeForPrompt(date: Date): string {
@@ -410,7 +409,7 @@ export class MessageRouter {
 
     if (isManagedSessionActive(session)) {
       await sessionRuntime.enqueue(sessionId, queueItem);
-      await this.turnRunner.sendSessionReply(session, ctx, '🧭 Session is under managed control; your message was queued for its manager.');
+      await ctx.reply('🧭 Session is under managed control; your message was queued for its manager.');
       return;
     }
 
@@ -418,7 +417,7 @@ export class MessageRouter {
       // Session-worker placement: the durable mailbox owns busy/idle queuing.
       // A failure here never falls back to the local runner; a post-append
       // ambiguous outcome remains durable retryable work.
-      await this.workerSubmit(sessionId, queueItem, ctx);
+      await this.workerSubmit(sessionId, queueItem);
       return;
     }
 

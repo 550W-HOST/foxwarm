@@ -5,6 +5,10 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
+import { normalizeMcpInboundConfig, type McpInboundConfig } from './mcpInboundConfig';
+
+export { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from './mcpInboundConfig';
+export type { McpInboundConfig, NormalizedMcpInboundConfig } from './mcpInboundConfig';
 import { DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS } from './llmStreamingTimeout';
 
 export type ChannelProgressConfig = false | {
@@ -538,6 +542,7 @@ export function normalizeHandoffConfirmationEnabled(value: unknown): boolean {
 }
 
 export type AppConfig = {
+  mcpInbound?: McpInboundConfig;
   nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
@@ -552,6 +557,7 @@ export type AppConfig = {
     enableTUI?: boolean;
   };
   llm?: CompactionConfig & {
+    providerImageOutputFormat?: 'webp' | 'jpeg';
     ollamaBaseUrl?: string;
     contextLimit?: number;
     compactBlockLevelMinTokens?: number;
@@ -656,8 +662,22 @@ export function readAppConfigFile(): AppConfig {
     return {};
   }
 
-  const parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
+  let parsed: AppConfig | undefined;
+  try {
+    parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
+  } catch (error) {
+    if (error instanceof yaml.YAMLException) throw safeAppConfigYamlError(error);
+    throw error;
+  }
   return parsed || {};
+}
+
+export function safeAppConfigYamlError(error: yaml.YAMLException): Error {
+  const line = error.mark && Number.isSafeInteger(error.mark.line) && error.mark.line >= 0 ? error.mark.line + 1 : undefined;
+  const column = error.mark && Number.isSafeInteger(error.mark.column) && error.mark.column >= 0 ? error.mark.column + 1 : undefined;
+  return new Error(line && column
+    ? `Invalid app config YAML at line ${line}, column ${column}.`
+    : 'Invalid app config YAML.');
 }
 
 function loadAppConfig(): AppConfig {
@@ -715,7 +735,14 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 }
 
 export const APP_CONFIG = loadAppConfig();
+export function normalizeProviderImageOutputFormat(value: unknown): 'webp' | 'jpeg' {
+  if (value === undefined || value === 'webp') return 'webp';
+  if (value === 'jpeg') return 'jpeg';
+  throw new Error('app config `llm.providerImageOutputFormat` must be `webp` or `jpeg`.');
+}
+export const PROVIDER_IMAGE_OUTPUT_FORMAT = normalizeProviderImageOutputFormat(APP_CONFIG.llm?.providerImageOutputFormat);
 
+export const MCP_INBOUND_CONFIG = normalizeMcpInboundConfig(APP_CONFIG.mcpInbound);
 export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
@@ -845,6 +872,27 @@ export type OpenAIWebSearchOptions = {
 
 export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
 
+export type OpenAIImageGenerationAction = 'auto' | 'generate' | 'edit';
+export type OpenAIImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type OpenAIImageGenerationBackground = 'auto' | 'opaque' | 'transparent';
+export type OpenAIImageGenerationOutputFormat = 'png' | 'jpeg' | 'webp';
+
+export type OpenAIImageGenerationOptions = {
+  /** Opt in to the hosted Responses API `image_generation` tool. An object without `enabled` means enabled. */
+  enabled?: boolean;
+  /** Optional hosted image model override. Omitted means the provider default. */
+  model?: string;
+  action?: OpenAIImageGenerationAction;
+  size?: string;
+  quality?: OpenAIImageGenerationQuality;
+  background?: OpenAIImageGenerationBackground;
+  outputFormat?: OpenAIImageGenerationOutputFormat;
+  /** PNG/WebP compression percentage. Ignored by the provider for other formats. */
+  outputCompression?: number;
+};
+
+export type OpenAIImageGenerationConfig = boolean | OpenAIImageGenerationOptions;
+
 export const MODEL_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ModelEffort = (typeof MODEL_EFFORTS)[number];
 export const DEFAULT_MODEL_EFFORT: ModelEffort = 'high';
@@ -947,6 +995,115 @@ function mergeOpenAIWebSearchConfig(
   };
 }
 
+export type NormalizedOpenAIImageGenerationConfig = Omit<OpenAIImageGenerationOptions, 'enabled'> & {
+  enabled: boolean;
+};
+
+const OPENAI_IMAGE_GENERATION_ACTIONS = ['auto', 'generate', 'edit'] as const;
+const OPENAI_IMAGE_GENERATION_QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const OPENAI_IMAGE_GENERATION_BACKGROUNDS = ['auto', 'opaque', 'transparent'] as const;
+const OPENAI_IMAGE_GENERATION_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
+
+export function normalizeOpenAIImageGenerationConfig(value: unknown): NormalizedOpenAIImageGenerationConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return { enabled: value };
+  }
+  if (!isPlainObject(value)) {
+    throw new Error('models config `imageGeneration` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('models config `imageGeneration.enabled` must be a boolean.');
+  }
+
+  const normalized: NormalizedOpenAIImageGenerationConfig = {
+    enabled: raw.enabled !== false,
+  };
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== 'string' || raw.model.trim().length === 0) {
+      throw new Error('models config `imageGeneration.model` must be a non-empty string.');
+    }
+    normalized.model = raw.model.trim();
+  }
+  if (raw.action !== undefined) {
+    if (typeof raw.action !== 'string' || !(OPENAI_IMAGE_GENERATION_ACTIONS as readonly string[]).includes(raw.action)) {
+      throw new Error('models config `imageGeneration.action` must be `auto`, `generate`, or `edit`.');
+    }
+    normalized.action = raw.action as OpenAIImageGenerationAction;
+  }
+  if (raw.size !== undefined) {
+    if (typeof raw.size !== 'string' || raw.size.trim().length === 0) {
+      throw new Error('models config `imageGeneration.size` must be a non-empty string.');
+    }
+    normalized.size = raw.size.trim();
+  }
+  if (raw.quality !== undefined) {
+    if (typeof raw.quality !== 'string' || !(OPENAI_IMAGE_GENERATION_QUALITIES as readonly string[]).includes(raw.quality)) {
+      throw new Error('models config `imageGeneration.quality` must be `auto`, `low`, `medium`, `high`, `xhigh`, or `max`.');
+    }
+    normalized.quality = raw.quality as OpenAIImageGenerationQuality;
+  }
+  if (raw.background !== undefined) {
+    if (typeof raw.background !== 'string' || !(OPENAI_IMAGE_GENERATION_BACKGROUNDS as readonly string[]).includes(raw.background)) {
+      throw new Error('models config `imageGeneration.background` must be `auto`, `opaque`, or `transparent`.');
+    }
+    normalized.background = raw.background as OpenAIImageGenerationBackground;
+  }
+  if (raw.outputFormat !== undefined) {
+    if (typeof raw.outputFormat !== 'string' || !(OPENAI_IMAGE_GENERATION_OUTPUT_FORMATS as readonly string[]).includes(raw.outputFormat)) {
+      throw new Error('models config `imageGeneration.outputFormat` must be `png`, `jpeg`, or `webp`.');
+    }
+    normalized.outputFormat = raw.outputFormat as OpenAIImageGenerationOutputFormat;
+  }
+  if (raw.outputCompression !== undefined) {
+    if (typeof raw.outputCompression !== 'number'
+      || !Number.isInteger(raw.outputCompression)
+      || raw.outputCompression < 0
+      || raw.outputCompression > 100) {
+      throw new Error('models config `imageGeneration.outputCompression` must be an integer between 0 and 100.');
+    }
+    normalized.outputCompression = raw.outputCompression;
+  }
+
+  if (hasTransparentJpegImageGenerationConflict(normalized)) {
+    throw new Error('models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent`.');
+  }
+
+  return normalized;
+}
+
+function hasTransparentJpegImageGenerationConflict(config: NormalizedOpenAIImageGenerationConfig | undefined): boolean {
+  return config?.outputFormat === 'jpeg' && config?.background === 'transparent';
+}
+
+function mergeOpenAIImageGenerationConfig(
+  baseValue: OpenAIImageGenerationConfig | undefined,
+  overrideValue: OpenAIImageGenerationConfig | undefined,
+): NormalizedOpenAIImageGenerationConfig | undefined {
+  const base = normalizeOpenAIImageGenerationConfig(baseValue);
+  if (overrideValue === undefined) {
+    return base;
+  }
+  const override = normalizeOpenAIImageGenerationConfig(overrideValue)!;
+  const merged: NormalizedOpenAIImageGenerationConfig = {
+    ...(base || {}),
+    ...override,
+  };
+  // Each side is valid on its own, so the effective combination has to be
+  // checked again after inheritance and overrides are applied.
+  if (hasTransparentJpegImageGenerationConflict(merged)) {
+    throw new Error(
+      'models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent` '
+      + 'after merging the provider and model settings.',
+    );
+  }
+  return merged;
+}
+
 export type ModelConfigOverride = {
   contextLimit?: number;
   streamContentInactivityTimeoutMs?: number;
@@ -955,6 +1112,7 @@ export type ModelConfigOverride = {
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
+  imageGeneration?: OpenAIImageGenerationConfig;
 };
 
 export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
@@ -976,6 +1134,7 @@ export type ProviderConfigEntry = {
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
+  imageGeneration?: OpenAIImageGenerationConfig;
   targets?: string[];
   failureThreshold?: number;
   cooldownMs?: number;
@@ -1012,6 +1171,7 @@ export type ModelConfigEntry = {
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: NormalizedOpenAIWebSearchConfig;
+  imageGeneration?: NormalizedOpenAIImageGenerationConfig;
   virtualRouting?: VirtualModelRoutingConfig;
 };
 
@@ -1248,6 +1408,10 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     resolvedProviderEntry.webSearch,
     modelOverride?.webSearch,
   );
+  const imageGeneration = mergeOpenAIImageGenerationConfig(
+    resolvedProviderEntry.imageGeneration,
+    modelOverride?.imageGeneration,
+  );
   return {
     providerKey,
     canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
@@ -1272,6 +1436,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
       modelOverride?.extraFields || {},
     ) || {},
     ...(webSearch && Object.keys(webSearch).length > 0 ? { webSearch } : {}),
+    ...(imageGeneration && Object.keys(imageGeneration).length > 0 ? { imageGeneration } : {}),
   };
 }
 
@@ -1356,6 +1521,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'asyncCompact',
     'disallowEmptyResponse',
     'webSearch',
+    'imageGeneration',
   ];
 
   for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
@@ -1452,6 +1618,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
           webSearchHash: hashConfigValue(entry.webSearch || {}),
+          imageGenerationHash: hashConfigValue(entry.imageGeneration || {}),
         };
       }),
     });

@@ -58,7 +58,7 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
     nodesManager.registerIncompatibleNodeWithTools({ send() {}, close() {} } as any, {} as any, 'cli-node', {
       tools: [{ name: 'private-tool', description: 'must not leave the backend' }],
       services: { 'vscode-fs': 1 },
-    }, negotiateNodeProtocol({ min: 3, max: 3 }, CURRENT_NODE_PROTOCOL_RANGE), 'incompatible-node');
+    }, negotiateNodeProtocol({ min: 4, max: 4 }, CURRENT_NODE_PROTOCOL_RANGE), 'incompatible-node');
 
     new WebUIChannel({ router: {} as any, token: TEST_TOKEN, enableTrigger: false, enableWebUI: true });
     await server.start();
@@ -86,6 +86,9 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
     assert.equal(incompatible.online, true);
     assert.deepEqual(incompatible.services, {});
     assert.equal(incompatible.protocolCompatibility.status, 'upgrade-required');
+    assert.deepEqual(incompatible.protocolCompatibility.client, { min: 4, max: 4 });
+    assert.deepEqual(incompatible.protocolCompatibility.master, CURRENT_NODE_PROTOCOL_RANGE);
+    assert.equal(incompatible.protocolCompatibility.negotiated, undefined);
     assert.equal(payload.nodes.find((node: any) => node.id === 'offline-node').online, false);
     assert.deepEqual(payload.nodes.find((node: any) => node.id === 'offline-node').services, {
       'vscode-fs': 1,

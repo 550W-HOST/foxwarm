@@ -35,16 +35,17 @@ function createEffects(session: Session, events: string[]): llm.CurrentSessionTu
     assert.equal(sessionId, session.id);
     events.push(`history:${message.role}`);
   };
-  const appendMessages = (owner: Session, messages: Message[]) => sessionManager.appendSessionMessagesForSession(
+  const appendMessages = async (owner: Session, messages: Message[]) => { await sessionManager.appendSessionMessagesForSession(
     owner,
     messages,
     () => persistSession(owner),
     notifyHistoryUpdate,
-  );
+  ); };
   return {
     placement: 'local',
     appendMessage: (owner, message) => appendMessages(owner, [message]),
     appendMessages,
+    appendQueuedMessages: (owner, messages) => sessionManager.appendQueuedSessionMessagesForSession(owner, messages, () => persistSession(owner), (_session, batch) => batch.forEach(message => notifyHistoryUpdate(owner.id, message))),
     persistSession,
     updateBusy: (owner, busy) => sessionManager.updateSessionBusyStateForSession(
       owner,
@@ -124,7 +125,48 @@ test('detached exact owner completes canonical foreground provider turn', async 
   }
 });
 
-test('one owned processor iterates many source turns with fresh TURN_IDs and one busy claim/release', async () => {
+test('selected ordinary prefix commits one complete authority batch before postcommit interruption', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_partial_prefix_${Date.now()}`, 'first queued input');
+  session.busy = true;
+  session.queue.push({ type: 'background', parts: [{ text: 'second queued input' }] });
+  const effects = createEffects(session, []);
+  let persistCount = 0;
+  const appendMessages = async (owner: Session, messages: Message[]) => { await sessionManager.appendSessionMessagesForSession(
+    owner,
+    messages,
+    async () => {
+      persistCount += 1;
+      await writeAuthoritativeSessionState(owner);
+      if (persistCount === 1) {
+        throw new SessionAuthorityPostCommitError('stop after the first selected-prefix authority commit');
+      }
+    },
+    () => {},
+  ); };
+  effects.appendMessage = (owner, message) => appendMessages(owner, [message]);
+  effects.appendMessages = appendMessages;
+  effects.appendQueuedMessages = async (owner, messages) => { await sessionManager.appendQueuedSessionMessagesForSession(owner, messages, async () => {
+    persistCount += 1;
+    await writeAuthoritativeSessionState(owner);
+    throw new SessionAuthorityPostCommitError('stop after selected-prefix authority commit');
+  }, () => {}); };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+
+  const selected = (runner as any).drainLeadingQueuedTurnInputs(session) as QueueItem[];
+  assert.equal(selected.length, 2);
+  assert.equal(session.queue.length, 0);
+  await assert.rejects(
+    () => (runner as any).appendQueuedTurnInputs(session, session.id, selected),
+    error => error instanceof SessionAuthorityPostCommitError,
+  );
+
+  const authority = await readSessionHistorySnapshot(session.id);
+  assert.deepEqual(authority?.queue, []);
+  assert.deepEqual((authority?.history || []).map((message: Message) => message.parts.find(part => part.text)?.text), ['first queued input', 'second queued input']);
+});
+
+test('one owned processor sends many different-source rows in one provider turn and one busy claim/release', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_many_sources_${Date.now()}`, 'unused');
   session.queue = Array.from({ length: 128 }, (_, index) => ({
@@ -149,9 +191,9 @@ test('one owned processor iterates many source turns with fresh TURN_IDs and one
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
-    assert.equal(turnIds.length, 128);
-    assert.equal(new Set(turnIds).size, 128);
-    assert.equal(session.history.length, 256);
+    assert.equal(turnIds.length, 1);
+    assert.equal(new Set(turnIds).size, 1);
+    assert.equal(session.history.length, 129);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2, 'one busy claim and one release own all turns');
@@ -194,7 +236,7 @@ test('one owned processor sequences compact turn compact without another busy cl
   }
 });
 
-test('retry and a different-source queued turn share ownership but receive fresh TURN_IDs', async () => {
+test('retry consumes a later different-source queued row in the same provider turn', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_retry_then_queue_${Date.now()}`, 'unused');
   session.history = [{
@@ -203,8 +245,8 @@ test('retry and a different-source queued turn share ownership but receive fresh
   }];
   session.queue = [{
     type: 'user',
-    source: { platform: 'qqbot', channelId: 'qq', channelUserId: 'c2c:later', conversationId: 'c2c:later', qqbotMessageId: 'later-message' },
-    parts: [{ text: 'later source turn' }],
+    source: { platform: 'qqbot', channelId: 'qq', channelUserId: 'c2c:later', conversationId: 'c2c:later', qqbotMessageId: 'later-message' } as any,
+    parts: [{ text: 'later queued turn' }],
   }];
   const events: string[] = [];
   const effects = createEffects(session, events);
@@ -220,9 +262,8 @@ test('retry and a different-source queued turn share ownership but receive fresh
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionRetry(session.id));
-    assert.equal(turnIds.length, 2);
-    assert.notEqual(turnIds[0], turnIds[1]);
-    assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'user', 'model']);
+    assert.equal(turnIds.length, 1);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'user', 'model']);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
     assert.equal(session.busy, false);
   } finally {
@@ -324,7 +365,7 @@ test('local post-final child-reminder failure keeps one provider final and relea
   }
 });
 
-test('persisted child-handoff state drives reminder boundaries, resolution, transparency, and legacy fallback', async () => {
+test('persisted child-handoff state exclusively drives reminder boundaries, resolution, and transparency', async () => {
   await initArchiveStore();
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
@@ -410,6 +451,14 @@ test('persisted child-handoff state drives reminder boundaries, resolution, tran
       assert.equal(transparentMaintenance.reminders.length, 1);
     }
 
+    const alreadyResolved = await runCase({
+      name: 'already-resolved',
+      initialState: { boundary: 'report-required', resolved: true },
+      queue: [{ type: 'background', parts: [{ text: 'transparent maintenance after report' }] }],
+    });
+    assert.deepEqual(alreadyResolved.session.childHandoffState, { boundary: 'report-required', resolved: true });
+    assert.equal(alreadyResolved.reminders.length, 0);
+
     const directUser = await runCase({
       name: 'direct-user',
       initialState: { boundary: 'report-required', resolved: false },
@@ -459,12 +508,12 @@ test('persisted child-handoff state drives reminder boundaries, resolution, tran
     assert.equal(queueGuard.reminders.length, 0);
     assert.equal(queueGuard.session.queue.length, 0);
 
-    const legacy = await runCase({
-      name: 'legacy-fallback',
-      queue: [{ type: 'background', parts: [{ text: 'legacy meaningful input' }] }],
+    const absentState = await runCase({
+      name: 'absent-state-history',
+      queue: [{ type: 'background', parts: [{ text: 'history that previously looked report-required' }] }],
     });
-    assert.equal(legacy.session.childHandoffState, undefined);
-    assert.equal(legacy.reminders.length, 1, 'no-state Sessions keep the existing backward scanner');
+    assert.equal(absentState.session.childHandoffState, undefined);
+    assert.equal(absentState.reminders.length, 0, 'no explicit state means no inferred reminder');
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
@@ -487,7 +536,7 @@ test('Stop bulk commit applies child-handoff boundaries in queue order and prese
     session.stopping = true;
     if (initialState) session.childHandoffState = structuredClone(initialState);
     const effects = createEffects(session, []);
-    if (appendError) effects.appendMessages = async () => { throw appendError; };
+    if (appendError) effects.appendQueuedMessages = async () => { throw appendError; };
     const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
     if (appendError) {
       await assert.rejects(() => (runner as any).finalizeStoppedSession(session), error => error === appendError);
@@ -623,9 +672,9 @@ test('exact host preserves append-many, wait, identity mismatch, and persistence
   const failedEffects = createEffects(session, events);
   const failPersist = async () => { throw new Error('detached persist failed'); };
   failedEffects.persistSession = failPersist;
-  failedEffects.appendMessages = (owner, messages) => sessionManager.appendSessionMessagesForSession(
+  failedEffects.appendMessages = async (owner, messages) => { await sessionManager.appendSessionMessagesForSession(
     owner, messages, failPersist, failedEffects.notifyHistoryUpdate,
-  );
+  ); };
   failedEffects.appendMessage = (owner, message) => failedEffects.appendMessages(owner, [message]);
   const failedHost = new LocalSessionTurnHost(failedEffects, session);
   await assert.rejects(() => failedHost.saveSession(session), /detached persist failed/);

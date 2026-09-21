@@ -13,6 +13,8 @@ import * as sessionManager from './sessionManager';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
 import type { ResolvedToolPermissionIdentity } from './permissions';
 import type { Session } from './types';
+import { requireVerifiedMcpInboundExternalId, type VerifiedMcpInboundPrincipal } from './mcpInboundConfig';
+import { buildExternalToolAuthorizationRequest, evaluateToolAuthorization, isToolAuthorizationPotentiallyVisibleSync } from './toolAuthorization';
 
 export type McpExternalConfigureRequest =
   | { sourceSessionId: string; name: string; action: 'set-enabled'; enabled: boolean }
@@ -158,12 +160,116 @@ async function rethrowWithAllSecretsRedacted(error: unknown, incoming: mcpClient
   throw redactConfiguredSecrets(error, [...Object.values(servers), ...incoming]);
 }
 
-async function runWithAllSecretsRedacted<T>(run: () => Promise<T>): Promise<T> {
+async function runWithAllSecretsRedacted<T>(run: () => Promise<T>, before: mcpClient.McpServerConfig[] = []): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    return await rethrowWithAllSecretsRedacted(error);
+    return await rethrowWithAllSecretsRedacted(error, before);
   }
+}
+
+const CREDENTIAL_HEADER_NAMES = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'x-auth-token']);
+
+async function externalCredentials(before: mcpClient.McpServerConfig[], afterEffect: boolean): Promise<string[]> {
+  let servers: Record<string, mcpClient.McpServerConfig>;
+  try { servers = await mcpClient.getServers(); }
+  catch {
+    throw new RpcError(afterEffect ? 'MCP_EXTERNAL_OUTPUT_UNAVAILABLE' : 'MCP_EXTERNAL_CONFIG_UNAVAILABLE',
+      afterEffect ? 'Tool may have completed; its output cannot be safely returned. Do not retry automatically.' : 'MCP configuration is unavailable; no tool call was sent.');
+  }
+  return Array.from(new Set([...before, ...Object.values(servers)].flatMap(config => [
+    config.token,
+    ...Object.entries(config.headers || {}).flatMap(([name, value]) => {
+      if (!CREDENTIAL_HEADER_NAMES.has(name.toLowerCase())) return [];
+      const bearer = /^Bearer\s+(\S+)$/i.exec(value);
+      return bearer ? [value, bearer[1]] : [value];
+    }),
+  ]).filter((value): value is string => typeof value === 'string' && value.length > 0)));
+}
+
+/** Refuse a credential-bearing remote item, without editing identifiers, schemas, or binary media. */
+function echoesCredential(value: unknown, credentials: string[], depth = 0): boolean {
+  if (!credentials.length) return false;
+  if (typeof value === 'string') return credentials.some(credential => value.includes(credential));
+  if (value === null || typeof value !== 'object') return false;
+  if (depth > 32) return true;
+  if (Array.isArray(value)) return value.some(item => echoesCredential(item, credentials, depth + 1));
+  const record = value as Record<string, unknown>;
+  const binary = record.type === 'image' || record.type === 'audio';
+  return Object.entries(record).some(([key, item]) => {
+    if (binary && (key === 'data' || key === 'blob')) return false;
+    return credentials.some(credential => key.includes(credential)) || echoesCredential(item, credentials, depth + 1);
+  });
+}
+
+async function externalConfigSnapshot(): Promise<mcpClient.McpServerConfig[]> {
+  try { return Object.values(await mcpClient.getServers()); }
+  catch { throw new RpcError('MCP_EXTERNAL_CONFIG_UNAVAILABLE', 'MCP configuration is unavailable; no tool call was sent.'); }
+}
+
+async function externalErrorDetail(error: unknown, before: mcpClient.McpServerConfig[]): Promise<string> {
+  let current: mcpClient.McpServerConfig[];
+  try { current = Object.values(await mcpClient.getServers()); }
+  catch { return 'MCP error detail is unavailable.'; }
+  const message = error instanceof Error ? error.message.slice(0, 400) : 'MCP operation failed.';
+  const connectionFields = [...before, ...current].flatMap(config => [config.url, config.cwd, config.command])
+    .filter((value): value is string => typeof value === 'string' && value.length >= 8);
+  return connectionFields.some(value => message.includes(value)) ? 'MCP connection detail is unavailable.' : message;
+}
+
+/** The external path is Main-owned and never presents an invented internal sourceSessionId to the v1 RPC service. */
+export async function listMcpServersForExternal(principal: VerifiedMcpInboundPrincipal): Promise<mcpClient.McpServerSummary[]> {
+  requireVerifiedMcpInboundExternalId(principal);
+  assertNotTerminallyShutDown();
+  return mcpClient.listServers();
+}
+
+export async function listMcpToolsForExternal(
+  principal: VerifiedMcpInboundPrincipal, externalSessionId: string, server: string, signal?: AbortSignal,
+): Promise<any[]> {
+  requireVerifiedMcpInboundExternalId(principal);
+  assertNotTerminallyShutDown();
+  const before = await externalConfigSnapshot();
+  const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal), before);
+  const credentials = await externalCredentials(before, false);
+  const items = Array.isArray((listed as any)?.tools) ? (listed as any).tools : Array.isArray(listed) ? listed : [];
+  return items.filter((tool: any) => typeof tool?.name === 'string' && !echoesCredential(tool, credentials) && isToolAuthorizationPotentiallyVisibleSync(
+    buildExternalToolAuthorizationRequest({ principal, sessionId: externalSessionId, tool: { source: 'mcp', server, name: tool.name } }),
+  ));
+}
+
+export async function callMcpToolForExternal(
+  principal: VerifiedMcpInboundPrincipal, externalSessionId: string, server: string,
+  name: string, args: Record<string, unknown>, signal?: AbortSignal,
+): Promise<any> {
+  requireVerifiedMcpInboundExternalId(principal);
+  assertNotTerminallyShutDown();
+  const normalizedArgs = requireJsonArgs(args);
+  const request = buildExternalToolAuthorizationRequest({
+    principal, sessionId: externalSessionId, tool: { source: 'mcp', server, name }, args: normalizedArgs,
+  });
+  if ((await evaluateToolAuthorization(request)).action !== 'allow') {
+    throw new RpcError('MCP_EXTERNAL_DENIED', 'Tool is not permitted.');
+  }
+  const before = await externalConfigSnapshot();
+  let listed: Awaited<ReturnType<typeof mcpClient.listTools>>;
+  try { listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server, signal), before); }
+  catch (error) {
+    const message = await externalErrorDetail(error, before);
+    throw new RpcError('MCP_EXTERNAL_CALL_NOT_SENT', `Tool lookup failed before invocation; no call was sent. ${message}`);
+  }
+  const items = Array.isArray((listed as any)?.tools) ? (listed as any).tools : Array.isArray(listed) ? listed : [];
+  const credentials = await externalCredentials(before, false);
+  if (!items.some((tool: any) => tool?.name === name && !echoesCredential(tool, credentials))) {
+    throw new RpcError('MCP_EXTERNAL_TOOL_NOT_FOUND', 'Tool is not available on the configured server.');
+  }
+  let result: Awaited<ReturnType<typeof mcpClient.callTool>>;
+  try { result = await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, normalizedArgs, { signal, rawResult: true }), before); }
+  catch (error) { throw new RpcError('MCP_EXTERNAL_CALL_FAILED', await externalErrorDetail(error, before)); }
+  if (echoesCredential(result, await externalCredentials(before, true))) {
+    throw new RpcError('MCP_EXTERNAL_OUTPUT_WITHHELD', 'Tool may have completed; remote output echoed a configured credential and was withheld. Do not retry automatically.');
+  }
+  return result;
 }
 
 async function authorize(sourceSessionId: unknown, identity: ResolvedToolPermissionIdentity, args: Record<string, unknown> = {}, expectedSourceSessionId?: string): Promise<Session> {

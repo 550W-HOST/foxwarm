@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
@@ -78,6 +78,19 @@ type HistoryResponse = {
 }
 
 type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
+type PendingQueueAppend = { historyVersion: number; startSeq: number; endSeq: number }
+
+type TimelineState = { messages: Message[]; queuedMessages: Message[] }
+type TimelineAction =
+  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'queue'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[] }
+
+function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
+  if (action.type === 'atomic') return { messages: typeof action.messages === 'function' ? action.messages(state.messages) : action.messages, queuedMessages: action.queuedMessages }
+  if (action.type === 'messages') return { ...state, messages: typeof action.update === 'function' ? action.update(state.messages) : action.update }
+  return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+}
 
 type PendingViewportRestore =
   | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
@@ -194,12 +207,15 @@ type SessionListRecord = {
 }
 
 const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {}, onDraftEdited }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([])
+  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
+  const messages = timelineState.messages
+  const queuedMessages = timelineState.queuedMessages
+  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'messages', update }), [])
+  const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
-  const [queuedMessages, setQueuedMessages] = useState<Message[]>([])
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
@@ -251,6 +267,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const reconnectAwaitingStateRef = useRef(false)
   const queueRefreshNeededRef = useRef(false)
   const historyGapDetectedRef = useRef(false)
+  const pendingQueueAppendRef = useRef<PendingQueueAppend | null>(null)
+  const atomicRecoveryScheduledRef = useRef(false)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
@@ -302,6 +320,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     reconnectAwaitingStateRef.current = false
     queueRefreshNeededRef.current = false
     historyGapDetectedRef.current = false
+    pendingQueueAppendRef.current = null
+    atomicRecoveryScheduledRef.current = false
     queuedMessagesRef.current = []
     pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
@@ -767,6 +787,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         representedMessageCountRef.current = 0
         latestCommittedSeqRef.current = 0
         hasTrustedHistoryFrontierRef.current = false
+        pendingQueueAppendRef.current = null
+        atomicRecoveryScheduledRef.current = false
         fullHistoryLoadedRef.current = true
         setIsFullHistoryLoaded(true)
         setHistoryLoaded(true)
@@ -781,15 +803,27 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
         representedHistoryVersionRef.current = version
         const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
-        latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
-        hasTrustedHistoryFrontierRef.current = typeof data.latestSeq === 'number'
+        const hasAuthoritativeFrontier = typeof data.latestSeq === 'number'
+        if (hasAuthoritativeFrontier) {
+          let contiguousLatestSeq = responseLatestSeq
+          const concurrentSeqs = concurrentMessages()
+            .map(message => message.__meta?.seq)
+            .filter((seq): seq is number => Number.isSafeInteger(seq))
+          for (const seq of [...new Set(concurrentSeqs)].sort((left, right) => left - right)) {
+            contiguousLatestSeq = advanceHistorySeqFrontier(contiguousLatestSeq, seq).latestSeq
+          }
+          latestCommittedSeqRef.current = contiguousLatestSeq
+        } else {
+          latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
+        }
+        hasTrustedHistoryFrontierRef.current = hasAuthoritativeFrontier
         if (complete) {
           fullHistoryLoadedRef.current = true
           setIsFullHistoryLoaded(true)
           setEarlierHistoryError(false)
         }
       }
-      const applyMetadata = (data: HistoryResponse) => {
+      const applyMetadata = (data: HistoryResponse, deferTimeline = false): boolean => {
         const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
         const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
         const hasNewerMismatchedQueue = hasNewerStreamState
@@ -802,12 +836,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (hasNewerMismatchedQueue) {
           queueRefreshNeededRef.current = true
           historyTrailingRefreshRef.current = true
-        } else {
+        } else if (!deferTimeline) {
           setQueuedMessages(Array.isArray(data.queuedMessages) ? data.queuedMessages : [])
           queueRefreshNeededRef.current = false
         }
         setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
         if (!hasNewerStreamState && typeof data.queueLength === 'number') setSessionQueueLength(data.queueLength)
+        return hasNewerMismatchedQueue
       }
       const maybeClearDraft = (snapshotMessages: Message[]) => {
         if (shouldClearDraftAfterHistory({
@@ -823,13 +858,47 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
       const applyFullSnapshot = (data: HistoryResponse, snapshotMessages: Message[]) => {
         const concurrent = concurrentMessages()
+        const pending = pendingQueueAppendRef.current
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
+        const pendingCovered = !pending || responseVersion !== pending.historyVersion || responseLatestSeq >= pending.endSeq
+        const queueMismatch = applyMetadata(data, true)
+        if (!pendingCovered || queueMismatch) {
+          historyTrailingRefreshRef.current = true
+          return false
+        }
+        dispatchTimeline({
+          type: 'atomic',
+          messages: currentMessages => {
+            const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
+            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+            return merged
+          },
+          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+        })
+        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        if (pending) {
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+        }
+        queueRefreshNeededRef.current = false
+        for (const message of snapshotMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, snapshotMessages, true)
+        updateLastTimestamp(snapshotMessages)
+        return true
+      }
+      const applySnapshotBeforePendingQueueAppend = (data: HistoryResponse, snapshotMessages: Message[]) => {
+        const pending = pendingQueueAppendRef.current
+        if (!pending) return false
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
+        if (responseVersion !== pending.historyVersion || responseLatestSeq >= pending.startSeq) return false
+        const concurrent = concurrentMessages()
         setMessages(currentMessages => {
-          const merged = mergeHistorySnapshot({
-            snapshot: snapshotMessages,
-            concurrentMessages: concurrent,
-            currentMessages,
-            pendingClientMessageIds: pendingSentMessageIdsRef.current,
-          })
+          const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
           representedMessageCountRef.current = countCommittedHistoryMessages(merged)
           return merged
         })
@@ -839,6 +908,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         }
         updateFrontier(data, snapshotMessages, true)
         updateLastTimestamp(snapshotMessages)
+        historyGapDetectedRef.current = true
+        queueRefreshNeededRef.current = true
+        historyTrailingRefreshRef.current = true
+        return true
       }
       const fetchAndApplyFull = async (): Promise<boolean> => {
         const { response, data } = await requestJson()
@@ -847,8 +920,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (missing !== null) return missing
         if (!response.ok) throw new Error(data.error || `Failed to fetch history (${response.status})`)
         const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
-        applyMetadata(data)
-        applyFullSnapshot(data, snapshotMessages)
+        if (!applyFullSnapshot(data, snapshotMessages)) return true
         maybeClearDraft(snapshotMessages)
         historyGapDetectedRef.current = false
         reconnectAwaitingStateRef.current = false
@@ -893,7 +965,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               return true
             }
             const prefixMessages = Array.isArray(prefixResult.data.messages) ? prefixResult.data.messages : []
-            applyFullSnapshot(data, [...prefixMessages, ...tailMessages])
+            const assembledSnapshot = [...prefixMessages, ...tailMessages]
+            if (!applyFullSnapshot(data, assembledSnapshot)
+              && !applySnapshotBeforePendingQueueAppend(data, assembledSnapshot)) return true
           } else {
             setMessages(currentMessages => {
               representedMessageCountRef.current = countCommittedHistoryMessages(currentMessages)
@@ -918,12 +992,29 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (response.status === 409 && data.code === 'SESSION_HISTORY_BOUNDARY_STALE') return fetchAndApplyFull()
         if (!response.ok) throw new Error(data.error || `Failed to reconcile history (${response.status})`)
         const appendedMessages = Array.isArray(data.messages) ? data.messages : []
-        applyMetadata(data)
-        setMessages(currentMessages => {
-          const merged = mergeHistoryMessages(currentMessages, appendedMessages)
-          representedMessageCountRef.current = countCommittedHistoryMessages(merged)
-          return merged
+        const pending = pendingQueueAppendRef.current
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(appendedMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : historyVersion
+        const queueMismatch = applyMetadata(data, true)
+        if (queueMismatch || pending && responseVersion === pending.historyVersion && responseLatestSeq < pending.endSeq) {
+          historyTrailingRefreshRef.current = true
+          return true
+        }
+        dispatchTimeline({
+          type: 'atomic',
+          messages: currentMessages => {
+            const merged = mergeHistoryMessages(currentMessages, appendedMessages)
+            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+            return merged
+          },
+          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
         })
+        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        if (pending) {
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+        }
+        queueRefreshNeededRef.current = false
         for (const message of appendedMessages) {
           const clientMessageId = getClientMessageId(message)
           if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
@@ -939,6 +1030,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         return true
       } catch (error) {
         if (controller.signal.aborted) return true
+        if (pendingQueueAppendRef.current) atomicRecoveryScheduledRef.current = false
         console.error('Failed to fetch history:', error)
         if (mode === 'bootstrap') {
           setEarlierHistoryError(true)
@@ -964,13 +1056,27 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return requestPromise
   }, [applySessionState, clearStreamingAssistantDraft, sessionId])
 
+  const scheduleAtomicRecovery = useCallback(() => {
+    if (atomicRecoveryScheduledRef.current) return
+    atomicRecoveryScheduledRef.current = true
+    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
+    historyRefreshTimeoutRef.current = window.setTimeout(() => {
+      historyRefreshTimeoutRef.current = null
+      void fetchHistory('reconcile')
+    }, 0)
+  }, [fetchHistory])
+
   const scheduleHistoryRefresh = useCallback((delay = 100) => {
+    if (pendingQueueAppendRef.current) {
+      scheduleAtomicRecovery()
+      return
+    }
     if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
     historyRefreshTimeoutRef.current = window.setTimeout(() => {
       historyRefreshTimeoutRef.current = null
       void fetchHistory('reconcile')
     }, delay)
-  }, [fetchHistory])
+  }, [fetchHistory, scheduleAtomicRecovery])
 
   const subscribeRealtime = useCallback(() => {
     let unsubscribe = () => {}
@@ -1019,7 +1125,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             || nextMessageCount !== previousMessageCount
             || nextHistoryVersion !== previousHistoryVersion
             || queueRefreshNeededRef.current) {
-            scheduleHistoryRefresh()
+            if (pendingQueueAppendRef.current) scheduleAtomicRecovery()
+            else scheduleHistoryRefresh()
           }
           return
         }
@@ -1055,6 +1162,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           fullHistoryLoadedRef.current = true
           setIsFullHistoryLoaded(true)
           queuedMessagesRef.current = []
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
           unsubscribe()
           setConnectionState('disconnected')
           return
@@ -1089,7 +1198,66 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           return
         }
 
+        if (data.type === 'history-append') {
+          const incomingMessages = Array.isArray(data.messages) ? data.messages as Message[] : []
+          const seqs = incomingMessages.map(message => message.__meta?.seq).filter((seq): seq is number => Number.isSafeInteger(seq))
+          const startSeq = seqs.length ? Math.min(...seqs) : 0
+          const endSeq = seqs.length ? Math.max(...seqs) : 0
+          const historyVersion = Number.isSafeInteger(data.historyVersion) ? data.historyVersion : 0
+          if (historyVersion === representedHistoryVersionRef.current && hasTrustedHistoryFrontierRef.current && endSeq > 0 && endSeq <= latestCommittedSeqRef.current) return
+          let batchFrontier = latestCommittedSeqRef.current
+          let batchHasGap = false
+          if (hasTrustedHistoryFrontierRef.current) {
+            for (const seq of [...new Set(seqs)].sort((left, right) => left - right)) {
+              const next = advanceHistorySeqFrontier(batchFrontier, seq)
+              batchFrontier = next.latestSeq
+              batchHasGap ||= next.gapDetected
+            }
+          }
+          const stateMatches = historyVersion === sessionHistoryVersionRef.current
+            && data.messageCount === sessionMessageCountRef.current
+            && data.queueLength === sessionQueueLengthRef.current
+          if (!stateMatches || batchHasGap || pendingQueueAppendRef.current || historyInFlightRef.current?.sessionId === sessionId) {
+            const existing = pendingQueueAppendRef.current
+            pendingQueueAppendRef.current = existing && existing.historyVersion === historyVersion
+              ? { historyVersion, startSeq: Math.min(existing.startSeq, startSeq), endSeq: Math.max(existing.endSeq, endSeq) }
+              : { historyVersion, startSeq, endSeq }
+            historyGapDetectedRef.current = true
+            queueRefreshNeededRef.current = true
+            scheduleAtomicRecovery()
+            return
+          }
+          dispatchTimeline({
+            type: 'atomic',
+            messages: currentMessages => {
+              const merged = mergeHistoryMessages(currentMessages, incomingMessages)
+              representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+              return merged
+            },
+            queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+          })
+          queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+          for (const message of incomingMessages) {
+            const clientMessageId = getClientMessageId(message)
+            if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+          }
+          representedHistoryVersionRef.current = historyVersion
+          latestCommittedSeqRef.current = hasTrustedHistoryFrontierRef.current ? batchFrontier : Math.max(latestCommittedSeqRef.current, endSeq)
+          hasTrustedHistoryFrontierRef.current = endSeq > 0 || hasTrustedHistoryFrontierRef.current
+          queueRefreshNeededRef.current = false
+          historyGapDetectedRef.current = false
+          return
+        }
+
         if (data.type === 'message') {
+          const incomingMessage = data.message as Message
+          const pendingQueueAppend = pendingQueueAppendRef.current
+          if (pendingQueueAppend && Number.isSafeInteger(incomingMessage.__meta?.seq)
+            && (incomingMessage.__meta?.seq as number) >= pendingQueueAppend.startSeq) {
+            historyGapDetectedRef.current = true
+            scheduleAtomicRecovery()
+            return
+          }
           const msgTimestamp = data.message.__meta?.timestamp
           const isCommandResponse = data.message.__meta?.isCommandResponse
           const isUpdateExisting = data.message.__meta?.updateExisting
@@ -1105,7 +1273,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             scheduleHistoryRefresh()
           }
 
-          const incomingMessage = data.message as Message
           const hasStableIdentity = hasStableHistoryIdentity(incomingMessage)
           if (!isCommandResponse && !isUpdateExisting && !hasStableIdentity
             && msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
@@ -1166,7 +1333,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       },
     })
     return unsubscribe
-  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleHistoryRefresh, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)

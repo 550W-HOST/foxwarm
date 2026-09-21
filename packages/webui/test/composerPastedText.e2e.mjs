@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webuiRoot = path.resolve(__dirname, '..')
@@ -14,9 +15,6 @@ const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-composer-paste-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
 const assetsDirectory = path.join(webuiRoot, 'dist/assets')
-const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
-const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
-const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 let server
 let fixtureUrl
 
@@ -147,7 +145,7 @@ await writeFile(entryPath, `
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
+    alias: webuiReactAliases,
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
   const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))
@@ -180,6 +178,17 @@ async function withBrowser(spec, run) {
   } finally {
     await browser.close()
   }
+}
+
+async function setModalText(page, value) {
+  await page.$eval('textarea[aria-label="Full pasted text"]', (node, nextValue) => {
+    // The native setter mirrors browser input; assigning node.value directly
+    // updates React's value tracker before the input event reaches onChange.
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    if (!setValue) throw new Error('Native textarea value setter is unavailable')
+    setValue.call(node, nextValue)
+    node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
+  }, value)
 }
 
 const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
@@ -219,11 +228,11 @@ for (const spec of browsers) {
     assert.equal(modalGeometry.width >= modalGeometry.viewportWidth * 0.75 && modalGeometry.width <= modalGeometry.viewportWidth * 0.81, true)
     assert.equal(modalGeometry.height >= modalGeometry.viewportHeight * 0.75 && modalGeometry.height <= modalGeometry.viewportHeight * 0.81, true)
     assert.equal(modalGeometry.textareaHeight > modalGeometry.height * 0.5, true)
-    await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'edited\n\n  block'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+    await setModalText(page, 'edited\n\n  block')
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Cancel').click())
     assert.equal(await page.evaluate(text => window.fixtureDraft.includes(`${text}</pasted-text>`), pasted), true)
     await page.click('.foxwarm-composer-pasted-text-chip')
-    await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'edited\n\n  block'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+    await setModalText(page, 'edited\n\n  block')
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save').click())
     assert.equal(await page.evaluate(() => window.fixtureDraft), 'before<pasted-text>edited\n\n  block</pasted-text>X\nYafter')
     await page.waitForFunction(() => document.activeElement?.closest('.foxwarm-composer-pasted-text-chip'))
@@ -252,7 +261,7 @@ for (const spec of browsers) {
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
     await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste('b'.repeat(2000)) })
     await page.click('.foxwarm-composer-pasted-text-chip')
-    await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'ordinary </pasted-text> text'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+    await setModalText(page, 'ordinary </pasted-text> text')
     assert.equal(await page.$eval('button', () => !![...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save')?.disabled), true)
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Restore to text').click())
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
@@ -1346,7 +1355,7 @@ test('Chromium blocks custom and native draft mutations throughout disabled tran
   await page.evaluate(() => { window.fixtureSelectText(5, 6); window.fixturePaste('d'.repeat(2000)) })
   const expected = await page.evaluate(() => window.fixtureDraft)
   await page.click('.foxwarm-composer-pasted-text-chip')
-  await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'stale modal edit'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+  await setModalText(page, 'stale modal edit')
   await page.evaluate(() => {
     window.fixtureStaleSave = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save')
     window.fixtureStaleRestore = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Restore to text')
@@ -1442,7 +1451,7 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.evaluate(() => window.fixtureSelectAll())
   await page.keyboard.down('Control'); await page.keyboard.press('x'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), '')
-  await page.evaluate(() => window.fixtureEditor().dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'historyUndo' })))
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), exact)
 
   await page.evaluate(() => { window.fixtureAccept = false })

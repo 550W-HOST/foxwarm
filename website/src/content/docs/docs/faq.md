@@ -1,54 +1,44 @@
 ---
 title: FAQ
-description: Answers to common questions about installing, configuring, and running Foxwarm.
+description: Resolve common setup, connection, and configuration problems.
 ---
 
-## Is foxwarm.550w.host a hosted Foxwarm service?
+## Is the documentation site a hosted Foxwarm service?
 
-No. The domain serves the static project site, documentation, and installer files. Your WebUI, API, data, model credentials, and Agents stay on the machine where you install Foxwarm.
+No. It hosts documentation and installer downloads. Install Foxwarm on your own machine or server to use the WebUI and run Agents.
 
-## Where is my login token?
+## Where do I log in?
 
-The installer prints a URL containing the token. You can also read `foxwarm-data/state/token` (or `state/token` under your custom data directory) and open:
+Use your installation's WebUI URL, not the documentation site. The startup URL includes the access token. See [Open the WebUI](/docs/installing/#open-the-webui) to recover it.
 
-```text
-http://localhost:3001/#token=<token>
-```
+The WebUI token, Node pairing token, and external MCP identity tokens serve different purposes. Use the credential required by the interface you are connecting to.
 
-## Why is Setup locked open?
+## Why does Setup stay open?
 
-Foxwarm needs a valid model configuration before it can open the rest of WebUI. First-run Setup stays open while `state/models.yaml` is absent.
+The active data directory does not yet contain `state/models.yaml`. Complete [model setup](/docs/model-setup/) and save the configuration. If you expected an existing configuration, check that Foxwarm is using the intended data directory before creating a replacement.
 
-## Do I need an OpenAI account?
+## Models save successfully, but chat fails. What should I check?
 
-Foxwarm supports OpenAI-compatible and Anthropic-compatible providers. You need a reachable endpoint, an exact model ID, and any credentials that endpoint requires.
+Saving validates the configuration; it does not make a live model request. Check the provider type, API base URL, exact model ID, and credentials, then try a short text-only message. Only enable optional hosted tools after that works.
 
-## Do I need a Node?
+For endpoint-specific features, see [Model options and routing](/docs/model-options/). For connection errors, also inspect the instance's `state/logs/`.
 
-No. `master` is the default local Node. Pair another Node when tools need a different environment or a remote, browser, or interactive capability.
+## Why can Foxwarm not reach a service at localhost?
 
-## Do I need a messaging Channel?
+`localhost` refers to the environment making the request. Inside a container it means that container; on a remote Node it means that Node. Use an address reachable from the component that needs the service.
 
-No. WebUI supports the local workflow by itself. Telegram, Matrix, WeWork, Weixin, and QQ Bot are optional adapters.
+For a model service on the Docker host, `host.docker.internal` can be used where configured and supported. The repository's Compose setup includes a host-gateway mapping for it. The service must also listen on an address accessible from the container.
 
-## Is Agent memory the same as chat history?
+## I saved Config. Do I need to restart?
 
-They serve different purposes. Agent memory is curated long-lived Markdown, Session history is the active conversation and tool record, and optional Vector memory is a derived semantic index over archived context.
+Saving **Setup → Config** refreshes managed Channels. Startup settings such as the HTTP port, Node providers, Vector search, and MCP inbound configuration require a Foxwarm restart.
 
-## Why does a local model URL fail in Docker?
+For Docker Compose, changing the application port also requires matching changes to the port mapping and healthcheck. See [Docker Compose installation](/docs/installing/#docker-compose).
 
-Inside a container, `localhost` points back to the container. Use an address that reaches the model service on the host, such as `host.docker.internal` where supported, and make sure the service accepts the connection.
+## A Channel connects, but messages do not reach my Session. Why?
 
-## How do I change the WebUI port?
+Check the sender's platform ID against `allowedUsers`, then inspect the conversation's Session attachment. The bot's credentials, sender permissions, and conversation routing are separate checks. The [Channels guide](/docs/channels/#check-a-connection) covers the sequence.
 
-Set `bot.httpPort` in `foxwarm-data/state/config.yaml`. For Docker Compose, update the compose port mapping and healthcheck to match.
+## Where should I report a problem?
 
-## How do I inspect startup problems?
-
-- Linux/macOS/WSL: `tmux attach -t foxwarm`
-- Any default install: inspect `foxwarm-data/state/logs/`
-- Windows: `npm run status:windows`
-
-## Where are the deeper technical docs?
-
-Architecture and reference guides live in the repository under [`docs/`](https://github.com/550W-HOST/foxwarm/tree/main/docs). Contributors and coding agents can use the [Code Index](https://github.com/550W-HOST/foxwarm/tree/main/docs/code-index) to find the relevant source.
+Use the repository's [issue tracker](https://github.com/550W-HOST/foxwarm/issues). Include the Foxwarm commit, platform, install method, relevant error, and steps to reproduce. Remove tokens, API keys, private messages, and sensitive paths from logs before sharing them.

@@ -10,12 +10,15 @@ import {
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
   normalizeHandoffConfirmationEnabled,
+  normalizeMcpInboundConfig,
   normalizeCompactionConfig,
   normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
+  normalizeProviderImageOutputFormat,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
+  safeAppConfigYamlError,
 } from './config';
 
 export type ProviderSetupDraft = {
@@ -58,7 +61,15 @@ export function readRawTextFileIfExists(filePath: string): string {
 }
 
 function parseYamlObject(rawYaml: string, label: string): Record<string, any> {
-  const parsed = yaml.load(rawYaml);
+  let parsed: unknown;
+  try {
+    parsed = yaml.load(rawYaml);
+  } catch (error) {
+    if (label === 'app config' && error instanceof yaml.YAMLException) {
+      throw safeAppConfigYamlError(error);
+    }
+    throw error;
+  }
   if (parsed === undefined || parsed === null) {
     return {};
   }
@@ -87,6 +98,7 @@ export function readRawAppConfigFile(filePath: string = APP_CONFIG_PATH): string
 
 export function validateAppConfigYaml(rawYaml: string): AppConfig {
   const config = parseYamlObject(rawYaml, 'app config') as AppConfig;
+  normalizeMcpInboundConfig(config.mcpInbound);
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
   }
@@ -99,6 +111,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
   normalizeCompactionConfig(config.llm);
+  normalizeProviderImageOutputFormat(config.llm?.providerImageOutputFormat);
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   normalizeHandoffConfirmationEnabled(config.handoffConfirmation);
@@ -261,7 +274,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {

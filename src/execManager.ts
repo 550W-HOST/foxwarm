@@ -1,4 +1,5 @@
 import path from 'path';
+import type { ExternalNodeOwner } from '../packages/shared/dist/nodeProtocol';
 import { STATE_DIR, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
@@ -26,6 +27,8 @@ export interface InitializeExecManagerOptions {
 export interface ExecRuntimeOptions {
   getDefaultCwd: (agentName: string) => string;
   getExecTempDir: (agentName: string) => string;
+  getExternalDefaultCwd?: (owner: ExternalNodeOwner) => string;
+  getExternalExecTempDir?: (owner: ExternalNodeOwner) => string;
   registryPath?: string;
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
@@ -57,6 +60,8 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
   const manager = new PersistentExecManager({
     getDefaultCwd: options.getDefaultCwd,
     getExecTempDir: options.getExecTempDir,
+    getExternalDefaultCwd: options.getExternalDefaultCwd,
+    getExternalExecTempDir: options.getExternalExecTempDir,
     registryPath: options.registryPath,
     nodeId,
     logger,

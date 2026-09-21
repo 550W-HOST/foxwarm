@@ -271,6 +271,7 @@ Example:
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
                     suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
+                    displayName: { type: 'string', description: "Display name for the new child session. This does not change its session ID." },
                     fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },
                     message: { type: 'string', description: "Initial task or message to send immediately after creation. Omit to create the child without starting a turn." },
                     afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session." },

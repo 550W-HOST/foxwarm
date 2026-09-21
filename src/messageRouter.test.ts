@@ -133,37 +133,27 @@ test('MessageRouter materializes deferred channel media only after canonical aut
   }
 });
 
-test('MessageRouter uses QQ Bot conversation identity as the passive reply merge boundary', () => {
-  const router = new MessageRouter() as any;
-  const runner = router.turnRunner as any;
-  const source = {
-    platform: 'qqbot',
-    channelId: 'qq-primary',
-    channelType: 'qqbot',
-    channelUserId: 'c2c:user-openid',
-    conversationId: 'c2c:user-openid',
-    qqbotMessageId: 'incoming-message-id',
-  };
-
-  assert.equal(
-    runner.getSourceStreamKey(source),
-    'qqbot:qq-primary:c2c:user-openid',
-  );
-  assert.deepEqual(runner.getTurnChannelOptions(undefined, source), {
-    qqbotMessageId: 'incoming-message-id',
-    qqbotChannelId: 'qq-primary',
-    qqbotConversationId: 'c2c:user-openid',
-  });
-});
-
 test('MessageRouter top-level queue drain persists user and intersession inputs separately before one model request', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('top_level_queue_message_boundaries');
   const originalChat = llm.chat;
   const seenRequests: Message[][] = [];
   session.queue.push(
-    { type: 'user', parts: [{ text: 'queued channel user' }] },
-    { type: 'intersession', message: { role: 'user', parts: [{ system: 'queued intersession notice' }] } },
+    {
+      type: 'user',
+      source: { platform: 'wework', channelId: 'wework-a', channelUserId: 'chat-a', conversationId: 'chat-a' },
+      parts: [{ text: 'queued channel user' }],
+    },
+    {
+      type: 'intersession',
+      source: { platform: 'qqbot', channelId: 'qq-a', channelUserId: 'c2c:user-b', conversationId: 'c2c:user-b' },
+      message: { role: 'user', parts: [{ system: 'queued intersession notice' }] },
+    },
+    {
+      type: 'user',
+      source: { platform: 'webui', channelId: 'webui', channelUserId: 'browser', conversationId: 'browser' },
+      parts: [{ text: 'queued WebUI steering' }],
+    },
   );
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
@@ -179,9 +169,10 @@ test('MessageRouter top-level queue drain persists user and intersession inputs 
     assert.equal(seenRequests.length, 1);
     assert.equal(countHistoryPartText(seenRequests[0], 'queued channel user'), 1);
     assert.equal(countHistoryPartSystem(seenRequests[0], 'queued intersession notice'), 1);
+    assert.equal(countHistoryPartText(seenRequests[0], 'queued WebUI steering'), 1);
     const queuedInputMessages = seenRequests[0].filter(message => message.role === 'user'
-      && message.parts.some(part => part.text === 'queued channel user' || part.system === 'queued intersession notice'));
-    assert.equal(queuedInputMessages.length, 2);
+      && message.parts.some(part => part.text === 'queued channel user' || part.system === 'queued intersession notice' || part.text === 'queued WebUI steering'));
+    assert.equal(queuedInputMessages.length, 3);
     assert.notEqual(queuedInputMessages[0], queuedInputMessages[1]);
     assert.equal(session.queue.length, 0);
   } finally {
@@ -231,32 +222,6 @@ test('MessageRouter outer owner sequences compact then turn then trailing compac
   }
 });
 
-test('MessageRouter keeps the first queued item as the turn source when later compatible input has a source', async () => {
-  const router = new MessageRouter() as any;
-  const captured: any[] = [];
-  const session = await createRouterQueueTestSession('queue_first_item_source');
-  session.queue.push(
-    { type: 'intersession', message: { role: 'user', parts: [{ system: 'first intersession event' }] } },
-    {
-      type: 'user',
-      source: { platform: 'webui', channelId: 'webui', conversationId: 'browser', channelUserId: 'browser' },
-      parts: [{ text: 'later web input' }],
-    },
-  );
-  router.turnRunner.runSessionTurn = async (_sessionId: string, options: any) => captured.push(options);
-
-  try {
-    await processOwnedTestQueue(router, session);
-
-    assert.equal(captured.length, 1);
-    assert.equal(captured[0].source, undefined);
-    assert.equal(captured[0].queuedItems.length, 2);
-    assert.equal(session.queue.length, 0);
-  } finally {
-    await sessionManager.deleteSession(session.id).catch(() => {});
-  }
-});
-
 test('MessageRouter concurrent unbound-channel resolution returns one attached lifetime', async () => {
   await sessionManager.loadSessions();
   const router = new MessageRouter() as any;
@@ -287,103 +252,6 @@ test('MessageRouter concurrent unbound-channel resolution returns one attached l
   await sessionManager.deleteSession(sessionId);
 });
 
-test('MessageRouter queued turn start keeps WeWork stream-bound and unbound inputs separate', () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    queue: [
-      {
-        type: 'user',
-        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-a' },
-        parts: [{ text: 'stream input' }],
-      },
-      {
-        type: 'user',
-        source: { platform: 'webui', channelId: 'webui', conversationId: 'browser' },
-        parts: [{ text: 'web input' }],
-      },
-    ],
-  };
-
-  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
-  assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'stream input'), true);
-  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'web input')), false);
-  assert.equal(session.queue.length, 1);
-});
-
-test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs before next LLM call', async () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    id: 'queue-consumption-same-stream',
-    history: [],
-    queue: [
-      {
-        type: 'user',
-        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-a' },
-        parts: [{ text: 'next stream input' }],
-      },
-      {
-        type: 'user',
-        source: { platform: 'webui', channelId: 'webui', conversationId: 'browser' },
-        parts: [{ text: 'web input' }],
-      },
-    ],
-  };
-
-  const originalAppend = sessionManager.appendSessionMessage;
-  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
-  try {
-    const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
-      session,
-      [{ text: 'pending' }],
-      { streamKey: 'wework:wework-a:chat-a', preferDirectReply: false },
-    );
-
-    assert.equal(consumed.parts, null);
-    assert.deepEqual(session.history.map((message: Message) => message.parts), [
-      [{ text: 'pending' }],
-      [{ text: 'next stream input' }],
-      [{ text: 'web input' }],
-    ]);
-    assert.equal(session.queue.length, 0);
-  } finally {
-    (sessionManager as any).appendSessionMessage = originalAppend;
-  }
-});
-
-test('MessageRouter in-turn queue consumption merges a newer WeWork card in the same conversation', async () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    id: 'queue-consumption-new-card',
-    history: [],
-    queue: [
-      {
-        type: 'user',
-        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-b' },
-        parts: [{ text: 'next card input' }],
-      },
-    ],
-  };
-
-  const originalAppend = sessionManager.appendSessionMessage;
-  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
-  try {
-    const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
-      session,
-      [{ text: 'pending' }],
-      { streamKey: 'wework:wework-a:chat-a', preferDirectReply: false },
-    );
-
-    assert.equal(consumed.parts, null);
-    assert.deepEqual(session.history.map((message: Message) => message.parts), [
-      [{ text: 'pending' }],
-      [{ text: 'next card input' }],
-    ]);
-    assert.equal(session.queue.length, 0);
-  } finally {
-    (sessionManager as any).appendSessionMessage = originalAppend;
-  }
-});
-
 test('MessageRouter does not inject source prefix twice for drained queued parts', () => {
   const router = new MessageRouter() as any;
   const ctx = {
@@ -411,7 +279,7 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   };
 
   const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
-  const parts = router.turnRunner.prepareTurnParts(session, 'session-1', drained.items[0].parts);
+  const parts = router.turnRunner.prepareTurnParts(session, 'session-1', drained[0].parts);
 
   const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
     && part.system.startsWith('<foxwarm-message ')
@@ -468,6 +336,36 @@ test('MessageRouter adds normal channel delivery guidance only to non-WebUI norm
     assert.equal(webuiTag?.attrs.hint, 'direct user message via channel');
   } finally {
     (sessionManager as any).getChannelConfig = originalGetChannelConfig;
+  }
+});
+
+test('MessageRouter preserves WebUI pasted-text bodies in direct channel wrappers', () => {
+  const router = new MessageRouter() as any;
+  const ctx = {
+    channelId: 'webui', channelType: 'webui', platform: 'webui',
+    channelUserId: 'fixture/main', conversationId: 'fixture/main', username: 'webui',
+    reply: async () => {}, sendTyping: async () => {},
+  };
+  const message = (parts: MessagePart[]) => router.buildChannelUserQueueItem(ctx, {
+    parts, channelUserId: ctx.channelUserId, conversationId: ctx.conversationId,
+  }).parts as MessagePart[];
+
+  for (const pasted of ['A'.repeat(2000), `${'A'.repeat(2000)}\n`]) {
+    const body = `<pasted-text>${pasted}</pasted-text>`;
+    const textOnly = message([{ text: body }]);
+    assert.equal(textOnly.length, 1);
+    assert.match(textOnly[0].system || '', /^<foxwarm-message type="channel" channelType="webui" /);
+    assert.equal(textOnly[0].system?.endsWith(`\n${body}\n</foxwarm-message>`), true);
+
+    const file = message([{ text: `${body}<attachment-ref ref="attachment1" />` }, {
+      text: '<foxwarm-file name="attachment1_notes.txt" node="master" path="/fixture/notes.txt" mime="text/plain" />',
+    }]);
+    assert.equal(file.length, 1);
+    assert.equal(file[0].system?.includes(`\n${body}<attachment-ref ref="attachment1" />\n<foxwarm-file `), true);
+
+    const image = message([{ text: body }, { inlineData: { mimeType: 'image/png', data: 'AAAA' } }]);
+    assert.deepEqual(image.map(part => Object.keys(part)), [['system'], ['text'], ['inlineData'], ['system']]);
+    assert.equal(image[1].text, body);
   }
 });
 
@@ -600,164 +498,13 @@ test('MessageRouter turn metadata no longer injects an idle-gap time marker', ()
   assert.ok(!sessionPart?.system.includes(' hint='));
 });
 
-test('MessageRouter queue draining merges different WeWork stream ids in one conversation', () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    queue: [
-      {
-        type: 'user',
-        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-a' },
-        parts: [{ text: 'first stream' }],
-      },
-      {
-        type: 'user',
-        source: { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-b' },
-        parts: [{ text: 'second stream' }],
-      },
-    ],
-  };
-
-  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
-  assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'first stream'), true);
-  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), true);
-  assert.equal(session.queue.length, 0);
-});
-
-test('MessageRouter keeps different QQ and WeWork conversations as hard merge boundaries', () => {
-  const router = new MessageRouter() as any;
-  for (const sources of [
-    [
-      { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
-      { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b', qqbotMessageId: 'qq-2' },
-    ],
-    [
-      { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-1' },
-      { platform: 'wework', channelId: 'wework-b', conversationId: 'chat-a', weworkStreamId: 'stream-2' },
-    ],
-  ]) {
-    const session: any = { queue: sources.map((source, index) => ({ type: 'user', source, parts: [{ text: `input-${index}` }] })) };
-    const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
-    assert.equal(drained.items.length, 1);
-    assert.equal(session.queue.length, 1);
-  }
-});
-
-test('MessageRouter leaves a different QQ conversation for provider call three after an active tool loop', async () => {
-  const router = new MessageRouter() as any;
-  const session = await createRouterQueueTestSession('qq_conversation_boundary_call_three');
-  const originalChat = llm.chat;
-  const originalExecuteTools = llm.executeTools;
-  let chatCalls = 0;
-  const turnIds: string[] = [];
-
-  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options: any) => {
-    chatCalls += 1;
-    turnIds.push(options?.turnId);
-    if (parts) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
-    }
-    if (chatCalls === 1) {
-      const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
-      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
-      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
-    }
-    const text = chatCalls === 2 ? 'first conversation final' : 'second conversation final';
-    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text }] });
-    return { text, allParts: [{ text }] };
-  };
-  (llm as any).executeTools = async () => {
-    await sessionManager.enqueueSessionItem(session.id, {
-      type: 'user',
-      source: { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b', channelUserId: 'c2c:user-b', qqbotMessageId: 'qq-2' },
-      parts: [{ text: 'different conversation input' }],
-    });
-    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }] };
-  };
-
-  try {
-    session.queue.push({
-      type: 'user', parts: [{ text: 'first conversation input' }],
-      source: { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
-    });
-    await processOwnedTestQueue(router, session);
-    assert.equal(chatCalls, 3);
-    assert.equal(turnIds.length, 3);
-    assert.match(turnIds[0], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    assert.equal(turnIds[0], turnIds[1], 'one session turn keeps one TURN_ID across its tool loop');
-    assert.notEqual(turnIds[0], turnIds[2], 'a later runSessionTurn receives a new TURN_ID');
-    assert.equal(userTextOccurrences(session, 'different conversation input'), 1);
-    assert.equal(session.queue.length, 0);
-  } finally {
-    (llm as any).chat = originalChat;
-    (llm as any).executeTools = originalExecuteTools;
-    sessionManager.clearActiveSessionRuntimeState(session.id);
-    await sessionManager.deleteSession(session.id).catch(() => {});
-  }
-});
-
-test('MessageRouter keeps a different QQ conversation separate at the pre-final safe point', async () => {
-  const router = new MessageRouter() as any;
-  const session = await createRouterQueueTestSession('qq_conversation_boundary_pre_final');
-  const originalChat = llm.chat;
-  const broadcasts: Array<{ text: string; options?: any }> = [];
-  let chatCalls = 0;
-  session.broadcast = (text: string, options?: any) => broadcasts.push({ text, options });
-
-  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    chatCalls += 1;
-    if (parts) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
-    }
-    if (chatCalls === 1) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'first conversation final' }] });
-      await sessionManager.enqueueSessionItem(session.id, {
-        type: 'user',
-        source: {
-          platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b',
-          channelUserId: 'c2c:user-b', qqbotMessageId: 'qq-2',
-        },
-        parts: [{ text: 'different conversation input' }],
-      });
-      return { text: 'first conversation final', allParts: [{ text: 'first conversation final' }] };
-    }
-
-    assert.equal(userTextOccurrences(activeSession, 'different conversation input'), 1);
-    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'second conversation final' }] });
-    return { text: 'second conversation final', allParts: [{ text: 'second conversation final' }] };
-  };
-
-  try {
-    session.queue.push({
-      type: 'user', parts: [{ text: 'first conversation input' }],
-      source: {
-        platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a',
-        channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1',
-      },
-    });
-    await processOwnedTestQueue(router, session);
-
-    assert.equal(chatCalls, 2);
-    assert.deepEqual(broadcasts.map(entry => entry.text), [
-      'first conversation final',
-      'second conversation final',
-    ]);
-    assert.equal(broadcasts.every(entry => entry.options?.turnFinal === true), true);
-    assert.equal(broadcasts.some(entry => entry.options?.parse_mode === 'Markdown'), false);
-    assert.equal(session.queue.length, 0);
-  } finally {
-    (llm as any).chat = originalChat;
-    sessionManager.clearActiveSessionRuntimeState(session.id);
-    await sessionManager.deleteSession(session.id).catch(() => {});
-  }
-});
-
 test('MessageRouter applies pending auto-compaction before a late compatible follow-up provider call', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('late_followup_compaction_gate');
   const originalChat = llm.chat;
   const originalProcessSessionCompactionRequest = sessionManager.processSessionCompactionRequest;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
-  const source = { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' };
+  const source: any = { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' };
   let chatCalls = 0;
   let compactRequests = 0;
   let compactApplies = 0;
@@ -769,7 +516,7 @@ test('MessageRouter applies pending auto-compaction before a late compatible fol
     if (chatCalls === 1) {
       await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'intermediate answer' }] });
       await sessionManager.enqueueSessionItem(session.id, {
-        type: 'user', source: { ...source, qqbotMessageId: 'qq-2' }, parts: [{ text: 'late compacted follow-up' }],
+        type: 'user', source: { ...source, qqbotMessageId: 'qq-2' } as any, parts: [{ text: 'late compacted follow-up' }],
       });
       return { text: 'intermediate answer', allParts: [{ text: 'intermediate answer' }], usage: { cachedTokens: 0, inputTokens: 100, outputTokens: 10 } };
     }
@@ -804,7 +551,7 @@ test('MessageRouter applies pending auto-compaction before a late compatible fol
   }
 });
 
-test('MessageRouter snapshots and serializes direct-reply routing intent', () => {
+test('MessageRouter does not snapshot legacy direct-reply routing intent', () => {
   const router = new MessageRouter() as any;
   const baseCtx = {
     channelUserId: 'conversation-a',
@@ -816,131 +563,21 @@ test('MessageRouter snapshots and serializes direct-reply routing intent', () =>
     reply: async () => {},
     sendTyping: async () => {},
   };
-  const direct = router.buildChannelUserQueueItem({ ...baseCtx, preferDirectReply: true }, {
-    parts: [{ text: 'direct' }], channelUserId: 'conversation-a', conversationId: 'conversation-a',
+  const item = router.buildChannelUserQueueItem({ ...baseCtx, preferDirectReply: true } as any, {
+    parts: [{ text: 'input' }], channelUserId: 'conversation-a', conversationId: 'conversation-a',
   });
-  const broadcast = router.buildChannelUserQueueItem({ ...baseCtx, preferDirectReply: false }, {
-    parts: [{ text: 'broadcast' }], channelUserId: 'conversation-a', conversationId: 'conversation-a',
-  });
-
-  assert.equal(JSON.parse(JSON.stringify(direct)).source.preferDirectReply, true);
-  assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(JSON.stringify(broadcast)).source, 'preferDirectReply'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(JSON.stringify(item)).source, 'preferDirectReply'), false);
 });
 
-test('MessageRouter keeps different direct-reply intents in separate queued turns', () => {
+test('SessionTurnRunner terminal provider delivery requires an attachment broadcast path', async () => {
   const router = new MessageRouter() as any;
-  const session: any = {
-    queue: [
-      { type: 'user', source: { platform: 'test', channelUserId: 'conversation', preferDirectReply: true }, parts: [{ text: 'direct' }] },
-      { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'broadcast' }] },
-    ],
-  };
-
-  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
-  assert.equal(drained.items.length, 1);
-  assert.equal(drained.items[0].source?.preferDirectReply, true);
-  assert.equal(session.queue.length, 1);
-});
-
-test('MessageRouter source boundaries do not collide with sentinel-like legal stream ids', () => {
-  const router = new MessageRouter() as any;
-  const sentinelLike = 'stream-a\u0000prefer-direct-reply';
-  const falseSentinelSource = { platform: 'wework', channelUserId: 'conversation', weworkStreamId: sentinelLike };
-  const trueNormalSource = { platform: 'wework', channelUserId: 'conversation', weworkStreamId: 'stream-a', preferDirectReply: true };
-  for (const sources of [[falseSentinelSource, trueNormalSource], [trueNormalSource, falseSentinelSource]]) {
-    const session: any = { queue: sources.map((source, index) => ({ type: 'user', source, parts: [{ text: `item-${index}` }] })) };
-    assert.equal(router.turnRunner.drainLeadingQueuedTurnInputs(session).items.length, 1);
-    assert.equal(session.queue.length, 1);
-  }
-
-  for (const source of [falseSentinelSource, { ...falseSentinelSource, preferDirectReply: true }]) {
-    const session: any = { queue: [
-      { type: 'user', source, parts: [{ text: 'same-a' }] },
-      { type: 'user', source: { ...source }, parts: [{ text: 'same-b' }] },
-    ] };
-    assert.equal(router.turnRunner.drainLeadingQueuedTurnInputs(session).items.length, 2);
-    assert.equal(session.queue.length, 0);
-  }
-});
-
-test('MessageRouter does not merge a different direct-reply intent into an active turn', async () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    queue: [
-      { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'broadcast follow-up' }] },
-    ],
-  };
-  const directKey = router.turnRunner.getSourceMergeBoundary({
-    platform: 'test', channelUserId: 'conversation', preferDirectReply: true,
-  });
-  const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(session, [{ text: 'current direct turn' }], directKey);
-  assert.equal(consumed.consumedInput, false);
-  assert.equal(session.queue.length, 1);
-});
-
-test('MessageRouter active turns do not decode sentinel-like stream suffixes as direct intent', async () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    history: [],
-    queue: [
-      { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'unbound broadcast follow-up' }] },
-    ],
-  };
-  const boundary = router.turnRunner.getSourceMergeBoundary({
-    platform: 'wework', channelUserId: 'conversation', weworkStreamId: 'stream-a\u0000prefer-direct-reply',
-  });
-  const originalAppend = sessionManager.appendSessionMessage;
-  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
-  try {
-    const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(session, null, boundary);
-    assert.equal(consumed.consumedInput, true);
-    assert.equal(session.queue.length, 0);
-  } finally {
-    (sessionManager as any).appendSessionMessage = originalAppend;
-  }
-});
-
-test('SessionTurnRunner terminal provider delivery uses snapshotted direct intent instead of a mutated live context flag', async () => {
-  const router = new MessageRouter() as any;
-  const directReplies: string[] = [];
   const broadcasts: string[] = [];
   const session: any = { broadcast: (text: string) => broadcasts.push(text) };
-  const ctx: any = {
-    channelUserId: 'conversation-a', conversationId: 'conversation-a', channelId: 'channel-a',
-    channelType: 'test', username: 'user-a', platform: 'test', preferDirectReply: true,
-    reply: async (text: string) => { directReplies.push(text); }, sendTyping: async () => {},
-  };
-  const directSource = router.turnRunner.snapshotSource(ctx);
-  ctx.preferDirectReply = false;
-  assert.equal(await router.turnRunner.deliverProviderResultText(session, ctx, directSource, 'direct once', false, session.broadcast, {}), true);
-  assert.deepEqual(directReplies, ['direct once']);
-  assert.deepEqual(broadcasts, []);
+  assert.equal(await router.turnRunner.deliverProviderResultText(session, 'broadcast once', false, session.broadcast, 'turn-a'), true);
+  assert.deepEqual(broadcasts, ['broadcast once']);
 
-  ctx.preferDirectReply = true;
-  await router.turnRunner.deliverProviderResultText(session, ctx, { platform: 'test', channelUserId: 'conversation-a' }, 'broadcast absent', false, session.broadcast, {});
-  await router.turnRunner.deliverProviderResultText(session, ctx, { platform: 'test', channelUserId: 'conversation-a', preferDirectReply: false }, 'broadcast false', false, session.broadcast, {});
-  assert.deepEqual(directReplies, ['direct once']);
-  assert.deepEqual(broadcasts, ['broadcast absent', 'broadcast false']);
-
-  await router.turnRunner.deliverProviderResultText(session, { ...ctx, reply: undefined }, directSource, 'fallback without callback', false, session.broadcast, {});
-  assert.deepEqual(broadcasts, ['broadcast absent', 'broadcast false', 'fallback without callback']);
-});
-
-test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {
-  const router = new MessageRouter() as any;
-  const events: Array<{ text: string; options: any }> = [];
-
-  router.turnRunner.emitTurnProgress((text: string, options?: any) => events.push({ text, options }), {
-    weworkStreamId: 'stream-1',
-    weworkStreamChannelId: 'wework-a',
-    weworkStreamConversationId: 'chat-a',
-  }, { type: 'llm-start' });
-
-  assert.equal(events.length, 1);
-  assert.equal(events[0].text, '');
-  assert.equal(events[0].options.allowEmptyBroadcast, true);
-  assert.deepEqual(events[0].options.targetChannel, { channelId: 'wework-a', conversationId: 'chat-a' });
-  assert.deepEqual(events[0].options.channelTurnProgress, { type: 'llm-start' });
+  const noBroadcastSession: any = {};
+  assert.equal(await router.turnRunner.deliverProviderResultText(noBroadcastSession, 'no attachment', false, undefined, 'turn-b'), false);
 });
 
 test('MessageRouter LLM retry notifier appends one display-only message then updates it', async () => {
@@ -1091,65 +728,36 @@ test('MessageRouter LLM retry notifier sends only the first ordinary-channel sni
   }
 });
 
-test('MessageRouter LLM retry notifier sends active WeWork intermediates only to the current stream target', async () => {
+test('MessageRouter awaits the first retry snippet and then broadcasts the successful final answer', async () => {
   const router = new MessageRouter() as any;
-  const session: Session = {
-    id: 'retry_notice_wework_session',
-    history: [],
-    persistentMemorySnapshot: '',
-    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
-    busy: false,
-    queue: [],
-    meta: { lastMessageTime: Date.now() },
-  } as Session;
-  const general: Array<{ text: string; options: any }> = [];
-  const all: Array<{ text: string; options: any }> = [];
-  const host = (router.turnRunner as any).host;
-  const originalAppend = host.appendSessionMessage;
-  const originalSave = host.saveSession;
-  const originalNotify = host.notifyHistoryUpdate;
-  host.appendSessionMessage = async (targetSession: Session, message: Message) => {
-    message.__meta = { ...(message.__meta || {}), timestamp: message.__meta?.timestamp || Date.now(), seq: 1 };
-    targetSession.history.push(message);
+  const broadcasts: Array<{ text: string; options: any }> = [];
+  const session = await createRouterQueueTestSession('retry_success_broadcast_session');
+  session.broadcast = (text: string, options?: any) => { broadcasts.push({ text, options }); };
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, activeSession: Session, _iteration: number, options: any) => {
+    if (parts) await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    await options.onRetry({
+      attempt: 1, nextAttempt: 2, maxRetries: 3, delayMs: 1000,
+      kind: 'request-error', reason: 'temporary main outage',
+    });
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'main recovered answer' }] });
+    return { text: 'main recovered answer' };
   };
-  host.saveSession = async () => {};
-  host.notifyHistoryUpdate = () => {};
-  session.broadcast = (text: string, options?: any) => all.push({ text, options });
-  let turnOptions = {
-    weworkStreamId: 'stream-a',
-    weworkStreamChannelId: 'wework-a',
-    weworkStreamConversationId: 'chat-a',
-  };
-  const notify = router.turnRunner.createLlmRetryNotifier(
-    session,
-    (text: string, options?: any) => general.push({ text, options }),
-    () => turnOptions,
-  );
 
   try {
-    await notify({ attempt: 1, nextAttempt: 2, maxRetries: 4, delayMs: 1000, kind: 'request-error', reason: 'outage one' });
-    await notify({ attempt: 2, nextAttempt: 3, maxRetries: 4, delayMs: 1000, kind: 'request-error', reason: 'outage two' });
-    turnOptions = {
-      weworkStreamId: 'stream-b',
-      weworkStreamChannelId: 'wework-b',
-      weworkStreamConversationId: 'chat-b',
-    };
-    await notify({ attempt: 3, nextAttempt: 4, maxRetries: 4, delayMs: 1000, kind: 'request-error', reason: 'outage three' });
-    await notify({ attempt: 4, maxRetries: 4, final: true, kind: 'request-error', reason: 'outage final' });
+    session.queue.push({ type: 'user', parts: [{ text: 'retry successfully' }] });
+    await processOwnedTestQueue(router, session);
 
-    assert.equal(general.length, 2);
-    assert.equal(all.length, 2);
-    assert.deepEqual(all[0].options.targetChannel, { channelId: 'wework-a', conversationId: 'chat-a' });
-    assert.deepEqual(all[1].options.targetChannel, { channelId: 'wework-b', conversationId: 'chat-b' });
-    assert.equal(all[0].options.weworkStreamId, 'stream-a');
-    assert.equal(all[1].options.weworkStreamId, 'stream-b');
-    assert.deepEqual(all.map(event => event.options.excludePlatforms), [['webui'], ['webui']]);
-    assert.equal(all.every(event => event.text.startsWith('⚠️ LLM Error: Attempt ')), true);
-    assert.equal(all.every(event => !event.text.includes('\n')), true);
+    assert.equal(broadcasts.length, 2);
+    assert.match(broadcasts[0].text, /Attempt 1\/3 failed: temporary main outage/);
+    assert.equal(broadcasts[0].options.turnFinal, undefined);
+    assert.equal(broadcasts[1].text, 'main recovered answer');
+    assert.equal(broadcasts[1].options.turnFinal, true);
+    assert.equal(session.history.filter(message => message.__meta?.noticeType === 'llm-retry').length, 1);
+    assert.equal(session.history.find(message => message.__meta?.noticeType === 'llm-retry')?.modelVisible, false);
   } finally {
-    host.appendSessionMessage = originalAppend;
-    host.saveSession = originalSave;
-    host.notifyHistoryUpdate = originalNotify;
+    (llm as any).chat = originalChat;
+    await sessionManager.deleteSession(session.id).catch(() => {});
   }
 });
 
@@ -1186,6 +794,8 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
     assert.equal(session.history.some(message => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
     assert.equal(broadcasts.some(event => /API request failed|^Error:/m.test(event.text)), false);
     assert.equal(broadcasts.filter(event => /No more retries/.test(event.text)).length, 1);
+    assert.equal(broadcasts.length, 1);
+    assert.equal(broadcasts[0].options.turnFinal, true);
   } finally {
     (llm as any).chat = originalChat;
     await sessionManager.deleteSession(session.id).catch(() => {});
@@ -1627,7 +1237,8 @@ test('stop commits content that arrives while stop history is being finalized', 
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
-  const originalAppendSessionMessages = sessionManager.appendSessionMessages;
+  const turnEffects = router.turnRunner.host.currentSessionEffects;
+  const originalAppendQueuedMessages = turnEffects.appendQueuedMessages;
   let chatCallCount = 0;
   let injectedDuringFinalization = false;
 
@@ -1641,9 +1252,8 @@ test('stop commits content that arrives while stop history is being finalized', 
     await sessionManager.requestSessionStop(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'stop-finalizing-tool', name: 'read', response: { output: 'stopped' } } }] };
   };
-  (sessionManager as any).appendSessionMessages = async (...args: Parameters<typeof sessionManager.appendSessionMessages>) => {
-    await originalAppendSessionMessages(...args);
-    const messages = args[1];
+  turnEffects.appendQueuedMessages = async (owner: Session, messages: Message[]) => {
+    await originalAppendQueuedMessages(owner, messages);
     if (!injectedDuringFinalization && messages.some(message => message.parts.some(part => part.text === 'queued before finalization'))) {
       injectedDuringFinalization = true;
       assert.equal(session.stopping, true);
@@ -1673,7 +1283,7 @@ test('stop commits content that arrives while stop history is being finalized', 
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
-    (sessionManager as any).appendSessionMessages = originalAppendSessionMessages;
+    turnEffects.appendQueuedMessages = originalAppendQueuedMessages;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
@@ -1755,7 +1365,14 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
   };
   (llm as any).executeTools = async () => {
     await sessionManager.enqueueSessionItem(sessionId, { type: 'compact-commit' });
-    await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued for dequeue' }] });
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'user', source: { platform: 'wework', channelId: 'wework-a', channelUserId: 'chat-a', conversationId: 'chat-a' },
+      parts: [{ text: 'queued for dequeue from WeWork' }],
+    });
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'user', source: { platform: 'qqbot', channelId: 'qq-a', channelUserId: 'c2c:user-a', conversationId: 'c2c:user-a' },
+      parts: [{ text: 'queued for dequeue from QQ' }],
+    });
     await sessionManager.requestSessionDequeue(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'dequeue-tool', name: 'read', response: { output: 'dequeued' } } }] };
   };
@@ -1766,7 +1383,8 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
 
     assert.equal(seenParts.length, 2);
     assert.equal(seenParts[1], null);
-    assert.equal(userTextOccurrences(session, 'queued for dequeue'), 1);
+    assert.equal(userTextOccurrences(session, 'queued for dequeue from WeWork'), 1);
+    assert.equal(userTextOccurrences(session, 'queued for dequeue from QQ'), 1);
     assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
   } finally {

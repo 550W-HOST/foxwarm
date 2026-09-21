@@ -7,6 +7,8 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 ## Key units
 
 - [src-tools](../units/src-tools.md) — registry, schemas, builtin implementations, and unified discovery/dispatch.
+- [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md) — authenticated external MCP discovery/call wrappers over Main's existing outbound MCP client and exact generic policy.
+- [src-mcp-inbound-node-service](../units/src-mcp-inbound-node-service.md) — verified Main-local external Node file/exec dispatch, selection and scoped results, registered by inbound MCP wrappers.
 - [src-main-management-tools](../units/src-main-management-tools.md) — closed versioned local RPC service for inter-session text/channel delivery, agent listing, and timer CRUD.
 - [src-file-delivery](../units/src-file-delivery.md) — fixed Main-owned file preparation and channel/session delivery boundary for trusted local Session workers.
 - [src-tools-session-agent](../units/src-tools-session-agent.md) — session, agent, timer, skill, recall, goal, channel, and wait tools.

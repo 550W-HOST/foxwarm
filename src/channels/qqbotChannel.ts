@@ -66,6 +66,7 @@ type QQBotSendOptions = {
   qqbotChannelId?: string;
   qqbotConversationId?: string;
   qqbotSourceBound?: boolean;
+  channelProgressTurnId?: string;
   turnFinal?: boolean;
 };
 
@@ -470,8 +471,11 @@ export class QQBotChannel implements Channel {
     const boundReplyId = persistedBoundReplyId
       ? this.latestMessageIds.get(conversationId) || persistedBoundReplyId
       : undefined;
-    const replyToId = directReplyId || boundReplyId;
-    const sourceBoundPassiveReply = Boolean(replyToId && (options?.qqbotSourceBound || boundReplyId));
+    const automaticTurnReplyId = (typeof options?.channelProgressTurnId === 'string' || options?.turnFinal === true)
+      ? this.latestMessageIds.get(conversationId)
+      : undefined;
+    const replyToId = directReplyId || automaticTurnReplyId || boundReplyId;
+    const sourceBoundPassiveReply = Boolean(replyToId && (options?.qqbotSourceBound || automaticTurnReplyId || boundReplyId));
     const replyGeneration = this.connectionGeneration;
     const messagePath = target.kind === 'c2c'
       ? `/v2/users/${encodeURIComponent(target.id)}/messages`
@@ -1032,11 +1036,7 @@ export class QQBotChannel implements Channel {
       conversationId: inbound.conversationId,
       username: inbound.username,
       senderId: inbound.senderId,
-      qqbotMessageId: inbound.messageId,
       platform: this.platform,
-      // QQ accepts a bounded passive reply window for the inbound msg_id.
-      // This callback is only used while this native context is live.
-      preferDirectReply: true,
       reply: async (text: string, options?: QQBotSendOptions) => {
         await this.sendMessage(inbound.conversationId, text, { ...options, replyToId: inbound.messageId, qqbotSourceBound: true });
       },

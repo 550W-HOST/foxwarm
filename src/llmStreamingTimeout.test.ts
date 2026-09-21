@@ -178,3 +178,26 @@ test('custom inactivity preserves first-content and hard limits; safety bufferin
     for (const entry of timers.entries) entry.callback();
   }
 });
+
+test('hosted images extend short custom inactivity and restore it after the last image', () => {
+  for (const timeout of [300_000, 900_000]) {
+    const timers = new FakeTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    const watchdog = createStreamingAttemptWatchdog({
+      streamContentInactivityTimeoutMs: timeout,
+      onTimeout: () => assert.fail('finished watchdog must not fire'),
+    });
+    watchdog.beginImageGeneration('first');
+    watchdog.beginImageGeneration('second');
+    watchdog.endImageGeneration('first');
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    watchdog.endImageGeneration('second');
+    assert.equal(timers.entries.at(-1)!.delayMs, timeout);
+    watchdog.beginImageGeneration('third');
+    assert.equal(watchdog.enterSafetyBuffering({ type: 'safety_buffering' }), Math.max(timeout, 600_000));
+    watchdog.endImageGeneration('third');
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    watchdog.finish();
+    for (const entry of timers.entries) entry.callback();
+  }
+});

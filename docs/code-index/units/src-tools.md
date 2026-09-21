@@ -93,7 +93,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_change_current_node` | Changes the session's current execution node |
 | `tool_copy_between_nodes` | Copies files between nodes |
 | `tool_node_bootstrap_info` | Generates bootstrap info for node pairing |
-| `tool_node_pair_approve` | Approves a pending node pairing request |
+| `tool_node_pair_approve` | Approves a pending node pairing request; an external Main-local caller can provide a final context/policy fence before registry mutation (see [inbound pairing](./src-mcp-inbound-pairing-service.md)) |
 | `tool_node_pair_list` | Lists pending node pairing requests |
 
 ### tools/vectorTools.ts — Vector recall scope utilities
@@ -106,6 +106,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 |----------|-------------|
 | `tool_search_tools` | Unified search across builtin, MCP, and node tool sources |
 | `formatSearchToolsOutput` | Renders bounded copyable TypeScript-like declarations, selected/total counts, schema omission markers, and discovery warnings |
+| `scoreUnifiedToolQuery`, `compareUnifiedSearchResults` | Shared pure ranking and deterministic tie-break for internal search and inbound MCP discovery |
 | `tool_call_tool` | Parses the unified call surface and delegates to the canonical resolved-tool executor |
 
 ### tools/resolvedTools.ts — Canonical invocation resolution
@@ -115,6 +116,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
+| `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
 
 ### tools/definitions.ts — Tool definition array
 | Export | Description |

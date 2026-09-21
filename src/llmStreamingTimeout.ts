@@ -1,6 +1,8 @@
 export const DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 60 * 1000;
 export const SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
+/** Local inactivity allowance while a hosted image generation call is active. */
+export const IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
 export type StreamingTimeoutKind = 'first-content' | 'content-inactivity' | 'hard-deadline';
 
@@ -22,6 +24,10 @@ let timerHooks: TimerHooks = defaultTimerHooks;
 export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
   enterSafetyBuffering(metadata: Record<string, unknown>): number;
+  /** Track an in-flight hosted image generation item by its stable identity. */
+  beginImageGeneration(itemId: string): void;
+  /** Release one hosted image generation item; the last release restores normal waiting. */
+  endImageGeneration(itemId: string): void;
   finish(): void;
 };
 
@@ -69,6 +75,10 @@ export function createStreamingAttemptWatchdog(options: {
   let phaseGeneration = 0;
   let inactivityTimeoutMs = options.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
   let safetyBufferingMetadata: Record<string, unknown> | undefined;
+  const activeImageItems = new Set<string>();
+
+  const effectiveInactivityTimeoutMs = () =>
+    activeImageItems.size > 0 ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS) : inactivityTimeoutMs;
 
   const clearPhase = () => {
     if (!phaseTimer) return;
@@ -106,14 +116,30 @@ export function createStreamingAttemptWatchdog(options: {
   return {
     markMeaningfulProgress() {
       if (finished) return;
-      schedulePhase('content-inactivity', inactivityTimeoutMs);
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
     },
     enterSafetyBuffering(metadata) {
       if (finished) return inactivityTimeoutMs;
       safetyBufferingMetadata = boundSafetyBufferingMetadata(metadata);
       inactivityTimeoutMs = Math.max(inactivityTimeoutMs, SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS);
-      schedulePhase('content-inactivity', inactivityTimeoutMs);
-      return inactivityTimeoutMs;
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+      return effectiveInactivityTimeoutMs();
+    },
+    beginImageGeneration(itemId) {
+      if (finished) return;
+      const key = typeof itemId === 'string' && itemId ? itemId : 'image_generation';
+      activeImageItems.add(key);
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+    },
+    endImageGeneration(itemId) {
+      if (finished) return;
+      const key = typeof itemId === 'string' && itemId ? itemId : 'image_generation';
+      if (activeImageItems.delete(key)) {
+        // The provider can report a done status without a matching added
+        // identity; deleting a missing key is a no-op, so only reschedule when
+        // the active set actually changed.
+        schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+      }
     },
     finish() {
       if (finished) return;

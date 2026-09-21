@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
+import type { ExternalNodeOwner } from './nodeProtocol';
 import path from 'path';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
 import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
@@ -80,7 +81,8 @@ export interface RunningExecEntry {
   id: string;
   pid: number;
   sessionId?: string;
-  agentName: string;
+  agentName?: string;
+  externalOwner?: ExternalNodeOwner;
   nodeId: string;
   command: string;
   initialCwd: string;
@@ -101,10 +103,13 @@ export interface StartPersistentExecOptions {
   command: string;
   sessionId?: string;
   agentName?: string;
+  externalOwner?: ExternalNodeOwner;
   nodeId?: string;
   cwd?: unknown;
   sessionCwd?: unknown;
   completionCapability?: string;
+  /** Optional caller fence after artifact setup but before trying to launch a process. */
+  onBeforeProcessLaunch?: () => void;
   onProcessStarted?: () => void;
 }
 
@@ -130,6 +135,8 @@ export type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecSta
 export interface PersistentExecManagerOptions {
   getDefaultCwd: (agentName: string) => string;
   getExecTempDir: (agentName: string) => string;
+  getExternalDefaultCwd?: (owner: ExternalNodeOwner) => string;
+  getExternalExecTempDir?: (owner: ExternalNodeOwner) => string;
   registryPath?: string;
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
@@ -139,6 +146,7 @@ export interface PersistentExecManagerOptions {
   isEntryRunning?: (entry: RunningExecEntry) => boolean | Promise<boolean>;
   readEntryWorkingDirectory?: (entry: RunningExecEntry) => Promise<string | null>;
   onRegistryIdle?: () => void;
+  onTrackingExpired?: (entry: RunningExecEntry) => void;
   /** Test seam for petname selection. Production uses crypto.randomInt. */
   randomInt?: (maxExclusive: number) => number;
   /** Test seam for completion-retention boundary checks. Production uses Date.now. */
@@ -525,15 +533,22 @@ export class PersistentExecManager {
         if (!raw || typeof raw !== 'object') continue;
         if (!isSupportedPersistentExecId(raw.id) || typeof raw.logPath !== 'string' || typeof raw.statusPath !== 'string') continue;
         if (!Number.isFinite(Number(raw.pid)) || !Number.isFinite(Number(raw.startedAt))) continue;
-        const agentName = typeof raw.agentName === 'string' && raw.agentName.trim().length > 0 ? raw.agentName : 'main';
+        const externalOwner: ExternalNodeOwner | undefined = raw.externalOwner?.kind === 'external'
+          && typeof raw.externalOwner.externalId === 'string' && raw.externalOwner.externalId
+          && typeof raw.externalOwner.contextId === 'string' && raw.externalOwner.contextId
+          && this.options.getExternalDefaultCwd && this.options.getExternalExecTempDir
+          ? { kind: 'external', externalId: raw.externalOwner.externalId, contextId: raw.externalOwner.contextId } : undefined;
+        if (raw.externalOwner !== undefined && !externalOwner) continue;
+        const agentName = externalOwner ? undefined : (typeof raw.agentName === 'string' && raw.agentName.trim().length > 0 ? raw.agentName : 'main');
         const entry: RunningExecEntry = {
           id: raw.id,
           pid: Number(raw.pid),
           sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
-          agentName,
+          ...(externalOwner ? { externalOwner } : { agentName }),
           nodeId: typeof raw.nodeId === 'string' && raw.nodeId.trim().length > 0 ? raw.nodeId : (this.options.nodeId || 'master'),
           command: typeof raw.command === 'string' ? raw.command : '',
-          initialCwd: typeof raw.initialCwd === 'string' && raw.initialCwd.trim().length > 0 ? raw.initialCwd : this.getDefaultCwd(agentName),
+          initialCwd: typeof raw.initialCwd === 'string' && raw.initialCwd.trim().length > 0 ? raw.initialCwd
+            : externalOwner ? this.options.getExternalDefaultCwd!(externalOwner) : this.getDefaultCwd(agentName!),
           cwdRaw: typeof raw.cwdRaw === 'string' ? raw.cwdRaw : undefined,
           cwdSource: raw.cwdSource === 'explicit' || raw.cwdSource === 'session' || raw.cwdSource === 'default' ? raw.cwdSource : undefined,
           logPath: raw.logPath,
@@ -649,10 +664,16 @@ export class PersistentExecManager {
 
   async startPersistentExec(options: StartPersistentExecOptions): Promise<RunningExecEntry> {
     const command = String(options.command || '');
-    const agentName = options.agentName || 'main';
+    const externalOwner = options.externalOwner;
+    if (externalOwner && (options.agentName !== undefined || options.sessionId !== undefined
+      || externalOwner.kind !== 'external' || !externalOwner.externalId || !externalOwner.contextId
+      || !this.options.getExternalDefaultCwd || !this.options.getExternalExecTempDir)) {
+      throw new Error('External exec owner cannot use a Session or Agent namespace.');
+    }
+    const agentName = externalOwner ? undefined : (options.agentName || 'main');
     const nodeId = options.nodeId || this.options.nodeId || 'master';
     const sessionId = options.sessionId;
-    const defaultCwd = this.getDefaultCwd(agentName);
+    const defaultCwd = externalOwner ? this.options.getExternalDefaultCwd!(externalOwner) : this.getDefaultCwd(agentName!);
     const cwdResult = await resolveValidatedExecCwd({
       cwd: options.cwd,
       sessionCwd: options.sessionCwd,
@@ -660,7 +681,7 @@ export class PersistentExecManager {
       nodeId,
     });
     const initialCwd = cwdResult.cwd;
-    const tempDir = this.options.getExecTempDir(agentName);
+    const tempDir = externalOwner ? this.options.getExternalExecTempDir!(externalOwner) : this.options.getExecTempDir(agentName!);
     const startedAt = new Date();
     const dateDir = path.join(tempDir, formatDate(startedAt));
     const timeToken = formatTime(startedAt);
@@ -692,6 +713,7 @@ export class PersistentExecManager {
 
     let launched: { pid: number };
     try {
+      options.onBeforeProcessLaunch?.();
       launched = await processOperations.launch({
         command: launcher.command,
         args: launcher.args,
@@ -721,7 +743,7 @@ export class PersistentExecManager {
       id: execId,
       pid: launched.pid,
       sessionId,
-      agentName,
+      ...(externalOwner ? { externalOwner } : { agentName }),
       nodeId,
       command,
       initialCwd,
@@ -755,6 +777,10 @@ export class PersistentExecManager {
       if (err?.code === 'ENOENT') return null;
       throw err;
     }
+  }
+
+  async getResolvedExecCwd(entry: RunningExecEntry): Promise<string> {
+    return await this.readExecCwd(entry.cwdPath) || entry.initialCwd;
   }
 
   private async readLogExcerpt(filePath: string, maxChars: number): Promise<LogExcerpt> {
@@ -947,6 +973,9 @@ export class PersistentExecManager {
     return null;
   }
 
+  getRunningExec(execId: string): RunningExecEntry | undefined { return this.runningExecs.get(execId); }
+  hasRunningExecs(): boolean { return this.runningExecs.size > 0; }
+
   async markExecForBackgroundNotification(execId: string): Promise<RunningExecEntry | null> {
     return await this.updateRunningExec(execId, { notifyOnCompletion: true });
   }
@@ -1004,6 +1033,7 @@ export class PersistentExecManager {
       if (!entry.notifyOnCompletion) continue;
       if ((this.options.now?.() ?? Date.now()) - entry.startedAt > BACKGROUND_COMPLETION_EVENT_RETENTION_MS) {
         try {
+          this.options.onTrackingExpired?.(entry);
           await this.removeRunningExec(entry.id);
           this.options.logger?.info?.({ execId: entry.id, pid: entry.pid, sessionId: entry.sessionId }, 'Removed expired background exec tracking record');
         } catch (err) {
