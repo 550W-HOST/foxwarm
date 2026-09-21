@@ -26,7 +26,7 @@ test('OpenAI-compatible model listing uses the configured API root, auth, header
     providerType: 'openai-completions',
     baseUrl: 'https://provider.test/custom/v1/',
     apiKey: 'secret-key',
-    extraHeaders: { Authorization: 'Bearer override', 'X-Project': 'project-a' },
+    extraHeaders: { authorization: 'Bearer override', 'X-Project': 'project-a' },
   }, {
     fetch: async (url, init) => {
       requestUrl = String(url);
@@ -36,8 +36,10 @@ test('OpenAI-compatible model listing uses the configured API root, auth, header
   });
 
   assert.equal(requestUrl, 'https://provider.test/custom/v1/models');
-  assert.equal((requestInit?.headers as Record<string, string>).Authorization, 'Bearer override');
-  assert.equal((requestInit?.headers as Record<string, string>)['X-Project'], 'project-a');
+  const requestHeaders = new Headers(requestInit?.headers);
+  assert.equal(requestHeaders.get('authorization'), 'Bearer override');
+  assert.equal(requestHeaders.get('x-project'), 'project-a');
+  assert.equal(requestHeaders.get('authorization')?.includes(','), false);
   assert.equal(models.length, PROVIDER_MODEL_LIST_MAX_MODELS);
   assert.equal(models[0], 'model-0');
   assert.equal(models[1], 'model-1');
@@ -54,26 +56,27 @@ test('OpenAI-compatible model listing uses the configured API root, auth, header
   }
 });
 
-test('Anthropic model listing uses the Messages API root contract and Anthropic headers', async () => {
+test('Anthropic model listing uses the Messages API root contract and case-insensitive header overrides', async () => {
   let requestUrl = '';
-  let requestHeaders: Record<string, string> = {};
+  let requestHeaders = new Headers();
   const models = await listProviderModels({
     providerType: 'anthropic',
     baseUrl: 'https://anthropic.test/proxy',
     apiKey: 'anthropic-secret',
-    extraHeaders: { 'anthropic-version': 'custom-version', 'X-Workspace': 'workspace-a' },
+    extraHeaders: { 'X-Api-Key': 'anthropic-override', 'Anthropic-Version': 'custom-version', 'X-Workspace': 'workspace-a' },
   }, {
     fetch: async (url, init) => {
       requestUrl = String(url);
-      requestHeaders = init?.headers as Record<string, string>;
+      requestHeaders = new Headers(init?.headers);
       return jsonResponse({ data: [{ id: 'claude-a' }, { id: ' ' }, {}, { id: 'claude-b' }] });
     },
   });
 
   assert.equal(requestUrl, `https://anthropic.test/proxy/v1/models?limit=${PROVIDER_MODEL_LIST_MAX_MODELS}`);
-  assert.equal(requestHeaders['x-api-key'], 'anthropic-secret');
-  assert.equal(requestHeaders['anthropic-version'], 'custom-version');
-  assert.equal(requestHeaders['X-Workspace'], 'workspace-a');
+  assert.equal(requestHeaders.get('x-api-key'), 'anthropic-override');
+  assert.equal(requestHeaders.get('anthropic-version'), 'custom-version');
+  assert.equal(requestHeaders.get('x-workspace'), 'workspace-a');
+  assert.equal(requestHeaders.get('x-api-key')?.includes(','), false);
   assert.deepEqual(models, ['claude-a', 'claude-b']);
 });
 

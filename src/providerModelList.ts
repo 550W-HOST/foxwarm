@@ -195,20 +195,18 @@ export async function listProviderModels(
     throw new ProviderModelListError('invalid-request', 'Provider baseUrl is not configured.', 400);
   }
   const url = buildProviderModelsUrl(connection.baseUrl, providerType);
-  const headers: Record<string, string> = OPENAI_PROVIDER_TYPES.has(providerType)
-    ? {
-      Accept: 'application/json',
-      ...(connection.apiKey ? { Authorization: `Bearer ${connection.apiKey}` } : {}),
-      'user-agent': 'foxwarm/1.0',
-    }
-    : {
-      Accept: 'application/json',
-      ...(connection.apiKey ? { 'x-api-key': connection.apiKey } : {}),
-      'anthropic-version': '2023-06-01',
-      'user-agent': 'foxwarm/1.0',
-    };
+  const headers = new Headers({
+    Accept: 'application/json',
+    'user-agent': 'foxwarm/1.0',
+  });
+  if (OPENAI_PROVIDER_TYPES.has(providerType)) {
+    if (connection.apiKey) headers.set('authorization', `Bearer ${connection.apiKey}`);
+  } else {
+    if (connection.apiKey) headers.set('x-api-key', connection.apiKey);
+    headers.set('anthropic-version', '2023-06-01');
+  }
   for (const [name, value] of Object.entries(connection.extraHeaders || {})) {
-    if (['string', 'number', 'boolean'].includes(typeof value)) headers[name] = String(value);
+    if (['string', 'number', 'boolean'].includes(typeof value)) headers.set(name, String(value));
   }
 
   const controller = new AbortController();
