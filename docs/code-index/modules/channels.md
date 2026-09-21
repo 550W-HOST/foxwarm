@@ -108,7 +108,9 @@ QQ Bot keeps a bounded in-memory latest-message map and does not persist or rece
 the same channel also has a legacy group webhook URL. An explicit per-call
 `webhookUrl` remains on the legacy text/image/file path, including inbound
 replies already bound to a native webhook URL; legacy-only configuration is
-unchanged. Adapter-local latest stream-card replies and terminal HTTP `response_url` replies
+unchanged. Without an explicit stream ID, that webhook override also bypasses
+automatic latest-card selection; a request-level reply carrying both an explicit
+stream ID and webhook URL retains its explicit stream binding. Adapter-local latest stream-card replies and terminal HTTP `response_url` replies
 retain their dedicated routes before this proactive selection. A selected
 WebSocket route never falls back to the webhook after an error, because timeout
 and disconnect outcomes can be ambiguous. Proactive WebSocket text uses the

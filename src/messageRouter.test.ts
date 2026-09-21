@@ -728,6 +728,39 @@ test('MessageRouter LLM retry notifier sends only the first ordinary-channel sni
   }
 });
 
+test('MessageRouter awaits the first retry snippet and then broadcasts the successful final answer', async () => {
+  const router = new MessageRouter() as any;
+  const broadcasts: Array<{ text: string; options: any }> = [];
+  const session = await createRouterQueueTestSession('retry_success_broadcast_session');
+  session.broadcast = (text: string, options?: any) => { broadcasts.push({ text, options }); };
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, activeSession: Session, _iteration: number, options: any) => {
+    if (parts) await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    await options.onRetry({
+      attempt: 1, nextAttempt: 2, maxRetries: 3, delayMs: 1000,
+      kind: 'request-error', reason: 'temporary main outage',
+    });
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'main recovered answer' }] });
+    return { text: 'main recovered answer' };
+  };
+
+  try {
+    session.queue.push({ type: 'user', parts: [{ text: 'retry successfully' }] });
+    await processOwnedTestQueue(router, session);
+
+    assert.equal(broadcasts.length, 2);
+    assert.match(broadcasts[0].text, /Attempt 1\/3 failed: temporary main outage/);
+    assert.equal(broadcasts[0].options.turnFinal, undefined);
+    assert.equal(broadcasts[1].text, 'main recovered answer');
+    assert.equal(broadcasts[1].options.turnFinal, true);
+    assert.equal(session.history.filter(message => message.__meta?.noticeType === 'llm-retry').length, 1);
+    assert.equal(session.history.find(message => message.__meta?.noticeType === 'llm-retry')?.modelVisible, false);
+  } finally {
+    (llm as any).chat = originalChat;
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('MessageRouter LLM final failure keeps retry notice display-only without appending Error model text', async () => {
   const router = new MessageRouter() as any;
   const broadcasts: Array<{ text: string; options: any }> = [];
@@ -761,6 +794,8 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
     assert.equal(session.history.some(message => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
     assert.equal(broadcasts.some(event => /API request failed|^Error:/m.test(event.text)), false);
     assert.equal(broadcasts.filter(event => /No more retries/.test(event.text)).length, 1);
+    assert.equal(broadcasts.length, 1);
+    assert.equal(broadcasts[0].options.turnFinal, true);
   } finally {
     (llm as any).chat = originalChat;
     await sessionManager.deleteSession(session.id).catch(() => {});

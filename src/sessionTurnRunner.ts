@@ -285,6 +285,8 @@ export class SessionTurnRunner {
   private createLlmRetryNotifier(
     session: Session,
     broadcast: Session['broadcast'] | undefined,
+    turnId?: string,
+    onTerminalDelivered?: () => void,
   ): (event: llm.LlmRetryEvent) => Promise<void> {
     let retryMessage: Message | null = null;
     let previousError: RetryErrorDescriptor | undefined;
@@ -339,11 +341,21 @@ export class SessionTurnRunner {
         this.host.notifyHistoryUpdate(session.id, retryMessage);
       }
 
-      if (!broadcast) return;
-
       const channelSnippet = formatRetryChannelSnippet(displayEvent);
-      if (initial || event.final === true) {
-        broadcast(channelSnippet, mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
+      if (event.final === true) {
+        if (this.host.deliverCommittedFinal && turnId) {
+          await this.host.deliverCommittedFinal(session, channelSnippet, 'error', turnId);
+          onTerminalDelivered?.();
+        } else if (broadcast) {
+          broadcast(channelSnippet, mergeExcludePlatforms({ parse_mode: 'Markdown', turnFinal: true }, ['webui']));
+          onTerminalDelivered?.();
+        }
+      } else if (initial) {
+        if (this.host.deliverIntermediateText && turnId) {
+          await this.host.deliverIntermediateText(session, channelSnippet, turnId);
+        } else if (broadcast) {
+          broadcast(channelSnippet, mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
+        }
       }
     };
   }
@@ -858,6 +870,7 @@ export class SessionTurnRunner {
     let stoppedByUser = false;
     let fencedMaintenanceError: unknown;
     let fencedMaintenanceDirect = false;
+    let terminalRetryDelivered = false;
     try {
       if (options.sendTyping && options.sourceCtx) {
         await this.host.sendTyping(options.sourceCtx);
@@ -924,7 +937,7 @@ export class SessionTurnRunner {
         let result;
         try {
           result = await this.host.chat(parts, session, iteration, {
-            onRetry: this.createLlmRetryNotifier(session, broadcast),
+            onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
             turnId,
           });
         } catch (e: any) {
@@ -1206,7 +1219,8 @@ export class SessionTurnRunner {
       } else if (!llm.isLlmRequestError(e)) {
         await this.appendTerminalModelMessage(session, errorText);
       }
-      if (!mutationFencedMaintenance && this.host.deliverCommittedFinal) {
+      if (!mutationFencedMaintenance && this.host.deliverCommittedFinal
+        && !(llm.isLlmRequestError(e) && terminalRetryDelivered)) {
         await this.maybeQueueChildReminder(session);
         await this.host.deliverCommittedFinal(session, errorText, 'error', turnId);
         return;
@@ -1216,7 +1230,10 @@ export class SessionTurnRunner {
         // attempt without entering any generic history/reminder/send branch.
       } else if (llm.isLlmRequestError(e)) {
         await this.maybeQueueChildReminder(session);
-        if (this.host.hasBroadcast(session)) {
+        if (terminalRetryDelivered) {
+          // The awaited retry callback already made the one terminal Channel
+          // delivery and finalized native lifecycle presentation.
+        } else if (this.host.hasBroadcast(session)) {
           this.sendEmptyTurnFinal(broadcast);
         } else {
           await this.sendSessionError(session, e, broadcast);

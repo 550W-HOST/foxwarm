@@ -291,6 +291,73 @@ test('worker delivers canonical model text before multiple tool iterations and o
   } finally { (llm as any).chat = originalChat; }
 });
 
+test('worker awaits the first retry attachment snippet before delivering a successful final answer', async () => {
+  const initial = baseSession('worker-retry-success-broadcast');
+  const originalChat = llm.chat;
+  const deliveries: Array<{ kind: string; text: string; outcome?: string; source: any }> = [];
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.onRetry({
+      attempt: 1, nextAttempt: 2, maxRetries: 3, delayMs: 1000,
+      kind: 'request-error', reason: 'temporary worker outage',
+    });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'worker recovered answer' }] });
+    return { text: 'worker recovered answer' };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'worker-retry-success', 'enqueue', {
+        type: 'user', source: { platform: 'wework', channelUserId: 'chat-a' }, parts: [{ text: 'retry successfully' }],
+      });
+      await host.runPending(8);
+      assert.equal(deliveries.length, 2);
+      assert.equal(deliveries[0].kind, 'intermediate');
+      assert.equal(deliveries[0].source, undefined);
+      assert.match(deliveries[0].text, /Attempt 1\/3 failed: temporary worker outage/);
+      assert.deepEqual(deliveries[1], { kind: 'final', source: undefined, text: 'worker recovered answer', outcome: 'response' });
+      const retryNotice = readDurable().history.find((message: any) => message.__meta?.noticeType === 'llm-retry');
+      assert.equal(retryNotice?.modelVisible, false);
+      assert.equal(readDurable().history.some((message: any) => message.role === 'model' && message.parts.some((part: any) => part.text === 'worker recovered answer')), true);
+    }, true, undefined,
+      async (source, text, outcome) => { deliveries.push({ kind: 'final', source, text, outcome }); },
+      async (source, text) => { deliveries.push({ kind: 'intermediate', source, text }); });
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker retry exhaustion delivers one terminal retry failure without a second generic error final', async () => {
+  const initial = baseSession('worker-retry-terminal-broadcast');
+  const originalChat = llm.chat;
+  const intermediate: string[] = [];
+  const finals: Array<{ source: any; text: string; outcome: string }> = [];
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.onRetry({
+      attempt: 3, maxRetries: 3, final: true,
+      kind: 'request-error', reason: 'worker provider exhausted',
+    });
+    throw new llm.LlmRequestError('API request failed after 3 attempts');
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'worker-retry-terminal', 'enqueue', {
+        type: 'user', source: { platform: 'qqbot', channelUserId: 'c2c:user' }, parts: [{ text: 'exhaust retries' }],
+      });
+      await host.runPending(8);
+      assert.deepEqual(intermediate, []);
+      assert.equal(finals.length, 1);
+      assert.equal(finals[0].source, undefined);
+      assert.equal(finals[0].outcome, 'error');
+      assert.match(finals[0].text, /Attempt 3\/3 failed: worker provider exhausted\. No more retries/);
+      assert.doesNotMatch(finals[0].text, /API request failed/);
+      const durable = readDurable();
+      assert.equal(durable.history.some((message: any) => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
+      assert.equal(durable.history.filter((message: any) => message.__meta?.noticeType === 'llm-retry').length, 1);
+    }, true, undefined,
+      async (source, text, outcome) => { finals.push({ source, text, outcome }); },
+      async (_source, text) => { intermediate.push(text); });
+  } finally { (llm as any).chat = originalChat; }
+});
+
 test('worker publishes a no-tool result once when a different-source follow-up arrives during the provider request', async () => {
   const initial = baseSession('worker-no-tool-compatible-followup');
   const originalChat = llm.chat;

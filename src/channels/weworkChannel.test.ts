@@ -126,6 +126,41 @@ test('WeWork response_url take-before-await preserves a newer inbound context an
   ]);
 });
 
+test('WeWork explicit webhook override bypasses an active latest card while automatic delivery still uses it', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-explicit-over-active-card',
+    aibot: { stream: true },
+  });
+  channel.onMessage(async () => {});
+  const webhookSends: Array<{ url: string; payload: any }> = [];
+  (channel as any).postWebhookPayload = async (url: string, payload: any) => { webhookSends.push({ url, payload }); };
+
+  const inbound = await (channel as any).processInboundBody(cloneBody('active-card-explicit-override'), {
+    mode: 'webhook', responseUrl: aibotTextBody.response_url,
+  }, true);
+  const streamId = inbound.passiveResponse.stream.id;
+
+  await channel.sendMessage('chat-1', 'explicit webhook terminal', {
+    channelProgressTurnId: 'turn-explicit',
+    turnFinal: true,
+    webhookUrl: 'https://example.test/explicit-active-card',
+  });
+  assert.equal(webhookSends.length, 1);
+  assert.equal(webhookSends[0].url, 'https://example.test/explicit-active-card');
+  const afterExplicit = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(afterExplicit.passiveResponse.stream.finish, false);
+  assert.equal(afterExplicit.passiveResponse.stream.content, '> 🤔 thinking');
+
+  await channel.sendMessage('chat-1', 'automatic card terminal', {
+    channelProgressTurnId: 'turn-automatic',
+    turnFinal: true,
+  });
+  const afterAutomatic = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(afterAutomatic.passiveResponse.stream.finish, true);
+  assert.equal(afterAutomatic.passiveResponse.stream.content, 'automatic card terminal');
+  assert.equal(webhookSends.length, 1);
+});
+
 test('WeWork failed terminal response_url delivery does not fall back or reuse the callback', async () => {
   const channel = new WeWorkWebhookChannel({ name: 'wework-response-failure', webhookUrl: 'https://example.test/proactive' });
   channel.onMessage(async () => {});
