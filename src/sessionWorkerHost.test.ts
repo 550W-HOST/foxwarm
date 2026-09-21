@@ -609,9 +609,12 @@ test('tool terminal paths never resend model text and close an active Worker WeW
           });
           await host.runPending(8);
           assert.deepEqual(intermediates, mode === 'stop-empty' ? [] : [`${mode} text`]);
+          // Waiting turn endings stay suspendable, while a user Stop is a
+          // terminal empty final.
+          const suspended = mode === 'wait' || mode === 'managed' || mode === 'tool-stop';
           assert.deepEqual(finals, mode === 'stop-empty'
             ? [{ text: '_[Execution stopped by user]_', outcome: 'response' }]
-            : [{ text: '', outcome: 'empty-final' }]);
+            : [{ text: '', outcome: suspended ? 'suspended' : 'empty-final' }]);
           assert.equal(readDurable().history.filter((message: any) => message.role === 'model').length, 1);
           assert.equal(readDurable().busy, false);
         }, true, undefined,

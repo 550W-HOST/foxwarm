@@ -18,6 +18,8 @@ import type { ChannelTurnProgress, MessagePart } from '../types';
 import {
   buildWeWorkStreamResponse,
   DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
+  normalizeWeWorkThinkFrameStyle,
+  stripWeWorkThinkTags,
   WeWorkStreamAggregator,
   WeWorkStreamSnapshot,
 } from './weworkStreamAggregator';
@@ -205,6 +207,7 @@ export class WeWorkWebhookChannel implements Channel {
     this.streamEnabled = !!config.aibot?.stream;
     this.streamAggregator = new WeWorkStreamAggregator({
       maxContentBytes: config.aibot?.streamMaxContentBytes || DEFAULT_WEWORK_STREAM_MAX_CONTENT_BYTES,
+      thinkFrame: normalizeWeWorkThinkFrameStyle(config.aibot?.streamThinkFrame),
     });
     this.websocketConfig = config.aibot?.websocket;
     
@@ -668,7 +671,9 @@ export class WeWorkWebhookChannel implements Channel {
 
   private handleAIBotStreamRefresh(body: any): WeWorkInboundProcessResult {
     const streamId = body?.stream?.id;
-    const snapshot = typeof streamId === 'string' ? this.streamAggregator.getByStreamId(streamId) : undefined;
+    // Each refresh poll also keeps an unfinished card inside its TTL, so a card
+    // parked on a suspended turn stays valid while the client keeps polling.
+    const snapshot = typeof streamId === 'string' ? this.streamAggregator.touchByStreamId(streamId) : undefined;
     if (!snapshot) {
       logger.warn({ streamId }, 'Received WeWork stream refresh for unknown stream id');
       return {
@@ -1227,6 +1232,12 @@ export class WeWorkWebhookChannel implements Channel {
   async handleTurnLifecycle(userId: string, options: any): Promise<void> {
     const active = this.streamAggregator.getByConversation(userId);
     if (!active || active.finish) return;
+    if (options?.turnSuspended === true) {
+      // The turn ended because it is waiting, not because an answer is ready.
+      // Keep the card open so the resumed turn appends to the same fold and the
+      // answer body closes it; a new inbound turn or the TTL still reclaims it.
+      return;
+    }
     await this.maybeAggregateStreamMessage(userId, '', {
       ...options,
       weworkStreamId: active.streamId,
@@ -1397,19 +1408,23 @@ export class WeWorkWebhookChannel implements Channel {
       }
 
       const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
+      // Past this point the content leaves the passive stream card: a proactive
+      // markdown/WebSocket/terminal delivery renders think tags literally, so a
+      // downgraded or expired card must never carry them.
+      const proactiveText = stripWeWorkThinkTags(text);
       if (!explicitWebhookUrl && options?.turnFinal === true) {
         // Take-before-await prevents a newer inbound response_url for the same
         // conversation from being deleted after this terminal attempt settles.
         const responseUrl = this.takeLatestResponseUrl(userId);
         if (responseUrl) {
-          await this.sendAIBotResponse(responseUrl, text);
+          await this.sendAIBotResponse(responseUrl, proactiveText);
           return;
         }
       }
       if (!explicitWebhookUrl && this.websocketConfig?.enabled) {
         const websocketPayload = {
           msgtype: 'markdown',
-          markdown: { content: text },
+          markdown: { content: proactiveText },
         };
         await this.sendWebSocketProactiveMessage(userId, websocketPayload, options);
         return;
@@ -1430,7 +1445,7 @@ export class WeWorkWebhookChannel implements Channel {
           payload = {
             msgtype: 'markdown',
             markdown: {
-              content: text
+              content: proactiveText
             }
           };
           break;
@@ -1440,7 +1455,7 @@ export class WeWorkWebhookChannel implements Channel {
           payload = {
             msgtype: 'text',
             text: {
-              content: text,
+              content: proactiveText,
               mentioned_list: options?.mentionedList || [],
               mentioned_mobile_list: options?.mentionedMobileList || []
             }

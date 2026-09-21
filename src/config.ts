@@ -48,6 +48,11 @@ export type WeWorkConfig = CommonChannelConfig & {
   aibot?: {
     stream?: boolean;
     streamMaxContentBytes?: number;
+    /**
+     * Think-fold frame shape for the passive stream card: `closed` (default)
+     * closes the fold in every frame, `open` closes it only in the final frame.
+     */
+    streamThinkFrame?: 'closed' | 'open';
     websocket?: {
       enabled?: boolean;
       botId?: string;
