@@ -3,6 +3,7 @@ import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-r
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
+import type { ChildPolicyChainEntry } from './childModelState'
 import ChatTimeline from './ChatTimeline'
 import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
@@ -191,6 +192,8 @@ type SessionListRecord = {
   modelKey?: string
   defaultModelKey?: string
   childModelDefault?: string | null
+  childModelPolicySource?: 'explicit' | 'follow-parent'
+  childPolicyChain?: ChildPolicyChainEntry[]
   effectiveChildModelKey?: string
   effort?: string | null
   effectiveEffort?: string
@@ -2062,6 +2065,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         sessionModel={sessionRecord?.model || null}
         defaultModelKey={sessionRecord?.defaultModelKey}
         childModelDefault={sessionRecord?.childModelDefault || null}
+        childModelPolicySource={sessionRecord?.childModelPolicySource}
+        childPolicyChain={sessionRecord?.childPolicyChain}
         effectiveChildModelKey={sessionRecord?.effectiveChildModelKey}
         effort={sessionRecord?.effort || null}
         effectiveEffort={sessionRecord?.effectiveEffort}

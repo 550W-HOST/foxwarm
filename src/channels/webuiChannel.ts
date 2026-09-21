@@ -417,8 +417,21 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>) {
-  const presentation = buildSessionModelEffortPresentation(session);
+function resolveWebUiAncestrySession(sessionId: string) {
+  const candidate = sessionManager.getSessionCatalog(sessionId);
+  if (!candidate) return undefined;
+  return {
+    id: candidate.id,
+    model: candidate.model,
+    effort: candidate.effort,
+    childModelDefault: candidate.childModelDefault,
+    childEffortDefault: candidate.childEffortDefault,
+    parentSessionId: candidate.parentSessionId,
+  };
+}
+
+function buildWebUiModelStatus(session: any, resolveAncestry = resolveWebUiAncestrySession) {
+  const presentation = buildSessionModelEffortPresentation(session, undefined, resolveAncestry);
   return {
     model: presentation.model,
     modelKey: presentation.modelKey,
@@ -428,6 +441,8 @@ function buildWebUiModelStatus(session: Pick<Session, 'model' | 'effort' | 'chil
     effortAllowed: presentation.effort.allowed,
     effortDefault: presentation.effort.defaultEffort,
     childModelDefault: presentation.childModelDefault,
+    childModelPolicySource: presentation.childModelPolicySource,
+    childPolicyChain: presentation.childPolicyChain,
     effectiveChildModelKey: presentation.effectiveChildModelKey,
     childEffortDefault: presentation.childEffort.raw,
     effectiveChildEffort: presentation.childEffort.effective,

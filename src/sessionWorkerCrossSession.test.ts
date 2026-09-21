@@ -287,8 +287,8 @@ test('main-management facade forks read-only, rejects stale generations, and val
       'the inherited prefix matches the parent authority exactly');
     assert.equal(forked.model, 'model-for-child');
     assert.equal(forked.effort, 'max');
-    assert.equal(forked.childModelDefault, undefined);
-    assert.equal(forked.childEffortDefault, undefined);
+    assert.equal(forked.childModelDefault, 'model-for-child');
+    assert.equal(forked.childEffortDefault, 'max');
     assert.deepEqual(await fs.readFile(parentJsonPath), parentBytesBeforeFork, 'fork never writes the parent authority');
     assert.equal(store.getOwnership(parentId).mailboxCursor, 0, 'fork never touches the durable mailbox cursor');
 

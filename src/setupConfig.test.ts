@@ -292,7 +292,7 @@ test('models setup form preserves unknown provider and model fields', () => {
   assert.equal(loaded.default, 'openai/gpt-5.2-codex');
 });
 
-test('models setup removes provider-only web search when converting a concrete provider to virtual routing', () => {
+test('models setup removes concrete web search and stream timeout when converting a concrete provider to virtual routing', () => {
   const next = buildModelsConfigFromSetupForm({
     defaultModel: 'route',
     providers: [{
@@ -310,6 +310,7 @@ test('models setup removes provider-only web search when converting a concrete p
       route: {
         providerType: 'openai-responses',
         webSearch: { enabled: true },
+        streamContentInactivityTimeoutMs: 300000,
         models: ['model-a'],
       },
       leaf: { providerType: 'openai-completions', models: ['model-a'] },
@@ -317,6 +318,7 @@ test('models setup removes provider-only web search when converting a concrete p
   });
 
   assert.equal((next.providers?.route as any).webSearch, undefined);
+  assert.equal(next.providers?.route.streamContentInactivityTimeoutMs, undefined);
   assert.doesNotThrow(() => loadModelsConfigFromObject(next));
 });
 

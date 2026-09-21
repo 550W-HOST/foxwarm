@@ -23,7 +23,7 @@ let timerHooks: TimerHooks = defaultTimerHooks;
 
 export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
-  enterSafetyBuffering(metadata: Record<string, unknown>): void;
+  enterSafetyBuffering(metadata: Record<string, unknown>): number;
   /** Track an in-flight hosted image generation item by its stable identity. */
   beginImageGeneration(itemId: string): void;
   /** Release one hosted image generation item; the last release restores normal waiting. */
@@ -66,18 +66,19 @@ function timeoutError(kind: StreamingTimeoutKind, timeoutMs: number, safetyBuffe
 
 export function createStreamingAttemptWatchdog(options: {
   hardTimeoutMs?: number;
+  streamContentInactivityTimeoutMs?: number;
   onTimeout(error: Error, kind: StreamingTimeoutKind): void;
 }): StreamingAttemptWatchdog {
   let finished = false;
   let phaseTimer: TimerHandle | undefined;
   let hardTimer: TimerHandle | undefined;
   let phaseGeneration = 0;
-  let inactivityTimeoutMs = DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
+  let inactivityTimeoutMs = options.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
   let safetyBufferingMetadata: Record<string, unknown> | undefined;
   const activeImageItems = new Set<string>();
 
   const effectiveInactivityTimeoutMs = () =>
-    activeImageItems.size > 0 ? IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS : inactivityTimeoutMs;
+    activeImageItems.size > 0 ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS) : inactivityTimeoutMs;
 
   const clearPhase = () => {
     if (!phaseTimer) return;
@@ -118,10 +119,11 @@ export function createStreamingAttemptWatchdog(options: {
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
     },
     enterSafetyBuffering(metadata) {
-      if (finished) return;
+      if (finished) return inactivityTimeoutMs;
       safetyBufferingMetadata = boundSafetyBufferingMetadata(metadata);
-      inactivityTimeoutMs = SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS;
+      inactivityTimeoutMs = Math.max(inactivityTimeoutMs, SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS);
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+      return effectiveInactivityTimeoutMs();
     },
     beginImageGeneration(itemId) {
       if (finished) return;

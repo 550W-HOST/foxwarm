@@ -12,6 +12,7 @@ import {
   buildWaitTimeoutMessage,
   createTimer,
   createTimersStore,
+  fireTimerForTests,
   resetTimersForTests,
   setTimersStoreForTests,
 } from '../timers';
@@ -815,6 +816,7 @@ test('wait timeout wakes via router before a later ordinary timer', async () => 
     const router = new MessageRouter();
     const originalChat = llm.chat;
     const observedTurns: string[] = [];
+    const processingTurns: Promise<void>[] = [];
 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       assert.equal(activeSession.id, sessionId);
@@ -834,30 +836,42 @@ test('wait timeout wakes via router before a later ordinary timer', async () => 
 
     sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
       if (triggeredSessionId === sessionId) {
-        void router.processSessionQueue(triggeredSessionId);
+        processingTurns.push(router.processSessionQueue(triggeredSessionId));
       }
     });
 
     try {
       const session = await sessionManager.getSession(sessionId);
-      await createTimer({
+      // This test verifies router wake ordering (the wait-timeout wake is processed
+      // before a later ordinary timer), not node-schedule wall-clock ordering: two real
+      // timers 20ms and 200ms apart can both come due late on a contended runner, and
+      // the ordinary timer was created first. The ordinary timer is therefore scheduled
+      // far beyond the wait timeout and fired explicitly below, so the only race left is
+      // the one under test. Real scheduler firing is covered by the timer tests.
+      const ordinaryTimer = await createTimer({
         sessionId,
-        afterSeconds: 0.2,
+        afterSeconds: 30,
         message: 'ordinary timer fired for wait test',
       });
       await tool_wait({ wakeIfNoActivityAfterSeconds: 0.02 }, { sessionId, session });
 
-      await sleep(120);
+      await waitFor(() => observedTurns.length >= 1, 10_000);
       assert.equal(observedTurns.length, 1);
       assert.match(observedTurns[0], /wait timeout reached after 0\.02s/);
 
-      await sleep(220);
+      await fireTimerForTests(ordinaryTimer.id);
+      await waitFor(() => observedTurns.length >= 2, 10_000);
       assert.equal(observedTurns.length, 2);
       assert.match(observedTurns[1], /Timer fired/);
       assert.match(observedTurns[1], /ordinary timer fired for wait test/);
     } finally {
-      (llm as any).chat = originalChat;
+      resetTimersForTests();
       sessionManager.setSessionTriggerCallback(() => {});
+      try {
+        await Promise.all(processingTurns);
+      } finally {
+        (llm as any).chat = originalChat;
+      }
       await cleanupSession(sessionId);
     }
   });

@@ -321,6 +321,7 @@ for (const spec of browsers) {
       document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
       document.documentElement.classList.remove('dark')
     })
+    await page.waitForFunction(() => window.fixtureReady && window.fixtureEditor()?.dataset.empty === 'true' && window.fixtureEditor()?.childNodes.length === 0)
     assert.deepEqual(await page.$eval(editor, node => ({ empty: node.dataset.empty, children: node.childNodes.length })), { empty: 'true', children: 0 })
 
     await page.click(editor)
@@ -480,6 +481,7 @@ for (const spec of browsers) {
     await page.reload({ waitUntil: 'load' })
     await page.waitForSelector(editor)
     await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+    await page.waitForFunction(() => window.fixtureEditor()?.querySelectorAll('[data-composer-trailing-newline]').length === 1)
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-trailing-newline]').length), 1)
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     const restoredEnd = await page.evaluate(() => {

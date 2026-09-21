@@ -113,6 +113,7 @@ const modelEffortConfig = {
 }
 
 const modelOverrideProperties = {
+  streamContentInactivityTimeoutMs: { type: 'integer', minimum: 1, maximum: 2147483647, default: 60000, description: 'Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000.' },
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   effort: modelEffortConfig,
   historyReasoningField: {
@@ -166,6 +167,7 @@ const providerObjectEntry = {
       ],
     },
     contextLimit: modelOverrideProperties.contextLimit,
+    streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
@@ -185,7 +187,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -193,7 +195,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
       },
     },
     {

@@ -283,3 +283,44 @@ test('real Axios active SSE aborts and watchdog timeouts do not emit uncaught st
   assert.equal(result.code, 0, result.stderr);
   assert.doesNotMatch(result.stderr, /UNCAUGHT:|UNHANDLED:/);
 });
+
+test('SSE uses resolved provider/model inactivity and leaves first output independent', async () => {
+  const { requestLlmOnce } = await llmPromise;
+  const { loadModelsConfigFromObject } = await import('./config');
+  const parsed = loadModelsConfigFromObject({ default: 'p/a', providers: {
+    p: { providerType: 'openai-responses', baseUrl: 'https://example.test/v1', streamContentInactivityTimeoutMs: 300_000,
+      models: ['a', { id: 'b', streamContentInactivityTimeoutMs: 900_000 }] },
+    normal: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', models: ['a'] },
+  } });
+  const originalPost = axios.post;
+  try {
+    for (const [key, expected] of [['p/a', 300_000], ['p/b', 900_000], ['normal/a', 60_000]] as const) {
+      const timers: Array<{ delay: number; cleared: boolean }> = [];
+      setStreamingTimeoutTestHooks({
+        set(_callback, delay) { const timer = { delay, cleared: false, unref() {} }; timers.push(timer); return timer; },
+        clear(timer) { (timer as any).cleared = true; },
+      });
+      (axios as any).post = async () => {
+        if (key !== 'normal/a') return { status: 200, headers: {}, data: responsesStream() };
+        const stream = new PassThrough();
+        process.nextTick(() => {
+          stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] })}\n\n`);
+          stream.end('data: [DONE]\n\n');
+        });
+        return { status: 200, headers: {}, data: stream };
+      };
+      const result = await requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }], systemPrompt: '', modelEntryOverride: parsed.models[key],
+        promptCacheKey: `custom-${key}`, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+      });
+      assert.equal(result.text, 'ok');
+      assert.equal(timers[0].delay, 180_000);
+      assert.ok(timers.length > 1);
+      assert.ok(timers.slice(1).every(timer => timer.delay === expected));
+      assert.ok(timers.every(timer => timer.cleared));
+    }
+  } finally {
+    (axios as any).post = originalPost;
+    setStreamingTimeoutTestHooks();
+  }
+});

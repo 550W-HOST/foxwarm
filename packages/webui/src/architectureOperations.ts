@@ -1,4 +1,5 @@
 import { getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from './sessionRuntimeState'
+import { getResolvedSessionNodeId } from './sessionNode'
 
 export type ArchitectureStatusFilter = 'all' | 'active' | 'waiting' | 'queued' | 'isolated'
 
@@ -31,11 +32,7 @@ export const orderArchitectureAgents = <T extends ArchitectureAgentLike>(agents:
   })
 )
 
-export const getArchitectureSessionNodeId = (session: ArchitectureSessionLike): string => (
-  session.runtimeState?.tool?.executionNode
-  || session.currentNode
-  || 'master'
-)
+export const getArchitectureSessionNodeId = (session: ArchitectureSessionLike): string => getResolvedSessionNodeId(session)
 
 export const matchesArchitectureStatus = (session: ArchitectureSessionLike, filter: ArchitectureStatusFilter): boolean => {
   if (filter === 'all') return true

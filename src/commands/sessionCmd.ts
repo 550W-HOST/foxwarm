@@ -213,6 +213,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       ctx.reply([
         '🧒 *Child model / effort defaults*',
         `- model override: ${view.childModelDefault ? `\`${view.childModelDefault}\`` : 'follow current'}`,
+        `- policy source: ${view.childModelPolicySource}`,
         `- effective model: \`${view.effectiveChildModelKey}\``,
         `- effort override: ${view.childEffort.raw || 'unset'}`,
         `- effective effort: ${view.childEffort.effective}`,
