@@ -35,9 +35,9 @@ test('child handoff boundary classification is narrow and legacy-safe', () => {
   }
 });
 
-test('child handoff state transitions supersede meaningful boundaries and ignore transparent input', () => {
+test('child handoff state transitions supersede meaningful boundaries and absence never infers a reminder', () => {
   const current = session();
-  assert.equal(shouldQueueChildHandoffReminder(current), undefined);
+  assert.equal(shouldQueueChildHandoffReminder(current), false);
 
   assert.equal(applyChildHandoffQueueItem(current, {
     type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'work' }],

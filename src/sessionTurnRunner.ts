@@ -3,7 +3,7 @@
 import { randomUUID } from 'crypto';
 import { logger } from './common';
 import { ChannelContext, getChannelId, getConversationId } from './channel';
-import { buildChildReminder, isModelNoActionSignal, isNoActionSignalText } from './session/childSessionReminder';
+import { buildChildReminder, isNoActionSignalText } from './session/childSessionReminder';
 import { getManagedSessionState, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
@@ -19,7 +19,7 @@ import { finishChannelTurnProgress, reportChannelTurnProgress } from './session/
 import { armMainWaitLiveness } from './mainManagementTools';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
-import { formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
+import { formatFoxwarmSystemTag } from './utils/promptWrappers';
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
   return typeof text === 'string' && text.trim().length > 0;
@@ -663,54 +663,6 @@ export class SessionTurnRunner {
     }
   }
 
-  private getChildTurnState(session: Session): {
-    foundUser: boolean;
-    hasSendToSession: boolean;
-    hasNoAction: boolean;
-    hasUserFromPrefix: boolean;
-  } {
-    const history = session.history;
-    let idx = history.length - 1;
-    let foundUser = false;
-    let hasSendToSession = false;
-    let hasNoAction = false;
-    let hasUserFromPrefix = false;
-
-    while (idx >= 0) {
-      const msg = history[idx];
-      if (isModelNoActionSignal(msg)) {
-        hasNoAction = true;
-      }
-      if (msg.parts?.some(p => {
-        if (typeof p.system !== 'string') {
-          return false;
-        }
-        if (p.system.startsWith('FROM:') || p.system.startsWith('The following message is a direct user message via channel;')) {
-          return true;
-        }
-        const tag = parseFoxwarmOpeningTag(p.system);
-        return tag?.tagName === 'foxwarm-message' && tag.attrs.type === 'channel';
-      })) {
-        hasUserFromPrefix = true;
-      }
-      if (msg.role === 'user') {
-        foundUser = true;
-        break;
-      }
-      if (msg.parts?.some(p => p.functionCall?.name === 'send_to_session')) {
-        hasSendToSession = true;
-      }
-      idx--;
-    }
-
-    return {
-      foundUser,
-      hasSendToSession,
-      hasNoAction,
-      hasUserFromPrefix,
-    };
-  }
-
   private async appendTerminalModelMessage(session: Session, text: string): Promise<void> {
     await this.host.appendSessionMessage(session, {
       role: 'model',
@@ -736,21 +688,12 @@ export class SessionTurnRunner {
       return;
     }
 
-    const stateDecision = shouldQueueChildHandoffReminder(session);
-    if (stateDecision !== undefined) {
-      if (stateDecision && session.queue.length === 0) {
-        const reminder = buildChildReminder(session.parentSessionId);
-        await this.host.queueSessionSystemEvent(session.id, reminder, 'background');
-      }
+    if (!shouldQueueChildHandoffReminder(session) || session.queue.length > 0) {
       return;
     }
 
-    const { foundUser, hasSendToSession, hasNoAction, hasUserFromPrefix } = this.getChildTurnState(session);
-
-    if (foundUser && !hasNoAction && !hasSendToSession && !hasUserFromPrefix && session.queue.length === 0) {
-      const reminder = buildChildReminder(session.parentSessionId);
-      await this.host.queueSessionSystemEvent(session.id, reminder, 'background');
-    }
+    const reminder = buildChildReminder(session.parentSessionId);
+    await this.host.queueSessionSystemEvent(session.id, reminder, 'background');
   }
 
   private async maybeAppendGoalIntervalReminder(session: Session): Promise<void> {

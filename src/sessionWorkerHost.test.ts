@@ -1115,7 +1115,9 @@ test('bound worker host closes reminders, awaits automatic compaction, and rejec
   };
   try {
     await withLocalHost(initial, async ({ host, store, session }) => {
-      store.enqueueIntent(initial.id, 'ordinary', 'enqueue', { type: 'intersession', sourceSessionId: 'parent-session', parts: [{ text: 'work' }] });
+      store.enqueueIntent(initial.id, 'ordinary', 'enqueue', {
+        type: 'intersession', sourceSessionId: 'parent-session', sourceSessionRelation: 'parent', parts: [{ text: 'work' }],
+      });
       await host.runPending(8);
       for (let index = 0; index < 40 && calls < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
       const reminders = session.history.filter(message => JSON.stringify(message.parts).includes('kind=\\"child-reminder\\"'));
@@ -1190,7 +1192,7 @@ test('Worker post-final child-reminder persistence failure resyncs authority wit
         return persistActivated(session, ...args);
       };
       store.enqueueIntent(initial.id, 'post-final-reminder', 'enqueue', {
-        type: 'intersession', sourceSessionId: 'parent-session',
+        type: 'intersession', sourceSessionId: 'parent-session', sourceSessionRelation: 'parent',
         source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }],
       });
       await host.runPending(8);

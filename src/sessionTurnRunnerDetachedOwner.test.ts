@@ -365,7 +365,7 @@ test('local post-final child-reminder failure keeps one provider final and relea
   }
 });
 
-test('persisted child-handoff state drives reminder boundaries, resolution, transparency, and legacy fallback', async () => {
+test('persisted child-handoff state exclusively drives reminder boundaries, resolution, and transparency', async () => {
   await initArchiveStore();
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
@@ -451,6 +451,14 @@ test('persisted child-handoff state drives reminder boundaries, resolution, tran
       assert.equal(transparentMaintenance.reminders.length, 1);
     }
 
+    const alreadyResolved = await runCase({
+      name: 'already-resolved',
+      initialState: { boundary: 'report-required', resolved: true },
+      queue: [{ type: 'background', parts: [{ text: 'transparent maintenance after report' }] }],
+    });
+    assert.deepEqual(alreadyResolved.session.childHandoffState, { boundary: 'report-required', resolved: true });
+    assert.equal(alreadyResolved.reminders.length, 0);
+
     const directUser = await runCase({
       name: 'direct-user',
       initialState: { boundary: 'report-required', resolved: false },
@@ -500,12 +508,12 @@ test('persisted child-handoff state drives reminder boundaries, resolution, tran
     assert.equal(queueGuard.reminders.length, 0);
     assert.equal(queueGuard.session.queue.length, 0);
 
-    const legacy = await runCase({
-      name: 'legacy-fallback',
-      queue: [{ type: 'background', parts: [{ text: 'legacy meaningful input' }] }],
+    const absentState = await runCase({
+      name: 'absent-state-history',
+      queue: [{ type: 'background', parts: [{ text: 'history that previously looked report-required' }] }],
     });
-    assert.equal(legacy.session.childHandoffState, undefined);
-    assert.equal(legacy.reminders.length, 1, 'no-state Sessions keep the existing backward scanner');
+    assert.equal(absentState.session.childHandoffState, undefined);
+    assert.equal(absentState.reminders.length, 0, 'no explicit state means no inferred reminder');
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
