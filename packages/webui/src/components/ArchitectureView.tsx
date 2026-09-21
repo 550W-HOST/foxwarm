@@ -152,13 +152,14 @@ function UsageDetails({ usage, loaded = false, detailed = false }: {
           <part.icon className={`h-3 w-3 shrink-0 ${part.ink}`} aria-hidden="true" />
           <span className="text-fw-text-muted">{part.label}</span>
           <span className="ml-auto shrink-0 font-medium text-fw-text-strong">{usageNumber(part.value)}</span>
+          <span className="w-14 shrink-0 text-right text-fw-text-muted">{total > 0 ? (part.value / total * 100).toFixed(1) : '0.0'}%</span>
         </div>)}
       </div> : null}
     </div>
   )
 }
 
-function UsagePie({ usage, loaded = false }: { usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }; loaded?: boolean }) {
+function UsagePie({ usage, loaded = false, global = false }: { usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }; loaded?: boolean; global?: boolean }) {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const popup = useRef<HTMLDivElement>(null)
@@ -179,12 +180,16 @@ function UsagePie({ usage, loaded = false }: { usage?: { cachedTokens: number; i
     return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); window.removeEventListener('resize', close); window.removeEventListener('scroll', close, true) }
   }, [position])
   return <>
-    <button ref={trigger} type="button" aria-label={loaded ? 'Loaded token usage' : 'Token usage'} aria-haspopup="dialog" aria-expanded={!!position}
+    <button ref={trigger} type="button" aria-label={global ? 'Global token usage' : loaded ? 'Loaded token usage' : 'Token usage'} aria-haspopup="dialog" aria-expanded={!!position}
       title={usage ? `${usageNumber(total)} ${loaded ? 'loaded tokens' : 'tokens'}` : 'Token usage unavailable'}
       onKeyDown={event => event.stopPropagation()}
       onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setPosition(position ? null : { left: Math.max(8, Math.min(rect.right - 280, window.innerWidth - 288)), top: rect.bottom + 210 < window.innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 210) }) }}
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring">
-      <span aria-hidden="true" className="h-5 w-5 rounded-full ring-1 ring-inset ring-fw-border/30" style={{ background: total ? `conic-gradient(var(--foxwarm-color-text-subtle) 0% ${cached}%, var(--foxwarm-color-accent) ${cached}% ${inputEnd}%, var(--foxwarm-color-special) ${inputEnd}% 100%)` : 'var(--foxwarm-color-border)' }} />
+      className={`flex shrink-0 items-center rounded-lg transition-colors hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${global ? 'gap-3 px-3 py-1.5 text-left' : 'h-8 w-8 justify-center'}`}>
+      <span aria-hidden="true" className={`${global ? 'h-8 w-8' : 'h-5 w-5'} shrink-0 rounded-full ring-1 ring-inset ring-fw-border/30`} style={{ background: total ? `conic-gradient(var(--foxwarm-color-text-subtle) 0% ${cached}%, var(--foxwarm-color-accent) ${cached}% ${inputEnd}%, var(--foxwarm-color-special) ${inputEnd}% 100%)` : 'var(--foxwarm-color-border)' }} />
+      {global ? <>
+        <span className="flex flex-col gap-0.5"><span className="text-[10px] font-medium tracking-wide text-fw-text-muted">Usage</span><strong className="text-lg font-semibold leading-none tabular-nums text-fw-text-strong">{usage ? usageNumber(total) : '—'}</strong></span>
+        <ChevronRight aria-hidden="true" className={`ml-1 h-3.5 w-3.5 text-fw-text-muted transition-transform ${position ? '-rotate-90' : 'rotate-90'}`} />
+      </> : null}
     </button>
     {position ? createPortal(<div ref={popup} role="dialog" aria-label="Token usage" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
       className="fixed z-[1000] w-[280px] max-w-[calc(100vw-16px)] rounded-xl border border-fw-border bg-fw-surface p-4 shadow-xl" style={position}>
@@ -910,7 +915,6 @@ export default function ArchitectureView({
   ]
 
   const readyNodes = displayNodes.filter(node => node.online && node.protocolStatus !== 'upgrade-required').length
-  const totalTokens = summary.totalCachedTokens + summary.totalInputTokens + summary.totalOutputTokens
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
   const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
 
@@ -997,48 +1001,44 @@ export default function ArchitectureView({
 
         </header>
 
-        {surface === 'topology' ? <div className="mb-4 rounded-xl border border-fw-border bg-fw-surface p-3 shadow-sm dark:border-fw-border dark:bg-fw-surface">
-          <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center">
-            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
-              <label className="relative min-w-0 flex-1 sm:min-w-64">
+        {surface === 'topology' ? <div className="mb-5 border-b border-fw-border-muted pb-4">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <label className="relative w-full sm:w-72 lg:w-80 sm:shrink-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
-                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search sessions, models, tools…" className="w-full rounded-lg border border-fw-border bg-fw-surface-sunken py-2 pl-9 pr-3 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring" />
+                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} aria-label="Search sessions, models, tools" placeholder="Search sessions…" className="h-9 w-full rounded-lg border border-fw-border bg-fw-surface py-0 pl-9 pr-3 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring hover:bg-fw-hover dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring" />
               </label>
-              <label className="relative sm:w-56">
+              <label className="relative min-w-0 flex-1 sm:w-48 sm:flex-none">
                 <Bot className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
-                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-fw-border bg-fw-surface-sunken py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong">
+                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border hover:bg-fw-hover dark:text-fw-text-strong">
                   <option value="">All agents · {summary.sessionCount}</option>
                   {agents.map(agent => <option key={agent.name} value={agent.name}>{agent.name} · {agent.sessionCount}</option>)}
                 </select>
                 <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
               </label>
-              <label className="relative sm:w-44">
+              <label className="relative min-w-0 flex-1 sm:w-36 sm:flex-none">
                 <ListFilter className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
-                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-fw-border bg-fw-surface-sunken py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong">
+                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border hover:bg-fw-hover dark:text-fw-text-strong">
                   {statusFilters.map(filter => <option key={filter.id} value={filter.id}>{filter.label}{typeof filter.count === 'number' ? ` · ${filter.count}` : ''}</option>)}
                 </select>
                 <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
               </label>
             </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-fw-border-muted pt-3 text-[11px] text-fw-text-muted dark:border-fw-border dark:text-fw-text-muted 2xl:border-l 2xl:border-t-0 2xl:pl-4 2xl:pt-0">
-              <span className="font-semibold uppercase tracking-[0.12em] text-fw-text-muted">Traffic</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(totalTokens)}</strong> total</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalCachedTokens)}</strong> cached</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalInputTokens)}</strong> input</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalOutputTokens)}</strong> output</span>
+            <div className="ml-auto flex shrink-0 items-center">
+              <UsagePie global usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens }} />
             </div>
           </div>
         </div> : null}
 
         {surface === 'topology' ? <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <main className="min-w-0 space-y-3">
-            <div className="flex items-center justify-between gap-3 px-1">
+            <div className="flex items-center justify-between gap-3 px-1 xl:col-span-2 xl:pr-[376px]">
               <div>
                 <h2 className="text-sm font-semibold text-fw-text-strong">Execution topology</h2>
                 <p className="mt-0.5 text-xs text-fw-text-muted">Sessions are grouped by their effective tool-execution node, not sidebar hierarchy.</p>
               </div>
               <span className="text-xs text-fw-text-muted">{visibleSessions.length} matching</span>
             </div>
+          <main className="min-w-0 space-y-3">
             {displayNodes.map(node => (
               <NodeLane
                 key={node.id}
