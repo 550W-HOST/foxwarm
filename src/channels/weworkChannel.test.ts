@@ -68,7 +68,7 @@ test('WeWork channel only enables passive stream aggregation when configured', a
     stream: {
       id: enabledResult.passiveResponse.stream.id,
       finish: false,
-      content: '<think></think>',
+      content: '<think>',
     },
   });
 });
@@ -148,12 +148,12 @@ test('WeWork explicit webhook override bypasses an active latest card while auto
   assert.equal(webhookSends[0].url, 'https://example.test/explicit-active-card');
   const afterExplicit = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
   assert.equal(afterExplicit.passiveResponse.stream.finish, false);
-  assert.equal(afterExplicit.passiveResponse.stream.content, '<think></think>');
+  assert.equal(afterExplicit.passiveResponse.stream.content, '<think>');
 
   await channel.sendMessage('chat-1', '🗜️ Background compaction finished');
   const afterNotice = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
   assert.equal(afterNotice.passiveResponse.stream.finish, false);
-  assert.equal(afterNotice.passiveResponse.stream.content, '<think>\n🗜️ Background compaction finished\n</think>');
+  assert.equal(afterNotice.passiveResponse.stream.content, '<think>\n🗜️ Background compaction finished');
   assert.equal(webhookSends.length, 1, 'ordinary text stays in the active card instead of sending proactively');
 
   await channel.sendMessage('chat-1', 'automatic card terminal', { turnFinal: true });
@@ -189,7 +189,7 @@ test('WeWork automatic latest-card routing stays scoped to one conversation', as
   assert.equal(webhookSends.length, 1);
   assert.equal(webhookSends[0].url, 'https://example.test/proactive');
   const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
-  assert.equal(refresh.passiveResponse.stream.content, '<think></think>');
+  assert.equal(refresh.passiveResponse.stream.content, '<think>');
   assert.equal(refresh.passiveResponse.stream.finish, false);
 });
 
@@ -258,7 +258,7 @@ test('WeWork channel can start a passive stream for pure short-callback AIBot me
   assert.equal(result.handled, true);
   assert.equal(result.passiveResponse.msgtype, 'stream');
   assert.equal(result.passiveResponse.stream.finish, false);
-  assert.equal(result.passiveResponse.stream.content, '<think></think>');
+  assert.equal(result.passiveResponse.stream.content, '<think>');
 });
 
 test('WeWork channel passes configured selfName on inbound context', async () => {
@@ -294,7 +294,7 @@ test('WeWork channel skips stream-bound broadcasts for non-matching conversation
   await channel.sendMessage('other-chat', 'must not be posted to webhook', { weworkStreamId: first.passiveResponse.stream.id });
 
   const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: first.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
-  assert.equal(refresh.passiveResponse.stream.content, '<think></think>');
+  assert.equal(refresh.passiveResponse.stream.content, '<think>');
   assert.equal(refresh.passiveResponse.stream.finish, false);
 });
 
@@ -410,7 +410,7 @@ test('WeWork channel applies structured turn progress to the bound stream card',
   });
 
   const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
-  assert.equal(refresh.passiveResponse.stream.content, '<think>\nmodel 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking\n</think>');
+  assert.equal(refresh.passiveResponse.stream.content, '<think>\nmodel 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
 });
 
 test('WeWork stream card shows model text and running tools before tools finish', async () => {
@@ -482,7 +482,7 @@ test('WeWork stream card shows model text and running tools before tools finish'
 
     const runningRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
     assert.equal(runningRefresh.passiveResponse.stream.finish, false);
-    assert.equal(runningRefresh.passiveResponse.stream.content, '<think>\nI will inspect it now.\n\n> ⌛️ read\n</think>');
+    assert.equal(runningRefresh.passiveResponse.stream.content, '<think>\nI will inspect it now.\n\n> ⌛️ read');
 
     releaseTool();
     await handlerRuns[0];
@@ -538,7 +538,7 @@ test('busy queued WeWork stream card is updated when its queued turn runs', asyn
       responseUrl: aibotTextBody.response_url,
     }, true);
     const streamId = queuedInbound.passiveResponse.stream.id;
-    assert.equal(queuedInbound.passiveResponse.stream.content, '<think></think>');
+    assert.equal(queuedInbound.passiveResponse.stream.content, '<think>');
     assert.equal(queuedInbound.passiveResponse.stream.finish, false);
 
     await waitFor(async () => {
@@ -637,7 +637,7 @@ test('busy WeWork follow-up joins the active tool loop and moves delivery to the
       responseUrl: aibotTextBody.response_url,
     }, true);
     const firstStreamId = firstInbound.passiveResponse.stream.id;
-    assert.equal(firstInbound.passiveResponse.stream.content, '<think></think>');
+    assert.equal(firstInbound.passiveResponse.stream.content, '<think>');
 
     await toolStartedPromise;
 
@@ -650,7 +650,7 @@ test('busy WeWork follow-up joins the active tool loop and moves delivery to the
     }, true);
     const secondStreamId = secondInbound.passiveResponse.stream.id;
     assert.notEqual(secondStreamId, firstStreamId);
-    assert.equal(secondInbound.passiveResponse.stream.content, '<think></think>');
+    assert.equal(secondInbound.passiveResponse.stream.content, '<think>');
 
     await waitFor(() => handlerRuns.length >= 2);
     await handlerRuns[1];
@@ -820,7 +820,7 @@ test('WeWork suspended turn keeps the active card open until the answer arrives'
 
   const parked = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
   assert.equal(parked.passiveResponse.stream.finish, false);
-  assert.equal(parked.passiveResponse.stream.content, '<think>\nwaiting for the child session\n</think>');
+  assert.equal(parked.passiveResponse.stream.content, '<think>\nwaiting for the child session');
   assert.equal(channel.isTurnLifecycleActive('chat-1'), true);
 
   // The resumed turn appends to the same card and the answer body closes it.
@@ -860,19 +860,19 @@ test('WeWork proactive fallback strips fold tags from downgraded content', async
   assert.equal(webhookSends[0].payload.markdown.content, '\nfolded process\n\nthe answer');
 });
 
-test('WeWork stream card follows the configured think frame style', async () => {
-  const channel = new WeWorkWebhookChannel({ name: 'wework-open-frame', aibot: { stream: true, streamThinkFrame: 'open' } });
+test('WeWork stream card follows a configured closed think frame style', async () => {
+  const channel = new WeWorkWebhookChannel({ name: 'wework-closed-frame', aibot: { stream: true, streamThinkFrame: 'closed' } });
   channel.onMessage(async () => {});
 
-  const inbound = await (channel as any).processInboundBody(cloneBody('open-frame-turn-1'), {
+  const inbound = await (channel as any).processInboundBody(cloneBody('closed-frame-turn-1'), {
     mode: 'webhook', responseUrl: aibotTextBody.response_url,
   }, true);
   const streamId = inbound.passiveResponse.stream.id;
-  assert.equal(inbound.passiveResponse.stream.content, '<think>');
+  assert.equal(inbound.passiveResponse.stream.content, '<think></think>');
 
   await channel.sendMessage('chat-1', 'step one', { weworkStreamId: streamId });
   const streaming = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
-  assert.equal(streaming.passiveResponse.stream.content, '<think>\nstep one');
+  assert.equal(streaming.passiveResponse.stream.content, '<think>\nstep one\n</think>');
   assert.equal(streaming.passiveResponse.stream.finish, false);
 
   await channel.sendMessage('chat-1', 'the answer', { turnFinal: true });

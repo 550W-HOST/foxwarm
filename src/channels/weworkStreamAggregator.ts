@@ -71,17 +71,17 @@ export const WEWORK_STREAM_THINK_CLOSE = '</think>';
  * the deep-thinking state instead. Text before `<think>` is dropped, and
  * content without a closing tag stays entirely folded.
  *
+ * - `open` (default): streaming frames never close the pair and only the final
+ *   frame emits the closing tag, which is what produces the running label first
+ *   and the finished label on the answer frame.
  * - `closed`: every frame carries a complete pair (`<think></think>` while the
  *   run has no recognizable process output, `<think>…</think>` afterwards) and
- *   only the answer body follows the closing tag. This matches the requested
- *   frame shape and therefore shows the deep-thinking label rather than the
+ *   only the answer body follows the closing tag. A first frame that already
+ *   carries the pair shows the deep-thinking label instead of the
  *   running-then-finished progression.
- * - `open`: streaming frames never close the pair and only the final frame
- *   emits the closing tag, which is what produces the running label first and
- *   the finished label on the answer frame.
  */
 export type WeWorkThinkFrameStyle = 'closed' | 'open';
-export const DEFAULT_WEWORK_THINK_FRAME_STYLE: WeWorkThinkFrameStyle = 'closed';
+export const DEFAULT_WEWORK_THINK_FRAME_STYLE: WeWorkThinkFrameStyle = 'open';
 export const WEWORK_STREAM_CONTENT_BYTE_LIMIT = 20480;
 // WeWork stream.content limit is documented as 20480 bytes. Keep a little room
 // for the truncation marker so UTF-8 byte length remains below the platform cap.
@@ -97,7 +97,7 @@ function utf8ByteLength(value: string): number {
 
 /** Resolves the configured think-frame style; unknown values fall back to the default. */
 export function normalizeWeWorkThinkFrameStyle(value: unknown): WeWorkThinkFrameStyle {
-  return value === 'open' ? 'open' : DEFAULT_WEWORK_THINK_FRAME_STYLE;
+  return value === 'open' || value === 'closed' ? value : DEFAULT_WEWORK_THINK_FRAME_STYLE;
 }
 
 /**

@@ -49,8 +49,9 @@ export type WeWorkConfig = CommonChannelConfig & {
     stream?: boolean;
     streamMaxContentBytes?: number;
     /**
-     * Think-fold frame shape for the passive stream card: `closed` (default)
-     * closes the fold in every frame, `open` closes it only in the final frame.
+     * Think-fold frame shape for the passive stream card: `open` (default)
+     * closes the fold only in the final frame, `closed` closes it in every
+     * frame.
      */
     streamThinkFrame?: 'closed' | 'open';
     websocket?: {
