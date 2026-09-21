@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
+import { LocalRpcTransport, ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
@@ -343,12 +343,12 @@ test('worker retry exhaustion delivers one terminal retry failure without a seco
         type: 'user', source: { platform: 'qqbot', channelUserId: 'c2c:user' }, parts: [{ text: 'exhaust retries' }],
       });
       await host.runPending(8);
-      assert.deepEqual(intermediate, []);
+      assert.equal(intermediate.length, 1);
+      assert.match(intermediate[0], /Attempt 3\/3 failed: worker provider exhausted\. No more retries/);
       assert.equal(finals.length, 1);
       assert.equal(finals[0].source, undefined);
-      assert.equal(finals[0].outcome, 'error');
-      assert.match(finals[0].text, /Attempt 3\/3 failed: worker provider exhausted\. No more retries/);
-      assert.doesNotMatch(finals[0].text, /API request failed/);
+      assert.equal(finals[0].outcome, 'empty-final');
+      assert.equal(finals[0].text, '');
       const durable = readDurable();
       assert.equal(durable.history.some((message: any) => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
       assert.equal(durable.history.filter((message: any) => message.__meta?.noticeType === 'llm-retry').length, 1);
@@ -356,6 +356,71 @@ test('worker retry exhaustion delivers one terminal retry failure without a seco
       async (source, text, outcome) => { finals.push({ source, text, outcome }); },
       async (_source, text) => { intermediate.push(text); });
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker terminal retry uses real attachment delivery without duplicating WebUI text', async () => {
+  const initial = baseSession(`worker-retry-real-attachments-${Date.now()}`);
+  const originalChat = llm.chat;
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const webuiId = 'webui';
+  const ordinaryId = `ordinary-retry-${suffix}`;
+  const weworkId = `wework-retry-${suffix}`;
+  const webuiTexts: string[] = [];
+  const ordinaryTexts: string[] = [];
+  const weworkTexts: string[] = [];
+  const weworkLifecycle: any[] = [];
+  registerChannel(webuiId, {
+    name: webuiId, platform: 'webui', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (_conversationId, text) => { webuiTexts.push(text); },
+  });
+  registerChannel(ordinaryId, {
+    name: ordinaryId, platform: 'telegram', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (_conversationId, text) => { ordinaryTexts.push(text); },
+  });
+  registerChannel(weworkId, {
+    name: weworkId, platform: 'wework', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (_conversationId, text) => { weworkTexts.push(text); },
+    handleTurnLifecycle: async (_conversationId, options) => { weworkLifecycle.push(options); },
+  });
+  sessionManager.attachChannel(webuiId, 'browser', initial.id);
+  sessionManager.attachChannel(ordinaryId, 'room', initial.id);
+  sessionManager.attachChannel(weworkId, 'chat', initial.id);
+  const registry = new RpcServiceRegistry();
+  registry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: initial.id }));
+  const transport = new LocalRpcTransport(registry);
+  const client = new RpcClient(sessionTurnDeliveryServiceDescriptor, transport);
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.onRetry({
+      attempt: 2, maxRetries: 2, final: true,
+      kind: 'request-error', reason: 'real attachment exhaustion',
+    });
+    throw new llm.LlmRequestError('generic error must not be delivered');
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'worker-retry-real-attachments', 'enqueue', {
+        type: 'user', source: { platform: 'wework', channelUserId: 'chat' }, parts: [{ text: 'exhaust real delivery' }],
+      });
+      await host.runPending(8);
+      assert.deepEqual(webuiTexts, []);
+      assert.equal(ordinaryTexts.length, 1);
+      assert.match(ordinaryTexts[0], /Attempt 2\/2 failed: real attachment exhaustion\. No more retries/);
+      assert.deepEqual(weworkTexts, ordinaryTexts);
+      assert.equal(weworkLifecycle.filter(options => options.turnFinal === true).length, 1);
+      assert.equal(readDurable().history.filter((message: any) => message.__meta?.noticeType === 'llm-retry').length, 1);
+      assert.equal(readDurable().history.some((message: any) => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
+    }, true, undefined,
+      async (_source, text, outcome) => { await client.call('deliverCommittedFinal', { sourceSessionId: initial.id, text, outcome }); },
+      async (_source, text) => { await client.call('deliverIntermediateText', { sourceSessionId: initial.id, text }); });
+  } finally {
+    (llm as any).chat = originalChat;
+    transport.close();
+    for (const [id, conversationId] of [[webuiId, 'browser'], [ordinaryId, 'room'], [weworkId, 'chat']] as const) {
+      sessionManager.detachChannel(id, conversationId);
+      unregisterChannel(id);
+    }
+  }
 });
 
 test('worker publishes a no-tool result once when a different-source follow-up arrives during the provider request', async () => {

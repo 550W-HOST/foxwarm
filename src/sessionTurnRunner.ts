@@ -343,8 +343,9 @@ export class SessionTurnRunner {
 
       const channelSnippet = formatRetryChannelSnippet(displayEvent);
       if (event.final === true) {
-        if (this.host.deliverCommittedFinal && turnId) {
-          await this.host.deliverCommittedFinal(session, channelSnippet, 'error', turnId);
+        if (this.host.deliverIntermediateText && this.host.deliverCommittedFinal && turnId) {
+          await this.host.deliverIntermediateText(session, channelSnippet, turnId);
+          await this.host.deliverCommittedFinal(session, '', 'empty-final', turnId);
           onTerminalDelivered?.();
         } else if (broadcast) {
           broadcast(channelSnippet, mergeExcludePlatforms({ parse_mode: 'Markdown', turnFinal: true }, ['webui']));
