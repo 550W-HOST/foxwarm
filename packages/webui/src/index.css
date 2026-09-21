@@ -2012,10 +2012,10 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   }
 }
 
-/* Saving an effort locks mutations without dimming or moving the picker. */
-[data-model-selector-popup][data-effort-saving="true"] [data-model-option-row]:disabled,
-[data-model-selector-popup][data-effort-saving="true"] [data-model-child-mode]:disabled,
-[data-model-selector-popup][data-effort-saving="true"] input:disabled {
+/* Saving model settings locks mutations without dimming or moving the picker. */
+[data-model-selector-popup][data-model-saving="true"] [data-model-option-row]:disabled,
+[data-model-selector-popup][data-model-saving="true"] [data-model-child-mode]:disabled,
+[data-model-selector-popup][data-model-saving="true"] input:disabled {
   opacity: 1;
 }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-webkit-slider-thumb { opacity: 0; }

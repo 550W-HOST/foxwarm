@@ -279,7 +279,6 @@ function ModelSelector({
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const [effortSaving, setEffortSaving] = useState(false)
   const [activeScope, setActiveScope] = useState<ModelSelectorScope>('current')
   const [filterQuery, setFilterQuery] = useState('')
   const [childFilterQuery, setChildFilterQuery] = useState('')
@@ -532,10 +531,7 @@ function ModelSelector({
         staleLabel={staleFullLabel}
         busy={busy}
         descriptionId={descriptionId}
-        onCommit={async next => {
-          setEffortSaving(true)
-          try { await onChange(next) } finally { setEffortSaving(false) }
-        }}
+        onCommit={onChange}
       />
     )
   }
@@ -553,7 +549,6 @@ function ModelSelector({
         <span className="min-w-0 truncate font-medium text-fw-text-strong" title={currentKeyFull} data-model-trigger-name="true">{currentDisplayName}</span>
         <span className="h-3.5 w-px shrink-0 bg-fw-border" aria-hidden="true" />
         <span className="shrink-0 text-fw-text-muted" data-model-trigger-effort="true">{triggerEffort}</span>
-        {((busy && !effortSaving) || refreshing) && <span className="shrink-0 text-fw-text-muted" aria-hidden="true">…</span>}
         {error && <span className="shrink-0 text-fw-danger" aria-hidden="true">!</span>}
         <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -588,7 +583,7 @@ function ModelSelector({
           aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
-          data-effort-saving={effortSaving ? "true" : undefined}
+          data-model-saving={busy ? "true" : undefined}
         >
           <div className="foxwarm-model-columns min-h-0 flex-1" data-model-columns={childFollows ? '1' : '2'}>
             {(['current', ...(!childFollows ? ['child'] : [])] as ModelSelectorScope[]).map(scope => {
