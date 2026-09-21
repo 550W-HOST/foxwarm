@@ -1188,13 +1188,8 @@ export class WeWorkWebhookChannel implements Channel {
 
     const explicitStreamId = typeof options?.weworkStreamId === 'string' ? options.weworkStreamId : undefined;
     const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
-    const automaticTurnDelivery = !explicitWebhookUrl && (
-      typeof options?.channelProgressTurnId === 'string'
-      || options?.turnFinal === true
-      || options?.channelTurnProgress !== undefined
-    );
-    const latestStream = automaticTurnDelivery ? this.streamAggregator.getByConversation(userId) : undefined;
-    const streamId = explicitStreamId || latestStream?.streamId;
+    const latestStream = !explicitWebhookUrl ? this.streamAggregator.getByConversation(userId) : undefined;
+    const streamId = explicitStreamId || (latestStream?.finish ? undefined : latestStream?.streamId);
     if (!streamId) {
       return false;
     }
