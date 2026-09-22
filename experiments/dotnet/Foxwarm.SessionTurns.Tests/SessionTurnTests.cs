@@ -216,9 +216,14 @@ public sealed class SessionTurnTests
         var registry = NewRegistry(store, chat, out var entry);
         entry.State.Queue.Add(QueueItem.UserText("one"));
         var runs = Enumerable.Range(0, 20).Select(_ => registry.Runner.ProcessQueueAsync("s")).ToArray();
-        await chat.Started;
+        await chat.Started.WaitAsync(TimeSpan.FromSeconds(5));
         chat.Complete("done");
-        await Task.WhenAll(runs);
+        try { await Task.WhenAll(runs).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (TimeoutException)
+        {
+            var snapshot = entry.Snapshot();
+            throw new TimeoutException($"Concurrent run did not settle: busy={snapshot.Busy}, queue={snapshot.Queue.Count}, history={snapshot.History.Count}, saves={store.CommitCount}, statuses={string.Join(',', runs.Select(run => run.Status))}.");
+        }
         Assert.Single(chat.Calls);
     }
 
@@ -836,10 +841,11 @@ internal sealed class ControlledChat : IChatService
             callSignal.TrySetResult(true);
             callSignal = NewSignal();
         }
+        var plan = plans.TryDequeue(out var queued) ? queued : ((_, _) => Task.FromResult(ChatResult.Text("ok")));
+        var result = plan(sessionId, cancellationToken);
         started.TrySetResult(true);
         startedById.GetOrAdd(sessionId, _ => NewSignal()).TrySetResult(true);
-        var plan = plans.TryDequeue(out var queued) ? queued : ((_, _) => Task.FromResult(ChatResult.Text("ok")));
-        return await plan(sessionId, cancellationToken);
+        return await result;
     }
 
     public sealed record Call(string SessionId, IReadOnlyList<JsonObject> History);

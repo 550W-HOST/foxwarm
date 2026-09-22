@@ -575,6 +575,26 @@ public sealed class ResponsesClientTests
         Assert.Equal(1_234.5, timing["durationMs"]?.GetValue<double>());
     }
 
+    [Fact]
+    public void ActualTypeScriptOrdinarySequenceBuilderPreservesHistoryVersionAndReplacesFalsyTimestamps()
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var resultPath = Path.Combine(root, "actual-ts-append-metadata.json");
+            RunPersistenceOracle("append-metadata-ts", root, resultPath, "s");
+            var result = JsonNode.Parse(File.ReadAllText(resultPath))!.AsObject();
+            Assert.Equal(9, result["historyVersion"]!.GetValue<int>());
+            Assert.Equal(6, result["nextMessageSeq"]!.GetValue<int>());
+            Assert.Equal(new[] { 4242, 4242, 4242, 4242, 7 }, result["timestamps"]!.AsArray().Select(node => node!.GetValue<int>()));
+            Assert.Equal(new[] { 1, 2, 3, 4, 5 }, result["seqs"]!.AsArray().Select(node => node!.GetValue<int>()));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static ResponsesChatService NewService(HttpClient http, Uri baseUri) => new(
         http,
         new ResponsesClientOptions(baseUri, "test-model", "openai/test-model", "test-token", "instructions", 321));

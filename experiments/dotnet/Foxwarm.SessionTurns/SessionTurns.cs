@@ -263,17 +263,21 @@ public sealed class SessionSaveLane
 
     private Task EnqueueOperationAsync(Func<Task> operation)
     {
+        var launch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task current;
         lock (laneGate)
         {
             var previous = tail;
-            var current = RunAfterAsync(previous, operation);
+            current = RunAfterAsync(launch.Task, previous, operation);
             tail = current;
-            return current;
         }
+        launch.TrySetResult(true);
+        return current;
     }
 
-    private static async Task RunAfterAsync(Task previous, Func<Task> operation)
+    private static async Task RunAfterAsync(Task launch, Task previous, Func<Task> operation)
     {
+        await launch.ConfigureAwait(false);
         try { await previous.ConfigureAwait(false); }
         catch { /* A failed best-effort attempt must not poison later strict work. */ }
         await operation().ConfigureAwait(false);
@@ -289,7 +293,10 @@ public sealed class SessionEntry
     private long busyClaimVersion;
     private int bestEffortFailures;
     private int postCommitNotificationFailures;
+    private int backgroundProcessorFailures;
     private Exception? lastPostCommitNotificationFailure;
+    private Exception? lastBackgroundProcessorFailure;
+    private readonly TaskCompletionSource<Exception> backgroundProcessorFailureSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }
@@ -298,6 +305,8 @@ public sealed class SessionEntry
     public int ProcessorClaimCount => Volatile.Read(ref processorClaimCount);
     public int PostCommitNotificationFailureCount => Volatile.Read(ref postCommitNotificationFailures);
     public Exception? LastPostCommitNotificationFailure => Volatile.Read(ref lastPostCommitNotificationFailure);
+    public int BackgroundProcessorFailureCount => Volatile.Read(ref backgroundProcessorFailures);
+    public Exception? LastBackgroundProcessorFailure => Volatile.Read(ref lastBackgroundProcessorFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
 
     public SessionEntry(SessionState state, ISessionAuthorityStore store)
@@ -314,6 +323,13 @@ public sealed class SessionEntry
         Volatile.Write(ref lastPostCommitNotificationFailure, error);
         Interlocked.Increment(ref postCommitNotificationFailures);
     }
+    internal void RecordBackgroundProcessorFailure(Exception error)
+    {
+        Volatile.Write(ref lastBackgroundProcessorFailure, error);
+        Interlocked.Increment(ref backgroundProcessorFailures);
+        backgroundProcessorFailureSignal.TrySetResult(error);
+    }
+    public Task<Exception> WaitForBackgroundProcessorFailureAsync() => backgroundProcessorFailureSignal.Task;
 
     public bool TryClaimProcessor()
     {
@@ -500,6 +516,7 @@ public sealed class LocalSessionTurnHost
     private readonly IChatService chat;
     private readonly ITurnToolExecutor tools;
     private readonly int maxToolIterations;
+    private readonly Func<long> clock;
     private int releaseCommits;
 
     public LocalSessionTurnHost(
@@ -507,12 +524,14 @@ public sealed class LocalSessionTurnHost
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor? tools = null,
-        int maxToolIterations = 500)
+        int maxToolIterations = 500,
+        Func<long>? clock = null)
     {
         this.entry = entry;
         this.chat = chat;
         this.tools = tools ?? new UnsupportedTurnToolExecutor();
         this.maxToolIterations = maxToolIterations > 0 ? maxToolIterations : throw new ArgumentOutOfRangeException(nameof(maxToolIterations));
+        this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
     public int ReleaseCommitCount => Volatile.Read(ref releaseCommits);
@@ -537,7 +556,7 @@ public sealed class LocalSessionTurnHost
     {
         if (items.Count == 0) return;
         foreach (var item in items) SessionIngress.EnsureSupportedForRunner(item);
-        await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: false)).ConfigureAwait(false);
+        await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: false, clock)).ConfigureAwait(false);
         entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 
@@ -609,7 +628,7 @@ public sealed class LocalSessionTurnHost
     private async Task AppendHistoryMessageStrictAsync(JsonObject message)
     {
         await entry.SaveLane.CommitCanonicalAppendAsync(state =>
-            PrepareCanonicalAppend(state, [message], [], updateLastMessageTime: false, finalizing: false)).ConfigureAwait(false);
+            PrepareCanonicalAppend(state, [message], [], updateLastMessageTime: false, finalizing: false, clock)).ConfigureAwait(false);
         entry.InvokeCommitted(entry.Snapshot());
     }
 
@@ -672,7 +691,7 @@ public sealed class LocalSessionTurnHost
     {
         var items = entry.WithState(state => state.Queue.ToArray());
         foreach (var item in items.Where(item => item.Type != QueueItemType.CompactCommit)) SessionIngress.EnsureSupportedForRunner(item);
-        await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: true)).ConfigureAwait(false);
+        await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: true, clock)).ConfigureAwait(false);
         Interlocked.Increment(ref releaseCommits);
         entry.InvokeQueuedCommitted(entry.Snapshot());
     }
@@ -680,7 +699,8 @@ public sealed class LocalSessionTurnHost
     private static CanonicalAppendPreparation PrepareQueuedAppend(
         SessionState state,
         IReadOnlyList<QueueItem> selectedItems,
-        bool finalizing)
+        bool finalizing,
+        Func<long> clock)
     {
         if (state.Queue.Count < selectedItems.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
         for (var index = 0; index < selectedItems.Count; index++)
@@ -720,7 +740,7 @@ public sealed class LocalSessionTurnHost
             rawMessages.Add(message);
             committedAnyInput = true;
         }
-        return PrepareCanonicalAppend(state, rawMessages, selectedItems, updateLastMessageTime, finalizing);
+        return PrepareCanonicalAppend(state, rawMessages, selectedItems, updateLastMessageTime, finalizing, clock);
     }
 
     private static CanonicalAppendPreparation PrepareCanonicalAppend(
@@ -728,7 +748,8 @@ public sealed class LocalSessionTurnHost
         IReadOnlyList<JsonObject> rawMessages,
         IReadOnlyList<QueueItem> selectedItems,
         bool updateLastMessageTime,
-        bool finalizing)
+        bool finalizing,
+        Func<long> clock)
     {
         var capturedNextSeq = state.NextMessageSeq;
         var capturedHistoryVersion = state.HistoryVersion;
@@ -744,8 +765,8 @@ public sealed class LocalSessionTurnHost
                 _ => throw new InvalidDataException("Canonical message __meta must be an object.")
             };
             if (meta.ContainsKey("seq")) throw new UnsupportedSessionTurnException("caller-supplied message seq");
-            if (!meta.ContainsKey("timestamp") || meta["timestamp"] is null)
-                meta["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (!meta.ContainsKey("timestamp") || meta["timestamp"] is null || IsZeroNumber(meta["timestamp"]))
+                meta["timestamp"] = clock();
             message["__meta"] = meta;
             meta["seq"] = nextSeq++;
             canonicalMessages.Add(message);
@@ -757,9 +778,9 @@ public sealed class LocalSessionTurnHost
         var stagedMeta = (JsonObject)state.Meta.DeepClone();
         JsonNode? previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
         var hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
-        if (updateLastMessageTime) stagedMeta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (updateLastMessageTime) stagedMeta["lastMessageTime"] = clock();
         stagedMeta["messageCount"] = stagedHistory.Count;
-        var stagedHistoryVersion = capturedHistoryVersion + (canonicalMessages.Count > 0 ? 1 : 0);
+        var stagedHistoryVersion = capturedHistoryVersion;
         var staged = new SessionSnapshot(
             state.Id,
             stagedHistory,
@@ -796,6 +817,16 @@ public sealed class LocalSessionTurnHost
                 live.Stopping = false;
             }
         });
+    }
+
+    private static bool IsZeroNumber(JsonNode? node)
+    {
+        if (node is not JsonValue value) return false;
+        if (value.TryGetValue<double>(out var floating)) return floating == 0;
+        if (value.TryGetValue<long>(out var signed)) return signed == 0;
+        if (value.TryGetValue<int>(out var integer)) return integer == 0;
+        if (value.TryGetValue<decimal>(out var decimalValue)) return decimalValue == 0;
+        return false;
     }
 
     private static JsonObject SessionTag(string sessionId) => new()
@@ -996,18 +1027,21 @@ public sealed class LocalSessionTurnHostFactory
     private readonly IChatService chat;
     private readonly ITurnToolExecutor tools;
     private readonly int maxToolIterations;
+    private readonly Func<long> clock;
     public LocalSessionTurnHostFactory(
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor tools,
-        int maxToolIterations)
+        int maxToolIterations,
+        Func<long>? clock = null)
     {
         this.store = store;
         this.chat = chat;
         this.tools = tools;
         this.maxToolIterations = maxToolIterations;
+        this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
-    public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat, tools, maxToolIterations);
+    public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat, tools, maxToolIterations, clock);
 }
 
 public sealed class SessionRegistry
@@ -1022,10 +1056,11 @@ public sealed class SessionRegistry
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor? tools = null,
-        int maxToolIterations = 500)
+        int maxToolIterations = 500,
+        Func<long>? clock = null)
     {
         Store = store;
-        hosts = new LocalSessionTurnHostFactory(store, chat, tools ?? new UnsupportedTurnToolExecutor(), maxToolIterations);
+        hosts = new LocalSessionTurnHostFactory(store, chat, tools ?? new UnsupportedTurnToolExecutor(), maxToolIterations, clock);
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
         control = new SessionControl(this);
@@ -1060,7 +1095,15 @@ public sealed class SessionRegistry
     internal void Trigger(string sessionId)
     {
         if (TriggerOverride is not null) _ = TriggerOverride(sessionId);
-        else _ = Runner.ProcessQueueAsync(sessionId);
+        else _ = ObserveTriggeredProcessorAsync(sessionId, Runner.ProcessQueueAsync(sessionId));
+    }
+
+    public Task TriggerProcessingAsync(string sessionId) => Runner.ProcessQueueAsync(sessionId);
+
+    private async Task ObserveTriggeredProcessorAsync(string sessionId, Task processing)
+    {
+        try { await processing.ConfigureAwait(false); }
+        catch (Exception error) { GetRequired(sessionId).RecordBackgroundProcessorFailure(error); }
     }
 
     private static void Restore(SessionState state, SessionSnapshot snapshot)

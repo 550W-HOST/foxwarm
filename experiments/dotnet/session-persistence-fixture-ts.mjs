@@ -104,6 +104,30 @@ if (mode === 'write-ts') {
   })
   await fs.mkdir(path.dirname(resultPath), { recursive: true })
   await fs.writeFile(resultPath, JSON.stringify(results), 'utf8')
+} else if (mode === 'append-metadata-ts') {
+  const { ensureMessageSeq } = await importFromFoxwarm('session/archive.js')
+  const originalNow = Date.now
+  Date.now = () => 4242
+  try {
+    const session = { id: sessionId, history: [], nextMessageSeq: 1, historyVersion: 9 }
+    const messages = [
+      { role: 'user', parts: [{ text: 'zero' }], __meta: { timestamp: 0 } },
+      { role: 'user', parts: [{ text: 'negative-zero' }], __meta: { timestamp: -0 } },
+      { role: 'user', parts: [{ text: 'null' }], __meta: { timestamp: null } },
+      { role: 'user', parts: [{ text: 'missing' }], __meta: {} },
+      { role: 'user', parts: [{ text: 'kept' }], __meta: { timestamp: 7 } },
+    ]
+    for (const message of messages) ensureMessageSeq(session, message)
+    await fs.mkdir(path.dirname(resultPath), { recursive: true })
+    await fs.writeFile(resultPath, JSON.stringify({
+      historyVersion: session.historyVersion,
+      nextMessageSeq: session.nextMessageSeq,
+      timestamps: messages.map(message => message.__meta.timestamp),
+      seqs: messages.map(message => message.__meta.seq),
+    }), 'utf8')
+  } finally {
+    Date.now = originalNow
+  }
 } else if (mode === 'replay-ts') {
   const { readSessionHistorySnapshot } = await importFromFoxwarm('session/metadataStore.js')
   const { writeArchiveMessages } = await importFromFoxwarm('session/archiveStore.js')

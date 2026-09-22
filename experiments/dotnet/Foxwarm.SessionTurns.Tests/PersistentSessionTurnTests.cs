@@ -219,6 +219,104 @@ public sealed class PersistentSessionTurnTests
     }
 
     [Fact]
+    public async Task OrdinaryAppendPreservesLoadedHistoryVersionAndUsesTsFalsyTimestampRule()
+    {
+        using var temp = new TempDirectory();
+        var store = new PersistentSessionAuthorityStore(temp.Path, "s");
+        var queue = new[]
+        {
+            QueueItem.Prebuilt(Prebuilt("zero", 0L, includeTimestamp: true)),
+            QueueItem.Prebuilt(Prebuilt("negative-zero", -0.0, includeTimestamp: true)),
+            QueueItem.Prebuilt(Prebuilt("null", null, includeTimestamp: true)),
+            QueueItem.Prebuilt(Prebuilt("missing", null, includeTimestamp: false)),
+            QueueItem.Prebuilt(Prebuilt("kept", 7L, includeTimestamp: true))
+        };
+        await store.CommitAsync(new SessionSnapshot(
+            "s", [], queue, false, null, false,
+            new JsonObject { ["lastMessageTime"] = 0, ["messageCount"] = 0 },
+            1, 9, new JsonObject()), SaveKind.Strict);
+        var chat = new ControlledChat();
+        chat.QueueResult("answer");
+        var registry = new SessionRegistry(store, chat, clock: () => 4242);
+        var entry = await registry.LoadOrAddAsync("s");
+
+        await registry.TriggerProcessingAsync("s");
+
+        var snapshot = entry.Snapshot();
+        Assert.Equal(9, snapshot.HistoryVersion);
+        Assert.Equal(9, (await store.LoadAsync("s"))!.HistoryVersion);
+        Assert.Equal(new double[] { 4242, 4242, 4242, 4242, 7, 4242 }, snapshot.History.Select(Timestamp));
+    }
+
+    [Fact]
+    public async Task SynchronousAuthorityWriteDoesNotHoldLaneGateAcrossStopEnqueue()
+    {
+        using var temp = new TempDirectory();
+        var hook = new BlockingStageHook(4, AtomicJsonWriteStage.BeforeRename);
+        var store = new PersistentSessionAuthorityStore(temp.Path, "s", authorityStageHook: hook.Invoke);
+        var chat = new ControlledChat();
+        chat.QueueResult("answer");
+        var registry = new SessionRegistry(store, chat);
+        var entry = registry.Add("s");
+        entry.State.Queue.Add(QueueItem.UserText("A"));
+
+        var runner = registry.TriggerProcessingAsync("s");
+        Assert.True(hook.Reached.Wait(TimeSpan.FromSeconds(5)));
+        Task<StopResult>? stopTask = null;
+        using var callReturned = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            stopTask = registry.Control.StopAsync("s");
+            callReturned.Set();
+        });
+        thread.Start();
+        Assert.True(callReturned.Wait(TimeSpan.FromSeconds(2)));
+        Assert.NotNull(stopTask);
+        Assert.False(stopTask!.IsCompleted);
+        Assert.True(entry.Snapshot().Stopping);
+
+        hook.Release();
+        Assert.True((await stopTask).AbortedInFlight);
+        await runner;
+        thread.Join();
+    }
+
+    [Fact]
+    public async Task DefaultTriggerRecordsCanonicalFailureWithoutRetryAndExplicitTriggerRecoversOnce()
+    {
+        using var temp = new TempDirectory();
+        var barrier = new AsyncCommitBarrier(1, failAfterRelease: true);
+        barrier.Release();
+        var store = new PersistentSessionAuthorityStore(temp.Path, "s", canonicalCommitBarrier: barrier.InvokeAsync);
+        var chat = new ControlledChat();
+        chat.QueueResult("answer");
+        var registry = new SessionRegistry(store, chat);
+        var entry = registry.Add("s");
+
+        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("A"));
+        var error = await entry.WaitForBackgroundProcessorFailureAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsType<IOException>(error);
+        Assert.Equal(1, entry.BackgroundProcessorFailureCount);
+        Assert.IsType<IOException>(entry.LastBackgroundProcessorFailure);
+        Assert.Equal(1, entry.ProcessorClaimCount);
+        Assert.Single(entry.Snapshot().Queue);
+        Assert.Empty(entry.Snapshot().History);
+        Assert.Empty(store.Archive.ReadMessages());
+        var failedAuthority = await store.LoadAsync("s");
+        Assert.Single(failedAuthority!.Queue);
+        Assert.Empty(failedAuthority.History);
+
+        await registry.TriggerProcessingAsync("s");
+        Assert.Equal(2, entry.ProcessorClaimCount);
+        Assert.Empty(entry.Snapshot().Queue);
+        Assert.Equal(2, entry.Snapshot().History.Count);
+        Assert.Equal(2, store.Archive.ReadMessages().Count);
+        Assert.Equal(2, (await store.LoadAsync("s"))!.History.Count);
+        Assert.Equal(1, entry.BackgroundProcessorFailureCount);
+    }
+
+    [Fact]
     public async Task CallbackFailureDoesNotReverseDurableCanonicalCommit()
     {
         using var temp = new TempDirectory();
@@ -275,9 +373,36 @@ public sealed class PersistentSessionTurnTests
     };
 
     private static long Seq(JsonObject message) => message["__meta"]!["seq"]!.GetValue<long>();
+    private static double Timestamp(JsonObject message)
+    {
+        var value = (JsonValue)message["__meta"]!["timestamp"]!;
+        if (value.TryGetValue<double>(out var floating)) return floating;
+        if (value.TryGetValue<long>(out var signed)) return signed;
+        if (value.TryGetValue<int>(out var integer)) return integer;
+        throw new InvalidDataException("Test message timestamp is not numeric.");
+    }
     private static string QueueText(QueueItem item) => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() ?? item.Type.ToString();
     private static string MessageText(JsonObject message) =>
         string.Join("", ((JsonArray)message["parts"]!).Select(part => part?["text"]?.GetValue<string>() ?? ""));
+
+    private static JsonObject Prebuilt(string text, object? timestamp, bool includeTimestamp)
+    {
+        var meta = new JsonObject();
+        if (includeTimestamp)
+            meta["timestamp"] = timestamp switch
+            {
+                null => null,
+                long signed => JsonValue.Create(signed),
+                double floating => JsonValue.Create(floating),
+                _ => throw new ArgumentException("Unsupported test timestamp type.", nameof(timestamp))
+            };
+        return new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
+            ["__meta"] = meta
+        };
+    }
 
     private sealed class TempDirectory : IDisposable
     {
@@ -314,6 +439,23 @@ public sealed class PersistentSessionTurnTests
             if (stage == AtomicJsonWriteStage.BeforeTempWrite) Interlocked.Increment(ref currentWrite);
             if (Volatile.Read(ref currentWrite) == targetWrite && stage == targetStage && Interlocked.Exchange(ref fired, 1) == 0)
                 throw new IOException("planned authority failure");
+        }
+    }
+
+    private sealed class BlockingStageHook(int targetWrite, AtomicJsonWriteStage targetStage)
+    {
+        private readonly ManualResetEventSlim reached = new(false);
+        private readonly ManualResetEventSlim release = new(false);
+        private int currentWrite;
+        private int fired;
+        public ManualResetEventSlim Reached => reached;
+        public void Release() => release.Set();
+        public void Invoke(AtomicJsonWriteStage stage)
+        {
+            if (stage == AtomicJsonWriteStage.BeforeTempWrite) Interlocked.Increment(ref currentWrite);
+            if (Volatile.Read(ref currentWrite) != targetWrite || stage != targetStage || Interlocked.Exchange(ref fired, 1) != 0) return;
+            reached.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("test authority hold timed out");
         }
     }
 }
