@@ -138,6 +138,8 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const configRevisionRef = useRef(0)
   const modelsSaveGenerationRef = useRef(0)
   const configSaveGenerationRef = useRef(0)
+  const savingModelsRef = useRef(false)
+  const savingConfigRef = useRef(false)
   const loadGenerationRef = useRef(0)
   const handledFocusModelsRequestRef = useRef(0)
 
@@ -256,6 +258,8 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }
 
   const saveModels = async () => {
+    if (savingModelsRef.current) return
+    savingModelsRef.current = true
     const saveGeneration = ++modelsSaveGenerationRef.current
     const submittedRevision = modelsRevisionRef.current
     const submittedYaml = rawModelsYamlRef.current
@@ -284,11 +288,14 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
         setModelsSaveResult({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
       }
     } finally {
+      savingModelsRef.current = false
       if (saveGeneration === modelsSaveGenerationRef.current) setSavingModels(false)
     }
   }
 
   const saveConfig = async () => {
+    if (savingConfigRef.current) return
+    savingConfigRef.current = true
     const saveGeneration = ++configSaveGenerationRef.current
     const submittedRevision = configRevisionRef.current
     const submittedYaml = configYamlRef.current
@@ -319,8 +326,21 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
         setConfigSaveResult({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
       }
     } finally {
+      savingConfigRef.current = false
       if (saveGeneration === configSaveGenerationRef.current) setSavingConfig(false)
     }
+  }
+
+  const handleEditorSaveShortcut = (event: React.KeyboardEvent<HTMLDivElement>, section: 'models' | 'config') => {
+    if (activeTab !== section
+      || event.key.toLowerCase() !== 's'
+      || (!event.ctrlKey && !event.metaKey)
+      || event.altKey
+      || event.shiftKey) return
+    event.preventDefault()
+    if (event.repeat || event.nativeEvent.isComposing) return
+    if (section === 'models') void saveModels()
+    else void saveConfig()
   }
 
   const startWeixinLogin = async () => {
@@ -489,7 +509,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 <p className="mt-1 text-sm text-fw-text">Configure model providers, routing, and your default model in YAML.</p>
               </div>
 
-              <div className="mt-4 min-h-72 flex-1">
+              <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
                 <SimpleCodeEditor
                   value={rawModelsYaml}
                   onChange={updateModelsYaml}
@@ -514,7 +534,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 <p className="mt-1 text-sm text-fw-text">Manage Foxwarm and channel settings in YAML.</p>
               </div>
 
-              <div className="mt-4 min-h-72 flex-1">
+              <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'config')}>
                 <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
               </div>
               <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">

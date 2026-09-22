@@ -217,6 +217,7 @@ async function attachRequestMocks(targetPage, options = {}) {
     if (url.pathname.endsWith('/api/setup/models') && request.method() === 'POST') {
       savedRequestPath = url.pathname
       savedRequest = JSON.parse(request.postData() || '{}')
+      options.modelsSaveRequests?.push(savedRequest)
       if (options.heldModelsSaves) {
         options.heldModelsSaves.push({ request, body: savedRequest })
         return
@@ -232,6 +233,11 @@ async function attachRequestMocks(targetPage, options = {}) {
     }
     if (url.pathname.endsWith('/api/setup/config') && request.method() === 'POST') {
       savedConfigRequest = JSON.parse(request.postData() || '{}')
+      options.configSaveRequests?.push(savedConfigRequest)
+      if (options.heldConfigSaves) {
+        options.heldConfigSaves.push({ request, body: savedConfigRequest })
+        return
+      }
       if (configSaveError) {
         void respondJson(request, { error: configSaveError }, 400)
       } else {
@@ -444,6 +450,20 @@ async function waitForMonacoValue(targetPage, modelUri, expectedValue) {
   }
   const state = await runMonacoEditorAction(targetPage, modelUri, 'snapshot')
   assert.equal(state.value, expectedValue)
+}
+
+async function pressSaveShortcut(targetPage, modifier) {
+  await targetPage.keyboard.down(modifier)
+  await targetPage.keyboard.press('s')
+  await targetPage.keyboard.up(modifier)
+}
+
+async function waitForItems(items, expectedLength) {
+  const deadline = Date.now() + 10_000
+  while (items.length < expectedLength && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.equal(items.length, expectedLength)
 }
 
 async function dragMonacoSelection(targetPage, modelUri, start, end) {
@@ -848,6 +868,133 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
 
   await page.click('[data-setup-tab="models"]')
   await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+})
+
+test('Setup editor Ctrl/Cmd+S shortcuts save once, prevent browser Save, and stay editor-scoped', async () => {
+  const shortcutPage = await browser.newPage()
+  const heldModelsSaves = []
+  const heldConfigSaves = []
+  const modelsSaveRequests = []
+  const configSaveRequests = []
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  await attachRequestMocks(shortcutPage, { heldModelsSaves, heldConfigSaves, modelsSaveRequests, configSaveRequests })
+
+  const recordEditorShortcuts = async (modelUri) => {
+    await shortcutPage.$eval(`[data-monaco-model-uri="${modelUri}"]`, (editor) => {
+      window.__setupSaveShortcutEvents = []
+      editor.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey)) {
+          window.__setupSaveShortcutEvents.push({
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            altKey: event.altKey,
+            shiftKey: event.shiftKey,
+            repeat: event.repeat,
+            defaultPrevented: event.defaultPrevented,
+          })
+        }
+      }, { capture: true })
+    })
+  }
+  const readEditorShortcuts = () => shortcutPage.evaluate(() => window.__setupSaveShortcutEvents || [])
+
+  try {
+    await shortcutPage.goto(`${baseUrl}/setup-save-shortcuts/#setup`, { waitUntil: 'networkidle2' })
+    await shortcutPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
+    await shortcutPage.waitForSelector('[data-setup-tab="models"]', { timeout: 15_000 })
+    await shortcutPage.click('[data-setup-tab="models"]')
+    await shortcutPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+    const modelsYaml = 'default: local/model-a\nproviders:\n  local:\n    models: [model-a]\n'
+    await runMonacoEditorAction(shortcutPage, modelsUri, 'replace-value', { value: modelsYaml })
+    await runMonacoEditorAction(shortcutPage, modelsUri, 'focus')
+    await recordEditorShortcuts(modelsUri)
+
+    await shortcutPage.keyboard.down('Control')
+    await shortcutPage.keyboard.down('s')
+    await shortcutPage.keyboard.down('s')
+    await shortcutPage.keyboard.up('s')
+    await shortcutPage.keyboard.up('Control')
+    await waitForItems(heldModelsSaves, 1)
+    assert.deepEqual(modelsSaveRequests, [{ yaml: modelsYaml }])
+    assert.deepEqual((await readEditorShortcuts()).slice(0, 2).map(event => ({ repeat: event.repeat, defaultPrevented: event.defaultPrevented })), [
+      { repeat: false, defaultPrevented: true },
+      { repeat: true, defaultPrevented: true },
+    ])
+
+    await pressSaveShortcut(shortcutPage, 'Control')
+    await shortcutPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(heldModelsSaves.length, 1)
+    assert.equal(modelsSaveRequests.length, 1)
+    assert.equal((await readEditorShortcuts()).at(-1)?.defaultPrevented, true)
+
+    await respondJson(heldModelsSaves[0].request, {
+      success: true,
+      models: { ...statusPayload.models, rawYaml: heldModelsSaves[0].body.yaml },
+    })
+    await shortcutPage.waitForFunction(() => {
+      const button = [...document.querySelectorAll('button')].find(candidate => candidate.textContent?.includes('Save models'))
+      return button instanceof HTMLButtonElement && !button.disabled
+    })
+
+    for (const modifiers of [['Control', 'Shift'], ['Control', 'Alt']]) {
+      for (const modifier of modifiers) await shortcutPage.keyboard.down(modifier)
+      await shortcutPage.keyboard.press('s')
+      for (const modifier of [...modifiers].reverse()) await shortcutPage.keyboard.up(modifier)
+    }
+    await shortcutPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(modelsSaveRequests.length, 1)
+    const composingPrevented = await shortcutPage.$eval(`[data-monaco-model-uri="${modelsUri}"]`, (editor) => {
+      const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, isComposing: true, bubbles: true, cancelable: true })
+      editor.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    assert.equal(composingPrevented, true)
+    assert.equal(modelsSaveRequests.length, 1)
+
+    await shortcutPage.click('[data-setup-tab="config"]')
+    await shortcutPage.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+    const configYaml = 'channels:\n  telegram:\n    enabled: true\n'
+    await runMonacoEditorAction(shortcutPage, configUri, 'replace-value', { value: configYaml })
+    await runMonacoEditorAction(shortcutPage, configUri, 'focus')
+    await recordEditorShortcuts(configUri)
+    await pressSaveShortcut(shortcutPage, 'Meta')
+    await waitForItems(heldConfigSaves, 1)
+    assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    assert.deepEqual((await readEditorShortcuts()).map(event => ({ metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })), [
+      { metaKey: true, defaultPrevented: true },
+    ])
+
+    await pressSaveShortcut(shortcutPage, 'Meta')
+    await shortcutPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(heldConfigSaves.length, 1)
+    assert.equal(configSaveRequests.length, 1)
+    assert.equal((await readEditorShortcuts()).at(-1)?.defaultPrevented, true)
+    await respondJson(heldConfigSaves[0].request, { success: true, rawYaml: heldConfigSaves[0].body.yaml, reload: { started: ['telegram'] } })
+    await shortcutPage.waitForFunction(() => {
+      const button = [...document.querySelectorAll('button')].find(candidate => candidate.textContent?.includes('Save config'))
+      return button instanceof HTMLButtonElement && !button.disabled
+    })
+
+    await shortcutPage.click('[data-setup-tab="appearance"]')
+    await shortcutPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    const outsidePrevented = await shortcutPage.$eval('[data-setup-tab="appearance"]', (tab) => {
+      const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+      tab.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    const hiddenEditorPrevented = await shortcutPage.$eval(`[data-monaco-model-uri="${modelsUri}"]`, (editor) => {
+      const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+      editor.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    assert.equal(outsidePrevented, false)
+    assert.equal(hiddenEditorPrevented, false)
+    assert.equal(modelsSaveRequests.length, 1)
+    assert.equal(configSaveRequests.length, 1)
+  } finally {
+    await shortcutPage.close()
+  }
 })
 
 if (selectedBrowser === 'firefox' || selectedBrowser === 'all') test('Firefox replaces real reverse mouse selections on the first physical key', {
@@ -1348,8 +1495,10 @@ test('editing while a models save is held preserves the newer document and suppr
 
 test('OOBE remains editable and savable when lazy Monaco/YAML support import rejects', async () => {
   const degradedPage = await browser.newPage()
+  const modelsSaveRequests = []
+  const configSaveRequests = []
   await degradedPage.setCacheEnabled(false)
-  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true })
+  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true, modelsSaveRequests, configSaveRequests })
   try {
     await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
@@ -1381,9 +1530,22 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     })
     await degradedPage.keyboard.press('x')
     const yaml = initialYaml.replace('local', 'x')
-    await degradedPage.click('button::-p-text(Save models)')
+    await fallback.evaluate((textarea) => {
+      window.__fallbackSaveShortcutEvents = []
+      textarea.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey)) {
+          window.__fallbackSaveShortcutEvents.push({ ctrlKey: event.ctrlKey, metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })
+        }
+      }, { capture: true })
+      textarea.focus()
+    })
+    await pressSaveShortcut(degradedPage, 'Control')
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved.'))
     assert.deepEqual(savedRequest, { yaml })
+    assert.deepEqual(modelsSaveRequests, [{ yaml }])
+    assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
+      { ctrlKey: true, metaKey: false, defaultPrevented: true },
+    ])
 
     await degradedPage.click('[data-setup-tab="config"]')
     const configFallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-fallback="true"]', { timeout: 15_000 })
@@ -1398,6 +1560,26 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
       const rect = button.getBoundingClientRect()
       return rect.top >= 0 && rect.bottom <= innerHeight
     }), true)
+    const configYaml = 'channels:\n  telegram:\n    enabled: true\n'
+    const configTextarea = await configFallback.$('textarea')
+    await configTextarea.evaluate((textarea, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(textarea, value)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      window.__fallbackSaveShortcutEvents = []
+      textarea.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey)) {
+          window.__fallbackSaveShortcutEvents.push({ ctrlKey: event.ctrlKey, metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })
+        }
+      }, { capture: true })
+      textarea.focus()
+    }, configYaml)
+    await pressSaveShortcut(degradedPage, 'Meta')
+    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Config saved. Active channels refreshed: telegram.'))
+    assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
+      { ctrlKey: false, metaKey: true, defaultPrevented: true },
+    ])
   } finally {
     await degradedPage.close()
   }

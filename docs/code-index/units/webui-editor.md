@@ -32,7 +32,7 @@ Provides reusable code editing and diff visualization components for the WebUI. 
 ## Integration
 
 - Setup owns the two stable YAML models and supplies a transient focus request when Chat opens model settings.
-- `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, exact executable and Docker-worktree Node-provider schema variants, schema boundaries, local and provider-list completion context/cache/cancellation, last-valid retention, the Setup flex-height contract, and the worker-compatible Monaco pin. Setup browser tests exercise production schema completion, on-demand provider network timing/replacement/isolation/failure/cancellation, forward and reverse selection replacement in both editors (including parent-driven value reset), and the savable controlled-textarea fallback.
+- `configEditor.test.mjs` validates shared-import parity, current/legacy/custom/backend-tolerant fixtures with Ajv, exact executable and Docker-worktree Node-provider schema variants, schema boundaries, local and provider-list completion context/cache/cancellation, last-valid retention, the Setup flex-height contract, and the worker-compatible Monaco pin. Setup browser tests exercise production schema completion, on-demand provider network timing/replacement/isolation/failure/cancellation, forward and reverse selection replacement in both editors (including parent-driven value reset), section-scoped Ctrl/Meta+S saving without duplicate requests, and the savable controlled-textarea fallback.
 - The former full-page WebUI file editor was removed with the custom workspace feature; Code remains the general browser editing integration.
 
 ## Design decisions

@@ -31,7 +31,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Models always render as a raw YAML editor. If the active file is missing or empty, Setup initializes editable text from a generated current-shape example rather than turning the packaged template into a write target.
 - The generated initial YAML defaults to `openai/gpt-5.6-sol` and lists `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 - Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
-- Each Models or Config save reports its success or validation error beside (or immediately below on narrow layouts) that section's own Save button using an announced status. Load and Weixin errors remain in the page-level error area.
+- Each Models or Config save reports its success or validation error beside (or immediately below on narrow layouts) that section's own Save button using an announced status. While focus is inside the active section's Monaco editor or controlled textarea fallback, unmodified Ctrl+S or Meta+S prevents the browser Save action and invokes that same section-owned save path exactly once; repeat events and additional presses during an in-flight save remain prevented without starting duplicate requests. Hidden editors, Appearance, and other panes do not own the shortcut. Load and Weixin errors remain in the page-level error area.
 - Setup presents Appearance, Models, and Config as an accessible three-tab surface. Appearance is first and selected by default. Inactive panels are hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
 - The former checklist is removed. Completion/attention icons appear in the tab labels: Models reflects usable model configuration; Config reflects enabled channel health and omits its icon when no enabled channel provides a meaningful status. Disabled channels do not create attention state.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
@@ -83,6 +83,10 @@ The visible Models workflow is raw YAML only. Keep structured request parsing/he
 ### D-setup-save-feedback
 
 Models save success/errors belong beside or immediately below the Models Save button, and Config save success/errors belong beside or immediately below the Config Save button. Each result belongs to the exact submitted document revision: editing that section or hydrating a new status clears it, and an older save/status response must neither publish stale feedback nor overwrite a newer edit. Keep the two results independent, responsive, and accessibly announced rather than placing them in the page-top notice area; unrelated load and Weixin failures remain page-level.
+
+### D-setup-editor-save-shortcut
+
+[2026-09-22] The active Models and Config editor regions own unmodified Ctrl+S and Meta+S. Handle the key at the section boundary shared by Monaco and its controlled textarea fallback, prevent the browser Save action, and delegate to the existing section save function and backend-authoritative validation. A held key repeat, composing input, or another press while that section's request is in flight must not create another request, although the recognized chord remains prevented. Do not register a document-global shortcut or capture Appearance, inactive panels, other workbench panes, Ctrl+Shift+S, or Alt-modified chords.
 
 ### D-setup-tab-layout
 
