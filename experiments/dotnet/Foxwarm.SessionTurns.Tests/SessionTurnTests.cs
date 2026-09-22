@@ -649,6 +649,87 @@ public sealed class SessionTurnTests
         Assert.DoesNotContain(snapshot.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task ToolLoopPersistsResponseBeforeConcurrentIngressAndKeepsOneProcessorClaim()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        chat.QueueChatResult(FunctionCalls(FunctionCall("call_a", "write_fixture", new JsonObject
+        {
+            ["fileName"] = "a.txt",
+            ["content"] = "a"
+        })));
+        chat.QueueResult("final");
+        var tools = new BarrierToolExecutor();
+        var registry = new SessionRegistry(store, chat, tools);
+        var entry = registry.Add("s");
+        entry.State.Queue.Add(QueueItem.UserText("A"));
+
+        var run = registry.Runner.ProcessQueueAsync("s");
+        await tools.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("B"));
+        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("C"));
+        tools.Release();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(new[] { "user", "model", "tool", "user", "user", "model" },
+            entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>()));
+        Assert.Contains("B", entry.Snapshot().History[3].ToJsonString(), StringComparison.Ordinal);
+        Assert.Contains("C", entry.Snapshot().History[4].ToJsonString(), StringComparison.Ordinal);
+        Assert.Equal(2, chat.Calls.Count);
+        Assert.Equal(new[] { "user", "model", "tool", "user", "user" },
+            chat.Calls[1].History.Select(message => message["role"]!.GetValue<string>()));
+        Assert.Equal(1, tools.Invocations);
+        Assert.Equal(1, entry.ProcessorClaimCount);
+    }
+
+    [Fact]
+    public async Task MalformedArgsAndUnknownToolProducePairedErrorsWithOriginalCallIds()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        chat.QueueChatResult(FunctionCalls(
+            FunctionCall("bad_args", "write_fixture", new JsonObject(), "{", "Invalid tool arguments JSON: bad"),
+            FunctionCall("unknown", "other_tool", new JsonObject())));
+        chat.QueueResult("final");
+        var tools = new RecordingToolExecutor();
+        var registry = new SessionRegistry(store, chat, tools);
+        var entry = registry.Add("s");
+        entry.State.Queue.Add(QueueItem.UserText("tools"));
+
+        await registry.Runner.ProcessQueueAsync("s");
+
+        var toolMessage = entry.Snapshot().History.Single(message => message["role"]?.GetValue<string>() == "tool");
+        var parts = Assert.IsType<JsonArray>(toolMessage["parts"]);
+        Assert.Equal(new[] { "bad_args", "unknown" }, parts.Select(part => part!["functionResponse"]!["tool_use_id"]!.GetValue<string>()));
+        Assert.Equal("invalid_tool_arguments", parts[0]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>());
+        Assert.Equal("unknown_tool", parts[1]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>());
+        Assert.Equal(1, tools.Invocations);
+        Assert.Equal(2, chat.Calls.Count);
+    }
+
+    [Fact]
+    public async Task ConfiguredToolLoopLimitStopsWithoutAThirdProviderCall()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        chat.QueueChatResult(FunctionCalls(FunctionCall("one", "write_fixture", new JsonObject())));
+        chat.QueueChatResult(FunctionCalls(FunctionCall("two", "write_fixture", new JsonObject())));
+        var tools = new RecordingToolExecutor(new JsonObject { ["output"] = "ok" });
+        var registry = new SessionRegistry(store, chat, tools, maxToolIterations: 2);
+        var entry = registry.Add("s");
+        entry.State.Queue.Add(QueueItem.UserText("loop"));
+
+        await registry.Runner.ProcessQueueAsync("s");
+
+        Assert.Equal(2, chat.Calls.Count);
+        Assert.Equal(2, tools.Invocations);
+        Assert.Equal(1, entry.ProcessorClaimCount);
+        Assert.False(entry.Snapshot().Busy);
+        Assert.Equal(new[] { "user", "model", "tool", "model", "tool" },
+            entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>()));
+    }
+
     private static SessionRegistry NewRegistry(InMemorySessionAuthorityStore store, ControlledChat chat, out SessionEntry entry)
     {
         var registry = new SessionRegistry(store, chat);
@@ -665,6 +746,18 @@ public sealed class SessionTurnTests
     private static int CountValue(SessionSnapshot snapshot, string value) =>
         snapshot.Queue.Count(item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == value)
         + snapshot.History.Count(message => message.ToJsonString().Contains($"\"text\":\"{value}\"", StringComparison.Ordinal));
+    private static ChatResult FunctionCalls(params JsonObject[] calls) => new(new JsonObject
+    {
+        ["role"] = "model",
+        ["parts"] = new JsonArray(calls.Select(call => (JsonNode)new JsonObject { ["functionCall"] = call.DeepClone() }).ToArray())
+    });
+    private static JsonObject FunctionCall(string id, string name, JsonObject args, string? rawArgsText = null, string? argsParseError = null)
+    {
+        var call = new JsonObject { ["id"] = id, ["name"] = name, ["args"] = args.DeepClone() };
+        if (rawArgsText is not null) call["rawArgsText"] = rawArgsText;
+        if (argsParseError is not null) call["argsParseError"] = argsParseError;
+        return call;
+    }
     private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
@@ -692,6 +785,7 @@ internal sealed class ControlledChat : IChatService
     public void ReleaseCallCountWaiter() => releaseWaiterBeforeSignalGate.TrySetResult(true);
 
     public void QueueResult(string result) => plans.Enqueue((_, _) => Task.FromResult(ChatResult.Text(result)));
+    public void QueueChatResult(ChatResult result) => plans.Enqueue((_, _) => Task.FromResult(result));
     public void QueueFailure(Exception error) => plans.Enqueue((_, _) => Task.FromException<ChatResult>(error));
     public void QueueAwaitingResult() => plans.Enqueue(async (_, token) =>
     {
@@ -746,6 +840,36 @@ internal sealed class ControlledChat : IChatService
 
     public sealed record Call(string SessionId, IReadOnlyList<JsonObject> History);
     private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+
+internal sealed class BarrierToolExecutor : ITurnToolExecutor
+{
+    private readonly TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int invocations;
+    public Task Started => started.Task;
+    public int Invocations => Volatile.Read(ref invocations);
+    public void Release() => release.TrySetResult(true);
+    public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref invocations);
+        started.TrySetResult(true);
+        await release.Task.WaitAsync(cancellationToken);
+        return new JsonObject { ["output"] = "created" };
+    }
+}
+
+internal sealed class RecordingToolExecutor(JsonObject? response = null) : ITurnToolExecutor
+{
+    private readonly JsonObject response = response ?? UnsupportedTurnToolExecutor.ToolError("unknown_tool", "Unknown tool: other_tool");
+    private int invocations;
+    public int Invocations => Volatile.Read(ref invocations);
+    public Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref invocations);
+        return Task.FromResult((JsonObject)response.DeepClone());
+    }
 }
 
 internal sealed class AppendFailureProbeStore : ISessionAuthorityStore

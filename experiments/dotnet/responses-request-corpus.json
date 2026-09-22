@@ -136,5 +136,74 @@
     "messages": [
       { "role": "user", "parts": [{ "system": "<foxwarm-systemé kind=\"odd\" />" }] }
     ]
+  },
+  {
+    "name": "valid-raw-call-text-fallback-and-tool-output",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "model",
+        "parts": [
+          {
+            "text": "calling",
+            "functionCall": {
+              "id": "call_valid",
+              "name": "write_fixture",
+              "args": { "fileName": "valid.txt", "content": "hello" },
+              "rawArgsText": "{\"fileName\":\"valid.txt\",\"content\":\"hello\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "parts": [
+          {
+            "functionResponse": {
+              "tool_use_id": "call_valid",
+              "name": "write_fixture",
+              "response": { "output": "created" }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "parse-error-call-and-paired-tool-error",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "model",
+        "parts": [
+          {
+            "functionCall": {
+              "id": "call_bad",
+              "name": "write_fixture",
+              "args": {},
+              "rawArgsText": "{",
+              "argsParseError": "Invalid tool arguments JSON: Unexpected end of JSON input"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "parts": [
+          {
+            "functionResponse": {
+              "tool_use_id": "call_bad",
+              "name": "write_fixture",
+              "response": {
+                "error": {
+                  "type": "invalid_tool_arguments",
+                  "message": "Invalid tool arguments JSON: Unexpected end of JSON input"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
   }
 ]

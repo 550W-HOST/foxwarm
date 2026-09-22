@@ -12,6 +12,69 @@ namespace Foxwarm.OpenAIResponses.Client.Tests;
 public sealed class ResponsesClientTests
 {
     [Fact]
+    public async Task RealFunctionCallLoopWritesFixtureAndSendsPairedSecondRequestUnderOneProcessor()
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var first = CompletedSse(new JsonArray(new JsonObject
+            {
+                ["type"] = "function_call",
+                ["call_id"] = "call_write",
+                ["name"] = "write_fixture",
+                ["arguments"] = "{\"fileName\":\"result.txt\",\"content\":\"héllo\"}"
+            }));
+            var second = CompletedSse(new JsonArray(new JsonObject
+            {
+                ["type"] = "message",
+                ["role"] = "assistant",
+                ["phase"] = "final_answer",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "output_text", ["text"] = "done" })
+            }));
+            await using var server = new ScriptedResponsesSequenceServer(2, (index, stream, _) =>
+                LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    "text/event-stream",
+                    Encoding.UTF8.GetBytes(index == 0 ? first : second),
+                    1, 3, 7, 13));
+            using var http = new HttpClient();
+            var executor = new WriteFixtureToolExecutor(root);
+            var store = new InMemorySessionAuthorityStore();
+            var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
+            var entry = registry.Add("s");
+            entry.State.Queue.Add(QueueItem.UserText("write it"));
+
+            await registry.Runner.ProcessQueueAsync("s");
+
+            var firstRequest = JsonNode.Parse((await server.RequestAt(0).WaitAsync(TimeSpan.FromSeconds(5))).Body) as JsonObject;
+            var secondRequest = JsonNode.Parse((await server.RequestAt(1).WaitAsync(TimeSpan.FromSeconds(5))).Body) as JsonObject;
+            Assert.NotNull(firstRequest);
+            Assert.NotNull(secondRequest);
+            Assert.Equal(2, server.RequestCount);
+            var secondInput = Assert.IsType<JsonArray>(secondRequest!["input"]);
+            Assert.Equal(new[] { "message", "function_call", "function_call_output" },
+                secondInput.Select(item => item!["type"]!.GetValue<string>()));
+            Assert.Equal("call_write", secondInput[1]?["call_id"]?.GetValue<string>());
+            Assert.Equal("{\"fileName\":\"result.txt\",\"content\":\"héllo\"}", secondInput[1]?["arguments"]?.GetValue<string>());
+            Assert.Equal("call_write", secondInput[2]?["call_id"]?.GetValue<string>());
+            Assert.Equal("created", secondInput[2]?["output"]?.GetValue<string>());
+
+            var snapshot = entry.Snapshot();
+            Assert.Equal(new[] { "user", "model", "tool", "model" }, snapshot.History.Select(message => message["role"]!.GetValue<string>()));
+            Assert.Equal(1, entry.ProcessorClaimCount);
+            Assert.Equal(1, executor.SuccessfulEffects);
+            Assert.Equal(Encoding.UTF8.GetBytes("héllo"), await File.ReadAllBytesAsync(Path.Combine(root, "result.txt")));
+            var stored = await store.LoadAsync("s");
+            Assert.Equal(snapshot.History.Select(message => message.ToJsonString()), stored!.History.Select(message => message.ToJsonString()));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task LocalHttpSseRoundTripPersistsOwnedCanonicalAssistantOnce()
     {
         var response = new JsonObject
@@ -67,7 +130,19 @@ public sealed class ResponsesClientTests
         Assert.Equal("instructions", requestJson["instructions"]?.GetValue<string>());
         Assert.Equal(321, requestJson["max_output_tokens"]?.GetValue<int>());
         Assert.True(requestJson["stream"]?.GetValue<bool>());
-        Assert.False(requestJson.ContainsKey("tools"));
+        Assert.Equal("auto", requestJson["tool_choice"]?.GetValue<string>());
+        Assert.True(requestJson["parallel_tool_calls"]?.GetValue<bool>());
+        var tools = Assert.IsType<JsonArray>(requestJson["tools"]);
+        var tool = Assert.IsType<JsonObject>(Assert.Single(tools));
+        Assert.Equal("function", tool["type"]?.GetValue<string>());
+        Assert.Equal("write_fixture", tool["name"]?.GetValue<string>());
+        Assert.False(tool["strict"]?.GetValue<bool>());
+        var parameters = Assert.IsType<JsonObject>(tool["parameters"]);
+        Assert.False(parameters["additionalProperties"]?.GetValue<bool>());
+        Assert.Equal(new[] { "fileName", "content" }, Assert.IsType<JsonArray>(parameters["required"]).Select(node => node!.GetValue<string>()));
+        var properties = Assert.IsType<JsonObject>(parameters["properties"]);
+        Assert.Equal("string", properties["fileName"]?["type"]?.GetValue<string>());
+        Assert.Equal("string", properties["content"]?["type"]?.GetValue<string>());
         var requestInput = Assert.IsType<JsonArray>(requestJson["input"]);
         Assert.Single(requestInput);
         Assert.Equal(2, Assert.IsType<JsonArray>(requestInput[0]!["content"]).Count);
@@ -97,33 +172,44 @@ public sealed class ResponsesClientTests
     [Fact]
     public async Task StopCancelsHeldHttpBodyAndServerObservesConnectionClose()
     {
-        var headersSent = NewSignal<bool>();
-        var closed = NewSignal<bool>();
-        await using var server = new LoopbackResponsesServer(async (stream, _) =>
+        var root = NewTempDirectory();
+        try
         {
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n"));
-            await stream.FlushAsync();
-            headersSent.TrySetResult(true);
-            var buffer = new byte[128];
-            while (await stream.ReadAsync(buffer) != 0) { }
-            closed.TrySetResult(true);
-        });
-        using var http = new HttpClient();
-        var store = new InMemorySessionAuthorityStore();
-        var registry = new SessionRegistry(store, NewService(http, server.BaseUri));
-        var entry = registry.Add("s");
-        entry.State.Queue.Add(QueueItem.UserText("cancel"));
+            var headersSent = NewSignal<bool>();
+            var closed = NewSignal<bool>();
+            await using var server = new LoopbackResponsesServer(async (stream, _) =>
+            {
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n"));
+                await stream.FlushAsync();
+                headersSent.TrySetResult(true);
+                var buffer = new byte[128];
+                while (await stream.ReadAsync(buffer) != 0) { }
+                closed.TrySetResult(true);
+            });
+            using var http = new HttpClient();
+            var store = new InMemorySessionAuthorityStore();
+            var executor = new WriteFixtureToolExecutor(root);
+            var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
+            var entry = registry.Add("s");
+            entry.State.Queue.Add(QueueItem.UserText("cancel"));
 
-        var run = registry.Runner.ProcessQueueAsync("s");
-        await headersSent.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await registry.Control.StopAsync("s");
-        await run.WaitAsync(TimeSpan.FromSeconds(5));
-        await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var run = registry.Runner.ProcessQueueAsync("s");
+            await headersSent.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await registry.Control.StopAsync("s");
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(1, server.RequestCount);
-        Assert.DoesNotContain(entry.Snapshot().History, message => message["role"]?.GetValue<string>() == "model");
-        Assert.False(entry.Snapshot().Busy);
+            Assert.Equal(1, server.RequestCount);
+            Assert.DoesNotContain(entry.Snapshot().History, message => message["role"]?.GetValue<string>() == "model");
+            Assert.False(entry.Snapshot().Busy);
+            Assert.Equal(0, executor.SuccessfulEffects);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     [Fact]
@@ -164,9 +250,9 @@ public sealed class ResponsesClientTests
     }
 
     [Fact]
-    public async Task FunctionCallOutputIsControlledUnsupportedAndNotPersisted()
+    public async Task FunctionCallWithoutStableIdIsControlledUnsupportedAndNotPersisted()
     {
-        var completed = "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"write\",\"arguments\":\"{}\"}]}}\n\n";
+        var completed = "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"function_call\",\"name\":\"write_fixture\",\"arguments\":\"{}\"}]}}\n\n";
         await using var server = new LoopbackResponsesServer(
             (stream, _) => LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(completed)));
         using var http = new HttpClient();
@@ -204,23 +290,166 @@ public sealed class ResponsesClientTests
     [Fact]
     public async Task AssistantStrictSaveFailureDoesNotRepeatHttpOrLeaveHotAssistant()
     {
-        var completed = "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"once\"}]}]}}\n\n";
-        await using var server = new LoopbackResponsesServer(
-            (stream, _) => LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(completed)));
-        using var http = new HttpClient();
-        var store = new FailStrictOrdinalStore(3);
-        var registry = new SessionRegistry(store, NewService(http, server.BaseUri));
-        var entry = registry.Add("s");
-        entry.State.Queue.Add(QueueItem.UserText("request"));
+        var root = NewTempDirectory();
+        try
+        {
+            var completed = CompletedSse(new JsonArray(new JsonObject
+            {
+                ["type"] = "function_call",
+                ["call_id"] = "call_never",
+                ["name"] = "write_fixture",
+                ["arguments"] = "{\"fileName\":\"never.txt\",\"content\":\"never\"}"
+            }));
+            await using var server = new LoopbackResponsesServer(
+                (stream, _) => LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(completed)));
+            using var http = new HttpClient();
+            var store = new FailStrictOrdinalStore(3);
+            var executor = new WriteFixtureToolExecutor(root);
+            var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
+            var entry = registry.Add("s");
+            entry.State.Queue.Add(QueueItem.UserText("request"));
 
-        await registry.Runner.ProcessQueueAsync("s");
+            await registry.Runner.ProcessQueueAsync("s");
 
-        Assert.Equal(1, server.RequestCount);
-        Assert.DoesNotContain(entry.Snapshot().History, message => message["role"]?.GetValue<string>() == "model");
-        var stored = await store.LoadAsync("s");
-        Assert.NotNull(stored);
-        Assert.DoesNotContain(stored!.History, message => message["role"]?.GetValue<string>() == "model");
-        Assert.False(entry.Snapshot().Busy);
+            Assert.Equal(1, server.RequestCount);
+            Assert.DoesNotContain(entry.Snapshot().History, message => message["role"]?.GetValue<string>() == "model");
+            var stored = await store.LoadAsync("s");
+            Assert.NotNull(stored);
+            Assert.DoesNotContain(stored!.History, message => message["role"]?.GetValue<string>() == "model");
+            Assert.False(entry.Snapshot().Busy);
+            Assert.Equal(0, executor.SuccessfulEffects);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task ToolResponseSaveFailureKeepsOneEffectButDoesNotReexecuteOrSendSecondRequest()
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var completed = CompletedSse(new JsonArray(new JsonObject
+            {
+                ["type"] = "function_call",
+                ["call_id"] = "call_once",
+                ["name"] = "write_fixture",
+                ["arguments"] = "{\"fileName\":\"once.txt\",\"content\":\"once\"}"
+            }));
+            await using var server = new LoopbackResponsesServer(
+                (stream, _) => LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(completed)));
+            using var http = new HttpClient();
+            var store = new FailStrictOrdinalStore(4);
+            var executor = new WriteFixtureToolExecutor(root);
+            var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
+            var entry = registry.Add("s");
+            entry.State.Queue.Add(QueueItem.UserText("request"));
+
+            await registry.Runner.ProcessQueueAsync("s");
+
+            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(1, executor.SuccessfulEffects);
+            Assert.Equal("once", await File.ReadAllTextAsync(Path.Combine(root, "once.txt")));
+            Assert.Equal(new[] { "user", "model" }, entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>()));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData("/absolute")]
+    [InlineData("bad\0name")]
+    public async Task WriteFixtureRejectsInvalidFileNamesWithoutEffect(string fileName)
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var executor = new WriteFixtureToolExecutor(root);
+            var response = await executor.ExecuteAsync(FunctionCall("c", "write_fixture", new JsonObject
+            {
+                ["fileName"] = fileName,
+                ["content"] = "no"
+            }), CancellationToken.None);
+            Assert.Equal("invalid_path", response["error"]?["type"]?.GetValue<string>());
+            Assert.Equal(0, executor.SuccessfulEffects);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task WriteFixtureRejectsExistingFileAndSymlinkWithoutOverwrite()
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var executor = new WriteFixtureToolExecutor(root);
+            var existing = Path.Combine(root, "existing.txt");
+            await File.WriteAllTextAsync(existing, "old");
+            var target = Path.Combine(root, "target.txt");
+            await File.WriteAllTextAsync(target, "target");
+            File.CreateSymbolicLink(Path.Combine(root, "link.txt"), target);
+
+            foreach (var name in new[] { "existing.txt", "link.txt" })
+            {
+                var response = await executor.ExecuteAsync(FunctionCall("c", "write_fixture", new JsonObject
+                {
+                    ["fileName"] = name,
+                    ["content"] = "new"
+                }), CancellationToken.None);
+                Assert.Equal("file_exists", response["error"]?["type"]?.GetValue<string>());
+            }
+            Assert.Equal("old", await File.ReadAllTextAsync(existing));
+            Assert.Equal("target", await File.ReadAllTextAsync(target));
+            Assert.Equal(0, executor.SuccessfulEffects);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task WriteFixtureRejectsUnknownToolAndInvalidSchemaWithoutEffect()
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var executor = new WriteFixtureToolExecutor(root);
+            var unknown = await executor.ExecuteAsync(FunctionCall("unknown", "other_tool", new JsonObject
+            {
+                ["fileName"] = "unknown.txt",
+                ["content"] = "no"
+            }), CancellationToken.None);
+            var invalid = await executor.ExecuteAsync(FunctionCall("invalid", "write_fixture", new JsonObject
+            {
+                ["fileName"] = "invalid.txt",
+                ["content"] = "no",
+                ["extra"] = true
+            }), CancellationToken.None);
+
+            Assert.Equal("unknown_tool", unknown["error"]?["type"]?.GetValue<string>());
+            Assert.Equal("invalid_tool_arguments", invalid["error"]?["type"]?.GetValue<string>());
+            Assert.Equal(0, executor.SuccessfulEffects);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     [Fact]
@@ -286,6 +515,23 @@ public sealed class ResponsesClientTests
         ["role"] = "user",
         ["parts"] = new JsonArray(new JsonObject { ["text"] = text })
     };
+
+    private static JsonObject FunctionCall(string id, string name, JsonObject args) => new()
+    {
+        ["id"] = id,
+        ["name"] = name,
+        ["args"] = args.DeepClone()
+    };
+
+    private static string CompletedSse(JsonArray output) =>
+        $"data: {{\"type\":\"response.completed\",\"response\":{{\"output\":{output.ToJsonString()}}}}}\n\n";
+
+    private static string NewTempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"foxwarm-dotnet-fixture-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

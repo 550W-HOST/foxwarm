@@ -69,7 +69,7 @@ internal sealed class LoopbackResponsesServer : IAsyncDisposable
         if (offset < body.Length) await stream.WriteAsync(body.AsMemory(offset)).ConfigureAwait(false);
     }
 
-    private static async Task<CapturedHttpRequest> ReadRequestAsync(NetworkStream stream)
+    internal static async Task<CapturedHttpRequest> ReadRequestAsync(NetworkStream stream)
     {
         using var bytes = new MemoryStream();
         var buffer = new byte[1024];
@@ -108,4 +108,60 @@ internal sealed class LoopbackResponsesServer : IAsyncDisposable
     }
 
     private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+
+internal sealed class ScriptedResponsesSequenceServer : IAsyncDisposable
+{
+    private readonly TcpListener listener;
+    private readonly Func<int, NetworkStream, CapturedHttpRequest, Task> respond;
+    private readonly TaskCompletionSource<CapturedHttpRequest>[] requests;
+    private readonly Task serverTask;
+    private int requestCount;
+
+    public ScriptedResponsesSequenceServer(
+        int expectedRequests,
+        Func<int, NetworkStream, CapturedHttpRequest, Task> respond)
+    {
+        if (expectedRequests <= 0) throw new ArgumentOutOfRangeException(nameof(expectedRequests));
+        this.respond = respond;
+        requests = Enumerable.Range(0, expectedRequests)
+            .Select(_ => new TaskCompletionSource<CapturedHttpRequest>(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        BaseUri = new Uri($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/v1");
+        serverTask = RunAsync();
+    }
+
+    public Uri BaseUri { get; }
+    public int RequestCount => Volatile.Read(ref requestCount);
+    public Task<CapturedHttpRequest> RequestAt(int index) => requests[index].Task;
+
+    private async Task RunAsync()
+    {
+        for (var index = 0; index < requests.Length; index++)
+        {
+            try
+            {
+                using var client = await listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                Interlocked.Increment(ref requestCount);
+                await using var stream = client.GetStream();
+                var captured = await LoopbackResponsesServer.ReadRequestAsync(stream).ConfigureAwait(false);
+                requests[index].TrySetResult(captured);
+                await respond(index, stream, captured).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                requests[index].TrySetException(error);
+                throw;
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        listener.Stop();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+        catch (Exception) when (serverTask.IsFaulted || serverTask.IsCanceled) { }
+    }
 }

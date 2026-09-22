@@ -217,6 +217,7 @@ public sealed class SessionSaveLane
 public sealed class SessionEntry
 {
     private int processorClaim;
+    private int processorClaimCount;
     private readonly object stateGate = new();
     private CancellationHandle? activeCancellation;
     private long busyClaimVersion;
@@ -228,6 +229,7 @@ public sealed class SessionEntry
     public SessionSaveLane SaveLane { get; }
     public object StateGate => stateGate;
     public int BestEffortFailureCount => Volatile.Read(ref bestEffortFailures);
+    public int ProcessorClaimCount => Volatile.Read(ref processorClaimCount);
     public int PostCommitNotificationFailureCount => Volatile.Read(ref postCommitNotificationFailures);
     public Exception? LastPostCommitNotificationFailure => Volatile.Read(ref lastPostCommitNotificationFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
@@ -247,7 +249,12 @@ public sealed class SessionEntry
         Interlocked.Increment(ref postCommitNotificationFailures);
     }
 
-    public bool TryClaimProcessor() => Interlocked.CompareExchange(ref processorClaim, 1, 0) == 0;
+    public bool TryClaimProcessor()
+    {
+        if (Interlocked.CompareExchange(ref processorClaim, 1, 0) != 0) return false;
+        Interlocked.Increment(ref processorClaimCount);
+        return true;
+    }
     public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
 
     internal T WithState<T>(Func<SessionState, T> action)
@@ -383,6 +390,29 @@ public interface IChatService
     Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken);
 }
 
+public interface ITurnToolExecutor
+{
+    Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);
+}
+
+public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
+{
+    public Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var name = functionCall["name"]?.GetValue<string>() ?? "";
+        return Task.FromResult(ToolError("unknown_tool", $"Unknown tool: {name}"));
+    }
+
+    public static JsonObject ToolError(string type, string message) => new()
+    {
+        ["error"] = new JsonObject { ["type"] = type, ["message"] = message }
+    };
+}
+
+public sealed class ToolLoopLimitException(int limit)
+    : InvalidOperationException($"Experimental Session turn exceeded the {limit} iteration tool-loop limit.");
+
 public sealed record ChatResult(JsonObject? AssistantMessage)
 {
     public static ChatResult Text(string text) => new(new JsonObject
@@ -402,12 +432,21 @@ public sealed class LocalSessionTurnHost
 {
     private readonly SessionEntry entry;
     private readonly IChatService chat;
+    private readonly ITurnToolExecutor tools;
+    private readonly int maxToolIterations;
     private int releaseCommits;
 
-    public LocalSessionTurnHost(SessionEntry entry, ISessionAuthorityStore store, IChatService chat)
+    public LocalSessionTurnHost(
+        SessionEntry entry,
+        ISessionAuthorityStore store,
+        IChatService chat,
+        ITurnToolExecutor? tools = null,
+        int maxToolIterations = 500)
     {
         this.entry = entry;
         this.chat = chat;
+        this.tools = tools ?? new UnsupportedTurnToolExecutor();
+        this.maxToolIterations = maxToolIterations > 0 ? maxToolIterations : throw new ArgumentOutOfRangeException(nameof(maxToolIterations));
     }
 
     public int ReleaseCommitCount => Volatile.Read(ref releaseCommits);
@@ -501,40 +540,109 @@ public sealed class LocalSessionTurnHost
         CancellationHandle? handle = null;
         try
         {
-            var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
             handle = entry.RegisterCancellation(requestCts);
             var registered = handle ?? throw new InvalidOperationException("Cancellation registration was not created.");
-            var result = await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
-            if (result.AssistantMessage is null) return result;
-            var assistant = (JsonObject)result.AssistantMessage.DeepClone();
-            if (assistant["role"]?.GetValue<string>() != "model" || assistant["parts"] is not JsonArray)
-                throw new InvalidOperationException("Chat result assistant message must be a canonical model message.");
-            entry.WithState(state => state.History.Add(assistant));
-            try
+            for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
-                await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                entry.WithState(state =>
+                var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
+                var result = await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
+                if (result.AssistantMessage is null) return result;
+                var assistant = (JsonObject)result.AssistantMessage.DeepClone();
+                if (assistant["role"]?.GetValue<string>() != "model" || assistant["parts"] is not JsonArray)
+                    throw new InvalidOperationException("Chat result assistant message must be a canonical model message.");
+                await AppendHistoryMessageStrictAsync(assistant).ConfigureAwait(false);
+
+                var calls = ExtractFunctionCalls(assistant);
+                if (calls.Count == 0) return result;
+
+                var toolParts = new JsonArray();
+                foreach (var call in calls)
                 {
-                    for (var index = state.History.Count - 1; index >= 0; index--)
+                    registered.Token.ThrowIfCancellationRequested();
+                    var callId = call["id"]?.GetValue<string>()
+                        ?? throw new InvalidOperationException("Canonical function call is missing its stable ID.");
+                    var name = call["name"]?.GetValue<string>() ?? "";
+                    JsonObject response;
+                    if (call["argsParseError"] is JsonValue parseErrorValue
+                        && parseErrorValue.TryGetValue<string>(out var parseError)
+                        && parseError.Length > 0)
                     {
-                        if (!ReferenceEquals(state.History[index], assistant)) continue;
-                        state.History.RemoveAt(index);
-                        break;
+                        response = UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", parseError);
                     }
-                });
-                throw;
+                    else
+                    {
+                        response = await tools.ExecuteAsync((JsonObject)call.DeepClone(), registered.Token).ConfigureAwait(false);
+                    }
+                    toolParts.Add(new JsonObject
+                    {
+                        ["functionResponse"] = new JsonObject
+                        {
+                            ["tool_use_id"] = callId,
+                            ["name"] = name,
+                            ["response"] = response.DeepClone()
+                        }
+                    });
+                }
+
+                var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
+                await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
+                if (entry.WithState(state => state.Stopping)) throw new OperationCanceledException(registered.Token);
+                await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
+                if (iteration + 1 >= maxToolIterations) throw new ToolLoopLimitException(maxToolIterations);
             }
-            entry.InvokeCommitted(entry.Snapshot());
-            return result;
+            throw new ToolLoopLimitException(maxToolIterations);
         }
         finally
         {
             if (handle is not null) entry.ClearCancellation(handle);
             else requestCts.Dispose();
         }
+    }
+
+    private async Task AppendHistoryMessageStrictAsync(JsonObject message)
+    {
+        entry.WithState(state => state.History.Add(message));
+        try
+        {
+            await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            entry.WithState(state =>
+            {
+                for (var index = state.History.Count - 1; index >= 0; index--)
+                {
+                    if (!ReferenceEquals(state.History[index], message)) continue;
+                    state.History.RemoveAt(index);
+                    break;
+                }
+            });
+            throw;
+        }
+        entry.InvokeCommitted(entry.Snapshot());
+    }
+
+    private static IReadOnlyList<JsonObject> ExtractFunctionCalls(JsonObject assistant)
+    {
+        var calls = new List<JsonObject>();
+        foreach (var node in assistant["parts"] as JsonArray ?? [])
+            if (node is JsonObject part && part["functionCall"] is JsonObject call)
+                calls.Add((JsonObject)call.DeepClone());
+        return calls;
+    }
+
+    private async Task AppendQueuedFollowUpsAfterToolAsync()
+    {
+        if (entry.WithState(state => state.Stopping || state.Queue.Count == 0)) return;
+        await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+        var batch = SessionTurnRunner.DrainLeading(entry);
+        if (batch.Count > 0)
+        {
+            await AppendQueuedInputsAsync(batch).ConfigureAwait(false);
+            return;
+        }
+        var remainingHead = entry.WithState(state => state.Queue.FirstOrDefault()?.CloneItem());
+        if (remainingHead is not null) SessionIngress.EnsureSupportedForRunner(remainingHead);
     }
 
     public async Task ReleaseBusyAsync()
@@ -806,7 +914,7 @@ public sealed class SessionTurnRunner
         }
     }
 
-    private static IReadOnlyList<QueueItem> DrainLeading(SessionEntry entry)
+    internal static IReadOnlyList<QueueItem> DrainLeading(SessionEntry entry)
     {
         return entry.WithState(state =>
         {
@@ -833,12 +941,20 @@ public sealed class LocalSessionTurnHostFactory
 {
     private readonly ISessionAuthorityStore store;
     private readonly IChatService chat;
-    public LocalSessionTurnHostFactory(ISessionAuthorityStore store, IChatService chat)
+    private readonly ITurnToolExecutor tools;
+    private readonly int maxToolIterations;
+    public LocalSessionTurnHostFactory(
+        ISessionAuthorityStore store,
+        IChatService chat,
+        ITurnToolExecutor tools,
+        int maxToolIterations)
     {
         this.store = store;
         this.chat = chat;
+        this.tools = tools;
+        this.maxToolIterations = maxToolIterations;
     }
-    public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat);
+    public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat, tools, maxToolIterations);
 }
 
 public sealed class SessionRegistry
@@ -849,10 +965,14 @@ public sealed class SessionRegistry
     private readonly SessionIngress ingress;
     private readonly SessionControl control;
 
-    public SessionRegistry(ISessionAuthorityStore store, IChatService chat)
+    public SessionRegistry(
+        ISessionAuthorityStore store,
+        IChatService chat,
+        ITurnToolExecutor? tools = null,
+        int maxToolIterations = 500)
     {
         Store = store;
-        hosts = new LocalSessionTurnHostFactory(store, chat);
+        hosts = new LocalSessionTurnHostFactory(store, chat, tools ?? new UnsupportedTurnToolExecutor(), maxToolIterations);
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
         control = new SessionControl(this);

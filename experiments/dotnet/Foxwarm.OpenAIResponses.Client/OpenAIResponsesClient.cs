@@ -47,11 +47,17 @@ public static partial class ResponsesRequestSerializer
         {
             var message = CanonicalMessage.FromNode(raw);
             if (!message.IsModelVisible) continue;
-            if (message.Role == "tool") throw new UnsupportedResponsesFeatureException("tool history");
+            if (message.Role == "tool")
+            {
+                AppendToolOutputs(input, message);
+                continue;
+            }
             var role = message.Role == "model" ? "assistant" : "user";
             var content = new JsonArray();
             string? messagePhase = null;
-            var fallbackPhase = role == "assistant" ? "final_answer" : null;
+            var fallbackPhase = role == "assistant"
+                ? message.Parts.Any(part => part.Get("functionCall") is JsonObject) ? "commentary" : "final_answer"
+                : null;
 
             void Flush()
             {
@@ -124,6 +130,26 @@ public static partial class ResponsesRequestSerializer
                         textPart["annotations"] = annotations.DeepClone();
                     content.Add(textPart);
                 }
+
+                if (part["functionCall"] is JsonObject functionCall)
+                {
+                    Flush();
+                    var callId = String(functionCall, "id");
+                    if (string.IsNullOrEmpty(callId))
+                        throw new UnsupportedResponsesFeatureException("function-call history without stable call ID");
+                    if (functionCall["args"] is not null and not JsonObject)
+                        throw new UnsupportedResponsesFeatureException("non-object canonical function-call args");
+                    input.Add(new JsonObject
+                    {
+                        ["type"] = "function_call",
+                        ["call_id"] = callId,
+                        ["name"] = String(functionCall, "name"),
+                        ["arguments"] = FunctionCallArguments.Stringify(
+                            functionCall["args"] as JsonObject,
+                            String(functionCall, "rawArgsText"),
+                            String(functionCall, "argsParseError"))
+                    });
+                }
             }
             Flush();
         }
@@ -143,6 +169,7 @@ public static partial class ResponsesRequestSerializer
             ["model"] = requestModel,
             ["instructions"] = instructions,
             ["input"] = ConvertHistory(history, concreteModelId),
+            ["tools"] = BuildToolDefinitions(),
             ["tool_choice"] = "auto",
             ["parallel_tool_calls"] = true,
             ["max_output_tokens"] = maxOutputTokens,
@@ -151,9 +178,96 @@ public static partial class ResponsesRequestSerializer
         };
     }
 
+    private static JsonArray BuildToolDefinitions() => new(new JsonObject
+    {
+        ["type"] = "function",
+        ["name"] = "write_fixture",
+        ["description"] = "Create a UTF-8 text file in the experiment's temporary directory. The file must not already exist.",
+        ["parameters"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = false,
+            ["required"] = new JsonArray("fileName", "content"),
+            ["properties"] = new JsonObject
+            {
+                ["fileName"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Name of the file to create, without directory components."
+                },
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Text to write to the file."
+                }
+            }
+        },
+        ["strict"] = false
+    });
+
+    private static void AppendToolOutputs(JsonArray input, CanonicalMessage message)
+    {
+        var grouped = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var order = new List<string>();
+        foreach (var view in message.Parts)
+        {
+            var part = view.ToJson();
+            if (part["functionResponse"] is not JsonObject functionResponse) continue;
+            var callId = String(functionResponse, "tool_use_id") ?? String(part, "toolUseId");
+            if (string.IsNullOrEmpty(callId))
+                throw new UnsupportedResponsesFeatureException("tool response without stable call ID");
+            if (!grouped.TryGetValue(callId, out var outputs))
+            {
+                outputs = new List<string>();
+                grouped.Add(callId, outputs);
+                order.Add(callId);
+            }
+            outputs.Add(FormatToolResponsePayload(functionResponse["response"] as JsonObject ?? new JsonObject()));
+        }
+        foreach (var callId in order)
+        {
+            var outputs = grouped[callId];
+            input.Add(new JsonObject
+            {
+                ["type"] = "function_call_output",
+                ["call_id"] = callId,
+                ["output"] = outputs.Count switch
+                {
+                    0 => "",
+                    1 => outputs[0],
+                    _ => new JsonArray(outputs.Select(output => (JsonNode)new JsonObject { ["type"] = "input_text", ["text"] = output }).ToArray())
+                }
+            });
+        }
+    }
+
+    private static string FormatToolResponsePayload(JsonObject response)
+    {
+        if (response.Count == 1 && response["output"] is JsonValue output)
+        {
+            if (output.TryGetValue<string>(out var text)) return text;
+            if (output.TryGetValue<bool>(out var boolean)) return boolean ? "true" : "false";
+            return output.ToJsonString();
+        }
+        if (response.Count == 1 && response["error"] is JsonObject error)
+        {
+            var type = String(error, "type") ?? "tool_error";
+            var message = String(error, "message") ?? "Tool execution failed";
+            return $"error: {{type: {YamlScalar(type)}, message: {YamlScalar(message)}}}";
+        }
+        throw new UnsupportedResponsesFeatureException("non-bounded tool response formatting");
+    }
+
+    private static string YamlScalar(string value)
+    {
+        if (value.Length == 0 || value.Contains(": ", StringComparison.Ordinal) || value[0] is '-' or '?' or ':' or '!' or '&' or '*' or '#' or '{' or '}' or '[' or ']' or ',' or '|' or '>' or '@' or '`')
+            return $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
+        return value;
+    }
+
     private static void RejectUnsupportedInput(JsonObject part)
     {
-        foreach (var property in new[] { "functionCall", "functionResponse", "inlineData", "inlineDataRef" })
+        foreach (var property in new[] { "functionResponse", "inlineData", "inlineDataRef" })
             if (part[property] is not null) throw new UnsupportedResponsesFeatureException($"message part {property}");
         if (part["providerMeta"]?["openaiResponses"]?["outputItem"] is not null)
             throw new UnsupportedResponsesFeatureException("native Responses output-item replay");
@@ -267,7 +381,23 @@ public static class ResponsesCanonicalConverter
                 }
                 continue;
             }
-            if (type == "function_call") throw new UnsupportedResponsesFeatureException("function-call output");
+            if (type == "function_call")
+            {
+                var callId = String(item, "call_id") ?? String(item, "id");
+                if (string.IsNullOrEmpty(callId))
+                    throw new UnsupportedResponsesFeatureException("function-call output without stable call ID");
+                var parsed = FunctionCallArguments.Parse(item["arguments"]);
+                var functionCall = new JsonObject
+                {
+                    ["id"] = callId,
+                    ["name"] = String(item, "name") ?? "",
+                    ["args"] = parsed.Args.DeepClone()
+                };
+                if (parsed.RawArgsText is not null) functionCall["rawArgsText"] = parsed.RawArgsText;
+                if (parsed.ArgsParseError is not null) functionCall["argsParseError"] = parsed.ArgsParseError;
+                parts.Add(new JsonObject { ["functionCall"] = functionCall });
+                continue;
+            }
             throw new UnsupportedResponsesFeatureException($"Responses output item {type ?? "unknown"}");
         }
         if (parts.Count == 0) return null;
@@ -319,6 +449,73 @@ public static class ResponsesCanonicalConverter
     private static string? String(JsonObject? value, string property) =>
         value?[property] is JsonValue scalar && scalar.TryGetValue<string>(out var result) ? result : null;
     private static string? RecognizedPhase(string? phase) => phase is "commentary" or "final_answer" ? phase : null;
+}
+
+public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
+{
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+    private readonly string sandboxRoot;
+    private int successfulEffects;
+
+    public WriteFixtureToolExecutor(string sandboxRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sandboxRoot);
+        this.sandboxRoot = Path.GetFullPath(sandboxRoot);
+        Directory.CreateDirectory(this.sandboxRoot);
+    }
+
+    public int SuccessfulEffects => Volatile.Read(ref successfulEffects);
+
+    public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var name = functionCall["name"]?.GetValue<string>() ?? "";
+        if (name != "write_fixture")
+            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", $"Unknown tool: {name}");
+        if (functionCall["args"] is not JsonObject args
+            || args.Count != 2
+            || args["fileName"] is not JsonValue fileNameValue
+            || !fileNameValue.TryGetValue<string>(out var fileName)
+            || args["content"] is not JsonValue contentValue
+            || !contentValue.TryGetValue<string>(out var content))
+            return UnsupportedTurnToolExecutor.ToolError(
+                "invalid_tool_arguments",
+                "write_fixture requires exactly string fileName and content.");
+        if (!IsPlainFileName(fileName))
+            return UnsupportedTurnToolExecutor.ToolError("invalid_path", "fileName must be a plain file name.");
+
+        var path = Path.Combine(sandboxRoot, fileName);
+        if (File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null)
+            return UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.");
+        var bytes = Utf8NoBom.GetBytes(content);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            await using var stream = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous);
+            await stream.WriteAsync(bytes, CancellationToken.None).ConfigureAwait(false);
+            await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            return UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.");
+        }
+        Interlocked.Increment(ref successfulEffects);
+        return new JsonObject { ["output"] = "created" };
+    }
+
+    private static bool IsPlainFileName(string fileName) =>
+        fileName.Length > 0
+        && fileName is not "." and not ".."
+        && !Path.IsPathRooted(fileName)
+        && !fileName.Contains('/')
+        && !fileName.Contains('\\')
+        && !fileName.Contains('\0');
 }
 
 public sealed class ResponsesChatService : IChatService
