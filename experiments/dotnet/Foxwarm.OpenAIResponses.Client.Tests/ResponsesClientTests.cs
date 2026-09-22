@@ -251,6 +251,32 @@ public sealed class ResponsesClientTests
             "openai/test-model"));
     }
 
+    [Fact]
+    public void CanonicalTimingDerivesFractionalStartFromCompletedWallAndMonotonicDuration()
+    {
+        var response = new JsonObject
+        {
+            ["output"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "message",
+                ["role"] = "assistant",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "output_text", ["text"] = "timed" })
+            })
+        };
+
+        var assistant = ResponsesCanonicalConverter.ConvertAssistant(
+            response,
+            "openai/test-model",
+            10_000,
+            1_234.5);
+
+        Assert.NotNull(assistant);
+        var timing = Assert.IsType<JsonObject>(assistant!["__meta"]?["llmRequestTiming"]);
+        Assert.Equal(8_765.5, timing["startedAt"]?.GetValue<double>());
+        Assert.Equal(10_000, timing["completedAt"]?.GetValue<long>());
+        Assert.Equal(1_234.5, timing["durationMs"]?.GetValue<double>());
+    }
+
     private static ResponsesChatService NewService(HttpClient http, Uri baseUri) => new(
         http,
         new ResponsesClientOptions(baseUri, "test-model", "openai/test-model", "test-token", "instructions", 321));

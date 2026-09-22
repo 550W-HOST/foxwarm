@@ -80,6 +80,16 @@ public static partial class ResponsesRequestSerializer
             {
                 var part = view.ToJson();
                 RejectUnsupportedInput(part);
+                if (String(part, "system") is { Length: > 0 } system)
+                {
+                    PrepareAssistant(part);
+                    content.Add(new JsonObject
+                    {
+                        ["type"] = role == "assistant" ? "output_text" : "input_text",
+                        ["text"] = FormatSystemPartForModel(system)
+                    });
+                }
+
                 var providerMeta = part["providerMeta"] as JsonObject;
                 var summaries = providerMeta?["thinkingSummaries"] as JsonArray;
                 var encryptedThinking = String(providerMeta, "encryptedThinking");
@@ -96,16 +106,6 @@ public static partial class ResponsesRequestSerializer
                     var reasoning = new JsonObject { ["type"] = "reasoning", ["summary"] = summary };
                     if (!string.IsNullOrEmpty(encryptedThinking)) reasoning["encrypted_content"] = encryptedThinking;
                     input.Add(reasoning);
-                }
-
-                if (String(part, "system") is { Length: > 0 } system)
-                {
-                    PrepareAssistant(part);
-                    content.Add(new JsonObject
-                    {
-                        ["type"] = role == "assistant" ? "output_text" : "input_text",
-                        ["text"] = FormatSystemPartForModel(system)
-                    });
                 }
 
                 if (part["text"] is JsonValue textValue && textValue.TryGetValue<string>(out var text)
@@ -161,7 +161,7 @@ public static partial class ResponsesRequestSerializer
 
     private static string FormatSystemPartForModel(string system)
     {
-        var trimmed = system.Trim();
+        var trimmed = EcmaTrim(system);
         if (FoxwarmMetadataLine().IsMatch(trimmed))
         {
             if (FoxwarmSystemLine().IsMatch(trimmed) && !FoxwarmKindAttribute().IsMatch(trimmed))
@@ -170,20 +170,36 @@ public static partial class ResponsesRequestSerializer
         }
         if (LegacySystemText().IsMatch(trimmed))
             throw new UnsupportedResponsesFeatureException("legacy system text normalization");
-        return $"<foxwarm-system kind=\"system\">\n{trimmed}\n</foxwarm-system>";
+        return trimmed.Length == 0
+            ? "<foxwarm-system kind=\"system\" />"
+            : $"<foxwarm-system kind=\"system\">\n{trimmed}\n</foxwarm-system>";
     }
+
+    private static string EcmaTrim(string value)
+    {
+        var start = 0;
+        while (start < value.Length && IsEcmaWhitespace(value[start])) start++;
+        var end = value.Length;
+        while (end > start && IsEcmaWhitespace(value[end - 1])) end--;
+        return value[start..end];
+    }
+
+    private static bool IsEcmaWhitespace(char character) => character is
+        '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
+        '\u1680' or '\u2028' or '\u2029' or '\u202F' or '\u205F' or '\u3000' or '\uFEFF' ||
+        character is >= '\u2000' and <= '\u200A';
 
     private static string? RecognizedPhase(string? phase) => phase is "commentary" or "final_answer" ? phase : null;
     private static string? String(JsonObject? value, string property) =>
         value?[property] is JsonValue scalar && scalar.TryGetValue<string>(out var result) ? result : null;
 
-    [GeneratedRegex("^\\s*</?foxwarm-(?:system|metadata|message)\\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("^</?foxwarm-(?:system|metadata|message)(?![A-Za-z0-9_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex FoxwarmMetadataLine();
-    [GeneratedRegex("^\\s*<foxwarm-system\\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("^<foxwarm-system(?![A-Za-z0-9_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex FoxwarmSystemLine();
-    [GeneratedRegex("\\bkind\\s*=", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("(?:^|[^A-Za-z0-9_])kind[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*=", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex FoxwarmKindAttribute();
-    [GeneratedRegex("^(?:current time\\s*=|current session ID\\s*=|Session goal reminder:|Reminder: message ended without send_to_session call\\.|Background Process Finished|session resumed after process restart|retrying last request|Managed session `|Compaction completed\\.?|\\*\\*(?:PARENT SESSION|NEW CHILD SESSION|HISTORY ABOVE IS INHERITED))", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("^(?:current time[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*=|current session ID[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*=|Session goal reminder:|Reminder: message ended without send_to_session call\\.|Background Process Finished|session resumed after process restart|retrying last request|Managed session `|Compaction completed\\.?|\\*\\*(?:COMPACTION COMPLETED|PARENT SESSION|NEW CHILD SESSION|HISTORY ABOVE IS INHERITED))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex LegacySystemText();
 }
 
@@ -192,7 +208,6 @@ public static class ResponsesCanonicalConverter
     public static JsonObject? ConvertAssistant(
         JsonObject response,
         string concreteModelId,
-        long startedAt,
         long completedAt,
         double durationMs)
     {
@@ -259,12 +274,7 @@ public static class ResponsesCanonicalConverter
         var meta = new JsonObject
         {
             ["modelId"] = concreteModelId,
-            ["llmRequestTiming"] = new JsonObject
-            {
-                ["startedAt"] = startedAt,
-                ["completedAt"] = completedAt,
-                ["durationMs"] = durationMs
-            }
+            ["llmRequestTiming"] = BuildTiming(completedAt, durationMs)
         };
         if (BuildUsage(response["usage"] as JsonObject) is { } usage) meta["usage"] = usage;
         return new JsonObject { ["role"] = "model", ["parts"] = parts, ["__meta"] = meta };
@@ -284,6 +294,19 @@ public static class ResponsesCanonicalConverter
         if (Number(usage["output_tokens_details"]?["reasoning_tokens"]) is { } reasoning)
             result["reasoningTokens"] = reasoning;
         return result;
+    }
+
+    private static JsonObject BuildTiming(long completedAt, double durationMs)
+    {
+        var startedAt = completedAt - durationMs;
+        if (completedAt < 0 || !double.IsFinite(durationMs) || durationMs < 0 || !double.IsFinite(startedAt) || startedAt < 0)
+            throw new InvalidOperationException("Responses request timing is invalid.");
+        return new JsonObject
+        {
+            ["startedAt"] = startedAt,
+            ["completedAt"] = completedAt,
+            ["durationMs"] = durationMs
+        };
     }
 
     private static long? Number(JsonNode? node)
@@ -328,7 +351,6 @@ public sealed class ResponsesChatService : IChatService
         if (!string.IsNullOrEmpty(options.Token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Token);
 
-        var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var started = Stopwatch.GetTimestamp();
         using var response = await httpClient.SendAsync(
             request,
@@ -350,7 +372,6 @@ public sealed class ResponsesChatService : IChatService
         return new ChatResult(ResponsesCanonicalConverter.ConvertAssistant(
             completed,
             options.ConcreteModelId,
-            startedAt,
             completedAt,
             elapsed));
     }

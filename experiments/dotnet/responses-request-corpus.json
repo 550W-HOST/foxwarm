@@ -90,5 +90,51 @@
     "messages": [
       { "role": "user", "parts": [{ "system": "" }, { "text": "" }, { "text": "kept" }] }
     ]
+  },
+  {
+    "name": "same-part-system-reasoning-text-order",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "model",
+        "parts": [
+          {
+            "system": "notice",
+            "providerMeta": { "thinkingSummaries": ["reason"] },
+            "text": "answer",
+            "phase": "commentary",
+            "vendor": { "open": true }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "whitespace-only-system-self-closes",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "parts": [{ "system": "   " }] }
+    ]
+  },
+  {
+    "name": "feff-system-wrapper-trims",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "parts": [{ "system": "\uFEFF wrapped \uFEFF" }] }
+    ]
+  },
+  {
+    "name": "nel-system-wrapper-preserves",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "parts": [{ "system": "\u0085wrapped\u0085" }] }
+    ]
+  },
+  {
+    "name": "metadata-ascii-word-boundary",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "parts": [{ "system": "<foxwarm-systemé kind=\"odd\" />" }] }
+    ]
   }
 ]
