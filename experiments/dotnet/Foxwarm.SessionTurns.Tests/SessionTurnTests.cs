@@ -61,47 +61,49 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
-    public async Task OrdinarySaveFailureDoesNotRejectAckOrBecomeStrict()
+    public async Task OrdinarySaveFailureDoesNotRejectAckAndSelectionRetriesBestEffortSnapshot()
     {
         var store = new InMemorySessionAuthorityStore();
         store.Fail("s", new IOException("best effort fault"), SaveKind.BestEffort);
         var chat = new ControlledChat();
         chat.QueueResult("answer");
         var registry = NewRegistry(store, chat, out var entry);
-        Task? triggeredRun = null;
-        registry.TriggerOverride = id => triggeredRun = registry.Runner.ProcessQueueAsync(id);
-        var enqueue = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hello"));
-        await enqueue;
-        await triggeredRun!;
+        registry.TriggerOverride = _ => Task.CompletedTask;
+
+        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hello"));
+
         Assert.Equal(1, entry.BestEffortFailureCount);
+        store.ClearFailure("s", SaveKind.BestEffort);
+        await registry.Runner.ProcessQueueAsync("s");
+
+        Assert.Equal(2, store.Calls.Count(call => call.Kind == SaveKind.BestEffort));
         Assert.Single(chat.Calls);
         Assert.Contains(store.Calls, call => call.Kind == SaveKind.Strict);
     }
 
     [Fact]
-    public async Task CompatibleSourcesBatchAndBoundariesCreateSeparateHistoryRowsAndCalls()
+    public async Task SourceBlindPrefixCommitsDifferentSourcesAsSeparateRowsInOneTurn()
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new ControlledChat();
         var registry = NewRegistry(store, chat, out var entry);
         registry.TriggerOverride = _ => Task.CompletedTask;
-        var source = new QueueSource("wework", "u", ChannelId: "c", ConversationId: "room", WeWorkStreamId: "stream");
-        entry.State.Queue.Add(QueueItem.UserText("one", source, "m1"));
-        entry.State.Queue.Add(QueueItem.UserText("two", source, "m2"));
-        chat.QueueResult("combined");
-        await registry.Runner.ProcessQueueAsync("s");
-        Assert.Single(chat.Calls);
-        Assert.Equal(3, entry.Snapshot().History.Count);
-        Assert.Equal("m1", ClientId(entry.Snapshot().History[0]));
-        Assert.Equal("m2", ClientId(entry.Snapshot().History[1]));
+        entry.State.Queue.Add(QueueItem.UserText("one", new QueueSource("wework", "u1", ChannelId: "wework-a", ConversationId: "room-a"), "m1"));
+        entry.State.Queue.Add(QueueItem.UserText("two", new QueueSource("qqbot", "u2", ChannelId: "qq-a", ConversationId: "room-b"), "m2"));
+        entry.State.Queue.Add(QueueItem.UserText("three", new QueueSource("webui", "browser", ChannelId: "webui", ConversationId: "browser"), "m3"));
+        chat.QueueResult("answer");
 
-        var secondSource = source with { PreferDirectReply = true };
-        entry.State.Queue.Add(QueueItem.UserText("three", source));
-        entry.State.Queue.Add(QueueItem.UserText("four", secondSource));
-        chat.QueueResult("third");
-        chat.QueueResult("fourth");
         await registry.Runner.ProcessQueueAsync("s");
-        Assert.Equal(3, chat.Calls.Count);
+
+        Assert.Single(chat.Calls);
+        Assert.Equal(3, chat.Calls[0].History.Count);
+        var snapshot = entry.Snapshot();
+        Assert.Equal(4, snapshot.History.Count);
+        Assert.Equal(new[] { "m1", "m2", "m3" }, snapshot.History.Take(3).Select(ClientId));
+        Assert.Empty(snapshot.Queue);
+        Assert.Equal(
+            new[] { SaveKind.Strict, SaveKind.BestEffort, SaveKind.Strict, SaveKind.Strict, SaveKind.Strict },
+            store.Calls.Select(call => call.Kind));
     }
 
     [Fact]
@@ -277,12 +279,19 @@ public sealed class SessionTurnTests
         entry.State.Queue.Add(QueueItem.UserText("first", clientMessageId: "first"));
         var run = registry.Runner.ProcessQueueAsync("s");
         await chat.Started;
-        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText("second", clientMessageId: "second"));
+        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText(
+            "second",
+            new QueueSource("wework", "room-a", ChannelId: "wework-a", ConversationId: "room-a"),
+            "second"));
+        await registry.Ingress.EnqueueAsync("s", QueueItem.UserText(
+            "third",
+            new QueueSource("qqbot", "room-b", ChannelId: "qq-a", ConversationId: "room-b"),
+            "third"));
         await registry.Control.StopAsync("s");
         await run;
         var snapshot = entry.Snapshot();
-        Assert.Equal(2, snapshot.History.Count);
-        Assert.Equal(new[] { "second" }, snapshot.History.Skip(1).Select(ClientId));
+        Assert.Equal(3, snapshot.History.Count);
+        Assert.Equal(new[] { "second", "third" }, snapshot.History.Skip(1).Select(ClientId));
         Assert.Empty(snapshot.Queue);
         Assert.False(snapshot.Busy);
         Assert.False(snapshot.Stopping);
@@ -399,22 +408,24 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
-    public async Task ChatFailureReleasesBusyAndLeavesLaterQueueForFreshTrigger()
+    public async Task ChatFailureReleasesBusyAfterCompleteSourceBlindPrefix()
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new ControlledChat();
         chat.QueueFailure(new InvalidOperationException("chat failed"));
-        chat.QueueResult("later");
         var registry = NewRegistry(store, chat, out var entry);
         registry.TriggerOverride = _ => Task.CompletedTask;
-        entry.State.Queue.Add(QueueItem.UserText("fails", new QueueSource("qq", "u", ChannelId: "c", ConversationId: "one", QqBotMessageId: "m1")));
-        entry.State.Queue.Add(QueueItem.UserText("later", new QueueSource("qq", "u", ChannelId: "c", ConversationId: "two", QqBotMessageId: "m2")));
+        entry.State.Queue.Add(QueueItem.UserText("fails", new QueueSource("qq", "u", ChannelId: "c", ConversationId: "one")));
+        entry.State.Queue.Add(QueueItem.UserText("same turn", new QueueSource("wework", "u", ChannelId: "other", ConversationId: "two")));
+
         await registry.Runner.ProcessQueueAsync("s");
+
         Assert.False(entry.Snapshot().Busy);
-        Assert.Single(entry.Snapshot().Queue);
-        await registry.Runner.ProcessQueueAsync("s");
-        Assert.Equal(2, chat.Calls.Count);
         Assert.Empty(entry.Snapshot().Queue);
+        Assert.Equal(2, entry.Snapshot().History.Count);
+        Assert.Single(chat.Calls);
+        await registry.Runner.ProcessQueueAsync("s");
+        Assert.Single(chat.Calls);
     }
 
     [Fact]
@@ -541,7 +552,7 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
-    public async Task ObserverFailureAfterAppendCommitDoesNotRollbackCommittedState()
+    public async Task QueueNotificationFailureAfterAppendCommitIsObservedWithoutPoisoningProcessor()
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new ControlledChat();
@@ -553,7 +564,7 @@ public sealed class SessionTurnTests
         };
         entry.State.Queue.Add(QueueItem.UserText("committed"));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => registry.Runner.ProcessQueueAsync("s"));
+        await registry.Runner.ProcessQueueAsync("s");
 
         var hot = entry.Snapshot();
         var stored = await store.LoadAsync("s");
@@ -564,10 +575,12 @@ public sealed class SessionTurnTests
         Assert.Empty(stored.Queue);
         Assert.False(hot.Busy);
         Assert.False(stored.Busy);
+        Assert.Equal(1, entry.PostCommitNotificationFailureCount);
+        Assert.Equal("observer failed", entry.LastPostCommitNotificationFailure?.Message);
     }
 
     [Fact]
-    public async Task ObserverFailureAfterStopFinalizationCommitDoesNotRollbackCommittedState()
+    public async Task QueueNotificationFailureAfterStopFinalizationIsObservedWithoutPoisoningFinalization()
     {
         var store = new InMemorySessionAuthorityStore();
         var entry = new SessionEntry(new SessionState("s"), store);
@@ -581,7 +594,7 @@ public sealed class SessionTurnTests
             if (Interlocked.Exchange(ref once, 1) == 0) throw new InvalidOperationException("observer failed");
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => host.FinalizeStoppedAsync());
+        await host.FinalizeStoppedAsync();
 
         var hot = entry.Snapshot();
         var stored = await store.LoadAsync("s");
@@ -594,6 +607,8 @@ public sealed class SessionTurnTests
         Assert.False(hot.Stopping);
         Assert.False(stored.Busy);
         Assert.False(stored.Stopping);
+        Assert.Equal(1, entry.PostCommitNotificationFailureCount);
+        Assert.Equal("observer failed", entry.LastPostCommitNotificationFailure?.Message);
     }
 
     [Fact]

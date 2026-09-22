@@ -28,17 +28,7 @@ public sealed record QueueSource(
     string? ChannelType = null,
     string? ConversationId = null,
     string? Username = null,
-    string? SenderId = null,
-    string? WeWorkStreamId = null,
-    string? QqBotMessageId = null,
-    bool PreferDirectReply = false)
-{
-    public string? StreamKey => WeWorkStreamId is not null
-        ? $"wework:{ChannelId ?? Platform}:{ConversationId ?? ChannelUserId}"
-        : QqBotMessageId is not null
-            ? $"qqbot:{ChannelId ?? Platform}:{ConversationId ?? ChannelUserId}"
-            : null;
-}
+    string? SenderId = null);
 
 public sealed record QueueItem(
     QueueItemType Type,
@@ -231,11 +221,15 @@ public sealed class SessionEntry
     private CancellationHandle? activeCancellation;
     private long busyClaimVersion;
     private int bestEffortFailures;
+    private int postCommitNotificationFailures;
+    private Exception? lastPostCommitNotificationFailure;
 
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }
     public object StateGate => stateGate;
     public int BestEffortFailureCount => Volatile.Read(ref bestEffortFailures);
+    public int PostCommitNotificationFailureCount => Volatile.Read(ref postCommitNotificationFailures);
+    public Exception? LastPostCommitNotificationFailure => Volatile.Read(ref lastPostCommitNotificationFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
 
     public SessionEntry(SessionState state, ISessionAuthorityStore store)
@@ -247,6 +241,11 @@ public sealed class SessionEntry
     public SessionSnapshot Snapshot() { lock (stateGate) return State.Snapshot(); }
     internal SessionSnapshot SnapshotForPersistence() => Snapshot();
     internal void RecordBestEffortFailure(Exception error) => Interlocked.Increment(ref bestEffortFailures);
+    internal void RecordPostCommitNotificationFailure(Exception error)
+    {
+        Volatile.Write(ref lastPostCommitNotificationFailure, error);
+        Interlocked.Increment(ref postCommitNotificationFailures);
+    }
 
     public bool TryClaimProcessor() => Interlocked.CompareExchange(ref processorClaim, 1, 0) == 0;
     public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
@@ -357,6 +356,12 @@ public sealed class SessionEntry
     }
 
     internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
+
+    internal void InvokeQueuedCommitted(SessionSnapshot snapshot)
+    {
+        try { Committed?.Invoke(snapshot); }
+        catch (Exception error) { RecordPostCommitNotificationFailure(error); }
+    }
 }
 
 public sealed class CancellationHandle : IDisposable
@@ -478,7 +483,7 @@ public sealed class LocalSessionTurnHost
             });
             throw;
         }
-        entry.InvokeCommitted(entry.Snapshot());
+        entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 
     public async Task<string> ChatAsync(string turnId)
@@ -592,7 +597,7 @@ public sealed class LocalSessionTurnHost
             });
             throw;
         }
-        entry.InvokeCommitted(entry.Snapshot());
+        entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 
     private static JsonObject SessionTag(string sessionId) => new()
@@ -732,6 +737,8 @@ public sealed class SessionTurnRunner
                     claimed = false;
                     break;
                 }
+                if (!entry.WithState(state => state.Queue.Count > 0)) break;
+                await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
                 var batch = DrainLeading(entry);
                 if (batch.Count == 0)
                 {
@@ -780,7 +787,6 @@ public sealed class SessionTurnRunner
         return entry.WithState(state =>
         {
             var result = new List<QueueItem>();
-            SourceBoundary? boundary = null;
             var index = 0;
             while (index < state.Queue.Count)
             {
@@ -791,19 +797,11 @@ public sealed class SessionTurnRunner
                     state.Queue.RemoveAt(index);
                     continue;
                 }
-                var next = SourceBoundary.From(item.Source);
-                if (boundary is not null && boundary != next) break;
-                boundary ??= next;
                 result.Add(item.CloneItem());
                 index++;
             }
             return (IReadOnlyList<QueueItem>)result;
         });
-    }
-
-    private sealed record SourceBoundary(string? StreamKey, bool PreferDirectReply)
-    {
-        public static SourceBoundary From(QueueSource? source) => new(source?.StreamKey, source?.PreferDirectReply == true);
     }
 }
 
