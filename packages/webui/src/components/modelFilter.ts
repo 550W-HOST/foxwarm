@@ -2,6 +2,11 @@ export type FilterableModelOption = {
   key: string
   label: string
   isDefault?: boolean
+  providerKey?: string | null
+  modelId?: string | null
+  providerType?: string | null
+  isVirtual?: boolean
+  targets?: string[]
 }
 
 export function formatModelLabel(option: FilterableModelOption, defaultModelKey?: string) {
@@ -42,6 +47,44 @@ export function resolveModelDisplayName(
   const option = options.find((candidate) => candidate.key === trimmed)
   if (!option) return modelKeyDisplayName(trimmed)
   return stripProviderPrefix(option.label?.trim() || trimmed, modelProviderName(trimmed))
+}
+
+/** Trigger label that qualifies only concrete model IDs duplicated across providers. */
+export function resolveModelTriggerDisplayName(
+  key: string | null | undefined,
+  options: FilterableModelOption[],
+): string {
+  const trimmed = typeof key === 'string' ? key.trim() : ''
+  if (!trimmed) return ''
+  const option = options.find((candidate) => candidate.key === trimmed)
+  if (!option || option.isVirtual) return resolveModelDisplayName(trimmed, options)
+  const providerKey = option.providerKey?.trim() || ''
+  const modelId = option.modelId?.trim() || ''
+  const rawLabel = option.label?.trim() || ''
+  const displayName = rawLabel && rawLabel !== option.key
+    ? stripProviderPrefix(rawLabel, providerKey || modelProviderName(option.key))
+    : (modelId || resolveModelDisplayName(trimmed, options))
+  if (!providerKey || !modelId) return displayName
+  const duplicatedAcrossProviders = options.some((candidate) => (
+    candidate.key !== option.key
+    && !candidate.isVirtual
+    && candidate.modelId?.trim() === modelId
+    && !!candidate.providerKey?.trim()
+    && candidate.providerKey?.trim() !== providerKey
+  ))
+  return duplicatedAcrossProviders ? `${providerKey}/${displayName}` : displayName
+}
+
+/** Ordered virtual-routing summary for the model-option secondary label. */
+export function formatVirtualModelDetail(option: FilterableModelOption): string | null {
+  if (!option.isVirtual) return null
+  const targets = (option.targets || []).map((target) => target.trim()).filter(Boolean)
+  if (targets.length === 0) return null
+  if (option.providerType === 'session-hash') {
+    return targets.length === 1 ? targets[0] : `session-hash: ${targets.join(', ')}`
+  }
+  if (option.providerType === 'failover') return `failover: ${targets.join(', ')}`
+  return null
 }
 
 /** Drop a redundant provider prefix from a label that already repeats it (e.g. `leaf/leaf-model`). */

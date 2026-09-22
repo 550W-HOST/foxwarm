@@ -19,7 +19,7 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -535,8 +535,8 @@ function sendSessionListQueryError(res: express.Response, error: any, logMessage
   res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
-export function buildWebUiModelsPayload(currentModel?: string) {
-  const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
+export function buildWebUiModelsPayloadFromConfig(modelsConfig: ModelsConfig, currentKey: string = modelsConfig.default) {
+  const defaultKey = modelsConfig.default;
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
   return {
     defaultKey,
@@ -548,6 +548,8 @@ export function buildWebUiModelsPayload(currentModel?: string) {
         label: key,
         isDefault: key === defaultKey,
         contextLimit: entry?.contextLimit || null,
+        providerKey: entry?.providerKey || null,
+        modelId: entry?.model || null,
         providerType: entry?.providerType || null,
         isVirtual: !!entry?.virtualRouting,
         targets: entry?.virtualRouting?.targets || [],
@@ -556,6 +558,11 @@ export function buildWebUiModelsPayload(currentModel?: string) {
       };
     }),
   };
+}
+
+export function buildWebUiModelsPayload(currentModel?: string) {
+  const { modelsConfig, currentKey } = resolveModelConfig(currentModel);
+  return buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey);
 }
 
 function normalizeWebUiEffortSelection(value: unknown): ModelEffort | undefined {

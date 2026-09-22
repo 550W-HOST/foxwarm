@@ -15,7 +15,7 @@ import {
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
-import { filterModelOptions, groupModelOptionsByProvider, resolveModelDisplayName } from './modelFilter'
+import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvider, resolveModelDisplayName, resolveModelTriggerDisplayName } from './modelFilter'
 import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
 import {
@@ -35,6 +35,11 @@ export type ModelOption = {
   label: string
   isDefault?: boolean
   contextLimit?: number | null
+  providerKey?: string | null
+  modelId?: string | null
+  providerType?: string | null
+  isVirtual?: boolean
+  targets?: string[]
   allowedEfforts?: string[]
   defaultEffort?: string | null
 }
@@ -331,30 +336,14 @@ function ModelSelector({
   })
   const childStaleFullLabel = childModelState.staleEffortLabel
 
-  const currentDisplayName = resolveModelDisplayName(currentModelKey || defaultModelKey, options) || 'model'
+  const currentDisplayName = resolveModelTriggerDisplayName(currentModelKey || defaultModelKey, options) || 'model'
   const currentKeyFull = currentModelKey || defaultModelKey || 'model'
   const triggerEffort = formatEffortLabel(effectiveEffort || effort || 'default')
-  const currentDefaultTargetName = resolveModelDisplayName(defaultModelKey || currentModelKey, options) || 'model'
-  const childResolvedTargetName = resolveModelDisplayName(
+  const currentDefaultTargetName = resolveModelTriggerDisplayName(defaultModelKey || currentModelKey, options) || 'model'
+  const childResolvedTargetName = resolveModelTriggerDisplayName(
     childModelDefault || effectiveChildModelKey || currentModelKey || defaultModelKey,
     options,
   ) || 'model'
-  const openScope = useCallback((scope: ModelSelectorScope) => {
-    if (open && activeScope === scope) {
-      setOpen(false)
-      return
-    }
-    if (!open) {
-      setFilterQuery('')
-      setChildFilterQuery('')
-      filterComposingRef.current = false
-      void onRefreshModels()
-    }
-    setActiveScope(scope)
-    setOpen(true)
-    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus())
-  }, [activeScope, onRefreshModels, open])
-
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -383,6 +372,23 @@ function ModelSelector({
       })
     }
   }, [childFollows])
+
+  const openScope = useCallback((scope: ModelSelectorScope) => {
+    if (open && activeScope === scope) {
+      setOpen(false)
+      return
+    }
+    if (!open) {
+      setFilterQuery('')
+      setChildFilterQuery('')
+      filterComposingRef.current = false
+      updatePopupPosition()
+      void onRefreshModels()
+    }
+    setActiveScope(scope)
+    setOpen(true)
+    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
+  }, [activeScope, onRefreshModels, open, updatePopupPosition])
 
   useEffect(() => {
     if (!open) return
@@ -423,7 +429,7 @@ function ModelSelector({
     let focusFrame = 0
     if (open) {
       focusFrame = requestAnimationFrame(() => {
-        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus()
+        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
     } else if (!open && wasOpenRef.current) {
       ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus()
@@ -478,7 +484,7 @@ function ModelSelector({
     >
       <span className="min-w-0 flex-1 truncate">{params.label}</span>
       {params.resolvedTarget && (
-        <span className="max-w-[45%] shrink-0 truncate text-[11px] text-fw-text-muted" data-model-option-target="true">{params.resolvedTarget}</span>
+        <span className="max-w-[45%] shrink-0 truncate text-[11px] text-fw-text-muted" data-model-option-target="true" title={params.resolvedTarget}>{params.resolvedTarget}</span>
       )}
       <Check aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${params.selected ? 'text-fw-accent' : 'text-transparent'}`} />
     </button>
@@ -499,6 +505,7 @@ function ModelSelector({
             label: resolveModelDisplayName(option.key, [option]),
             selected: selectedKey === option.key,
             title: option.key,
+            resolvedTarget: formatVirtualModelDetail(option),
             onSelect: () => onSelect(option.key),
           }))}
         </div>

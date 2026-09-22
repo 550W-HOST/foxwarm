@@ -18,7 +18,7 @@ await build({
   format: 'cjs',
 })
 
-const { filterModelOptions, resolveModelDisplayName } = await import(pathToFileURL(output).href)
+const { filterModelOptions, formatVirtualModelDetail, resolveModelDisplayName, resolveModelTriggerDisplayName } = await import(pathToFileURL(output).href)
 
 after(async () => {
   await rm(tempDir, { recursive: true, force: true })
@@ -51,4 +51,26 @@ test('model display names fall back to the model id for absent or blank labels',
   assert.equal(resolveModelDisplayName('provider/family/model', [{ key: 'provider/family/model' }]), 'family/model')
   assert.equal(resolveModelDisplayName('provider/model', [{ key: 'provider/model', label: '  ' }]), 'model')
   assert.equal(resolveModelDisplayName('provider/model', [{ key: 'provider/model', label: 'Friendly name' }]), 'Friendly name')
+})
+
+test('trigger labels qualify only actual model ids duplicated across providers', () => {
+  const duplicateOptions = [
+    { key: 'alpha', label: 'Friendly Alpha', providerKey: 'alpha', modelId: 'org/model-a' },
+    { key: 'beta', label: 'beta', providerKey: 'beta', modelId: 'org/model-a' },
+    { key: 'alpha-alias', label: 'Same Provider Alias', providerKey: 'alpha', modelId: 'org/model-a' },
+    { key: 'gamma/unique', label: 'gamma/Unique Label', providerKey: 'gamma', modelId: 'unique' },
+    { key: 'route', label: 'Virtual route', providerKey: 'route', modelId: null, isVirtual: true },
+  ]
+  assert.equal(resolveModelTriggerDisplayName('alpha', duplicateOptions), 'alpha/Friendly Alpha')
+  assert.equal(resolveModelTriggerDisplayName('beta', duplicateOptions), 'beta/org/model-a')
+  assert.equal(resolveModelTriggerDisplayName('gamma/unique', duplicateOptions), 'Unique Label')
+  assert.equal(resolveModelTriggerDisplayName('route', duplicateOptions), 'Virtual route')
+  assert.equal(resolveModelTriggerDisplayName('alpha', duplicateOptions.filter(option => option.providerKey !== 'beta')), 'Friendly Alpha')
+})
+
+test('virtual model details preserve target order and distinguish aliases, session hashing, and failover', () => {
+  assert.equal(formatVirtualModelDetail({ key: 'alias', label: 'alias', isVirtual: true, providerType: 'session-hash', targets: ['alpha/org/model-a'] }), 'alpha/org/model-a')
+  assert.equal(formatVirtualModelDetail({ key: 'sticky', label: 'sticky', isVirtual: true, providerType: 'session-hash', targets: ['alpha/a', 'beta/b'] }), 'session-hash: alpha/a, beta/b')
+  assert.equal(formatVirtualModelDetail({ key: 'route', label: 'route', isVirtual: true, providerType: 'failover', targets: ['beta/b', 'alpha/a'] }), 'failover: beta/b, alpha/a')
+  assert.equal(formatVirtualModelDetail({ key: 'leaf', label: 'leaf', isVirtual: false, providerType: 'openai', targets: ['ignored'] }), null)
 })
