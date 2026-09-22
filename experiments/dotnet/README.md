@@ -7,6 +7,7 @@ This directory is a manual migration experiment and is not part of the Node.js b
 - `Foxwarm.OpenAIResponses.Streaming` ports one complete, transport-neutral OpenAI Responses event accumulator plus an async SSE collector. It is not a provider client: request construction, authentication, retries, routing, timeouts/watchdogs, WebSocket pooling, journaling, Session ownership, final `Message` conversion, and runtime integration remain outside the experiment.
 - `Foxwarm.OpenAIResponses.Client` adds one bounded HTTP Responses client over the existing collector. It serializes the supported canonical text/reasoning subset, performs a real `ResponseHeadersRead` POST, converts completed text/refusal/reasoning/phase/usage into an owned assistant Message, and implements the SessionTurns chat boundary without retries or hidden persistence.
 - `Foxwarm.SessionTurns` ports the first bounded Main-local Session-turn seams: owned Message JSON state, source-blind ordinary queue batching, ordered authority snapshot saves, one processor claim, one active cancellation handle, Stop finalization, and an in-process fake chat host. It has no production runtime integration.
+- `Foxwarm.SessionPersistence` is Slice C1 only: an independent current-v1 authority-document validator, exact six-column `archive_messages` store, and Linux atomic JSON writer over test-owned roots. It is not connected to `SessionTurns`; runtime state remains in-memory until a separately approved C2.
 
 ## Build and tests
 
@@ -18,6 +19,25 @@ export PATH="$DOTNET_ROOT:$PATH"
 dotnet restore experiments/dotnet/Foxwarm.DotnetSpike.sln
 dotnet test experiments/dotnet/Foxwarm.DotnetSpike.sln --no-restore
 ```
+
+## Session persistence C1 experiment
+
+`Foxwarm.SessionPersistence` accepts one explicitly bound Session ID and the current bounded ordinary v1 authority subset. It preserves open unknown top-level, Message, part, metadata, and provider JSON, while rejecting known unsupported semantic state such as a nonempty queue, fork/alias lineage, wait/managed/child-handoff/indexing/compact state, Worker mailbox progress, CTX-BLOCKs, images, and Archive blocks. Active JSON remains the sole active-history authority; Archive rows are immutable audit records and are never used to rebuild active history.
+
+The SQLite store pins `Microsoft.Data.Sqlite` 10.0.12 and creates only the current TypeScript `archive_messages(session_id,agent,seq,timestamp,role,message_json,PRIMARY KEY(session_id,seq))` table. Schema admission checks exact columns, primary-key index, and absence of foreign keys. A single-Session nondeferred transaction returns only newly inserted rows, treats byte-identical `message_json` as idempotent replay, rejects same-key conflicts, and rolls back only the returned rows by exact stored payload. It does not implement catalog, blocks, checkpoints, reservations, branch lineage, or a database schema-version fiction. When an actual TypeScript reader opens a C#-created fixture, TypeScript may create its other normal Archive tables; that cross-read is not a claim that the read is physically write-free.
+
+Stored `message_json` read from SQLite retains its original string and is never silently reserialized. New C# rows use a bounded ECMAScript-compatible formatter whose supported domain is checked against actual `JSON.stringify`, including numeric-key ordering, non-ASCII, U+2028/U+2029, a literal `\\u2028`, quotes, backslashes, controls, and fractional numbers. This is a tested subset, not a general custom ECMAScript serializer.
+
+The JSON authority writer writes a unique same-directory UTF-8 temp file, calls `Flush(true)`, atomically renames it over the target, and fsyncs the Linux parent directory. Matching the current TypeScript portability rule, directory-open/fsync errors `EPERM`, `EISDIR`, `EINVAL`, `ENOSYS`, and `ENOTSUP` are reported as unsupported rather than durable; other errors fail. Failures before rename remain precommit and remove the temp file. Failures after rename throw `AuthorityCommittedException` and leave the new authority visible, so a later caller cannot misclassify the operation as rollback-safe. File fsync and directory fsync are separate durability boundaries; injected failures and normal reopen do not prove power-loss or cross-SQLite/JSON atomicity.
+
+The C1 tests use only fresh temporary roots. An actual current TypeScript helper writes one source-derived v1 JSON/full Archive fixture for C# read/rewrite/TypeScript reread, and reads a C#-created limited fixture in the opposite direction. Run against the intended current TypeScript build explicitly:
+
+```sh
+FOXWARM_TS_ROOT=/path/to/current/foxwarm \
+  dotnet test experiments/dotnet/Foxwarm.SessionPersistence.Tests/Foxwarm.SessionPersistence.Tests.csproj --no-restore
+```
+
+C1 deliberately does not modify the Session processor, save lane, HTTP/tool loop, or restart path. Canonical append integration and two-process normal reopen remain C2 and D respectively.
 
 The Responses collector uses native async `Stream.ReadAsync`, incremental UTF-8 decoding, source-equivalent narrow SSE framing, and explicit `StreamOwnership.Dispose` (the default) or `LeaveOpen`. The accumulator owns retained input JSON by deep clone and emits cumulative progress, meaningful-progress, safety-buffering, decoded-text, and complete-block callbacks. Typed semantic terminal, malformed-event, read, EOF, and normal .NET cancellation categories are covered by independent xUnit tests. The loopback cancellation test proves accepted/requested/held/cancelled/connection-closed milestones without sleep-based synchronization; it does not contact a provider and does not restart a runtime.
 
