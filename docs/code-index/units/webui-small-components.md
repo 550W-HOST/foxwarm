@@ -1,6 +1,6 @@
 # Unit: webui-small-components
 
-Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/launcherDraft.ts, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/processingStatus.test.mjs, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/launcherDraft.test.mjs, packages/webui/test/specialBlocks.e2e.mjs
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/launcherDraft.ts, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/agentCreationMenu.e2e.mjs, packages/webui/test/processingStatus.test.mjs, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/launcherDraft.test.mjs, packages/webui/test/specialBlocks.e2e.mjs
 Secondary files: packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/ModelThreadCard.tsx
 
 ## Purpose
@@ -12,7 +12,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `ContentHeader` — Page/section header with icon, title, optional back button and actions
 - `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal
 - `CollapsedSidebar` — Fixed-width collapsed sidebar rail with expand/new-session controls and root-session avatar buttons
-- `AgentCreationMenu` — Shared Agents `+` dropdown and simple new-agent/new-session modals, including inline validation/loading/error states
+- `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
 - `CodeLaunchButton` — Sidebar split button for opening Code at a remembered node/path and controlling the global new-browser-tab default
@@ -37,7 +37,7 @@ A collection of small, reusable React UI components and utility functions for th
 | `ContextMenu({ ... })` | ~40–130 | Positioned dropdown menu with portal rendering and viewport clamping |
 | `getSessionInitial(session)` | (CollapsedSidebar.tsx) | Derives a single visible initial/avatar from display name or session id |
 | `CollapsedSidebar({ ... })` | (CollapsedSidebar.tsx) | Renders the compact rail with expand/new-session buttons and top root sessions |
-| `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Renders the creation dropdown plus agent/session modal flows shared by desktop and mobile expanded sidebars |
+| `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Opens New session directly, selects its Agent with wrapping tags, and switches the same modal to New agent from the trailing `+` tag |
 | `buildSessionCreationBody(agentId, sessionId)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
 | `CreateTabButton({ ... })` | ~50–110 | Split button with dropdown form for custom terminal tab creation |
 | `selectLauncherDraftNode(draft, nodeId)` | `launcherDraft.ts` | Preserve a same-node draft or reset a changed node's path to `/` |
@@ -74,6 +74,7 @@ A collection of small, reusable React UI components and utility functions for th
 ## Behavior
 
 - `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, or resize. Captured scroll keeps point-anchored menus open at their viewport position and dismisses rect-anchored menus whose trigger can move.
+- `AgentCreationMenu` makes the shared Agents `+` open New session without an intermediate menu. The current Agent (or first available Agent) is selected by default in an accessible wrapping tag group; a final `+` tag switches the one modal to New agent. Cancel, Escape, or backdrop dismissal from New agent returns to New session without losing its Agent or optional Session ID draft. Successful Agent creation retains the existing callback contract, which may create and navigate to that Agent's main Session; it does not implicitly resume the pending Session draft. An empty Agent registry keeps New session disabled but leaves New agent reachable.
 - `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, displays the canonical runtime-state dot at top-right, and independently displays unread idle completion at bottom-right with accessible title/name text. The unread contract is canonical in [webui-session-list](./webui-session-list.md#design-decisions).
 - `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded. Its chrome comes from the shared `ModelThreadCard` owned by [webui-chat-timeline](./webui-chat-timeline.md).
 - `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
