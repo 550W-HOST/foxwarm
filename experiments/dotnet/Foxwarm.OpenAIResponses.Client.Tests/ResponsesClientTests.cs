@@ -622,7 +622,7 @@ public sealed class ResponsesClientTests
         return path;
     }
 
-    private static void RunPersistenceOracle(string mode, string root, string resultPath, string sessionId)
+    internal static void RunPersistenceOracle(string mode, string root, string resultPath, string sessionId)
     {
         var foxwarmRoot = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT");
         if (string.IsNullOrWhiteSpace(foxwarmRoot))

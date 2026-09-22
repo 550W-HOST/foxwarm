@@ -15,5 +15,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Foxwarm.SessionPersistence\Foxwarm.SessionPersistence.csproj" />
     <ProjectReference Include="..\Foxwarm.OpenAIResponses.Client\Foxwarm.OpenAIResponses.Client.csproj" />
+    <ProjectReference Include="..\Foxwarm.SessionRestartHarness\Foxwarm.SessionRestartHarness.csproj" />
   </ItemGroup>
 </Project>
