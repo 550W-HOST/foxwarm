@@ -1,0 +1,94 @@
+[
+  {
+    "name": "system-wrapper-and-text",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          { "system": "  <foxwarm-system kind=\"session\" currentSessionId=\"s\" />  ", "vendor": { "keep": true } },
+          { "text": "hello", "unknown": [1, null, false] }
+        ],
+        "opaqueMessageMeta": { "x": 1 }
+      }
+    ]
+  },
+  {
+    "name": "unknown-metadata-and-empty-assistant",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "model",
+        "parts": [
+          { "text": "", "providerMeta": { "vendor": { "opaque": true } }, "other": "ignored" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "assistant-phase-split",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "model",
+        "parts": [
+          { "text": "analysis", "phase": "commentary" },
+          { "text": "answer", "phase": "final_answer" },
+          { "text": "fallback" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "display-only-exact-false",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "modelVisible": false, "parts": [{ "text": "hidden" }] },
+      { "role": "user", "modelVisible": 0, "parts": [{ "text": "zero-is-visible" }] },
+      { "role": "user", "parts": [{ "text": "shown" }] }
+    ]
+  },
+  {
+    "name": "reasoning-and-annotations",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "model",
+        "parts": [
+          {
+            "thinking": "summary",
+            "providerMeta": {
+              "thinkingSummaries": ["one", "two"],
+              "encryptedThinking": "cipher",
+              "opaque": { "keep": true }
+            }
+          },
+          {
+            "text": "annotated",
+            "phase": "final_answer",
+            "providerMeta": {
+              "openaiResponses": {
+                "sourceModelId": "openai/test-model",
+                "annotations": [{ "type": "url_citation", "url": "https://example.test", "extra": null }]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "plain-system-wrapper",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "parts": [{ "system": "  ordinary system text  " }] }
+    ]
+  },
+  {
+    "name": "empty-user-fields-are-omitted",
+    "modelId": "openai/test-model",
+    "messages": [
+      { "role": "user", "parts": [{ "system": "" }, { "text": "" }, { "text": "kept" }] }
+    ]
+  }
+]

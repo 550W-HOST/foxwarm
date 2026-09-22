@@ -670,7 +670,7 @@ public sealed class SessionTurnTests
 
 internal sealed class ControlledChat : IChatService
 {
-    private readonly ConcurrentQueue<Func<string, CancellationToken, Task<string>>> plans = new();
+    private readonly ConcurrentQueue<Func<string, CancellationToken, Task<ChatResult>>> plans = new();
     private readonly ConcurrentQueue<Call> calls = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> startedById = new();
     private readonly object signalGate = new();
@@ -680,7 +680,7 @@ internal sealed class ControlledChat : IChatService
     private int pauseNextWaiter;
     private readonly TaskCompletionSource<bool> waiterPausedBeforeSignalGate = NewSignal();
     private readonly TaskCompletionSource<bool> releaseWaiterBeforeSignalGate = NewSignal();
-    private TaskCompletionSource<string>? pendingResult;
+    private TaskCompletionSource<ChatResult>? pendingResult;
 
     public IReadOnlyList<Call> Calls => calls.ToArray();
     public Task Started => started.Task;
@@ -691,21 +691,21 @@ internal sealed class ControlledChat : IChatService
     public void PauseNextCallCountWaiterBeforeSignalGate() => Interlocked.Exchange(ref pauseNextWaiter, 1);
     public void ReleaseCallCountWaiter() => releaseWaiterBeforeSignalGate.TrySetResult(true);
 
-    public void QueueResult(string result) => plans.Enqueue((_, _) => Task.FromResult(result));
-    public void QueueFailure(Exception error) => plans.Enqueue((_, _) => Task.FromException<string>(error));
+    public void QueueResult(string result) => plans.Enqueue((_, _) => Task.FromResult(ChatResult.Text(result)));
+    public void QueueFailure(Exception error) => plans.Enqueue((_, _) => Task.FromException<ChatResult>(error));
     public void QueueAwaitingResult() => plans.Enqueue(async (_, token) =>
     {
-        pendingResult = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pendingResult = new TaskCompletionSource<ChatResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = token.Register(() => pendingResult.TrySetCanceled(token));
         return await pendingResult.Task;
     });
     public void QueueAwaitingCancellation() => plans.Enqueue(async (_, token) =>
     {
-        try { await Task.Delay(Timeout.InfiniteTimeSpan, token); return "unexpected"; }
+        try { await Task.Delay(Timeout.InfiniteTimeSpan, token); return ChatResult.Text("unexpected"); }
         catch (OperationCanceledException) { CancellationObserved = true; cancelled.TrySetResult(true); throw; }
     });
-    public void QueuePlan(Func<string, CancellationToken, Task<string>> plan) => plans.Enqueue(plan);
-    public void Complete(string result) => pendingResult?.TrySetResult(result);
+    public void QueuePlan(Func<string, CancellationToken, Task<string>> plan) => plans.Enqueue(async (id, token) => ChatResult.Text(await plan(id, token)));
+    public void Complete(string result) => pendingResult?.TrySetResult(ChatResult.Text(result));
 
     public async Task WaitForStarted(string sessionId) => await startedById.GetOrAdd(sessionId, _ => NewSignal()).Task;
 
@@ -730,7 +730,7 @@ internal sealed class ControlledChat : IChatService
         }
     }
 
-    public async Task<string> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
+    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
     {
         calls.Enqueue(new Call(sessionId, history));
         lock (signalGate)
@@ -740,7 +740,7 @@ internal sealed class ControlledChat : IChatService
         }
         started.TrySetResult(true);
         startedById.GetOrAdd(sessionId, _ => NewSignal()).TrySetResult(true);
-        var plan = plans.TryDequeue(out var queued) ? queued : ((_, _) => Task.FromResult("ok"));
+        var plan = plans.TryDequeue(out var queued) ? queued : ((_, _) => Task.FromResult(ChatResult.Text("ok")));
         return await plan(sessionId, cancellationToken);
     }
 

@@ -5,6 +5,7 @@ This directory is a manual migration experiment and is not part of the Node.js b
 - `Foxwarm.ConditionalMemory` ports the pure conditional-memory helpers.
 - `Foxwarm.MessageJson` is an owned `JsonObject` compatibility leaf for supported canonical messages and tool arguments.
 - `Foxwarm.OpenAIResponses.Streaming` ports one complete, transport-neutral OpenAI Responses event accumulator plus an async SSE collector. It is not a provider client: request construction, authentication, retries, routing, timeouts/watchdogs, WebSocket pooling, journaling, Session ownership, final `Message` conversion, and runtime integration remain outside the experiment.
+- `Foxwarm.OpenAIResponses.Client` adds one bounded HTTP Responses client over the existing collector. It serializes the supported canonical text/reasoning subset, performs a real `ResponseHeadersRead` POST, converts completed text/refusal/reasoning/phase/usage into an owned assistant Message, and implements the SessionTurns chat boundary without retries or hidden persistence.
 - `Foxwarm.SessionTurns` ports the first bounded Main-local Session-turn seams: owned Message JSON state, source-blind ordinary queue batching, ordered authority snapshot saves, one processor claim, one active cancellation handle, Stop finalization, and an in-process fake chat host. It has no production runtime integration.
 
 ## Build and tests
@@ -19,6 +20,18 @@ dotnet test experiments/dotnet/Foxwarm.DotnetSpike.sln --no-restore
 ```
 
 The Responses collector uses native async `Stream.ReadAsync`, incremental UTF-8 decoding, source-equivalent narrow SSE framing, and explicit `StreamOwnership.Dispose` (the default) or `LeaveOpen`. The accumulator owns retained input JSON by deep clone and emits cumulative progress, meaningful-progress, safety-buffering, decoded-text, and complete-block callbacks. Typed semantic terminal, malformed-event, read, EOF, and normal .NET cancellation categories are covered by independent xUnit tests. The loopback cancellation test proves accepted/requested/held/cancelled/connection-closed milestones without sleep-based synchronization; it does not contact a provider and does not restart a runtime.
+
+## Responses HTTP client experiment
+
+`Foxwarm.OpenAIResponses.Client` accepts an explicit base URI, request model name, concrete model identity, bearer token, instructions, and output cap. It POSTs `/responses` with `ResponseHeadersRead`, `store:false`, streaming enabled, no tools, and the current bounded request fields. It never reads Foxwarm live configuration or credentials. Non-success bodies are captured up to 64 KiB; cancellation flows through send, body read, the SSE collector, and owned response-stream disposal.
+
+The request serializer clones canonical input and filters only exact `modelVisible:false`. Its supported subset is user/model text, canonical Foxwarm system wrappers, plain system text wrapping, recognized assistant phases, compatible reasoning replay, and same-model output-text annotations. Open property bags remain open: unrelated message, part, and provider metadata is ignored rather than rejected or mutated. Inputs requiring unimplemented semantic conversion fail by name, including tool history/calls/results, image data/references, native Responses output-item replay, and legacy system-text normalization.
+
+Completed Responses output is converted to one owned canonical assistant Message containing reasoning, text/refusal, recognized phase, compatible annotations, token usage, concrete model identity, and wall-clock plus monotonic request timing. Function calls and other unimplemented output-item/content types fail before persistence. `IChatService` now returns this owned optional assistant Message; only `LocalSessionTurnHost` performs the one strict assistant append. If that save fails, the host removes only its own hot assistant object, does not repeat HTTP, and later busy release persists the compensated state. Empty completed output produces no fabricated assistant row.
+
+The localhost integration suite proves request receipt and fragmented SSE completion, canonical strict persistence, held-body Stop cancellation with server-observed connection close, bounded non-2xx capture, malformed/early-EOF rejection, controlled function-call rejection, and no HTTP repetition after assistant-save failure. `responses-request-corpus.json` is compared against the actual TypeScript `convertToOpenAIResponsesFormat` implementation for system/text, open metadata, empty assistant/user fields, phases, exact-false display exclusion, reasoning, and annotations.
+
+This client remains experiment-only and in-memory. It excludes tool execution/loops, images and hosted tools, model routing/failover/retries, provider request compression, prompt-cache headers, WebSocket transport, streaming UI callbacks, request journaling/IDs, seq/Archive, filesystem/SQLite authority, Channel delivery, Worker placement, and production integration.
 
 ## Session-turn experiment
 
@@ -52,6 +65,19 @@ The TypeScript subprocess runs with a fresh owned temporary `FOXWARM_DATA_DIR`, 
 
 ```text
 comparison ok: 10 cases; semantic final/progress/raw/block/error parity exact
+```
+
+Slice A adds a separate request-input differential. `responses-request-corpus.json` covers canonical system wrapping plus text, open unknown metadata, empty assistant and user fields, recognized phase boundaries, exact-false display filtering, reasoning replay, and same-model annotations. The TypeScript runner imports the actual built `convertToOpenAIResponsesFormat` from `FOXWARM_TS_ROOT`; it does not reproduce the serializer in test code or invoke the network/request runtime. Run it with the same private SDK selected:
+
+```sh
+FOXWARM_TS_ROOT=/path/to/current/foxwarm \
+  python3 experiments/dotnet/responses-request-parity-compare.py dotnet
+```
+
+The expected result is:
+
+```text
+comparison ok: 7 actual TypeScript/C# Responses request-input cases
 ```
 
 Run the preserved Phase 2A differential oracle separately with `python3 experiments/dotnet/run-parity.py` after the repository JavaScript dependencies and shared generated package are available. The prototype remains outside normal Node CI and does not alter TypeScript runtime behavior, persistence, model routing, or Session ownership.

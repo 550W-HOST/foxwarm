@@ -1,0 +1,378 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using Foxwarm.MessageJson;
+using Foxwarm.OpenAIResponses.Streaming;
+using Foxwarm.SessionTurns;
+
+namespace Foxwarm.OpenAIResponses.Client;
+
+public sealed record ResponsesClientOptions(
+    Uri BaseUri,
+    string RequestModel,
+    string ConcreteModelId,
+    string Token,
+    string Instructions,
+    int MaxOutputTokens)
+{
+    public Uri ResponsesUri => new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
+}
+
+public sealed class UnsupportedResponsesFeatureException(string feature)
+    : InvalidOperationException($"Experimental OpenAI Responses client does not support {feature}.")
+{
+    public string Feature { get; } = feature;
+}
+
+public sealed class ResponsesHttpException(
+    HttpStatusCode statusCode,
+    string responseBody,
+    bool bodyTruncated)
+    : HttpRequestException($"OpenAI Responses HTTP request failed with status {(int)statusCode}.", null, statusCode)
+{
+    public string ResponseBody { get; } = responseBody;
+    public bool BodyTruncated { get; } = bodyTruncated;
+}
+
+public static partial class ResponsesRequestSerializer
+{
+    public static JsonArray ConvertHistory(IReadOnlyList<JsonObject> history, string concreteModelId)
+    {
+        var input = new JsonArray();
+        foreach (var raw in history)
+        {
+            var message = CanonicalMessage.FromNode(raw);
+            if (!message.IsModelVisible) continue;
+            if (message.Role == "tool") throw new UnsupportedResponsesFeatureException("tool history");
+            var role = message.Role == "model" ? "assistant" : "user";
+            var content = new JsonArray();
+            string? messagePhase = null;
+            var fallbackPhase = role == "assistant" ? "final_answer" : null;
+
+            void Flush()
+            {
+                if (content.Count == 0) return;
+                var item = new JsonObject
+                {
+                    ["type"] = "message",
+                    ["role"] = role,
+                    ["content"] = content.DeepClone()
+                };
+                if (role == "assistant" && messagePhase is not null) item["phase"] = messagePhase;
+                input.Add(item);
+                content.Clear();
+                messagePhase = null;
+            }
+
+            void PrepareAssistant(JsonObject part)
+            {
+                if (role != "assistant") return;
+                var next = part.ContainsKey("phase") ? RecognizedPhase(String(part, "phase")) : fallbackPhase;
+                if (content.Count > 0 && next != messagePhase) Flush();
+                messagePhase = next;
+            }
+
+            foreach (var view in message.Parts)
+            {
+                var part = view.ToJson();
+                RejectUnsupportedInput(part);
+                var providerMeta = part["providerMeta"] as JsonObject;
+                var summaries = providerMeta?["thinkingSummaries"] as JsonArray;
+                var encryptedThinking = String(providerMeta, "encryptedThinking");
+                if (summaries is not null || !string.IsNullOrEmpty(encryptedThinking))
+                {
+                    Flush();
+                    var summary = new JsonArray();
+                    if (summaries is not null)
+                    {
+                        foreach (var entry in summaries)
+                            if (entry is JsonValue scalar && scalar.TryGetValue<string>(out var summaryText))
+                                summary.Add(new JsonObject { ["text"] = summaryText, ["type"] = "summary_text" });
+                    }
+                    var reasoning = new JsonObject { ["type"] = "reasoning", ["summary"] = summary };
+                    if (!string.IsNullOrEmpty(encryptedThinking)) reasoning["encrypted_content"] = encryptedThinking;
+                    input.Add(reasoning);
+                }
+
+                if (String(part, "system") is { Length: > 0 } system)
+                {
+                    PrepareAssistant(part);
+                    content.Add(new JsonObject
+                    {
+                        ["type"] = role == "assistant" ? "output_text" : "input_text",
+                        ["text"] = FormatSystemPartForModel(system)
+                    });
+                }
+
+                if (part["text"] is JsonValue textValue && textValue.TryGetValue<string>(out var text)
+                    && (role == "assistant" || text.Length > 0))
+                {
+                    PrepareAssistant(part);
+                    var textPart = new JsonObject
+                    {
+                        ["type"] = role == "assistant" ? "output_text" : "input_text",
+                        ["text"] = text
+                    };
+                    var responseMeta = providerMeta?["openaiResponses"] as JsonObject;
+                    if (role == "assistant"
+                        && String(responseMeta, "sourceModelId") == concreteModelId
+                        && responseMeta?["annotations"] is JsonArray annotations)
+                        textPart["annotations"] = annotations.DeepClone();
+                    content.Add(textPart);
+                }
+            }
+            Flush();
+        }
+        return input;
+    }
+
+    public static JsonObject BuildRequest(
+        IReadOnlyList<JsonObject> history,
+        string requestModel,
+        string concreteModelId,
+        string instructions,
+        int maxOutputTokens)
+    {
+        if (maxOutputTokens <= 0) throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
+        return new JsonObject
+        {
+            ["model"] = requestModel,
+            ["instructions"] = instructions,
+            ["input"] = ConvertHistory(history, concreteModelId),
+            ["tool_choice"] = "auto",
+            ["parallel_tool_calls"] = true,
+            ["max_output_tokens"] = maxOutputTokens,
+            ["store"] = false,
+            ["stream"] = true
+        };
+    }
+
+    private static void RejectUnsupportedInput(JsonObject part)
+    {
+        foreach (var property in new[] { "functionCall", "functionResponse", "inlineData", "inlineDataRef" })
+            if (part[property] is not null) throw new UnsupportedResponsesFeatureException($"message part {property}");
+        if (part["providerMeta"]?["openaiResponses"]?["outputItem"] is not null)
+            throw new UnsupportedResponsesFeatureException("native Responses output-item replay");
+    }
+
+    private static string FormatSystemPartForModel(string system)
+    {
+        var trimmed = system.Trim();
+        if (FoxwarmMetadataLine().IsMatch(trimmed))
+        {
+            if (FoxwarmSystemLine().IsMatch(trimmed) && !FoxwarmKindAttribute().IsMatch(trimmed))
+                throw new UnsupportedResponsesFeatureException("legacy Foxwarm system metadata normalization");
+            return trimmed;
+        }
+        if (LegacySystemText().IsMatch(trimmed))
+            throw new UnsupportedResponsesFeatureException("legacy system text normalization");
+        return $"<foxwarm-system kind=\"system\">\n{trimmed}\n</foxwarm-system>";
+    }
+
+    private static string? RecognizedPhase(string? phase) => phase is "commentary" or "final_answer" ? phase : null;
+    private static string? String(JsonObject? value, string property) =>
+        value?[property] is JsonValue scalar && scalar.TryGetValue<string>(out var result) ? result : null;
+
+    [GeneratedRegex("^\\s*</?foxwarm-(?:system|metadata|message)\\b", RegexOptions.IgnoreCase)]
+    private static partial Regex FoxwarmMetadataLine();
+    [GeneratedRegex("^\\s*<foxwarm-system\\b", RegexOptions.IgnoreCase)]
+    private static partial Regex FoxwarmSystemLine();
+    [GeneratedRegex("\\bkind\\s*=", RegexOptions.IgnoreCase)]
+    private static partial Regex FoxwarmKindAttribute();
+    [GeneratedRegex("^(?:current time\\s*=|current session ID\\s*=|Session goal reminder:|Reminder: message ended without send_to_session call\\.|Background Process Finished|session resumed after process restart|retrying last request|Managed session `|Compaction completed\\.?|\\*\\*(?:PARENT SESSION|NEW CHILD SESSION|HISTORY ABOVE IS INHERITED))", RegexOptions.IgnoreCase)]
+    private static partial Regex LegacySystemText();
+}
+
+public static class ResponsesCanonicalConverter
+{
+    public static JsonObject? ConvertAssistant(
+        JsonObject response,
+        string concreteModelId,
+        long startedAt,
+        long completedAt,
+        double durationMs)
+    {
+        var parts = new JsonArray();
+        foreach (var node in response["output"] as JsonArray ?? [])
+        {
+            if (node is not JsonObject item) continue;
+            var type = String(item, "type");
+            if (type == "reasoning")
+            {
+                var summaryTexts = new List<string>();
+                JsonArray? summaries = null;
+                if (item["summary"] is JsonArray sourceSummaries)
+                {
+                    summaries = new JsonArray();
+                    foreach (var summaryNode in sourceSummaries)
+                    {
+                        var summary = summaryNode as JsonObject;
+                        var text = String(summary, "text") ?? String(summary, "summary") ?? "";
+                        if (text.Length > 0) summaryTexts.Add(text);
+                        summaries.Add(String(summary, "text") is { } exact ? JsonValue.Create(exact) : null);
+                    }
+                }
+                var providerMeta = new JsonObject();
+                if (summaries is not null) providerMeta["thinkingSummaries"] = summaries;
+                if (String(item, "encrypted_content") is { } encrypted) providerMeta["encryptedThinking"] = encrypted;
+                parts.Add(new JsonObject
+                {
+                    ["thinking"] = string.Join("\n", summaryTexts),
+                    ["providerMeta"] = providerMeta
+                });
+                continue;
+            }
+            if (type == "message" && String(item, "role") == "assistant")
+            {
+                var phase = RecognizedPhase(String(item, "phase"));
+                foreach (var contentNode in item["content"] as JsonArray ?? [])
+                {
+                    if (contentNode is not JsonObject content) continue;
+                    var contentType = String(content, "type");
+                    var text = contentType == "output_text" ? String(content, "text")
+                        : contentType == "refusal" ? String(content, "refusal") : null;
+                    if (text is null)
+                        throw new UnsupportedResponsesFeatureException($"Responses message content {contentType ?? "unknown"}");
+                    var part = new JsonObject { ["text"] = text };
+                    if (phase is not null) part["phase"] = phase;
+                    if (contentType == "output_text" && content["annotations"] is JsonArray annotations && annotations.Count > 0)
+                        part["providerMeta"] = new JsonObject
+                        {
+                            ["openaiResponses"] = new JsonObject
+                            {
+                                ["sourceModelId"] = concreteModelId,
+                                ["annotations"] = annotations.DeepClone()
+                            }
+                        };
+                    parts.Add(part);
+                }
+                continue;
+            }
+            if (type == "function_call") throw new UnsupportedResponsesFeatureException("function-call output");
+            throw new UnsupportedResponsesFeatureException($"Responses output item {type ?? "unknown"}");
+        }
+        if (parts.Count == 0) return null;
+        var meta = new JsonObject
+        {
+            ["modelId"] = concreteModelId,
+            ["llmRequestTiming"] = new JsonObject
+            {
+                ["startedAt"] = startedAt,
+                ["completedAt"] = completedAt,
+                ["durationMs"] = durationMs
+            }
+        };
+        if (BuildUsage(response["usage"] as JsonObject) is { } usage) meta["usage"] = usage;
+        return new JsonObject { ["role"] = "model", ["parts"] = parts, ["__meta"] = meta };
+    }
+
+    private static JsonObject? BuildUsage(JsonObject? usage)
+    {
+        if (usage is null) return null;
+        var cached = Number(usage["input_tokens_details"]?["cached_tokens"]) ?? 0;
+        var input = Number(usage["input_tokens"]) ?? 0;
+        var result = new JsonObject
+        {
+            ["inputTokens"] = input - cached,
+            ["outputTokens"] = Number(usage["output_tokens"]) ?? 0,
+            ["cachedTokens"] = cached
+        };
+        if (Number(usage["output_tokens_details"]?["reasoning_tokens"]) is { } reasoning)
+            result["reasoningTokens"] = reasoning;
+        return result;
+    }
+
+    private static long? Number(JsonNode? node)
+    {
+        if (node is not JsonValue scalar) return null;
+        if (scalar.TryGetValue<long>(out var integer)) return integer;
+        if (scalar.TryGetValue<int>(out var small)) return small;
+        return null;
+    }
+    private static string? String(JsonObject? value, string property) =>
+        value?[property] is JsonValue scalar && scalar.TryGetValue<string>(out var result) ? result : null;
+    private static string? RecognizedPhase(string? phase) => phase is "commentary" or "final_answer" ? phase : null;
+}
+
+public sealed class ResponsesChatService : IChatService
+{
+    private const int MaxErrorBodyBytes = 64 * 1024;
+    private readonly HttpClient httpClient;
+    private readonly ResponsesClientOptions options;
+
+    public ResponsesChatService(HttpClient httpClient, ResponsesClientOptions options)
+    {
+        this.httpClient = httpClient;
+        this.options = options;
+    }
+
+    public async Task<ChatResult> ChatAsync(
+        string sessionId,
+        IReadOnlyList<JsonObject> history,
+        CancellationToken cancellationToken)
+    {
+        var body = ResponsesRequestSerializer.BuildRequest(
+            history,
+            options.RequestModel,
+            options.ConcreteModelId,
+            options.Instructions,
+            options.MaxOutputTokens);
+        using var request = new HttpRequestMessage(HttpMethod.Post, options.ResponsesUri)
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        if (!string.IsNullOrEmpty(options.Token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Token);
+
+        var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var started = Stopwatch.GetTimestamp();
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var (errorBody, truncated) = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            throw new ResponsesHttpException(response.StatusCode, errorBody, truncated);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var completed = await ResponsesSseCollector.CollectAsync(
+            stream,
+            cancellationToken,
+            ownership: StreamOwnership.Dispose).ConfigureAwait(false);
+        var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        return new ChatResult(ResponsesCanonicalConverter.ConvertAssistant(
+            completed,
+            options.ConcreteModelId,
+            startedAt,
+            completedAt,
+            elapsed));
+    }
+
+    private static async Task<(string Body, bool Truncated)> ReadBoundedAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var buffer = new byte[4096];
+        using var output = new MemoryStream();
+        var truncated = false;
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            var remaining = MaxErrorBodyBytes - (int)output.Length;
+            if (remaining <= 0) { truncated = true; break; }
+            var accepted = Math.Min(remaining, read);
+            output.Write(buffer, 0, accepted);
+            if (accepted < read) { truncated = true; break; }
+        }
+        return (Encoding.UTF8.GetString(output.ToArray()), truncated);
+    }
+}

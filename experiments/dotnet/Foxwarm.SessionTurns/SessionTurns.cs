@@ -380,7 +380,16 @@ public sealed class CancellationHandle : IDisposable
 
 public interface IChatService
 {
-    Task<string> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken);
+    Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken);
+}
+
+public sealed record ChatResult(JsonObject? AssistantMessage)
+{
+    public static ChatResult Text(string text) => new(new JsonObject
+    {
+        ["role"] = "model",
+        ["parts"] = new JsonArray(new JsonObject { ["text"] = text })
+    });
 }
 
 public sealed class UnsupportedSessionTurnException : InvalidOperationException
@@ -486,7 +495,7 @@ public sealed class LocalSessionTurnHost
         entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 
-    public async Task<string> ChatAsync(string turnId)
+    public async Task<ChatResult> ChatAsync(string turnId)
     {
         var requestCts = new CancellationTokenSource();
         CancellationHandle? handle = null;
@@ -496,13 +505,28 @@ public sealed class LocalSessionTurnHost
             handle = entry.RegisterCancellation(requestCts);
             var registered = handle ?? throw new InvalidOperationException("Cancellation registration was not created.");
             var result = await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
-            var assistant = new JsonObject
-            {
-                ["role"] = "model",
-                ["parts"] = new JsonArray(new JsonObject { ["text"] = result })
-            };
+            if (result.AssistantMessage is null) return result;
+            var assistant = (JsonObject)result.AssistantMessage.DeepClone();
+            if (assistant["role"]?.GetValue<string>() != "model" || assistant["parts"] is not JsonArray)
+                throw new InvalidOperationException("Chat result assistant message must be a canonical model message.");
             entry.WithState(state => state.History.Add(assistant));
-            await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
+            try
+            {
+                await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                entry.WithState(state =>
+                {
+                    for (var index = state.History.Count - 1; index >= 0; index--)
+                    {
+                        if (!ReferenceEquals(state.History[index], assistant)) continue;
+                        state.History.RemoveAt(index);
+                        break;
+                    }
+                });
+                throw;
+            }
             entry.InvokeCommitted(entry.Snapshot());
             return result;
         }
@@ -888,7 +912,7 @@ public sealed class FakeChatService : IChatService
     public void EnqueueResult(string text) => plans.Enqueue(_ => Task.FromResult(text));
     public void EnqueuePlan(Func<CancellationToken, Task<string>> plan) => plans.Enqueue(plan);
 
-    public async Task<string> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
+    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
     {
         var call = new Call(sessionId, history.Select(m => (JsonObject)m.DeepClone()).ToArray());
         calls.Enqueue(call);
@@ -896,7 +920,7 @@ public sealed class FakeChatService : IChatService
         var plan = plans.TryDequeue(out var queued) ? queued : (_ => Task.FromResult("ok"));
         var result = await plan(cancellationToken).ConfigureAwait(false);
         FirstCallCompleted.TrySetResult(true);
-        return result;
+        return ChatResult.Text(result);
     }
 
     public sealed record Call(string SessionId, IReadOnlyList<JsonObject> History);
