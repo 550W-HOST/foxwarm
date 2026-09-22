@@ -1442,6 +1442,18 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
   const normalPage = await browser.newPage()
   await attachRequestMocks(normalPage)
   try {
+    const assertConfigureModelsHitTarget = async () => {
+      const state = await normalPage.$eval('button[aria-label="Configure models"]', (button) => {
+        const rect = button.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return {
+          visible: button.checkVisibility(),
+          hit: hit === button || button.contains(hit),
+        }
+      })
+      assert.deepEqual(state, { visible: true, hit: true })
+    }
+
     await normalPage.evaluateOnNewDocument(() => {
       try {
         localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
@@ -1451,6 +1463,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await assertConfigureModelsHitTarget()
     const pickerState = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => ({
       treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
       columnCount: popup.querySelectorAll('[data-model-column]').length,
@@ -1480,6 +1493,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     const reopenedModelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
     await reopenedModelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await assertConfigureModelsHitTarget()
     await normalPage.click('button[aria-label="Configure models"]')
     await normalPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await normalPage.waitForFunction(() => (

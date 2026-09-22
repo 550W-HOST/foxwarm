@@ -338,22 +338,6 @@ function ModelSelector({
     childModelDefault || effectiveChildModelKey || currentModelKey || defaultModelKey,
     options,
   ) || 'model'
-  const openScope = useCallback((scope: ModelSelectorScope) => {
-    if (open && activeScope === scope) {
-      setOpen(false)
-      return
-    }
-    if (!open) {
-      setFilterQuery('')
-      setChildFilterQuery('')
-      filterComposingRef.current = false
-      void onRefreshModels()
-    }
-    setActiveScope(scope)
-    setOpen(true)
-    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
-  }, [activeScope, onRefreshModels, open])
-
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -382,6 +366,23 @@ function ModelSelector({
       })
     }
   }, [childFollows])
+
+  const openScope = useCallback((scope: ModelSelectorScope) => {
+    if (open && activeScope === scope) {
+      setOpen(false)
+      return
+    }
+    if (!open) {
+      setFilterQuery('')
+      setChildFilterQuery('')
+      filterComposingRef.current = false
+      updatePopupPosition()
+      void onRefreshModels()
+    }
+    setActiveScope(scope)
+    setOpen(true)
+    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
+  }, [activeScope, onRefreshModels, open, updatePopupPosition])
 
   useLayoutEffect(() => {
     if (open) updatePopupPosition()
