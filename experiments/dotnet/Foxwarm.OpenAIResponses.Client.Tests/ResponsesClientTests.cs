@@ -453,6 +453,47 @@ public sealed class ResponsesClientTests
     }
 
     [Fact]
+    public async Task WriteFixtureReportsGeneralIoFailuresWithoutDeletingPossiblePartialFile()
+    {
+        var root = NewTempDirectory();
+        try
+        {
+            var openExecutor = new WriteFixtureToolExecutor(root, openNew: _ =>
+                throw new IOException("injected open failure"));
+            var openFailure = await openExecutor.ExecuteAsync(FunctionCall("open", "write_fixture", new JsonObject
+            {
+                ["fileName"] = "open-failure.txt",
+                ["content"] = "no"
+            }), CancellationToken.None);
+
+            var writeAttempts = 0;
+            var writeExecutor = new WriteFixtureToolExecutor(root, (_, _) =>
+            {
+                Interlocked.Increment(ref writeAttempts);
+                return Task.FromException(new IOException("injected write failure"));
+            });
+            var writeFailure = await writeExecutor.ExecuteAsync(FunctionCall("write", "write_fixture", new JsonObject
+            {
+                ["fileName"] = "partial.txt",
+                ["content"] = "not committed"
+            }), CancellationToken.None);
+
+            Assert.Equal("tool_io_error", openFailure["error"]?["type"]?.GetValue<string>());
+            Assert.Equal("tool_io_error", writeFailure["error"]?["type"]?.GetValue<string>());
+            Assert.Equal(1, writeAttempts);
+            Assert.Equal(0, openExecutor.SuccessfulEffects);
+            Assert.Equal(0, writeExecutor.SuccessfulEffects);
+            Assert.False(File.Exists(Path.Combine(root, "open-failure.txt")));
+            Assert.True(File.Exists(Path.Combine(root, "partial.txt")));
+            Assert.Empty(await File.ReadAllBytesAsync(Path.Combine(root, "partial.txt")));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void SerializerRejectsSemanticUnsupportedInputsWithoutMutatingOpenHistory()
     {
         var history = new[]

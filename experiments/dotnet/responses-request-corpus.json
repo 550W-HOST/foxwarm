@@ -205,5 +205,52 @@
         ]
       }
     ]
+  },
+  {
+    "name": "bounded-tool-error-yaml-scalar-escaping",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "tool",
+        "parts": [
+          {
+            "functionResponse": {
+              "tool_use_id": "quoted",
+              "name": "other_tool",
+              "response": {
+                "error": {
+                  "type": "unknown_tool",
+                  "message": "Unknown tool: odd'name,more"
+                }
+              }
+            }
+          },
+          {
+            "functionResponse": {
+              "tool_use_id": "controls",
+              "name": "other_tool",
+              "response": {
+                "error": {
+                  "type": "unknown_tool",
+                  "message": "Unknown tool: line\nnext\t\u0000"
+                }
+              }
+            }
+          },
+          {
+            "functionResponse": {
+              "tool_use_id": "diagnostic",
+              "name": "write_fixture",
+              "response": {
+                "error": {
+                  "type": "invalid_tool_arguments",
+                  "message": "Invalid tool arguments JSON: bad\nline\u0085next"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
   }
 ]

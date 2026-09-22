@@ -260,9 +260,42 @@ public static partial class ResponsesRequestSerializer
 
     private static string YamlScalar(string value)
     {
+        if (value.Any(character => character <= '\u001F'
+            || character is >= '\u007F' and <= '\u009F'
+            || character is '\u2028' or '\u2029'))
+            return DoubleQuotedYamlScalar(value);
         if (value.Length == 0 || value.Contains(": ", StringComparison.Ordinal) || value[0] is '-' or '?' or ':' or '!' or '&' or '*' or '#' or '{' or '}' or '[' or ']' or ',' or '|' or '>' or '@' or '`')
             return $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
         return value;
+    }
+
+    private static string DoubleQuotedYamlScalar(string value)
+    {
+        var result = new StringBuilder(value.Length + 2).Append('"');
+        foreach (var character in value)
+        {
+            result.Append(character switch
+            {
+                '\0' => "\\0",
+                '\u0007' => "\\a",
+                '\b' => "\\b",
+                '\t' => "\\t",
+                '\n' => "\\n",
+                '\u000B' => "\\v",
+                '\f' => "\\f",
+                '\r' => "\\r",
+                '\u001B' => "\\e",
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\u0085' => "\\N",
+                '\u2028' => "\\L",
+                '\u2029' => "\\P",
+                <= '\u00FF' when character <= '\u001F' || character is >= '\u007F' and <= '\u009F'
+                    => $"\\x{(int)character:X2}",
+                _ => character.ToString()
+            });
+        }
+        return result.Append('"').ToString();
     }
 
     private static void RejectUnsupportedInput(JsonObject part)
@@ -455,12 +488,19 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
     private readonly string sandboxRoot;
+    private readonly Func<Stream, ReadOnlyMemory<byte>, Task> writeBytes;
+    private readonly Func<string, Stream> openNew;
     private int successfulEffects;
 
-    public WriteFixtureToolExecutor(string sandboxRoot)
+    public WriteFixtureToolExecutor(
+        string sandboxRoot,
+        Func<Stream, ReadOnlyMemory<byte>, Task>? writeBytes = null,
+        Func<string, Stream>? openNew = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sandboxRoot);
         this.sandboxRoot = Path.GetFullPath(sandboxRoot);
+        this.writeBytes = writeBytes ?? WriteBytesAsync;
+        this.openNew = openNew ?? OpenNew;
         Directory.CreateDirectory(this.sandboxRoot);
     }
 
@@ -485,29 +525,68 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
             return UnsupportedTurnToolExecutor.ToolError("invalid_path", "fileName must be a plain file name.");
 
         var path = Path.Combine(sandboxRoot, fileName);
-        if (File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null)
+        if (TargetExists(path))
             return UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.");
         var bytes = Utf8NoBom.GetBytes(content);
         cancellationToken.ThrowIfCancellationRequested();
+        Stream stream;
         try
         {
-            await using var stream = new FileStream(
-                path,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                4096,
-                FileOptions.Asynchronous);
-            await stream.WriteAsync(bytes, CancellationToken.None).ConfigureAwait(false);
-            await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            stream = openNew(path);
         }
         catch (IOException)
         {
-            return UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.");
+            return TargetExists(path)
+                ? UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.")
+                : ToolIoError();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return ToolIoError();
+        }
+        await using (stream)
+        {
+            try
+            {
+                await writeBytes(stream, bytes).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                return ToolIoError();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return ToolIoError();
+            }
         }
         Interlocked.Increment(ref successfulEffects);
         return new JsonObject { ["output"] = "created" };
     }
+
+    private static async Task WriteBytesAsync(Stream stream, ReadOnlyMemory<byte> bytes)
+    {
+        await stream.WriteAsync(bytes, CancellationToken.None).ConfigureAwait(false);
+        await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private static Stream OpenNew(string path) => new FileStream(
+        path,
+        FileMode.CreateNew,
+        FileAccess.Write,
+        FileShare.None,
+        4096,
+        FileOptions.Asynchronous);
+
+    private static bool TargetExists(string path)
+    {
+        try { return File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    private static JsonObject ToolIoError() => UnsupportedTurnToolExecutor.ToolError(
+        "tool_io_error",
+        "write_fixture failed due to an I/O error.");
 
     private static bool IsPlainFileName(string fileName) =>
         fileName.Length > 0
