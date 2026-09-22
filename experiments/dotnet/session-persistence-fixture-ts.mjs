@@ -3,7 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 
-const [mode, root, resultPath, inputPath] = process.argv.slice(2)
+const [mode, root, resultPath, inputPath, requestedSessionId] = process.argv.slice(2)
 if (!mode || !root || !resultPath) {
   throw new Error('usage: session-persistence-fixture-ts.mjs MODE ROOT RESULT [INPUT]')
 }
@@ -11,7 +11,7 @@ const foxwarmRoot = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirn
 process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
 const importFromFoxwarm = relative => import(pathToFileURL(path.join(foxwarmRoot, 'lib', relative)).href)
-const sessionId = 'c1/fixture'
+const sessionId = requestedSessionId || 'c1/fixture'
 
 async function readResult() {
   const { readSessionHistorySnapshot } = await importFromFoxwarm('session/metadataStore.js')

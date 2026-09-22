@@ -107,6 +107,8 @@ public sealed class SqliteArchiveMessageStore
         this.sessionId = sessionId;
     }
 
+    public string DatabasePath => databasePath;
+
     public void Initialize()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);

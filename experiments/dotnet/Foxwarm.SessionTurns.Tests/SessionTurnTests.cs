@@ -449,8 +449,9 @@ public sealed class SessionTurnTests
         Assert.Contains(hotBeforeRelease.Queue, item => item.Parts?.FirstOrDefault()?[
             "text"]?.GetValue<string>() == "B");
         Assert.DoesNotContain(hotBeforeRelease.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
-        var timestamp = hotBeforeRelease.Meta["lastMessageTime"]!.GetValue<long>();
-        entry.WithStateForTest(state => state.Meta["lastMessageTime"] = JsonValue.Create(timestamp));
+        Assert.False(hotBeforeRelease.Meta.ContainsKey("lastMessageTime"));
+        const long timestamp = 9876;
+        entry.WithStateForTest(state => state.Meta["lastMessageTime"] = timestamp);
 
         store.ReleaseHeldStrictAppend();
         await Assert.ThrowsAsync<InvalidOperationException>(() => runner);
@@ -547,7 +548,10 @@ public sealed class SessionTurnTests
 
         var snapshot = entry.Snapshot();
         var user = snapshot.History.Single(message => message["role"]?.GetValue<string>() == "user");
-        Assert.Equal(prebuilt.ToJsonString(), user.ToJsonString());
+        Assert.Equal("user", user["role"]?.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(prebuilt["parts"], user["parts"]));
+        Assert.Equal(1, user["__meta"]?["seq"]?.GetValue<long>());
+        Assert.True(user["__meta"]?["timestamp"]?.GetValue<long>() > 0);
         Assert.Equal(42, snapshot.Meta["lastMessageTime"]?.GetValue<long>());
     }
 
@@ -952,7 +956,10 @@ internal sealed class AppendFailureProbeStore : ISessionAuthorityStore
         snapshot.Busy,
         snapshot.BusyStartedAt,
         snapshot.Stopping,
-        (JsonObject)snapshot.Meta.DeepClone());
+        (JsonObject)snapshot.Meta.DeepClone(),
+        snapshot.NextMessageSeq,
+        snapshot.HistoryVersion,
+        (JsonObject)snapshot.AuthorityEnvelope.DeepClone());
 
     private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 

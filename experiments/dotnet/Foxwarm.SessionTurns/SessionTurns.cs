@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.MessageJson;
+using Foxwarm.SessionPersistence;
 
 namespace Foxwarm.SessionTurns;
 
@@ -28,7 +29,8 @@ public sealed record QueueSource(
     string? ChannelType = null,
     string? ConversationId = null,
     string? Username = null,
-    string? SenderId = null);
+    string? SenderId = null,
+    JsonObject? OpenFields = null);
 
 public sealed record QueueItem(
     QueueItemType Type,
@@ -37,7 +39,8 @@ public sealed record QueueItem(
     QueueSource? Source = null,
     string? ClientMessageId = null,
     string? SourceSessionId = null,
-    string? SourceSessionRelation = null)
+    string? SourceSessionRelation = null,
+    JsonObject? OpenFields = null)
 {
     public static QueueItem UserText(string text, QueueSource? source = null, string? clientMessageId = null) =>
         new(QueueItemType.User, new[] { new JsonObject { ["text"] = text } }, null, source, clientMessageId);
@@ -48,7 +51,9 @@ public sealed record QueueItem(
     public QueueItem CloneItem() => this with
     {
         Parts = Parts?.Select(p => (JsonObject)p.DeepClone()).ToArray(),
-        Message = Message is null ? null : (JsonObject)Message.DeepClone()
+        Message = Message is null ? null : (JsonObject)Message.DeepClone(),
+        Source = Source is null ? null : Source with { OpenFields = Source.OpenFields is null ? null : (JsonObject)Source.OpenFields.DeepClone() },
+        OpenFields = OpenFields is null ? null : (JsonObject)OpenFields.DeepClone()
     };
 }
 
@@ -61,6 +66,9 @@ public sealed class SessionState
     public long? BusyStartedAt { get; internal set; }
     public bool Stopping { get; internal set; }
     public JsonObject Meta { get; } = new();
+    public long NextMessageSeq { get; internal set; } = 1;
+    public long HistoryVersion { get; internal set; }
+    public JsonObject AuthorityEnvelope { get; } = new();
 
     public SessionState(string id) => Id = id;
 
@@ -71,10 +79,13 @@ public sealed class SessionState
             Busy = Busy,
             BusyStartedAt = BusyStartedAt,
             Stopping = Stopping,
+            NextMessageSeq = NextMessageSeq,
+            HistoryVersion = HistoryVersion,
         };
         clone.History.AddRange(History.Select(message => (JsonObject)message.DeepClone()));
         clone.Queue.AddRange(Queue.Select(item => item.CloneItem()));
         foreach (var property in Meta) clone.Meta[property.Key] = property.Value?.DeepClone();
+        foreach (var property in AuthorityEnvelope) clone.AuthorityEnvelope[property.Key] = property.Value?.DeepClone();
         return clone;
     }
 
@@ -88,7 +99,10 @@ public sealed class SessionState
             clone.Busy,
             clone.BusyStartedAt,
             clone.Stopping,
-            (JsonObject)clone.Meta.DeepClone());
+            (JsonObject)clone.Meta.DeepClone(),
+            clone.NextMessageSeq,
+            clone.HistoryVersion,
+            (JsonObject)clone.AuthorityEnvelope.DeepClone());
     }
 }
 
@@ -99,7 +113,10 @@ public sealed record SessionSnapshot(
     bool Busy,
     long? BusyStartedAt,
     bool Stopping,
-    JsonObject Meta);
+    JsonObject Meta,
+    long NextMessageSeq,
+    long HistoryVersion,
+    JsonObject AuthorityEnvelope);
 
 public enum SaveKind
 {
@@ -113,8 +130,21 @@ public interface ISessionAuthorityStore
     Task<SessionSnapshot?> LoadAsync(string sessionId, CancellationToken cancellationToken = default);
 }
 
+public interface ICanonicalAppendAuthorityStore
+{
+    Task CommitCanonicalAppendAsync(
+        SessionSnapshot stagedSnapshot,
+        IReadOnlyList<JsonObject> appendedMessages,
+        CancellationToken cancellationToken = default);
+}
+
+internal sealed record CanonicalAppendPreparation(
+    SessionSnapshot StagedSnapshot,
+    IReadOnlyList<JsonObject> AppendedMessages,
+    Action<SessionState> Publish);
+
 /// <summary>Test-only authority snapshot store. It proves ordering and round-trip cloning only.</summary>
-public sealed class InMemorySessionAuthorityStore : ISessionAuthorityStore
+public sealed class InMemorySessionAuthorityStore : ISessionAuthorityStore, ICanonicalAppendAuthorityStore
 {
     private readonly ConcurrentDictionary<string, SessionSnapshot> snapshots = new();
     private readonly ConcurrentQueue<(string SessionId, SaveKind Kind)> calls = new();
@@ -160,6 +190,12 @@ public sealed class InMemorySessionAuthorityStore : ISessionAuthorityStore
         return Task.FromResult(snapshot is null ? null : Clone(snapshot));
     }
 
+    public Task CommitCanonicalAppendAsync(
+        SessionSnapshot stagedSnapshot,
+        IReadOnlyList<JsonObject> appendedMessages,
+        CancellationToken cancellationToken = default) =>
+        CommitAsync(stagedSnapshot, SaveKind.Strict, cancellationToken);
+
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -170,7 +206,10 @@ public sealed class InMemorySessionAuthorityStore : ISessionAuthorityStore
         snapshot.Busy,
         snapshot.BusyStartedAt,
         snapshot.Stopping,
-        (JsonObject)snapshot.Meta.DeepClone());
+        (JsonObject)snapshot.Meta.DeepClone(),
+        snapshot.NextMessageSeq,
+        snapshot.HistoryVersion,
+        (JsonObject)snapshot.AuthorityEnvelope.DeepClone());
 }
 
 public sealed class SessionSaveLane
@@ -194,23 +233,50 @@ public sealed class SessionSaveLane
         catch (Exception error) { entry.RecordBestEffortFailure(error); }
     }
 
+    internal Task CommitCanonicalAppendAsync(
+        Func<SessionState, CanonicalAppendPreparation> prepare,
+        CancellationToken cancellationToken = default) =>
+        EnqueueOperationAsync(async () =>
+        {
+            var operation = entry.WithState(prepare);
+            try
+            {
+                if (store is ICanonicalAppendAuthorityStore canonical)
+                    await canonical.CommitCanonicalAppendAsync(operation.StagedSnapshot, operation.AppendedMessages, cancellationToken).ConfigureAwait(false);
+                else
+                    await store.CommitAsync(operation.StagedSnapshot, SaveKind.Strict, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AuthorityCommittedException)
+            {
+                entry.WithState(operation.Publish);
+                throw;
+            }
+            entry.WithState(operation.Publish);
+        });
+
     private Task EnqueueAsync(SaveKind kind, CancellationToken cancellationToken)
+        => EnqueueOperationAsync(async () =>
+        {
+            var snapshot = entry.SnapshotForPersistence();
+            await store.CommitAsync(snapshot, kind, cancellationToken).ConfigureAwait(false);
+        });
+
+    private Task EnqueueOperationAsync(Func<Task> operation)
     {
         lock (laneGate)
         {
             var previous = tail;
-            var current = RunAfterAsync(previous, kind, cancellationToken);
+            var current = RunAfterAsync(previous, operation);
             tail = current;
             return current;
         }
     }
 
-    private async Task RunAfterAsync(Task previous, SaveKind kind, CancellationToken cancellationToken)
+    private static async Task RunAfterAsync(Task previous, Func<Task> operation)
     {
         try { await previous.ConfigureAwait(false); }
         catch { /* A failed best-effort attempt must not poison later strict work. */ }
-        var snapshot = entry.SnapshotForPersistence();
-        await store.CommitAsync(snapshot, kind, cancellationToken).ConfigureAwait(false);
+        await operation().ConfigureAwait(false);
     }
 }
 
@@ -460,9 +526,9 @@ public sealed class LocalSessionTurnHost
             await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
             return true;
         }
-        catch
+        catch (Exception error)
         {
-            entry.RollbackBusy(version);
+            if (error is not AuthorityCommittedException) entry.RollbackBusy(version);
             throw;
         }
     }
@@ -471,66 +537,7 @@ public sealed class LocalSessionTurnHost
     {
         if (items.Count == 0) return;
         foreach (var item in items) SessionIngress.EnsureSupportedForRunner(item);
-        var removedItems = items.Select(item => item.CloneItem()).ToArray();
-        var appendedMessages = new List<JsonObject>();
-        JsonNode? previousLastMessageTime = null;
-        JsonNode? appliedLastMessageTime = null;
-        var hadLastMessageTime = false;
-        entry.WithState(state =>
-        {
-            if (state.Queue.Count < items.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
-            state.Queue.RemoveRange(0, items.Count);
-            var historyEmpty = state.History.Count == 0;
-            var committedAnyInput = false;
-            foreach (var item in items)
-            {
-                if (item.Message is not null)
-                {
-                    var appendedMessage = (JsonObject)item.Message.DeepClone();
-                    state.History.Add(appendedMessage);
-                    appendedMessages.Add(appendedMessage);
-                    committedAnyInput = true;
-                    continue;
-                }
-                if (item.Parts is null || item.Parts.Count == 0) continue;
-                var parts = item.Parts.Select(part => (JsonObject)part.DeepClone()).ToArray();
-                if (!committedAnyInput)
-                {
-                    hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
-                    previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
-                    appliedLastMessageTime = JsonValue.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                    state.Meta["lastMessageTime"] = appliedLastMessageTime;
-                    if (historyEmpty) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
-                }
-                var message = new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(parts.Select(p => (JsonNode)p).ToArray()) };
-                if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
-                state.History.Add(message);
-                appendedMessages.Add(message);
-                committedAnyInput = true;
-            }
-        });
-        try
-        {
-            await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-        }
-        catch
-        {
-            entry.WithState(state =>
-            {
-                foreach (var message in appendedMessages)
-                {
-                    for (var index = state.History.Count - 1; index >= 0; index--)
-                    {
-                        if (!ReferenceEquals(state.History[index], message)) continue;
-                        state.History.RemoveAt(index);
-                        break;
-                    }
-                }
-                state.Queue.InsertRange(0, removedItems.Select(item => item.CloneItem()));
-                RestoreLastMessageTime(state, hadLastMessageTime, previousLastMessageTime, appliedLastMessageTime);
-            });
-            throw;
-        }
+        await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: false)).ConfigureAwait(false);
         entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 
@@ -601,24 +608,8 @@ public sealed class LocalSessionTurnHost
 
     private async Task AppendHistoryMessageStrictAsync(JsonObject message)
     {
-        entry.WithState(state => state.History.Add(message));
-        try
-        {
-            await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-        }
-        catch
-        {
-            entry.WithState(state =>
-            {
-                for (var index = state.History.Count - 1; index >= 0; index--)
-                {
-                    if (!ReferenceEquals(state.History[index], message)) continue;
-                    state.History.RemoveAt(index);
-                    break;
-                }
-            });
-            throw;
-        }
+        await entry.SaveLane.CommitCanonicalAppendAsync(state =>
+            PrepareCanonicalAppend(state, [message], [], updateLastMessageTime: false, finalizing: false)).ConfigureAwait(false);
         entry.InvokeCommitted(entry.Snapshot());
     }
 
@@ -647,89 +638,164 @@ public sealed class LocalSessionTurnHost
 
     public async Task ReleaseBusyAsync()
     {
-        if (!entry.ReleaseBusy()) return;
+        var beforeBusy = false;
+        long? beforeBusyStartedAt = null;
+        var changed = entry.WithState(state =>
+        {
+            if (!state.Busy && state.BusyStartedAt is null) return false;
+            beforeBusy = state.Busy;
+            beforeBusyStartedAt = state.BusyStartedAt;
+            state.Busy = false;
+            state.BusyStartedAt = null;
+            return true;
+        });
+        if (!changed) return;
         Interlocked.Increment(ref releaseCommits);
-        await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
+        try { await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false); }
+        catch (Exception error)
+        {
+            if (error is not AuthorityCommittedException)
+                entry.WithState(state =>
+                {
+                    if (!state.Busy && state.BusyStartedAt is null)
+                    {
+                        state.Busy = beforeBusy;
+                        state.BusyStartedAt = beforeBusyStartedAt;
+                    }
+                });
+            throw;
+        }
         entry.InvokeCommitted(entry.Snapshot());
     }
 
     public async Task FinalizeStoppedAsync()
     {
-        var drainedItems = Array.Empty<QueueItem>();
-        var appendedMessages = new List<JsonObject>();
-        var beforeBusy = false;
-        long? beforeBusyStartedAt = null;
-        var beforeStopping = false;
-        JsonNode? previousLastMessageTime = null;
-        JsonNode? appliedLastMessageTime = null;
-        var hadLastMessageTime = false;
-        entry.WithState(state =>
-        {
-            drainedItems = state.Queue.Select(item => item.CloneItem()).ToArray();
-            beforeBusy = state.Busy;
-            beforeBusyStartedAt = state.BusyStartedAt;
-            beforeStopping = state.Stopping;
-            var historyEmpty = state.History.Count == 0;
-            var committedAnyInput = false;
-            foreach (var item in state.Queue)
-            {
-                if (item.Type == QueueItemType.CompactCommit) continue;
-                if (item.Message is not null)
-                {
-                    var appendedMessage = (JsonObject)item.Message.DeepClone();
-                    state.History.Add(appendedMessage);
-                    appendedMessages.Add(appendedMessage);
-                    committedAnyInput = true;
-                    continue;
-                }
-                if (item.Parts is null || item.Parts.Count == 0) continue;
-                var parts = item.Parts.Select(p => (JsonObject)p.DeepClone()).ToArray();
-                if (!committedAnyInput)
-                {
-                    hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
-                    previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
-                    appliedLastMessageTime = JsonValue.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                    state.Meta["lastMessageTime"] = appliedLastMessageTime;
-                    if (historyEmpty) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
-                }
-                var message = new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(parts.Select(p => (JsonNode)p).ToArray()) };
-                if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
-                state.History.Add(message);
-                appendedMessages.Add(message);
-                committedAnyInput = true;
-            }
-            state.Queue.Clear();
-            state.Stopping = false;
-            state.Busy = false;
-            state.BusyStartedAt = null;
-        });
-        try
-        {
-            await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-            Interlocked.Increment(ref releaseCommits);
-        }
-        catch
-        {
-            entry.WithState(state =>
-            {
-                foreach (var message in appendedMessages)
-                {
-                    for (var index = state.History.Count - 1; index >= 0; index--)
-                    {
-                        if (!ReferenceEquals(state.History[index], message)) continue;
-                        state.History.RemoveAt(index);
-                        break;
-                    }
-                }
-                state.Queue.InsertRange(0, drainedItems.Select(item => item.CloneItem()));
-                if (state.Busy == false) state.Busy = beforeBusy;
-                if (state.BusyStartedAt is null) state.BusyStartedAt = beforeBusyStartedAt;
-                if (state.Stopping == false) state.Stopping = beforeStopping;
-                RestoreLastMessageTime(state, hadLastMessageTime, previousLastMessageTime, appliedLastMessageTime);
-            });
-            throw;
-        }
+        var items = entry.WithState(state => state.Queue.ToArray());
+        foreach (var item in items.Where(item => item.Type != QueueItemType.CompactCommit)) SessionIngress.EnsureSupportedForRunner(item);
+        await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: true)).ConfigureAwait(false);
+        Interlocked.Increment(ref releaseCommits);
         entry.InvokeQueuedCommitted(entry.Snapshot());
+    }
+
+    private static CanonicalAppendPreparation PrepareQueuedAppend(
+        SessionState state,
+        IReadOnlyList<QueueItem> selectedItems,
+        bool finalizing)
+    {
+        if (state.Queue.Count < selectedItems.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
+        for (var index = 0; index < selectedItems.Count; index++)
+            if (!ReferenceEquals(state.Queue[index], selectedItems[index]))
+                throw new InvalidOperationException("Selected queue identity changed before canonical append.");
+
+        var rawMessages = new List<JsonObject>();
+        var historyEmpty = state.History.Count == 0;
+        var committedAnyInput = false;
+        var updateLastMessageTime = false;
+        foreach (var item in selectedItems)
+        {
+            if (item.Type == QueueItemType.CompactCommit)
+            {
+                if (!finalizing) throw new UnsupportedSessionTurnException("compact");
+                continue;
+            }
+            if (item.Message is not null)
+            {
+                rawMessages.Add((JsonObject)item.Message.DeepClone());
+                committedAnyInput = true;
+                continue;
+            }
+            if (item.Parts is null || item.Parts.Count == 0) continue;
+            var parts = item.Parts.Select(part => (JsonObject)part.DeepClone()).ToArray();
+            if (!committedAnyInput)
+            {
+                updateLastMessageTime = true;
+                if (historyEmpty) parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
+            }
+            var message = new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(parts.Select(part => (JsonNode)part).ToArray())
+            };
+            if (item.ClientMessageId is not null) message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
+            rawMessages.Add(message);
+            committedAnyInput = true;
+        }
+        return PrepareCanonicalAppend(state, rawMessages, selectedItems, updateLastMessageTime, finalizing);
+    }
+
+    private static CanonicalAppendPreparation PrepareCanonicalAppend(
+        SessionState state,
+        IReadOnlyList<JsonObject> rawMessages,
+        IReadOnlyList<QueueItem> selectedItems,
+        bool updateLastMessageTime,
+        bool finalizing)
+    {
+        var capturedNextSeq = state.NextMessageSeq;
+        var capturedHistoryVersion = state.HistoryVersion;
+        var canonicalMessages = new List<JsonObject>(rawMessages.Count);
+        var nextSeq = capturedNextSeq;
+        foreach (var rawMessage in rawMessages)
+        {
+            var message = (JsonObject)rawMessage.DeepClone();
+            var meta = message["__meta"] switch
+            {
+                null => new JsonObject(),
+                JsonObject value => (JsonObject)value.DeepClone(),
+                _ => throw new InvalidDataException("Canonical message __meta must be an object.")
+            };
+            if (meta.ContainsKey("seq")) throw new UnsupportedSessionTurnException("caller-supplied message seq");
+            if (!meta.ContainsKey("timestamp") || meta["timestamp"] is null)
+                meta["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            message["__meta"] = meta;
+            meta["seq"] = nextSeq++;
+            canonicalMessages.Add(message);
+        }
+
+        var stagedHistory = state.History.Select(message => (JsonObject)message.DeepClone()).ToList();
+        stagedHistory.AddRange(canonicalMessages.Select(message => (JsonObject)message.DeepClone()));
+        var stagedQueue = state.Queue.Skip(selectedItems.Count).Select(item => item.CloneItem()).ToArray();
+        var stagedMeta = (JsonObject)state.Meta.DeepClone();
+        JsonNode? previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
+        var hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
+        if (updateLastMessageTime) stagedMeta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        stagedMeta["messageCount"] = stagedHistory.Count;
+        var stagedHistoryVersion = capturedHistoryVersion + (canonicalMessages.Count > 0 ? 1 : 0);
+        var staged = new SessionSnapshot(
+            state.Id,
+            stagedHistory,
+            stagedQueue,
+            finalizing ? false : state.Busy,
+            finalizing ? null : state.BusyStartedAt,
+            finalizing ? false : state.Stopping,
+            stagedMeta,
+            nextSeq,
+            stagedHistoryVersion,
+            (JsonObject)state.AuthorityEnvelope.DeepClone());
+
+        return new CanonicalAppendPreparation(staged, canonicalMessages, live =>
+        {
+            if (live.NextMessageSeq != capturedNextSeq || live.HistoryVersion != capturedHistoryVersion)
+                throw new InvalidOperationException("Canonical append base changed before publish.");
+            if (live.Queue.Count < selectedItems.Count) throw new InvalidOperationException("Selected queue items disappeared before publish.");
+            for (var index = 0; index < selectedItems.Count; index++)
+                if (!ReferenceEquals(live.Queue[index], selectedItems[index]))
+                    throw new InvalidOperationException("Selected queue identity changed before publish.");
+            live.Queue.RemoveRange(0, selectedItems.Count);
+            live.History.AddRange(canonicalMessages);
+            live.NextMessageSeq = nextSeq;
+            live.HistoryVersion = stagedHistoryVersion;
+            live.Meta["messageCount"] = live.History.Count;
+            if (updateLastMessageTime
+                && live.Meta.ContainsKey("lastMessageTime") == hadLastMessageTime
+                && JsonNode.DeepEquals(live.Meta["lastMessageTime"], previousLastMessageTime))
+                live.Meta["lastMessageTime"] = stagedMeta["lastMessageTime"]?.DeepClone();
+            if (finalizing)
+            {
+                live.Busy = false;
+                live.BusyStartedAt = null;
+                live.Stopping = false;
+            }
+        });
     }
 
     private static JsonObject SessionTag(string sessionId) => new()
@@ -774,18 +840,6 @@ public sealed class LocalSessionTurnHost
         '\u0009' or '\u000A' or '\u000B' or '\u000C' or '\u000D' or '\u0020' or '\u00A0' or
         '\u1680' or '\u2028' or '\u2029' or '\u202F' or '\u205F' or '\u3000' or '\uFEFF' ||
         character is >= '\u2000' and <= '\u200A';
-
-    private static void RestoreLastMessageTime(
-        SessionState state,
-        bool hadPrevious,
-        JsonNode? previous,
-        JsonNode? applied)
-    {
-        var current = state.Meta["lastMessageTime"];
-        if (applied is null || !ReferenceEquals(current, applied)) return;
-        if (hadPrevious) state.Meta["lastMessageTime"] = previous?.DeepClone();
-        else state.Meta.Remove("lastMessageTime");
-    }
 
 }
 
@@ -889,6 +943,10 @@ public sealed class SessionTurnRunner
                     claimed = false;
                     break;
                 }
+                catch (AuthorityCommittedException)
+                {
+                    throw;
+                }
                 catch
                 {
                     break;
@@ -924,12 +982,7 @@ public sealed class SessionTurnRunner
             {
                 var item = state.Queue[index];
                 if (item.Type == QueueItemType.CompactCommit) break;
-                if (item.Message is null && (item.Parts is null || item.Parts.Count == 0))
-                {
-                    state.Queue.RemoveAt(index);
-                    continue;
-                }
-                result.Add(item.CloneItem());
+                result.Add(item);
                 index++;
             }
             return (IReadOnlyList<QueueItem>)result;
@@ -1017,7 +1070,10 @@ public sealed class SessionRegistry
         state.Busy = snapshot.Busy;
         state.BusyStartedAt = snapshot.BusyStartedAt;
         state.Stopping = snapshot.Stopping;
+        state.NextMessageSeq = snapshot.NextMessageSeq;
+        state.HistoryVersion = snapshot.HistoryVersion;
         foreach (var property in snapshot.Meta) state.Meta[property.Key] = property.Value?.DeepClone();
+        foreach (var property in snapshot.AuthorityEnvelope) state.AuthorityEnvelope[property.Key] = property.Value?.DeepClone();
     }
 }
 

@@ -90,8 +90,7 @@ public sealed class SessionAuthorityDocument
             throw new InvalidDataException("Session authority persistentMemorySnapshot must be a string.");
         var queue = root["queue"] as JsonArray
             ?? throw new InvalidDataException("Session authority queue must be an array.");
-        if (queue.Count != 0)
-            throw new UnsupportedSessionAuthorityException("Slice C1 supports only an empty queue; runtime queue persistence begins in C2.");
+        ValidateQueue(queue);
         var stats = root["stats"] as JsonObject
             ?? throw new InvalidDataException("Session authority stats must be an object.");
         ValidateStats(stats);
@@ -163,6 +162,50 @@ public sealed class SessionAuthorityDocument
         foreach (var field in new[] { "cachedTokens", "inputTokens", "reasoningTokens", "outputTokens" })
             if (usage.ContainsKey(field) && usage[field] is not null)
                 _ = ReadFiniteNumber(usage[field]!, $"Session authority stats.lastUsage.{field}");
+    }
+
+    private static void ValidateQueue(JsonArray queue)
+    {
+        var ordinaryTypes = new HashSet<string>(["user", "intersession", "background", "trigger", "onboot"], StringComparer.Ordinal);
+        for (var index = 0; index < queue.Count; index++)
+        {
+            var item = queue[index] as JsonObject
+                ?? throw new InvalidDataException($"Session authority queue[{index}] must be an object.");
+            var type = RequiredString(item, "type", $"queue[{index}]");
+            if (!ordinaryTypes.Contains(type))
+                throw new UnsupportedSessionAuthorityException($"Session authority queue[{index}] type {type} is unsupported by Slice C2.");
+            var hasParts = item["parts"] is JsonArray parts && parts.Count > 0;
+            if (item.ContainsKey("parts") && item["parts"] is not JsonArray)
+                throw new InvalidDataException($"Session authority queue[{index}].parts must be an array.");
+            if (item["parts"] is JsonArray itemParts)
+                for (var partIndex = 0; partIndex < itemParts.Count; partIndex++)
+                    if (itemParts[partIndex] is not JsonObject)
+                        throw new InvalidDataException($"Session authority queue[{index}].parts[{partIndex}] must be an object.");
+            var hasMessage = item["message"] is JsonObject;
+            if (item.ContainsKey("message") && item["message"] is not JsonObject)
+                throw new InvalidDataException($"Session authority queue[{index}].message must be an object.");
+            if (!hasParts && !hasMessage)
+                throw new InvalidDataException($"Session authority queue[{index}] must contain nonempty parts or a message.");
+            if (item.ContainsKey("source"))
+            {
+                var source = item["source"] as JsonObject
+                    ?? throw new InvalidDataException($"Session authority queue[{index}].source must be an object.");
+                _ = RequiredString(source, "platform", $"queue[{index}].source");
+                _ = RequiredString(source, "channelUserId", $"queue[{index}].source");
+                foreach (var field in new[] { "channelId", "channelType", "conversationId", "username", "senderId" })
+                    if (source.ContainsKey(field) && (source[field] is not JsonValue value || !value.TryGetValue<string>(out _)))
+                        throw new InvalidDataException($"Session authority queue[{index}].source.{field} must be a string.");
+            }
+            foreach (var field in new[] { "clientMessageId", "sourceSessionId" })
+                if (item.ContainsKey(field) && (item[field] is not JsonValue value || !value.TryGetValue<string>(out _)))
+                    throw new InvalidDataException($"Session authority queue[{index}].{field} must be a string.");
+            if (item.ContainsKey("sourceSessionRelation"))
+            {
+                var relation = RequiredString(item, "sourceSessionRelation", $"queue[{index}]");
+                if (relation is not ("direct-child" or "parent" or "other"))
+                    throw new InvalidDataException($"Session authority queue[{index}].sourceSessionRelation is invalid.");
+            }
+        }
     }
 
     private static long RequiredSafeInteger(JsonObject value, string property, string label)

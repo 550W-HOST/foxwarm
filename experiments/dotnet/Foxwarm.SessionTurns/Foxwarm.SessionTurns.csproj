@@ -6,5 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Foxwarm.MessageJson\Foxwarm.MessageJson.csproj" />
+    <ProjectReference Include="..\Foxwarm.SessionPersistence\Foxwarm.SessionPersistence.csproj" />
   </ItemGroup>
 </Project>

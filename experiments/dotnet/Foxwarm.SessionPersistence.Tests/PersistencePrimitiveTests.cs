@@ -20,8 +20,17 @@ public sealed class PersistencePrimitiveTests
         mailbox["lastAppliedMailboxId"] = 1;
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(mailbox, Fixture.SessionId));
         var queue = (JsonObject)root.DeepClone();
-        ((JsonArray)queue["queue"]!).Add(new JsonObject { ["type"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "later" }) });
-        Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(queue, Fixture.SessionId));
+        ((JsonArray)queue["queue"]!).Add(new JsonObject
+        {
+            ["type"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "later", ["opaque"] = "preserved" }),
+            ["futureQueue"] = new JsonObject { ["keep"] = true }
+        });
+        var queued = SessionAuthorityDocument.FromOwned(queue, Fixture.SessionId).CloneRoot();
+        Assert.True(JsonNode.DeepEquals(queue["queue"], queued["queue"]));
+        var compact = (JsonObject)root.DeepClone();
+        ((JsonArray)compact["queue"]!).Add(new JsonObject { ["type"] = "compact-commit" });
+        Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(compact, Fixture.SessionId));
         var block = (JsonObject)root.DeepClone();
         ((JsonObject)((JsonObject)((JsonArray)block["history"]!)[0]!)["__meta"]!)["contextBlock"] = new JsonObject { ["id"] = 1 };
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(block, Fixture.SessionId));

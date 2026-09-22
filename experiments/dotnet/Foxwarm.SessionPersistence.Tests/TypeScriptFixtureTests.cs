@@ -39,6 +39,20 @@ public sealed class TypeScriptFixtureTests
         var messages = StressMessages();
         var root = PersistencePrimitiveTests.FixtureAuthority(messages);
         root["futureTopLevel"] = new JsonObject { ["10"] = "ten", ["2"] = "two", ["retained"] = true };
+        root["queue"] = new JsonArray(new JsonObject
+        {
+            ["type"] = "intersession",
+            ["sourceSessionId"] = "parent",
+            ["sourceSessionRelation"] = "parent",
+            ["parts"] = new JsonArray(new JsonObject { ["text"] = "queued", ["futurePart"] = 1 }),
+            ["source"] = new JsonObject
+            {
+                ["platform"] = "webui",
+                ["channelUserId"] = "conversation",
+                ["futureSource"] = new JsonObject { ["keep"] = true }
+            },
+            ["futureQueue"] = new JsonObject { ["keep"] = true }
+        });
         var document = SessionAuthorityDocument.FromOwned(root, Fixture.SessionId);
         var archive = new SqliteArchiveMessageStore(Path.Combine(temp.Path, "state", "archive-store.sqlite"), Fixture.SessionId);
         archive.Initialize();

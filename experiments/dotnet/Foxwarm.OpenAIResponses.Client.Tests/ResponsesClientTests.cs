@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.OpenAIResponses.Client;
 using Foxwarm.OpenAIResponses.Streaming;
+using Foxwarm.SessionPersistence;
 using Foxwarm.SessionTurns;
 
 namespace Foxwarm.OpenAIResponses.Client.Tests;
@@ -40,7 +42,7 @@ public sealed class ResponsesClientTests
                     1, 3, 7, 13));
             using var http = new HttpClient();
             var executor = new WriteFixtureToolExecutor(root);
-            var store = new InMemorySessionAuthorityStore();
+            var store = new PersistentSessionAuthorityStore(root, "s");
             var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
             var entry = registry.Add("s");
             entry.State.Queue.Add(QueueItem.UserText("write it"));
@@ -62,11 +64,23 @@ public sealed class ResponsesClientTests
 
             var snapshot = entry.Snapshot();
             Assert.Equal(new[] { "user", "model", "tool", "model" }, snapshot.History.Select(message => message["role"]!.GetValue<string>()));
+            Assert.Equal(new long[] { 1, 2, 3, 4 }, snapshot.History.Select(message => message["__meta"]!["seq"]!.GetValue<long>()));
+            Assert.Equal(5, snapshot.NextMessageSeq);
             Assert.Equal(1, entry.ProcessorClaimCount);
             Assert.Equal(1, executor.SuccessfulEffects);
             Assert.Equal(Encoding.UTF8.GetBytes("héllo"), await File.ReadAllBytesAsync(Path.Combine(root, "result.txt")));
             var stored = await store.LoadAsync("s");
             Assert.Equal(snapshot.History.Select(message => message.ToJsonString()), stored!.History.Select(message => message.ToJsonString()));
+            var archive = store.Archive.ReadMessages();
+            Assert.Equal(4, archive.Count);
+            Assert.Equal(snapshot.History.Select(EcmaJson.Stringify), archive.Select(record => record.MessageJson));
+            var replayResult = Path.Combine(root, "actual-ts-replay.json");
+            RunPersistenceOracle("replay-ts", root, replayResult, "s");
+            Assert.Equal(0, JsonNode.Parse(await File.ReadAllTextAsync(replayResult))!["insertedCount"]!.GetValue<int>());
+            var readResult = Path.Combine(root, "actual-ts-read.json");
+            RunPersistenceOracle("read", root, readResult, "s");
+            var actual = JsonNode.Parse(await File.ReadAllTextAsync(readResult))!.AsObject();
+            Assert.Equal(4, actual["rawRows"]!.AsArray().Count);
         }
         finally
         {
@@ -303,7 +317,13 @@ public sealed class ResponsesClientTests
             await using var server = new LoopbackResponsesServer(
                 (stream, _) => LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(completed)));
             using var http = new HttpClient();
-            var store = new FailStrictOrdinalStore(3);
+            var persistenceRoot = Path.Combine(root, "persistence");
+            var store = new PersistentSessionAuthorityStore(
+                persistenceRoot,
+                "s",
+                canonicalCommitBarrier: (ordinal, _) => ordinal == 2
+                    ? Task.FromException(new IOException("strict assistant save failed"))
+                    : Task.CompletedTask);
             var executor = new WriteFixtureToolExecutor(root);
             var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
             var entry = registry.Add("s");
@@ -316,9 +336,10 @@ public sealed class ResponsesClientTests
             var stored = await store.LoadAsync("s");
             Assert.NotNull(stored);
             Assert.DoesNotContain(stored!.History, message => message["role"]?.GetValue<string>() == "model");
+            Assert.Single(store.Archive.ReadMessages());
             Assert.False(entry.Snapshot().Busy);
             Assert.Equal(0, executor.SuccessfulEffects);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            Assert.False(File.Exists(Path.Combine(root, "never.txt")));
         }
         finally
         {
@@ -342,7 +363,13 @@ public sealed class ResponsesClientTests
             await using var server = new LoopbackResponsesServer(
                 (stream, _) => LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(completed)));
             using var http = new HttpClient();
-            var store = new FailStrictOrdinalStore(4);
+            var persistenceRoot = Path.Combine(root, "persistence");
+            var store = new PersistentSessionAuthorityStore(
+                persistenceRoot,
+                "s",
+                canonicalCommitBarrier: (ordinal, _) => ordinal == 3
+                    ? Task.FromException(new IOException("strict tool response save failed"))
+                    : Task.CompletedTask);
             var executor = new WriteFixtureToolExecutor(root);
             var registry = new SessionRegistry(store, NewService(http, server.BaseUri), executor);
             var entry = registry.Add("s");
@@ -354,6 +381,7 @@ public sealed class ResponsesClientTests
             Assert.Equal(1, executor.SuccessfulEffects);
             Assert.Equal("once", await File.ReadAllTextAsync(Path.Combine(root, "once.txt")));
             Assert.Equal(new[] { "user", "model" }, entry.Snapshot().History.Select(message => message["role"]!.GetValue<string>()));
+            Assert.Equal(2, store.Archive.ReadMessages().Count);
         }
         finally
         {
@@ -574,21 +602,41 @@ public sealed class ResponsesClientTests
         return path;
     }
 
-    private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-}
-
-internal sealed class FailStrictOrdinalStore(int failOrdinal) : ISessionAuthorityStore
-{
-    private readonly InMemorySessionAuthorityStore inner = new();
-    private int strictCount;
-
-    public async Task CommitAsync(SessionSnapshot snapshot, SaveKind kind, CancellationToken cancellationToken = default)
+    private static void RunPersistenceOracle(string mode, string root, string resultPath, string sessionId)
     {
-        if (kind == SaveKind.Strict && Interlocked.Increment(ref strictCount) == failOrdinal)
-            throw new IOException("strict assistant save failed");
-        await inner.CommitAsync(snapshot, kind, cancellationToken);
+        var foxwarmRoot = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT");
+        if (string.IsNullOrWhiteSpace(foxwarmRoot))
+            throw new InvalidOperationException("FOXWARM_TS_ROOT must point to the current built TypeScript source tree.");
+        var helper = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "session-persistence-fixture-ts.mjs");
+        helper = Path.GetFullPath(helper);
+        var logPath = Path.Combine(root, $"actual-ts-{mode}.log");
+        var start = new ProcessStartInfo("node")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.ArgumentList.Add(helper);
+        start.ArgumentList.Add(mode);
+        start.ArgumentList.Add(root);
+        start.ArgumentList.Add(resultPath);
+        start.ArgumentList.Add("");
+        start.ArgumentList.Add(sessionId);
+        start.Environment["FOXWARM_TS_ROOT"] = foxwarmRoot;
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Unable to start actual TypeScript persistence oracle.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Actual TypeScript persistence oracle timed out.");
+        }
+        Task.WaitAll(stdout, stderr);
+        var log = stdout.Result + stderr.Result;
+        File.WriteAllText(logPath, log);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"Actual TypeScript persistence oracle exited {process.ExitCode}: {log}");
     }
 
-    public Task<SessionSnapshot?> LoadAsync(string sessionId, CancellationToken cancellationToken = default) =>
-        inner.LoadAsync(sessionId, cancellationToken);
+    private static TaskCompletionSource<T> NewSignal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
