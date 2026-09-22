@@ -1,4 +1,6 @@
 using System.Text.Encodings.Web;
+using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -69,8 +71,8 @@ public sealed class SessionAuthorityDocument
 
         var meta = message["__meta"] as JsonObject
             ?? throw new InvalidDataException($"{label}.__meta must be an object.");
-        if (meta.ContainsKey("contextBlock") || meta.ContainsKey("contextFrontierItem"))
-            throw new UnsupportedSessionAuthorityException($"{label} contains unsupported context block/frontier state.");
+        if (meta.ContainsKey("contextBlock") || meta.ContainsKey("contextFrontierItem") || meta.ContainsKey("preservedFromBlockId"))
+            throw new UnsupportedSessionAuthorityException($"{label} contains unsupported context block/frontier/preserved-message state.");
         var seq = RequiredSafeInteger(meta, "seq", $"{label}.__meta");
         if (seq != expectedSeq) throw new UnsupportedSessionAuthorityException($"{label} seq must be the contiguous value {expectedSeq}.");
         _ = RequiredFiniteNumber(meta, "timestamp", $"{label}.__meta");
@@ -211,8 +213,46 @@ public static class EcmaJson
     {
         JsonObject value => NormalizeObject(value),
         JsonArray value => new JsonArray(value.Select(item => item is null ? null : Normalize(item)).ToArray()),
+        JsonValue value => NormalizeValue(value),
         _ => node.DeepClone()
     };
+
+    private static JsonNode NormalizeValue(JsonValue value)
+    {
+        if (value.TryGetValue<JsonElement>(out var element) && element.ValueKind == JsonValueKind.Number)
+        {
+            var raw = element.GetRawText();
+            var number = element.GetDouble();
+            if (!double.IsFinite(number)) throw new InvalidDataException("Archive JSON numbers must be finite binary64 values.");
+            if (raw.IndexOfAny(['.', 'e', 'E']) < 0
+                && BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer)
+                && new BigInteger(number) != integer)
+                throw new UnsupportedSessionAuthorityException($"Archive integer {raw} is not exactly representable as an ECMAScript Number.");
+            return JsonNode.Parse(EcmaNumber.Format(number))!;
+        }
+        if (value.TryGetValue<double>(out var doubleValue)) return JsonNode.Parse(EcmaNumber.Format(doubleValue))!;
+        if (value.TryGetValue<float>(out var floatValue)) return JsonNode.Parse(EcmaNumber.Format(floatValue))!;
+        if (value.TryGetValue<long>(out var signed)) return NormalizeInteger(signed);
+        if (value.TryGetValue<ulong>(out var unsigned)) return NormalizeInteger(unsigned);
+        if (value.TryGetValue<int>(out var intValue)) return NormalizeInteger(intValue);
+        if (value.TryGetValue<uint>(out var uintValue)) return NormalizeInteger(uintValue);
+        if (value.TryGetValue<short>(out var shortValue)) return NormalizeInteger(shortValue);
+        if (value.TryGetValue<ushort>(out var ushortValue)) return NormalizeInteger(ushortValue);
+        if (value.TryGetValue<byte>(out var byteValue)) return NormalizeInteger(byteValue);
+        if (value.TryGetValue<sbyte>(out var sbyteValue)) return NormalizeInteger(sbyteValue);
+        if (value.TryGetValue<decimal>(out _))
+            throw new UnsupportedSessionAuthorityException("CLR decimal archive values are unsupported; use an established finite binary64 Number.");
+        return value.DeepClone();
+    }
+
+    private static JsonNode NormalizeInteger<T>(T value) where T : IBinaryInteger<T>
+    {
+        var integer = BigInteger.Parse(value.ToString(null, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+        var number = (double)integer;
+        if (!double.IsFinite(number) || new BigInteger(number) != integer)
+            throw new UnsupportedSessionAuthorityException($"Archive integer {integer} is not exactly representable as an ECMAScript Number.");
+        return JsonNode.Parse(EcmaNumber.Format(number))!;
+    }
 
     private static JsonObject NormalizeObject(JsonObject value)
     {
@@ -271,5 +311,48 @@ public static class EcmaJson
             result.Append(json[index]);
         }
         return result.ToString();
+    }
+}
+
+public static class EcmaNumber
+{
+    public static string Format(double value)
+    {
+        if (!double.IsFinite(value)) throw new InvalidDataException("ECMAScript JSON numbers must be finite.");
+        if (value == 0) return "0";
+        var negative = value < 0;
+        var shortest = Math.Abs(value).ToString("R", CultureInfo.InvariantCulture);
+        var exponentMarker = shortest.IndexOfAny(['E', 'e']);
+        var significand = exponentMarker < 0 ? shortest : shortest[..exponentMarker];
+        var explicitExponent = exponentMarker < 0
+            ? 0
+            : int.Parse(shortest[(exponentMarker + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+        var dot = significand.IndexOf('.');
+        var decimalPoint = (dot < 0 ? significand.Length : dot) + explicitExponent;
+        var digits = dot < 0 ? significand : significand.Remove(dot, 1);
+        while (digits.Length > 1 && digits[0] == '0')
+        {
+            digits = digits[1..];
+            decimalPoint--;
+        }
+        var scientificExponent = decimalPoint - 1;
+        string rendered;
+        if (scientificExponent >= -6 && scientificExponent < 21)
+        {
+            rendered = decimalPoint switch
+            {
+                <= 0 => "0." + new string('0', -decimalPoint) + digits,
+                _ when decimalPoint >= digits.Length => digits + new string('0', decimalPoint - digits.Length),
+                _ => digits.Insert(decimalPoint, ".")
+            };
+        }
+        else
+        {
+            rendered = digits.Length == 1 ? digits : digits[0] + "." + digits[1..];
+            rendered += scientificExponent >= 0
+                ? $"e+{scientificExponent.ToString(CultureInfo.InvariantCulture)}"
+                : $"e{scientificExponent.ToString(CultureInfo.InvariantCulture)}";
+        }
+        return negative ? "-" + rendered : rendered;
     }
 }

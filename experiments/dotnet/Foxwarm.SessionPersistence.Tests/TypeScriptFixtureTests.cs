@@ -48,12 +48,44 @@ public sealed class TypeScriptFixtureTests
         new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json").Write(document);
 
         Assert.Equal(["archive_messages"], UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite")));
+        var replayPath = Path.Combine(temp.Path, "ts-replay-result.json");
+        TypeScriptOracle.Run("replay-ts", temp.Path, replayPath);
+        Assert.Equal(0, JsonNode.Parse(File.ReadAllText(replayPath))!["insertedCount"]!.GetValue<int>());
         var resultPath = Path.Combine(temp.Path, "ts-read-result.json");
         TypeScriptOracle.Run("read", temp.Path, resultPath);
         var result = JsonNode.Parse(File.ReadAllText(resultPath))!.AsObject();
         Assert.True(JsonNode.DeepEquals(root, result["authority"]));
         Assert.Equal(records.Select(record => record.MessageJson), RawMessageJson(result));
         Assert.Contains("archive_branches", UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite")));
+    }
+
+    [Fact]
+    public void EcmaNumberMatchesActualJavaScriptForBoundariesAndSeededFiniteBinary64Sample()
+    {
+        using var temp = new TempDirectory();
+        var values = new List<double>
+        {
+            -0.0, 0.0, 1e-7, 1e-6, Math.BitDecrement(1e-6), Math.BitIncrement(1e-6),
+            1e20, Math.BitDecrement(1e20), Math.BitIncrement(1e20),
+            1e21, Math.BitDecrement(1e21), Math.BitIncrement(1e21),
+            12.5, 1987.5, 0.1, double.Epsilon, double.MaxValue, double.MinValue
+        };
+        var random = new Random(20260922);
+        var randomBytes = new byte[8];
+        while (values.Count < 530)
+        {
+            random.NextBytes(randomBytes);
+            var value = BitConverter.Int64BitsToDouble(BitConverter.ToInt64(randomBytes));
+            if (double.IsFinite(value)) values.Add(value);
+        }
+        var bits = values.Select(value => unchecked((ulong)BitConverter.DoubleToInt64Bits(value)).ToString("x16")).ToArray();
+        var inputPath = Path.Combine(temp.Path, "number-bits.json");
+        var resultPath = Path.Combine(temp.Path, "number-results.json");
+        File.WriteAllText(inputPath, JsonSerializer.Serialize(bits));
+        TypeScriptOracle.Run("number-stringify", temp.Path, resultPath, inputPath);
+        var actual = JsonNode.Parse(File.ReadAllText(resultPath))!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+        var expected = values.Select(EcmaNumber.Format).ToArray();
+        Assert.Equal(actual, expected);
     }
 
     [Fact]
@@ -81,7 +113,19 @@ public sealed class TypeScriptFixtureTests
                 ["parts"] = new JsonArray(new JsonObject
                 {
                     ["text"] = "héllo\u2028separator\u2029 quote:\" slash:\\ literal:\\u2028 control:\u0001",
-                    ["opaque"] = NumericOpaque()
+                    ["opaque"] = NumericOpaque(),
+                    ["numbers"] = new JsonObject
+                    {
+                        ["negativeZero"] = -0.0,
+                        ["smallScientific"] = 1e-7,
+                        ["fixedThreshold"] = 1e-6,
+                        ["belowFixedThreshold"] = Math.BitDecrement(1e-6),
+                        ["aboveFixedThreshold"] = Math.BitIncrement(1e-6),
+                        ["largeFixed"] = 1e20,
+                        ["largeScientific"] = 1e21,
+                        ["belowScientificThreshold"] = Math.BitDecrement(1e21),
+                        ["aboveScientificThreshold"] = Math.BitIncrement(1e21)
+                    }
                 }),
                 ["__meta"] = new JsonObject { ["timestamp"] = 1000, ["seq"] = 1, ["fractionalTiming"] = 12.5 },
                 ["futureMessage"] = new JsonObject { ["preserve"] = "yes" }

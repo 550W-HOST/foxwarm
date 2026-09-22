@@ -92,6 +92,36 @@ if (mode === 'write-ts') {
   const values = JSON.parse(await fs.readFile(inputPath, 'utf8'))
   await fs.mkdir(path.dirname(resultPath), { recursive: true })
   await fs.writeFile(resultPath, JSON.stringify(values.map(value => JSON.stringify(value))), 'utf8')
+} else if (mode === 'number-stringify') {
+  if (!inputPath) throw new Error('number-stringify mode requires INPUT')
+  const bitPatterns = JSON.parse(await fs.readFile(inputPath, 'utf8'))
+  const results = bitPatterns.map(hex => {
+    const bytes = Buffer.allocUnsafe(8)
+    bytes.writeBigUInt64LE(BigInt(`0x${hex}`))
+    const value = bytes.readDoubleLE()
+    if (!Number.isFinite(value)) return null
+    return JSON.stringify(value)
+  })
+  await fs.mkdir(path.dirname(resultPath), { recursive: true })
+  await fs.writeFile(resultPath, JSON.stringify(results), 'utf8')
+} else if (mode === 'replay-ts') {
+  const { readSessionHistorySnapshot } = await importFromFoxwarm('session/metadataStore.js')
+  const { writeArchiveMessages } = await importFromFoxwarm('session/archiveStore.js')
+  const authority = await readSessionHistorySnapshot(sessionId)
+  if (!authority) throw new Error('authority missing for replay')
+  const records = authority.history.map(message => ({
+    v: 1,
+    kind: 'message',
+    sessionId,
+    agent: authority.agent || 'main',
+    seq: message.__meta.seq,
+    timestamp: message.__meta.timestamp,
+    role: message.role,
+    message,
+  }))
+  const inserted = await writeArchiveMessages(records)
+  await fs.mkdir(path.dirname(resultPath), { recursive: true })
+  await fs.writeFile(resultPath, JSON.stringify({ insertedCount: inserted.length }), 'utf8')
 } else {
   throw new Error(`unknown mode: ${mode}`)
 }

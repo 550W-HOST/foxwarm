@@ -25,9 +25,24 @@ public sealed class PersistencePrimitiveTests
         var block = (JsonObject)root.DeepClone();
         ((JsonObject)((JsonObject)((JsonArray)block["history"]!)[0]!)["__meta"]!)["contextBlock"] = new JsonObject { ["id"] = 1 };
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(block, Fixture.SessionId));
+        var preserved = (JsonObject)root.DeepClone();
+        ((JsonObject)((JsonObject)((JsonArray)preserved["history"]!)[0]!)["__meta"]!)["preservedFromBlockId"] = 1;
+        Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(preserved, Fixture.SessionId));
         var version = (JsonObject)root.DeepClone();
         version["sessionStateVersion"] = 2;
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(version, Fixture.SessionId));
+    }
+
+    [Fact]
+    public void NewArchiveProjectionRejectsNonBinary64IntegerAndClrDecimalBeforeDatabaseWrite()
+    {
+        var overPrecise = Fixture.Message(1, "number", 1000);
+        ((JsonObject)((JsonArray)overPrecise["parts"]!)[0]!)["opaque"] = JsonNode.Parse("9007199254740993");
+        Assert.Throws<UnsupportedSessionAuthorityException>(() => ArchiveMessageRecord.Create(Fixture.SessionId, "main", 1, 1000, overPrecise));
+
+        var decimalValue = Fixture.Message(1, "decimal", 1000);
+        ((JsonObject)((JsonArray)decimalValue["parts"]!)[0]!)["opaque"] = JsonValue.Create(0.1m);
+        Assert.Throws<UnsupportedSessionAuthorityException>(() => ArchiveMessageRecord.Create(Fixture.SessionId, "main", 1, 1000, decimalValue));
     }
 
     [Fact]
