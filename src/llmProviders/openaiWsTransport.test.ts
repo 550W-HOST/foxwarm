@@ -831,6 +831,17 @@ test('a hosted image call keeps the extended inactivity window after its item en
   const delays = timers.entries.map(entry => entry.delayMs);
   assert.ok(delays.includes(DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS), 'the configured window applies before the image call');
   assert.equal(delays.at(-1), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+
+  // Later hosted image status frames are ongoing progress and restart the
+  // extended window instead of leaving the first report as a fixed deadline.
+  const windowBeforeLateActivity = timers.entries.at(-1)!;
+  socket.emit('message', JSON.stringify({
+    type: 'response.image_generation_call.generating', output_index: 1, item_id: 'ig_ws',
+  }));
+  for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(windowBeforeLateActivity.cleared, true);
+  assert.notEqual(timers.entries.at(-1), windowBeforeLateActivity);
+  assert.equal(timers.entries.at(-1)?.delayMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
   controller.abort();
   await assert.rejects(pending, (error: any) => error?.name === 'AbortError');
 });

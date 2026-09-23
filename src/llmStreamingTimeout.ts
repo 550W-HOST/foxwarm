@@ -1,7 +1,7 @@
 export const DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 60 * 1000;
 export const SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
-/** Local inactivity allowance while a hosted image generation call is active. */
+/** Local inactivity allowance once an attempt reports hosted image generation activity. */
 export const IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
 export type StreamingTimeoutKind = 'first-content' | 'content-inactivity' | 'hard-deadline';
@@ -25,12 +25,12 @@ export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
   enterSafetyBuffering(metadata: Record<string, unknown>): number;
   /**
-   * Latches that this attempt produced a hosted image generation call. The
-   * extended allowance then applies for the rest of the attempt, because the
-   * response as a whole can still be outstanding after the image item itself
-   * ends. A later attempt starts from the configured inactivity value.
+   * Reports hosted image generation activity. The extended allowance is latched
+   * for the rest of the attempt, because the response as a whole can still be
+   * outstanding after the image item itself ends, and every reported activity
+   * restarts it. A later attempt starts from the configured value.
    */
-  beginImageGeneration(): void;
+  reportImageGenerationActivity(): void;
   finish(): void;
 };
 
@@ -128,8 +128,8 @@ export function createStreamingAttemptWatchdog(options: {
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
       return effectiveInactivityTimeoutMs();
     },
-    beginImageGeneration() {
-      if (finished || imageGenerationStarted) return;
+    reportImageGenerationActivity() {
+      if (finished) return;
       imageGenerationStarted = true;
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
     },

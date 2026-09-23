@@ -3227,7 +3227,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 let attemptSignal = abortController.signal;
                 let markMeaningfulProgress: (() => void) | undefined;
                 let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
-                let imageGenerationWatchdog: { beginImageGeneration(): void } | undefined;
+                let imageGenerationWatchdog: { reportImageGenerationActivity(): void } | undefined;
                 if (plan.useStreamingApi) {
                     const attemptAbortController = new AbortController();
                     const abortAttemptFromOuter = () => attemptAbortController.abort();
@@ -3267,8 +3267,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         : undefined,
                     onMeaningfulProgress: markMeaningfulProgress,
                     onSafetyBuffering: handleSafetyBuffering,
-                    onImageGenerationStarted: () => {
-                        imageGenerationWatchdog?.beginImageGeneration();
+                    onImageGenerationActivity: () => {
+                        imageGenerationWatchdog?.reportImageGenerationActivity();
                     },
                     onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                     onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
@@ -3293,7 +3293,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             attempt,
                         },
                         onProgress: streamCollectOptions.onProgress,
-                        onImageGenerationStarted: streamCollectOptions.onImageGenerationStarted,
+                        onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
                         onRawFrame: frame => {
                             attemptRawStreamLog?.appendChunk(`${frame}\n`);
                             attemptRawStreamLog?.appendSseBlock(frame);

@@ -55,7 +55,7 @@ type OpenAIWsRequestOptions = {
     streamContentInactivityTimeoutMs?: number;
     diagnostics?: OpenAIWsAttemptDiagnostics;
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
-    onImageGenerationStarted?: () => void;
+    onImageGenerationActivity?: () => void;
     onRawFrame?: (frame: string) => void;
 };
 
@@ -605,9 +605,9 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
             onSafetyBuffering: handleSafetyBuffering,
-            onImageGenerationStarted: () => {
-                watchdog.beginImageGeneration();
-                options.onImageGenerationStarted?.();
+            onImageGenerationActivity: () => {
+                watchdog.reportImageGenerationActivity();
+                options.onImageGenerationActivity?.();
             },
             onMeaningfulProgress: () => {
                 if (firstContentAt === undefined) firstContentAt = now();

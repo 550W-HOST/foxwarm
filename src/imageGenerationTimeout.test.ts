@@ -13,11 +13,12 @@ import { collectOpenAIResponsesStream } from './llmProviders/openai';
 // allowance instead of being cut off at this value.
 const CONFIGURED_INACTIVITY_MS = 180_000;
 
-class FakeTimers {
-  entries: Array<{ callback: () => void; delayMs: number; cleared: boolean; timer: any }> = [];
+class FakeClock {
+  private current = 0;
+  entries: Array<{ callback: () => void; delayMs: number; dueAt: number; cleared: boolean; timer: any }> = [];
   hooks = {
     set: (callback: () => void, delayMs: number) => {
-      const entry = { callback, delayMs, cleared: false, timer: undefined as any };
+      const entry = { callback, delayMs, dueAt: this.current + delayMs, cleared: false, timer: undefined as any };
       entry.timer = { unref: () => {} };
       this.entries.push(entry);
       return entry.timer;
@@ -28,7 +29,21 @@ class FakeTimers {
     },
   };
   pending() {
-    return this.entries.filter(entry => !entry.cleared).at(-1);
+    return this.entries
+      .filter(entry => !entry.cleared)
+      .sort((left, right) => left.dueAt - right.dueAt || this.entries.indexOf(left) - this.entries.indexOf(right))[0];
+  }
+  advance(ms: number) {
+    const target = this.current + ms;
+    for (;;) {
+      const due = this.entries.filter(entry => !entry.cleared && entry.dueAt <= target)
+        .sort((left, right) => left.dueAt - right.dueAt)[0];
+      if (!due) break;
+      due.cleared = true;
+      this.current = due.dueAt;
+      due.callback();
+    }
+    this.current = target;
   }
 }
 
@@ -36,6 +51,10 @@ afterEach(() => setStreamingTimeoutTestHooks());
 
 function sse(event: unknown): string {
   return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+async function tick(): Promise<void> {
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 const OUTPUT_ITEM_ADDED = (itemId: string, index = 0) => ({
@@ -48,34 +67,19 @@ const OUTPUT_ITEM_DONE = (itemId: string, index = 0) => ({
   output_index: index,
   item: { type: 'image_generation_call', id: itemId, status: 'completed', output_format: 'png', result: 'iVBORw0KGgo=' },
 });
-const LIFECYCLE = (itemId: string, index = 0) => ({
-  type: 'response.image_generation_call.in_progress',
+const LIFECYCLE = (state: string, itemId: string, index = 0) => ({
+  type: `response.image_generation_call.${state}`,
   output_index: index,
   item_id: itemId,
 });
 
-async function tick(): Promise<void> {
-  await new Promise(resolve => setImmediate(resolve));
-}
+type FiredTimeout = { kind: string; timeoutMs: number; message: string };
 
-type ScenarioResult = {
-  timers: FakeTimers;
-  fired: Array<{ kind: string; timeoutMs: number; message: string }>;
-  outcome: string;
-  pendingDelayMs?: number;
-};
-
-async function runScenario(options: {
-  events: unknown[];
-  holder?: (stream: PassThrough) => void;
-  inactivityMs?: number;
-  hardTimeoutMs?: number;
-  fire?: 'pending' | 'hard-deadline';
-}): Promise<ScenarioResult> {
-  const timers = new FakeTimers();
-  setStreamingTimeoutTestHooks(timers.hooks);
+function startScenario(options: { inactivityMs?: number; hardTimeoutMs?: number } = {}) {
+  const clock = new FakeClock();
+  setStreamingTimeoutTestHooks(clock.hooks);
   const controller = new AbortController();
-  const fired: Array<{ kind: string; timeoutMs: number; message: string }> = [];
+  const fired: FiredTimeout[] = [];
   const watchdog = createStreamingAttemptWatchdog({
     hardTimeoutMs: options.hardTimeoutMs,
     streamContentInactivityTimeoutMs: options.inactivityMs ?? CONFIGURED_INACTIVITY_MS,
@@ -87,67 +91,113 @@ async function runScenario(options: {
   const stream = new PassThrough();
   const collected = collectOpenAIResponsesStream(stream, controller.signal, {
     onMeaningfulProgress: () => watchdog.markMeaningfulProgress(),
-    onImageGenerationStarted: () => watchdog.beginImageGeneration(),
+    onImageGenerationActivity: () => watchdog.reportImageGenerationActivity(),
   }).then(() => 'resolved', error => `rejected:${error?.code || error?.name || 'error'}`);
-  for (const event of options.events) stream.write(sse(event));
-  options.holder?.(stream);
-  await tick();
-  await tick();
-  const pending = options.fire === 'hard-deadline'
-    ? timers.entries.find(entry => !entry.cleared && entry.delayMs === options.hardTimeoutMs)
-    : timers.pending();
-  const pendingDelayMs = pending?.delayMs;
-  pending?.callback();
-  await tick();
-  watchdog.finish();
-  stream.destroy();
-  return { timers, fired, outcome: await Promise.race([collected, tick().then(() => 'pending')]), pendingDelayMs };
+  return {
+    clock,
+    fired,
+    async write(events: unknown[]) {
+      for (const event of events) stream.write(sse(event));
+      await tick();
+      await tick();
+    },
+    async advance(ms: number) {
+      clock.advance(ms);
+      await tick();
+    },
+    pendingDelay() {
+      return clock.pending()?.delayMs;
+    },
+    async finish() {
+      watchdog.finish();
+      stream.destroy();
+      return Promise.race([collected, tick().then(() => 'pending')]);
+    },
+  };
 }
 
 test('an image item that finishes before the response keeps the extended inactivity window', async () => {
   // The stream shape that must keep waiting: the image item completes, then the
   // response stays silent instead of sending response.completed.
-  const result = await runScenario({
-    events: [
-      { type: 'response.created', response: { id: 'resp_1', status: 'in_progress' } },
-      OUTPUT_ITEM_ADDED('ig_first'),
-      LIFECYCLE('ig_first'),
-      OUTPUT_ITEM_DONE('ig_first'),
-    ],
-  });
-  assert.equal(result.pendingDelayMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
-  assert.equal(result.fired.length, 1);
-  assert.equal(result.fired[0].kind, 'content-inactivity');
-  assert.equal(result.fired[0].timeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
-  assert.equal(result.outcome, 'rejected:ERR_CANCELED');
+  const scenario = startScenario();
+  await scenario.write([
+    { type: 'response.created', response: { id: 'resp_1', status: 'in_progress' } },
+    OUTPUT_ITEM_ADDED('ig_first'),
+    LIFECYCLE('in_progress', 'ig_first'),
+    OUTPUT_ITEM_DONE('ig_first'),
+  ]);
+  assert.equal(scenario.pendingDelay(), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  await scenario.advance(IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  assert.equal(scenario.fired.length, 1);
+  assert.equal(scenario.fired[0].kind, 'content-inactivity');
+  assert.equal(scenario.fired[0].timeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  assert.equal(await scenario.finish(), 'rejected:ERR_CANCELED');
 });
 
 test('an image item that never reports completion also keeps the extended window', async () => {
-  const result = await runScenario({
-    events: [OUTPUT_ITEM_ADDED('ig_open'), LIFECYCLE('ig_open')],
-  });
-  assert.equal(result.pendingDelayMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
-  assert.equal(result.fired[0].timeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  const scenario = startScenario();
+  await scenario.write([OUTPUT_ITEM_ADDED('ig_open'), LIFECYCLE('in_progress', 'ig_open')]);
+  assert.equal(scenario.pendingDelay(), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  await scenario.advance(IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  assert.equal(scenario.fired[0].timeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  await scenario.finish();
+});
+
+test('every image activity restarts the extended window instead of forming a per-attempt cap', async () => {
+  const scenario = startScenario();
+  await scenario.write([OUTPUT_ITEM_ADDED('ig_activity'), LIFECYCLE('in_progress', 'ig_activity')]);
+  const firstWindow = scenario.clock.pending();
+  assert.equal(firstWindow?.delayMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+
+  // Almost the whole window passes without another provider event.
+  await scenario.advance(IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS - 1_000);
+  assert.deepEqual(scenario.fired, []);
+
+  // Generating and defensive partial-preview statuses are ongoing progress.
+  await scenario.write([
+    LIFECYCLE('generating', 'ig_activity'),
+    LIFECYCLE('partial_image', 'ig_activity'),
+  ]);
+  assert.equal(firstWindow?.cleared, true, 'a later image activity must replace the previous window');
+  assert.equal(scenario.pendingDelay(), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+
+  // The restarted window is full again: the old deadline would already have passed.
+  await scenario.advance(IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS - 1_000);
+  assert.deepEqual(scenario.fired, []);
+
+  // A completion status is generation progress too, even without response.completed.
+  const windowBeforeCompletion = scenario.clock.pending();
+  await scenario.write([LIFECYCLE('completed', 'ig_activity')]);
+  assert.equal(windowBeforeCompletion?.cleared, true);
+  assert.equal(scenario.pendingDelay(), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+
+  // Only silence after the last activity ends the attempt, at the extended value.
+  await scenario.advance(IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  assert.equal(scenario.fired.length, 1);
+  assert.equal(scenario.fired[0].kind, 'content-inactivity');
+  assert.equal(scenario.fired[0].timeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  await scenario.finish();
 });
 
 test('a response without any image call still times out at the configured inactivity', async () => {
-  const result = await runScenario({
-    events: [
-      { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
-    ],
-  });
-  assert.equal(result.pendingDelayMs, CONFIGURED_INACTIVITY_MS);
-  assert.equal(result.fired[0].timeoutMs, CONFIGURED_INACTIVITY_MS);
-  assert.match(result.fired[0].message, /further model output activity after 180000ms/);
+  const scenario = startScenario();
+  await scenario.write([
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+  ]);
+  assert.equal(scenario.pendingDelay(), CONFIGURED_INACTIVITY_MS);
+  await scenario.advance(CONFIGURED_INACTIVITY_MS);
+  assert.equal(scenario.fired.length, 1);
+  assert.equal(scenario.fired[0].timeoutMs, CONFIGURED_INACTIVITY_MS);
+  assert.match(scenario.fired[0].message, /further model output activity after 180000ms/);
+  await scenario.finish();
 });
 
-test('the explicit hard deadline still ends an attempt that started an image', async () => {
-  const result = await runScenario({
-    events: [OUTPUT_ITEM_ADDED('ig_hard')],
-    hardTimeoutMs: 120_000,
-    fire: 'hard-deadline',
-  });
-  assert.equal(result.fired.length, 1);
-  assert.equal(result.fired[0].kind, 'hard-deadline');
-  assert.equal(result.fired[0].timeoutMs, 120_000);
+test('the explicit hard deadline still ends an attempt that reported image activity', async () => {
+  const scenario = startScenario({ hardTimeoutMs: 120_000 });
+  await scenario.write([OUTPUT_ITEM_ADDED('ig_hard')]);
+  await scenario.advance(120_000);
+  assert.equal(scenario.fired.length, 1);
+  assert.equal(scenario.fired[0].kind, 'hard-deadline');
+  assert.equal(scenario.fired[0].timeoutMs, 120_000);
+  await scenario.finish();
 });

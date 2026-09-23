@@ -83,7 +83,7 @@ type OpenAIStreamProgressOptions = {
     onMeaningfulProgress?: () => void;
     onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     /** Hosted image generation lifecycle; used for watchdog state only. */
-    onImageGenerationStarted?: () => void;
+    onImageGenerationActivity?: () => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -938,21 +938,20 @@ export async function collectOpenAIResponsesStream(
                         ensureOutputItem(event.output_index, event.item);
                         if (event.type === 'response.output_item.added'
                             && event.item.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
-                            options?.onImageGenerationStarted?.();
+                            options?.onImageGenerationActivity?.();
                         }
                         emitProgressUpdate();
                     }
                     return;
                 case 'response.image_generation_call.in_progress':
                 case 'response.image_generation_call.generating':
-                    // Lifecycle-only activity. The final bytes always come from
-                    // the complete output item, never from these events.
-                    options?.onImageGenerationStarted?.();
-                    return;
+                case 'response.image_generation_call.completed':
                 case 'response.image_generation_call.partial_image':
-                    // Defensive: V1 never persists or forwards partial previews.
-                    // Track the call; the base64 preview is discarded.
-                    options?.onImageGenerationStarted?.();
+                    // Lifecycle-only activity. The final bytes always come from
+                    // the complete output item, never from these events, so they
+                    // are reported as activity and their payload is discarded.
+                    // V1 never persists or forwards a partial preview either.
+                    options?.onImageGenerationActivity?.();
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':

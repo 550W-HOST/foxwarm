@@ -187,13 +187,13 @@ test('hosted image generation extends short custom inactivity for the rest of th
       streamContentInactivityTimeoutMs: timeout,
       onTimeout: () => assert.fail('finished watchdog must not fire'),
     });
-    watchdog.beginImageGeneration();
+    watchdog.reportImageGenerationActivity();
     assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
-    // Later progress and further image calls keep the extended window.
+    // Later progress and further image activity keep the extended window.
     watchdog.markMeaningfulProgress();
     assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
     assert.equal(watchdog.enterSafetyBuffering({ type: 'safety_buffering' }), Math.max(timeout, 600_000));
-    watchdog.beginImageGeneration();
+    watchdog.reportImageGenerationActivity();
     assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
     watchdog.finish();
     for (const entry of timers.entries) entry.callback();
@@ -208,7 +208,7 @@ test('a later attempt starts from the configured inactivity until its own image 
       streamContentInactivityTimeoutMs: timeout,
       onTimeout: () => assert.fail('finished watchdog must not fire'),
     });
-    imageAttempt.beginImageGeneration();
+    imageAttempt.reportImageGenerationActivity();
     assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
     imageAttempt.finish();
 
@@ -220,4 +220,26 @@ test('a later attempt starts from the configured inactivity until its own image 
     assert.equal(timers.entries.at(-1)!.delayMs, timeout);
     freshAttempt.finish();
   }
+});
+
+test('every reported image activity restarts the extended window', () => {
+  const timers = new FakeTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  const fired: string[] = [];
+  const watchdog = createStreamingAttemptWatchdog({
+    streamContentInactivityTimeoutMs: 300_000,
+    onTimeout: (_error, kind) => fired.push(kind),
+  });
+  watchdog.reportImageGenerationActivity();
+  const firstWindow = timers.entries.at(-1)!;
+  assert.equal(firstWindow.delayMs, 600_000);
+  // A later status event replaces the window instead of leaving the first report
+  // as a fixed per-attempt deadline.
+  watchdog.reportImageGenerationActivity();
+  assert.equal(firstWindow.cleared, true);
+  assert.notEqual(timers.entries.at(-1), firstWindow);
+  assert.equal(timers.entries.at(-1)!.delayMs, 600_000);
+  assert.deepEqual(fired, []);
+  watchdog.finish();
+  for (const entry of timers.entries) entry.callback();
 });
