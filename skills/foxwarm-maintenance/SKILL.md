@@ -1,64 +1,42 @@
 ---
 name: foxwarm-maintenance
-description: "Use for safely maintaining a Foxwarm installation: backing up or restoring data and SQLite stores, restarting, reading logs, updating from upstream, and protecting runtime data in state/agents/data_dir layouts."
+description: "Foxwarm-specific data layout, backup and restore boundaries, and upgrade checks. Use when assessing an installation's storage or changes to persisted data."
 ---
 
 # Foxwarm Maintenance
 
-Use this skill when the task is to operate or update a running Foxwarm installation: back up or restore data, inspect health, read logs, restart, upgrade from upstream, or reason about `data_dir` / `state/` / `agents/` layout safety.
+This skill covers installation details that are specific to Foxwarm. Use an
+installation's own runbook for service control, deployment, backup destinations,
+and retention. Inspect its actual configuration rather than assuming a process
+manager, repository layout, or remote.
 
-## Safety Rules
+## Data layout and ownership
 
-- Do not restart, stop, upgrade, migrate data layout, or rewrite git history unless the user has authorized that action.
-- Never use broad destructive commands such as `git reset --hard`, `git clean -fdx`, or unscoped `rm -rf` in a live install. They can delete runtime data.
-- Treat `state/`, `agents/`, tokens, model/channel configs, session archives, vector DBs, and logs as user data unless proven otherwise.
-- Back up and restore the complete data root as one coordinated restore set; a snapshot of one SQLite database is only a component backup.
-- For a live SQLite database, use an online backup API or a verified quiesced checkpoint/copy procedure. Never copy only the main `.sqlite` file while WAL writers are active.
-- Stop or isolate Foxwarm before replacing live restore targets. Restore into new paths and verify first; never let a helper overwrite a live database in place.
-- Before changing code or pulling from upstream, inspect the source repo status and the data directory layout.
-- Prefer fast-forward/merge-based updates and scoped file operations. Preserve evidence and report blockers instead of forcing through conflicts.
+Resolve the running process's data root in this order:
 
-## First: Identify the Install Layout
+1. Nonempty `FOXWARM_DATA_DIR` in its environment.
+2. Nonempty `data_dir` file in the program repository.
+3. The program repository itself.
 
-From the Foxwarm program repo root, collect:
+Relative values resolve against the program repository, not the operator's shell
+working directory. A shell's environment may differ from the running service.
 
-```bash
-pwd
-git status --short --branch
-git remote -v
-cat data_dir 2>/dev/null || true
-printf 'FOXWARM_DATA_DIR=%s\n' "${FOXWARM_DATA_DIR:-}"
-```
+- `<data-root>/state/` contains configuration, credentials, Session authority,
+  databases, blobs, and logs. `<data-root>/agents/` contains user-owned Agent
+  files and the live framework prompt.
+- `<program-repo>/skills/` contains bundled skills; `templates/` supplies initial
+  defaults, not replacements for initialized user data.
+- `state/` and `agents/` may be separate repositories or worktrees. A source
+  commit, pull, or push does not necessarily include either one. Inspect each
+  repository boundary before updating or backing up; do not sweep user data into
+  a source commit or change nested repository pointers incidentally.
+- Untracked data inside a source checkout is still user data. Preserve it across
+  source updates; moving the data root is a separate migration.
 
-Resolve the data root in this order:
+## Backup and restore
 
-1. `$FOXWARM_DATA_DIR`, if set for the running process or current shell.
-2. The repo-root `data_dir` pointer file, if present.
-3. The program repo root itself, for older/manual installs.
-
-Runtime data normally lives under the data root:
-
-```text
-<data-root>/state/
-<data-root>/agents/
-```
-
-Bundled skills live in the program repo under:
-
-```text
-<repo>/skills/
-```
-
-## Back Up or Restore Data
-
-For backup composition, recovery safety, the bundled SQLite fixed-chunk helper,
-and legacy chunk read compatibility, read:
-
-```text
-skills/foxwarm-maintenance/references/BACKUP-RESTORE.md
-```
-
-The helper has one explicit entry point:
+Read [Backup and Restore](references/BACKUP-RESTORE.md) for the restore-set
+contents, consistency boundaries, and the bundled SQLite chunk helper:
 
 ```bash
 python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
@@ -66,190 +44,20 @@ python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py verify SNAPSHOT-DIRE
 python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py restore SNAPSHOT-DIRECTORY NEW.sqlite
 ```
 
-It creates or checks one SQLite component. It does not snapshot the whole data
-root, create a cross-database transaction, upload data, manage retention, or
-replace a live database.
+Run these from the program repository. They operate on one SQLite component,
+not a complete installation. Online SQLite backups must include committed WAL
+state through the backup API; copying the main database file alone is unsafe.
+A live LanceDB directory also needs a verified snapshot or quiesced capture.
+Restore to new paths and verify before any authorized replacement of live data.
 
-## Read Logs
+## Upgrades and runtime changes
 
-For local/tmux installs:
+Read [Post-Upgrade Checks](references/POST-UPGRADE.md) from the target revision
+when planning an upgrade. Source, initialized configuration, and Agent memory
+have separate ownership; an update must not silently replace the latter two.
 
-```bash
-DATA_ROOT="$(cat data_dir 2>/dev/null || pwd)"
-tail -n 200 "$DATA_ROOT/state/logs/foxwarm.log"
-tail -f "$DATA_ROOT/state/logs/foxwarm.log"
-```
-
-If `FOXWARM_DATA_DIR` is used, prefer that value:
-
-```bash
-tail -n 200 "$FOXWARM_DATA_DIR/state/logs/foxwarm.log"
-```
-
-To inspect the live tmux console:
-
-```bash
-tmux attach -t "${FOXWARM_TMUX_SESSION:-foxwarm}"
-# detach without stopping: Ctrl-b then d
-```
-
-For Docker Compose installs:
-
-```bash
-docker compose logs --tail=200 foxwarm
-docker compose logs -f foxwarm
-```
-
-## Restart
-
-Ask for confirmation before restarting a live instance.
-
-Local/tmux install:
-
-```bash
-cd /path/to/foxwarm
-npm run restart
-```
-
-If the install uses a custom tmux session or data dir, preserve those environment variables:
-
-```bash
-FOXWARM_TMUX_SESSION=my-session FOXWARM_DATA_DIR=/path/to/foxwarm-data npm run restart
-```
-
-Foreground/manual process:
-
-```bash
-npm run build-all
-npm run start:notmux
-```
-
-Docker Compose:
-
-```bash
-docker compose up -d --build
-# or, for config/runtime-only changes that do not need rebuilding:
-docker compose restart foxwarm
-```
-
-## Update From Upstream Safely
-
-### 1. Confirm scope and authorization
-
-Explain that updating may rebuild and restart Foxwarm. Confirm the target branch/ref and whether restart is allowed.
-
-### 2. Inspect source and data layout
-
-```bash
-cd /path/to/foxwarm
-git status --short --branch
-git fetch --all --prune
-cat data_dir 2>/dev/null || true
-ls -ld state agents 2>/dev/null || true
-git submodule status 2>/dev/null || true
-find state agents -maxdepth 2 -name .git -print 2>/dev/null || true
-```
-
-Classify the data layout before pulling.
-
-### Case A: data directory is outside the source repo
-
-This is the safest layout. The installer default is usually a sibling directory such as `../foxwarm-data`, referenced by repo-root `data_dir`.
-
-Recommended update:
-
-```bash
-git pull --ff-only
-npm run build-all
-npm run restart
-```
-
-If `--ff-only` fails, stop and report the divergence instead of rebasing/resetting automatically.
-
-### Case B: data directory is inside the repo as a nested repo or submodule
-
-Examples:
-
-- `state/` and/or `agents/` are nested git repositories.
-- `state/` and/or `agents/` are submodules.
-- A single in-repo data directory is ignored by the outer repo and has its own `.git`.
-
-Before updating:
-
-```bash
-git status --short --branch
-git submodule status 2>/dev/null || true
-git -C state status --short --branch 2>/dev/null || true
-git -C agents status --short --branch 2>/dev/null || true
-```
-
-Rules:
-
-- Do not run outer-repo cleanup commands that recurse into or delete nested data repos.
-- Do not update submodule pointers unless that is explicitly part of the task.
-- If nested data repos have changes, leave them alone unless the user asked for data backup/commit work.
-- Pull/update only the program repo, then build and restart if authorized.
-
-### Case C: data directory is inside the repo as untracked files/directories
-
-This layout is risky because upstream changes, cleanup commands, or future tracked paths can collide with user data.
-
-If you see untracked runtime paths such as:
-
-```text
-?? state/
-?? agents/
-```
-
-or an untracked in-repo data directory, do **not** blindly pull/clean. Recommend a user-authorized migration first.
-
-Preferred migration options:
-
-1. Move data outside the program repo and write a `data_dir` pointer.
-2. If the user wants data to stay physically inside the checkout, convert it into an ignored nested data repo:
-   - add the runtime data path (for example `/state/`, `/agents/`, or `/foxwarm-data/`) to the outer repo `.gitignore`;
-   - initialize or attach a separate nested git repo for that data if the user wants versioned backups;
-   - verify the outer `git status` no longer lists runtime data as untracked.
-
-Only perform this migration after explicit user approval and, when practical, a backup.
-
-### 3. Pull/build/restart
-
-After data safety is clear:
-
-```bash
-git pull --ff-only
-npm run build-all
-npm run restart
-```
-
-For Docker Compose:
-
-```bash
-git pull --ff-only
-docker compose up -d --build
-```
-
-After restart, verify:
-
-```bash
-tail -n 100 "${FOXWARM_DATA_DIR:-$(cat data_dir 2>/dev/null || pwd)}/state/logs/foxwarm.log"
-```
-
-### 4. Post-upgrade checks
-
-After the program repo has been updated, read the latest post-upgrade checklist from the updated checkout:
-
-```text
-skills/foxwarm-maintenance/references/POST-UPGRADE.md
-```
-
-That file covers version-specific follow-up work such as comparing new templates with live user-owned files and asking before merging changes into `agents/` or `state/`.
-
-## Quick Troubleshooting Checklist
-
-- WebUI not reachable: check the port in `state/config.yaml`, tmux console, and `state/logs/foxwarm.log`.
-- Restart does not affect the right instance: check `FOXWARM_TMUX_SESSION`, `FOXWARM_DATA_DIR`, and `data_dir`.
-- Update blocked by git status: identify whether dirty paths are source files or runtime data; do not stash or clean runtime data blindly.
-- Model/channel config broken: inspect `state/models.yaml` and `state/config.yaml` in the resolved data root, not necessarily the program repo root.
-- After a code update, remember that initialized `agents/` data is user-owned; framework templates in `templates/` do not automatically overwrite live agent memory.
+Use the installation's existing launch configuration, including its data root
+and environment. A source update, successful build, and running replacement are
+separate facts. Report which happened. Static frontend updates alone do not
+require restarting the backend; assess the whole pending change, not only its
+latest commit.
