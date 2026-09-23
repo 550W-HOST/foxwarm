@@ -3209,7 +3209,6 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
 
             let attemptRawStreamLog: RawStreamCapture | null = null;
             let attemptHistoryAppendFinalizer: OpenAIWsHistoryAppendFinalizer | undefined;
-            let attemptImageGenerationStarted = false;
             let resp: any;
             let response: AxiosResponse | undefined;
             let responseStatus = '';
@@ -3228,7 +3227,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 let attemptSignal = abortController.signal;
                 let markMeaningfulProgress: (() => void) | undefined;
                 let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
-                let imageGenerationWatchdog: { beginImageGeneration(id: string): void; endImageGeneration(id: string): void } | undefined;
+                let imageGenerationWatchdog: { beginImageGeneration(): void } | undefined;
                 if (plan.useStreamingApi) {
                     const attemptAbortController = new AbortController();
                     const abortAttemptFromOuter = () => attemptAbortController.abort();
@@ -3268,13 +3267,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         : undefined,
                     onMeaningfulProgress: markMeaningfulProgress,
                     onSafetyBuffering: handleSafetyBuffering,
-                    onImageGenerationActivity: (state: 'begin' | 'end', itemId: string) => {
-                        if (state === 'begin') {
-                            attemptImageGenerationStarted = true;
-                            imageGenerationWatchdog?.beginImageGeneration(itemId);
-                        } else {
-                            imageGenerationWatchdog?.endImageGeneration(itemId);
-                        }
+                    onImageGenerationStarted: () => {
+                        imageGenerationWatchdog?.beginImageGeneration();
                     },
                     onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                     onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
@@ -3299,7 +3293,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             attempt,
                         },
                         onProgress: streamCollectOptions.onProgress,
-                        onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
+                        onImageGenerationStarted: streamCollectOptions.onImageGenerationStarted,
                         onRawFrame: frame => {
                             attemptRawStreamLog?.appendChunk(`${frame}\n`);
                             attemptRawStreamLog?.appendSseBlock(frame);
@@ -3459,22 +3453,6 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                         },
                     });
-                if (attemptImageGenerationStarted && failure.retryable) {
-                    // The provider already began a hosted image call, so the
-                    // outcome (and any cost) is unconfirmed. Never transparently
-                    // retry or fail over into a possible duplicate generation.
-                    failure = new ConcreteAttemptFailure(
-                        `Hosted image generation had already started before this attempt failed; the result is unconfirmed and was not retried. ${failure.message}`,
-                        {
-                            kind: failure.kind,
-                            status: failure.status,
-                            retryable: false,
-                            countable: false,
-                            logDetail: failure.logDetail,
-                        },
-                    );
-                }
-
                 responseAttempts.push({
                     attempt,
                     modelId: plan.modelId,

@@ -15,6 +15,7 @@ import type { Message } from '../types';
 import {
   DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS,
   SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from '../llmStreamingTimeout';
@@ -803,6 +804,35 @@ test('user abort after safety buffering remains AbortError rather than a metadat
   controller.abort();
   await assert.rejects(pending, (error: any) => error?.name === 'AbortError' && !error.message.includes('Safety buffering metadata'));
   assert.equal(socket.terminated, 1);
+});
+
+test('a hosted image call keeps the extended inactivity window after its item ends', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } });
+      current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'warming up' });
+      // The image item starts and then ends, but the response never completes.
+      current.frame({ type: 'response.output_item.added', output_index: 1, item: { type: 'image_generation_call', id: 'ig_ws', status: 'in_progress' } });
+      current.frame({ type: 'response.image_generation_call.in_progress', output_index: 1, item_id: 'ig_ws' });
+      current.frame({ type: 'response.image_generation_call.completed', output_index: 1, item_id: 'ig_ws' });
+      current.frame({ type: 'response.output_item.done', output_index: 1, item: { type: 'image_generation_call', id: 'ig_ws', status: 'completed', output_format: 'png', result: 'iVBORw0KGgo=' } });
+    });
+    return socket as any;
+  }});
+  const controller = new AbortController();
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+    placement: 'local', signal: controller.signal,
+  });
+  for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve));
+  const delays = timers.entries.map(entry => entry.delayMs);
+  assert.ok(delays.includes(DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS), 'the configured window applies before the image call');
+  assert.equal(delays.at(-1), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  controller.abort();
+  await assert.rejects(pending, (error: any) => error?.name === 'AbortError');
 });
 
 test('completed idle chains actively expire and close after ten minutes without another request', async () => {

@@ -24,10 +24,13 @@ let timerHooks: TimerHooks = defaultTimerHooks;
 export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
   enterSafetyBuffering(metadata: Record<string, unknown>): number;
-  /** Track an in-flight hosted image generation item by its stable identity. */
-  beginImageGeneration(itemId: string): void;
-  /** Release one hosted image generation item; the last release restores normal waiting. */
-  endImageGeneration(itemId: string): void;
+  /**
+   * Latches that this attempt produced a hosted image generation call. The
+   * extended allowance then applies for the rest of the attempt, because the
+   * response as a whole can still be outstanding after the image item itself
+   * ends. A later attempt starts from the configured inactivity value.
+   */
+  beginImageGeneration(): void;
   finish(): void;
 };
 
@@ -75,10 +78,10 @@ export function createStreamingAttemptWatchdog(options: {
   let phaseGeneration = 0;
   let inactivityTimeoutMs = options.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
   let safetyBufferingMetadata: Record<string, unknown> | undefined;
-  const activeImageItems = new Set<string>();
+  let imageGenerationStarted = false;
 
   const effectiveInactivityTimeoutMs = () =>
-    activeImageItems.size > 0 ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS) : inactivityTimeoutMs;
+    imageGenerationStarted ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS) : inactivityTimeoutMs;
 
   const clearPhase = () => {
     if (!phaseTimer) return;
@@ -125,21 +128,10 @@ export function createStreamingAttemptWatchdog(options: {
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
       return effectiveInactivityTimeoutMs();
     },
-    beginImageGeneration(itemId) {
-      if (finished) return;
-      const key = typeof itemId === 'string' && itemId ? itemId : 'image_generation';
-      activeImageItems.add(key);
+    beginImageGeneration() {
+      if (finished || imageGenerationStarted) return;
+      imageGenerationStarted = true;
       schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
-    },
-    endImageGeneration(itemId) {
-      if (finished) return;
-      const key = typeof itemId === 'string' && itemId ? itemId : 'image_generation';
-      if (activeImageItems.delete(key)) {
-        // The provider can report a done status without a matching added
-        // identity; deleting a missing key is a no-op, so only reschedule when
-        // the active set actually changed.
-        schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
-      }
     },
     finish() {
       if (finished) return;

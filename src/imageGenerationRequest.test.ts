@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 import crypto from 'crypto';
@@ -9,8 +9,11 @@ import sharp from 'sharp';
 import { requestLlmOnce } from './llm';
 import { LOGS_DIR } from './config';
 import { resolveImageBlobPath, readImageRef } from './imageBlobs';
+import { IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS, setStreamingTimeoutTestHooks } from './llmStreamingTimeout';
 import { LLM_REQUEST_JOURNAL_DB_PATH } from './llmRequestJournal';
 import type { Message } from './types';
+
+afterEach(() => setStreamingTimeoutTestHooks());
 
 function sse(event: unknown): string {
   return `data: ${JSON.stringify(event)}\n\n`;
@@ -281,7 +284,7 @@ test('surfaces png, jpeg, and webp results with matching MIME types', async () =
   }
 });
 
-test('invalid or empty image results fail without a transparent retry', async () => {
+test('invalid or empty image results fail with a non-retryable response error', async () => {
   const cap = captureAxios(() => makeImageStream({ images: [{ index: 0, item: imageItem('ig_bad', 'not-valid-base64!!', 'png') }] }));
   try {
     await assert.rejects(
@@ -292,7 +295,8 @@ test('invalid or empty image results fail without a transparent retry', async ()
         return true;
       },
     );
-    // The provider must be called exactly once; a started image call is never retried.
+    // An invalid result is a non-retryable response error, so the provider is
+    // called exactly once without any retry policy special-casing.
     assert.equal(cap.captured.length, 1);
   } finally {
     cap.restore();
@@ -432,5 +436,133 @@ test('a missing generated image blob fails before any provider call', async () =
     assert.equal(cap.captured.length, 0, 'a missing local blob must not reach the provider');
   } finally {
     cap.restore();
+  }
+});
+
+class WatchdogTimers {
+  entries: Array<{ callback: () => void; delayMs: number; cleared: boolean; timer: any }> = [];
+  hooks = {
+    set: (callback: () => void, delayMs: number) => {
+      const entry = { callback, delayMs, cleared: false, timer: undefined as any };
+      entry.timer = { unref: () => {} };
+      this.entries.push(entry);
+      return entry.timer;
+    },
+    clear: (timer: any) => {
+      const entry = this.entries.find(candidate => candidate.timer === timer);
+      if (entry) entry.cleared = true;
+    },
+  };
+  pending() {
+    return this.entries.filter(entry => !entry.cleared).at(-1);
+  }
+  firePending() {
+    this.pending()?.callback();
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('condition was not reached in time');
+}
+
+// The first attempt starts an image call and then the provider stays silent, so
+// the attempt only ends through the extended output inactivity window.
+function stalledImageStream(itemId: string): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(sse({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } }));
+    stream.write(sse({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'ATTEMPT-ONE-TEXT' }));
+    stream.write(sse({ type: 'response.output_item.added', output_index: 1, item: { type: 'image_generation_call', id: itemId, status: 'in_progress' } }));
+    stream.write(sse({ type: 'response.image_generation_call.in_progress', output_index: 1, item_id: itemId }));
+  });
+  return stream;
+}
+
+function disconnectedImageStream(itemId: string): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(sse({ type: 'response.output_item.added', output_index: 0, item: { type: 'image_generation_call', id: itemId, status: 'in_progress' } }));
+    stream.write(sse({ type: 'response.image_generation_call.generating', output_index: 0, item_id: itemId }));
+    stream.destroy(new Error('socket hang up'));
+  });
+  return stream;
+}
+
+test('an inactivity timeout after image generation started is retried without duplicating the image', async () => {
+  const png = await makeRaster('png');
+  const timers = new WatchdogTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let attempt = 0;
+  const cap = captureAxios(() => {
+    attempt += 1;
+    return attempt === 1
+      ? stalledImageStream('ig_stalled')
+      : makeImageStream({ images: [{ index: 0, item: imageItem('ig_retried', png.toString('base64'), 'png') }] });
+  });
+  try {
+    const pending = runRequest(responsesEntry({
+      imageGeneration: { enabled: true },
+      streamContentInactivityTimeoutMs: 300_000,
+    }), { maxRetries: 3 });
+    // Wait for the first attempt to latch the image window, then let the
+    // extended inactivity window end that attempt.
+    await waitFor(() => cap.captured.length === 1 && timers.pending()?.delayMs === IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+    timers.firePending();
+    const result = await pending;
+    assert.equal(cap.captured.length, 2, 'an image attempt that timed out must follow the ordinary retry policy');
+    const imageParts = (result.allParts || []).filter(part => !!part.inlineDataRef);
+    assert.equal(imageParts.length, 1);
+    assert.equal(JSON.stringify(result.allParts).includes('ATTEMPT-ONE-TEXT'), false);
+    assert.equal(result.text.includes('ATTEMPT-ONE-TEXT'), false);
+    await fs.remove(resolveImageBlobPath(imageParts[0].inlineDataRef!.blobId!));
+  } finally {
+    cap.restore();
+    setStreamingTimeoutTestHooks();
+  }
+});
+
+test('a transport failure after image generation started is retried', async () => {
+  const png = await makeRaster('png');
+  let attempt = 0;
+  const cap = captureAxios(() => {
+    attempt += 1;
+    return attempt === 1
+      ? disconnectedImageStream('ig_dropped')
+      : makeImageStream({ images: [{ index: 0, item: imageItem('ig_after_drop', png.toString('base64'), 'png') }] });
+  });
+  try {
+    const result = await runRequest(responsesEntry({ imageGeneration: { enabled: true } }), { maxRetries: 3 });
+    assert.equal(cap.captured.length, 2);
+    const imageParts = (result.allParts || []).filter(part => !!part.inlineDataRef);
+    assert.equal(imageParts.length, 1);
+    await fs.remove(resolveImageBlobPath(imageParts[0].inlineDataRef!.blobId!));
+  } finally {
+    cap.restore();
+  }
+});
+
+test('the retry budget bounds attempts that began image generation', async () => {
+  const timers = new WatchdogTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  const cap = captureAxios(() => stalledImageStream('ig_budget'));
+  try {
+    const pending = runRequest(responsesEntry({ imageGeneration: { enabled: true } }), { maxRetries: 1 });
+    await waitFor(() => cap.captured.length === 1 && !!timers.pending());
+    timers.firePending();
+    await assert.rejects(() => pending, (error: any) => {
+      const message = String(error?.message || '');
+      assert.match(message, /further model output activity after 600000ms/);
+      assert.equal(message.includes('had already started'), false);
+      return true;
+    });
+    assert.equal(cap.captured.length, 1);
+  } finally {
+    cap.restore();
+    setStreamingTimeoutTestHooks();
   }
 });

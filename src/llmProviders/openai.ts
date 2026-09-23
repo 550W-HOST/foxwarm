@@ -83,7 +83,7 @@ type OpenAIStreamProgressOptions = {
     onMeaningfulProgress?: () => void;
     onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     /** Hosted image generation lifecycle; used for watchdog state only. */
-    onImageGenerationActivity?: (state: 'begin' | 'end', itemId: string) => void;
+    onImageGenerationStarted?: () => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -928,13 +928,6 @@ export async function collectOpenAIResponsesStream(
 
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
-            const imageItemId = (() => {
-                if (typeof event.item_id === 'string' && event.item_id.trim()) return event.item_id.trim();
-                if (event.item && typeof event.item === 'object' && typeof event.item.id === 'string' && event.item.id.trim()) {
-                    return event.item.id.trim();
-                }
-                return typeof event.output_index === 'number' ? `image_output_${event.output_index}` : 'image_generation';
-            })();
 
             switch (event.type) {
                 case 'response.output_item.added':
@@ -943,11 +936,9 @@ export async function collectOpenAIResponsesStream(
                         && typeof event.item === 'object' && !Array.isArray(event.item)) {
                         options?.onMeaningfulProgress?.();
                         ensureOutputItem(event.output_index, event.item);
-                        if (event.item.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
-                            options?.onImageGenerationActivity?.(
-                                event.type === 'response.output_item.added' ? 'begin' : 'end',
-                                imageItemId,
-                            );
+                        if (event.type === 'response.output_item.added'
+                            && event.item.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                            options?.onImageGenerationStarted?.();
                         }
                         emitProgressUpdate();
                     }
@@ -956,15 +947,12 @@ export async function collectOpenAIResponsesStream(
                 case 'response.image_generation_call.generating':
                     // Lifecycle-only activity. The final bytes always come from
                     // the complete output item, never from these events.
-                    options?.onImageGenerationActivity?.('begin', imageItemId);
-                    return;
-                case 'response.image_generation_call.completed':
-                    options?.onImageGenerationActivity?.('end', imageItemId);
+                    options?.onImageGenerationStarted?.();
                     return;
                 case 'response.image_generation_call.partial_image':
                     // Defensive: V1 never persists or forwards partial previews.
-                    // Track activity only; the base64 preview is discarded.
-                    options?.onImageGenerationActivity?.('begin', imageItemId);
+                    // Track the call; the base64 preview is discarded.
+                    options?.onImageGenerationStarted?.();
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':
