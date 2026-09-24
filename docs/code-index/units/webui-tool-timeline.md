@@ -70,6 +70,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 ## Behavior
 
 - Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets.
+- A valid persisted `executionTiming` adds a small invocation duration beside the tool tag in the existing header; malformed or legacy responses show none. This is the call-to-return duration, not the lifetime of a background process or the interval between model requests. Collapse behavior and result layout stay unchanged.
 - View mode toggles between "preview" (formatted diff/command) and "raw" (JSON) display
 - Default tool response rendering formats the whole `functionResponse.response` object via the shared WebUI formatter. Single-key objects (for example `{ output: "ok" }` or `{ error: "bad" }`) display the single value, while multi-key objects stay structured/YAML-like. Special renderers such as exec/read still use this formatter as their fallback for non-standard or error-shaped results.
 - Streaming/partial tool calls are intentionally lightweight: when the parent model message is the synthetic streaming draft, call previews and expanded bodies show the latest raw argument text without parsing heavy or incomplete inputs (for example `apply_patch`). Provider updates are throttled to at most once per second, and rich patch/diff rendering remains deferred until the finalized tool call arrives.

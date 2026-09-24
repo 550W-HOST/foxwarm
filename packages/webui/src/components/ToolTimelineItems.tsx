@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Code2, Eye, FileJson, Download } from 'lucide-react'
+import { Code2, Eye, FileJson, Download, Timer } from 'lucide-react'
 import {
   IconToggleButton,
   MiniToggleButton,
@@ -33,10 +33,19 @@ import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
+import { formatCompactDuration } from '../usageTiming'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
+
+const getToolInvocationDuration = (timing: FunctionResponse['executionTiming']): number | null => {
+  if (!timing || typeof timing !== 'object'
+    || typeof timing.startedAt !== 'number' || !Number.isFinite(timing.startedAt) || timing.startedAt < 0
+    || typeof timing.completedAt !== 'number' || !Number.isFinite(timing.completedAt) || timing.completedAt < timing.startedAt
+    || typeof timing.durationMs !== 'number' || !Number.isFinite(timing.durationMs) || timing.durationMs < 0) return null
+  return timing.durationMs
+}
 
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
   if (resp.name !== 'send_file') {
@@ -593,6 +602,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     imagePartCount: imageParts.length,
   })
   const primaryResponse = responses[0]
+  const invocationDurationMs = getToolInvocationDuration(primaryResponse?.executionTiming)
   const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
   const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
@@ -647,6 +657,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
+        {invocationDurationMs !== null && <span data-tool-execution-time className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
         {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
       </div>
       {includeExpandedCall && expandedCallContent && (

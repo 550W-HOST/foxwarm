@@ -61,6 +61,8 @@ export interface MessageProviderMeta {
 export interface FunctionResponse {
   tool_use_id: string;
   name: string;
+  /** Measured duration of the tool invocation until its result returns. */
+  executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
   /**
    * Internal timing for the model request which produced this tool batch.
    * It is persisted with the first tool response so serializers never need to
