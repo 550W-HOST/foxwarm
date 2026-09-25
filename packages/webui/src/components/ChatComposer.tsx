@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUp, Check, ChevronDown, GitBranch, Link2, SlidersHorizontal, Mic, Paperclip, Plus, RefreshCw, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -279,11 +279,10 @@ function ModelSelector({
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const [effortSaving, setEffortSaving] = useState(false)
   const [activeScope, setActiveScope] = useState<ModelSelectorScope>('current')
   const [filterQuery, setFilterQuery] = useState('')
   const [childFilterQuery, setChildFilterQuery] = useState('')
-  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed', visibility: 'hidden' })
   const [scrollbarWidth] = useState(() => getBrowserScrollbarWidth())
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -339,22 +338,6 @@ function ModelSelector({
     childModelDefault || effectiveChildModelKey || currentModelKey || defaultModelKey,
     options,
   ) || 'model'
-  const openScope = useCallback((scope: ModelSelectorScope) => {
-    if (open && activeScope === scope) {
-      setOpen(false)
-      return
-    }
-    if (!open) {
-      setFilterQuery('')
-      setChildFilterQuery('')
-      filterComposingRef.current = false
-      void onRefreshModels()
-    }
-    setActiveScope(scope)
-    setOpen(true)
-    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus())
-  }, [activeScope, onRefreshModels, open])
-
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -384,9 +367,29 @@ function ModelSelector({
     }
   }, [childFollows])
 
+  const openScope = useCallback((scope: ModelSelectorScope) => {
+    if (open && activeScope === scope) {
+      setOpen(false)
+      return
+    }
+    if (!open) {
+      setFilterQuery('')
+      setChildFilterQuery('')
+      filterComposingRef.current = false
+      updatePopupPosition()
+      void onRefreshModels()
+    }
+    setActiveScope(scope)
+    setOpen(true)
+    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
+  }, [activeScope, onRefreshModels, open, updatePopupPosition])
+
+  useLayoutEffect(() => {
+    if (open) updatePopupPosition()
+  }, [open, updatePopupPosition])
+
   useEffect(() => {
     if (!open) return
-    updatePopupPosition()
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node
@@ -423,10 +426,10 @@ function ModelSelector({
     let focusFrame = 0
     if (open) {
       focusFrame = requestAnimationFrame(() => {
-        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus()
+        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
     } else if (!open && wasOpenRef.current) {
-      ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus()
+      ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus({ preventScroll: true })
     }
     wasOpenRef.current = open
     return () => {
@@ -529,10 +532,7 @@ function ModelSelector({
         staleLabel={staleFullLabel}
         busy={busy}
         descriptionId={descriptionId}
-        onCommit={async next => {
-          setEffortSaving(true)
-          try { await onChange(next) } finally { setEffortSaving(false) }
-        }}
+        onCommit={onChange}
       />
     )
   }
@@ -550,7 +550,6 @@ function ModelSelector({
         <span className="min-w-0 truncate font-medium text-fw-text-strong" title={currentKeyFull} data-model-trigger-name="true">{currentDisplayName}</span>
         <span className="h-3.5 w-px shrink-0 bg-fw-border" aria-hidden="true" />
         <span className="shrink-0 text-fw-text-muted" data-model-trigger-effort="true">{triggerEffort}</span>
-        {((busy && !effortSaving) || refreshing) && <span className="shrink-0 text-fw-text-muted" aria-hidden="true">…</span>}
         {error && <span className="shrink-0 text-fw-danger" aria-hidden="true">!</span>}
         <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -585,7 +584,7 @@ function ModelSelector({
           aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
-          data-effort-saving={effortSaving ? "true" : undefined}
+          data-model-saving={busy ? "true" : undefined}
         >
           <div className="foxwarm-model-columns min-h-0 flex-1" data-model-columns={childFollows ? '1' : '2'}>
             {(['current', ...(!childFollows ? ['child'] : [])] as ModelSelectorScope[]).map(scope => {
