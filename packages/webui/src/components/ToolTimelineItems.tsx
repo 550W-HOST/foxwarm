@@ -101,26 +101,36 @@ const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
   error: '-ml-2 bg-fw-danger-surface/85 pl-2 pr-0 py-1 dark:bg-fw-danger-surface-strong/20',
 }
 
-export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand }: { items: ToolTagItem[]; onExpand: () => void }) {
+export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand, expanded = false, children }: {
+  items: ToolTagItem[]
+  onExpand: () => void
+  expanded?: boolean
+  children?: ReactNode
+}) {
   const countedItems = useMemo(() => summarizeToolTagCounts(items), [items])
   return (
     <div
-      className={`foxwarm-tool-card foxwarm-tool-tone-neutral group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
-      onClick={onExpand}
+      data-tool-group-card
+      data-group-expanded={expanded}
+      className={`foxwarm-tool-card foxwarm-tool-group-card foxwarm-tool-tone-neutral group relative min-w-0 max-w-full pl-2 pr-2 text-xs text-fw-text-muted ${expanded ? 'pb-1' : 'cursor-pointer hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer'} ${toolSurfaceToneClasses.neutral}`}
+      onClick={!expanded ? onExpand : undefined}
     >
       <ThreadLineButton
-        expanded={false}
+        expanded={expanded}
         onToggle={onExpand}
-        label="Expand tool group"
+        label={expanded ? 'Collapse tool group' : 'Expand tool group'}
         className={toolThreadLineToneClasses.neutral}
       />
-      <div className={`foxwarm-tool-header flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
+      <div
+        className={`foxwarm-tool-header foxwarm-tool-group-header -ml-2 -mr-2 flex min-w-0 items-start gap-2 pr-2 ${toolHeaderToneClasses.neutral} ${expanded ? 'cursor-pointer' : ''}`}
+        onClick={expanded ? (event) => { event.stopPropagation(); onExpand() } : undefined}
+      >
         <ToolTagList items={countedItems} />
       </div>
+      {expanded && <div className="foxwarm-tool-group-body mt-1 min-w-0 max-w-full pl-4">{children}</div>}
     </div>
   )
 })
-
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 

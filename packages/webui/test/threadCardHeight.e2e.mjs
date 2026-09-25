@@ -34,11 +34,11 @@ before(async () => {
         { role: 'model', parts: [{ functionCall: { name: 'exec', id: 'card-tool', args: { command: ('echo a\\n').repeat(24) } } }, { thinking: Array.from({ length: 18 }, (_, n) => 'reasoning step ' + n).join('\\n\\n') }, { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'search', queries: Array.from({ length: 12 }, (_, n) => 'query ' + n), query: 'query 0' } } } } }], __meta: { seq: 18, timestamp: 1018 } },
         { role: 'model', parts: [{ text: 'Last answer' }], __meta: { seq: 19, timestamp: 1019 } })
     }
-    if (size === 'ctx') {
+    if (size === 'ctx' || size === 'ctx-deep') {
       messages.splice(17, 1, { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#4 raw#1-#3] ' + ('summary paragraph\\n\\n').repeat(10) }], __meta: { seq: 18, timestamp: 1018, contextBlock: { id: 4, level: 1, rawStartSeq: 1, rawEndSeq: 3, sourceKind: 'message' } } })
     }
     if (size === 'group' || size === 'group-large') {
-      const call = (id, seq) => ({ role: 'model', parts: [{ functionCall: { id, name: 'exec', args: { command: 'echo ' + id } } }], __meta: { seq, timestamp: 1000 + seq, usage: { inputTokens: 500, outputTokens: 100 } } })
+      const call = (id, seq) => ({ role: 'model', parts: [{ functionCall: { id, name: 'exec', args: { command: 'echo ' + id } } }], __meta: { seq, timestamp: 1000 + seq, usage: { cachedTokens: 0, inputTokens: 500, outputTokens: 100 } } })
       const result = (id, seq) => ({ role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: id, response: { output: id + ' result\\n' + 'line\\n'.repeat(25) } } }], __meta: { seq, timestamp: 1000 + seq } })
       const entries = size === 'group-large' ? Array.from({ length: 14 }, (_, n) => [call('call-' + n, 18 + 2 * n), result('call-' + n, 19 + 2 * n)]).flat() : [call('first', 18), result('first', 19), call('second', 20), result('second', 21)]
       messages.splice(17, 1, ...entries, { role: 'model', parts: [{ text: 'Final answer' }], __meta: { seq: 18 + entries.length, timestamp: 1018 + entries.length } })
@@ -46,6 +46,18 @@ before(async () => {
 
     window.fetch = async input => {
       const url = String(input)
+      if (url.includes('/context-blocks/5/expand')) {
+        return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 5, expansionKind: 'messages', messages: [
+          { role: 'model', parts: [{ functionCall: { id: 'deep-tool', name: 'exec', args: { command: 'echo deep' } } }], __meta: { seq: 31 } },
+          { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'deep-tool', response: { output: 'deep result' } } }], __meta: { seq: 32 } },
+          { role: 'model', parts: [{ text: 'Deep archive tail' }], __meta: { seq: 33 } },
+        ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/context-blocks/4/expand') && size === 'ctx-deep') {
+        return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 4, expansionKind: 'messages', messages: [
+          { role: 'model', parts: [{ text: '[CTX-BLOCK L2 B#5 raw#1-#3] nested summary' }], __meta: { seq: 30, contextBlock: { id: 5, level: 2, rawStartSeq: 1, rawEndSeq: 3, sourceKind: 'message' } } },
+        ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
       if (url.includes('/context-blocks/4/expand')) {
         await new Promise(resolve => setTimeout(resolve, 125))
         return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 4, expansionKind: 'messages', messages: [{ role: 'model', parts: [{ text: 'Loaded archive detail ' + 'line\\n'.repeat(60) }], __meta: { seq: 1 } }, { role: 'model', parts: [{ functionCall: { id: 'nested-tool', name: 'exec', args: { command: 'echo nested' } } }], __meta: { seq: 2 } }, { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'nested-tool', response: { output: 'nested result' } } }], __meta: { seq: 3 } }, { role: 'model', parts: [{ text: 'archive tail' }], __meta: { seq: 4 } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -71,7 +83,7 @@ before(async () => {
     window.WebSocket = FixtureSocket
     window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', groupTools: size.startsWith('group') || size === 'ctx',
+      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', groupTools: size.startsWith('group') || size.startsWith('ctx'),
     }))
   `
   const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
@@ -97,11 +109,11 @@ const geometry = () => page.evaluate(() => {
   const rect = card.getBoundingClientRect()
   return { top: rect.top, height: rect.height, viewportTop: view.top, scrollTop: container.scrollTop, distance: container.scrollHeight - container.scrollTop - container.clientHeight, styleHeight: card.style.height, clipPath: card.style.clipPath }
 })
-async function mount(size, reduced = false) {
+async function mount(size, reduced = false, width = 900, height = 600) {
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
-  if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.setViewport({ width: 900, height: 600 })
+  if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.setViewport({ width, height })
   await page.goto(`${baseUrl}/?size=${size}&reduced=${reduced ? '1' : '0'}`, { waitUntil: 'load' })
-  await page.waitForSelector(size.startsWith('group') ? '[data-tool-group]' : size === 'ctx' ? '.foxwarm-context-block-card' : size === 'cards' ? '.foxwarm-tool-card' : '[data-system-message-card]')
+  await page.waitForSelector(size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' ? '.foxwarm-tool-card' : '[data-system-message-card]')
   await wait(80)
   await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
   await wait(40)
@@ -172,12 +184,24 @@ test('reduced-motion does not leave a transition height or clip', async () => {
 })
 
 
-test('group expansion interpolates; rail and header collapse whole group; controls stay separate from inner cards', async () => {
+test('group card keeps its counted-tag header and transitions nested members without overlapping disclosure hits', async () => {
   await mount('group')
   const group = '[data-tool-group]'
-  const before = await page.$eval(group, node => ({ height: node.getBoundingClientRect().height, cards: node.querySelectorAll('.foxwarm-tool-card').length, rail: node.querySelector('.foxwarm-tool-group-thread-line') }))
-  assert.equal(before.cards, 1)
-  assert.equal(before.rail, null)
+  const before = await page.$eval(group, node => ({
+    height: node.getBoundingClientRect().height,
+    members: node.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card)').length,
+    header: node.querySelector('.foxwarm-tool-group-header')?.textContent,
+    outerLeft: node.querySelector('[data-tool-group-card]')?.getBoundingClientRect().left,
+    regularLeft: document.querySelector('.foxwarm-assistant-message-card')?.getBoundingClientRect().left,
+    regularWidth: document.querySelector('.foxwarm-assistant-message-card')?.getBoundingClientRect().width,
+    outerWidth: node.querySelector('[data-tool-group-card]')?.getBoundingClientRect().width,
+    inlineHeight: node.style.height,
+    firstAnchor: node.getAttribute('data-chat-message-anchor-key'),
+  }))
+  assert.equal(before.members, 0)
+  assert.equal(before.inlineHeight, '', 'initially mounted group has no height animation')
+  assert.ok(Math.abs(before.outerLeft - before.regularLeft) <= 1 && Math.abs(before.outerWidth - before.regularWidth) <= 2, `collapsed group aligns with ordinary card: ${JSON.stringify(before)}`)
+  assert.ok(before.header?.includes('exec ×2'))
   const samples = await page.$eval(`${group} [aria-label="Expand tool group"]`, async button => {
     const node = button.closest('[data-tool-group]')
     button.click()
@@ -191,25 +215,43 @@ test('group expansion interpolates; rail and header collapse whole group; contro
     } while (performance.now() - started < 320)
     return { heights, target }
   })
-  assert.ok(samples.target.endsWith('px'), 'group layout commit measures a target pixel height')
+  assert.ok(samples.target.endsWith('px'), 'group commit measures a target pixel height')
   await wait(140)
-  const after = await page.$eval(group, node => ({ height: node.getBoundingClientRect().height, cards: node.querySelectorAll('.foxwarm-tool-card').length, rail: !!node.querySelector('.foxwarm-tool-group-thread-line'), header: !!node.querySelector('.foxwarm-tool-group-collapse'), styleHeight: node.style.height, railRight: node.querySelector('.foxwarm-tool-group-thread-line')?.getBoundingClientRect().right, innerLeft: node.querySelector('.foxwarm-tool-thread-line')?.getBoundingClientRect().left, buttonBottom: node.querySelector('.foxwarm-tool-group-collapse')?.getBoundingClientRect().bottom, cardTop: node.querySelector('.foxwarm-tool-card')?.getBoundingClientRect().top }))
-  assert.ok(samples.heights.some(value => value > before.height + 1 && value < after.height - 1), `group has an actual intermediate height between ${before.height} and ${after.height}: ${JSON.stringify(samples.heights)}`)
-  assert.equal(after.cards, 2)
-  assert.ok(after.rail && after.header)
-  assert.ok(after.railRight <= after.innerLeft + 2, 'group rail and member rail have distinct hit areas')
-  assert.ok(after.buttonBottom <= after.cardTop + 1, 'group text control occupies its own strip above card controls')
+  const after = await page.$eval(group, node => {
+    const outer = node.querySelector('[data-tool-group-card]')
+    const member = node.querySelector('.foxwarm-tool-card:not(.foxwarm-tool-group-card)')
+    return {
+      height: node.getBoundingClientRect().height,
+      members: node.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card)').length,
+      header: node.querySelector('.foxwarm-tool-group-header')?.textContent,
+      styleHeight: node.style.height,
+      outerLeft: outer.getBoundingClientRect().left,
+      outerLine: outer.querySelector(':scope > .foxwarm-thread-line-button').getBoundingClientRect().toJSON(),
+      memberLine: member.querySelector(':scope > .foxwarm-thread-line-button').getBoundingClientRect().toJSON(),
+      firstAnchor: node.getAttribute('data-chat-message-anchor-key'),
+      duplicateFirstAnchors: document.querySelectorAll(`[data-chat-message-anchor-key="${node.getAttribute('data-chat-message-anchor-key')}"]`).length,
+    }
+  })
+  assert.ok(samples.heights.some(value => value > before.height + 1 && value < after.height - 1), `actual interpolated group heights between ${before.height} and ${after.height}: ${JSON.stringify(samples.heights)}`)
+  assert.equal(after.members, 2)
+  assert.equal(after.header, before.header, 'counted tags stay in the same header across expansion')
+  assert.equal(after.outerLeft, before.outerLeft, 'collapsed and expanded outer card align')
+  assert.equal(after.firstAnchor, before.firstAnchor)
+  assert.equal(after.duplicateFirstAnchors, 1)
+  assert.ok(after.outerLine.right <= after.memberLine.left, `outer/inner hit rectangles do not intersect: ${JSON.stringify(after)}`)
   assert.equal(after.styleHeight, '')
-  await page.click(`${group} .foxwarm-tool-group-thread-line`)
+  await page.click(`${group} .foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button`)
+  assert.equal(await page.$eval(group, node => node.dataset.toolGroupExpanded), 'true', 'member toggle does not collapse the outer card')
+  await page.click(`${group} [data-tool-group-card] > .foxwarm-thread-line-button`)
   await wait(370)
-  assert.equal(await page.$eval(group, node => node.querySelectorAll('.foxwarm-tool-card').length), 1)
+  assert.equal(await page.$eval(group, node => node.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card)').length), 0)
+  assert.equal(await page.$eval(group, node => node.querySelector('.foxwarm-tool-group-header')?.textContent), before.header)
   await page.click(`${group} [aria-label="Expand tool group"]`)
   await wait(370)
-  await page.click(`${group} .foxwarm-tool-group-collapse`)
+  await page.click(`${group} .foxwarm-tool-group-header`)
   await wait(370)
-  assert.equal(await page.$eval(group, node => node.querySelectorAll('.foxwarm-tool-card').length), 1)
+  assert.equal(await page.$eval(group, node => node.dataset.toolGroupExpanded), 'false', 'the header itself collapses the group')
 })
-
 
 test('oversized group preserves its top until new content or explicit bottom navigation', async () => {
   await mount('group-large')
@@ -265,8 +307,8 @@ test('CTX asynchronous archive content grows after toggle and returns to natural
   assert.equal(await page.$eval(nestedGroup, node => node.querySelector('[aria-label="Expand tool group"]') !== null), true)
   await page.$eval(`${nestedGroup} [aria-label="Expand tool group"]`, node => node.click())
   await wait(370)
-  assert.equal(await page.$eval(nestedGroup, node => node.querySelector('.foxwarm-tool-card:not(:has([aria-label="Expand tool group"]))') !== null), true)
-  await page.$eval(`${nestedGroup} .foxwarm-tool-group-collapse`, node => node.click())
+  assert.equal(await page.$eval(nestedGroup, node => node.querySelector('.foxwarm-tool-card:not(.foxwarm-tool-group-card)') !== null), true)
+  await page.$eval(`${nestedGroup} .foxwarm-tool-group-header`, node => node.click())
   await wait(370)
   assert.equal(await page.$eval(nestedGroup, node => node.querySelector('[aria-label="Expand tool group"]') !== null), true)
 })
@@ -283,30 +325,38 @@ test('new streaming content after a tall expansion resumes the existing bottom f
 })
 
 
-test('mobile chevron treatment keeps a discoverable group collapse button without a drawn long rail', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
-  await page.setViewport({ width: 380, height: 640 })
-  await mount('group')
+test('mobile chevron treatment keeps the outer card header and contained disclosure operable', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
+  await mount('group', false, 380, 640)
   await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-separator-treatment', 'chevron'))
+  const beforeHeader = await page.$eval('[data-tool-group] .foxwarm-tool-group-header', node => node.textContent)
   await page.click('[data-tool-group] [aria-label="Expand tool group"]')
   await wait(350)
-  const group = await page.$eval('[data-tool-group]', node => {
-    const rail = node.querySelector('.foxwarm-tool-group-thread-line')
-    const button = node.querySelector('.foxwarm-tool-group-collapse')
-    const stroke = rail.querySelector('.foxwarm-thread-line-stroke')
-    const icon = rail.querySelector('.foxwarm-thread-disclosure-icon')
-    const badge = node.querySelector('.foxwarm-model-usage-badge')
-    return { stroke: getComputedStyle(stroke).display, icon: getComputedStyle(icon).display, buttonRect: button.getBoundingClientRect().toJSON(), railRect: rail.getBoundingClientRect().toJSON(), badgeRect: badge?.getBoundingClientRect().toJSON(), viewRect: document.querySelector('.foxwarm-chat-messages').getBoundingClientRect().toJSON() }
+  await page.$eval('[data-tool-group] [data-usage-badge]', node => node.scrollIntoView({ block: 'center', inline: 'nearest' }))
+  const result = await page.$eval('[data-tool-group]', node => {
+    const outer = node.querySelector('[data-tool-group-card]')
+    const line = outer.querySelector(':scope > .foxwarm-thread-line-button')
+    const stroke = line.querySelector('.foxwarm-thread-line-stroke')
+    const icon = line.querySelector('.foxwarm-thread-disclosure-icon')
+    const header = outer.querySelector('.foxwarm-tool-group-header')
+    const badge = node.querySelector('[data-usage-badge]')
+    const view = document.querySelector('.foxwarm-chat-messages')
+    return { stroke: getComputedStyle(stroke).display, icon: getComputedStyle(icon).display, header: header.textContent,
+      lineRect: line.getBoundingClientRect().toJSON(), headerRect: header.getBoundingClientRect().toJSON(),
+      badgeRect: badge?.getBoundingClientRect().toJSON(), badgeHit: badge ? document.elementFromPoint(badge.getBoundingClientRect().left + badge.getBoundingClientRect().width / 2, badge.getBoundingClientRect().top + badge.getBoundingClientRect().height / 2)?.closest('[data-usage-badge]') === badge : false, viewRect: view.getBoundingClientRect().toJSON(),
+      horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth }
   })
-  assert.equal(group.stroke, 'none')
-  assert.notEqual(group.icon, 'none')
-  assert.ok(group.railRect.left >= group.viewRect.left - 1, 'group disclosure remains inside the viewport')
-  assert.ok(group.buttonRect.left >= group.viewRect.left && group.buttonRect.right < group.viewRect.right, 'text control is touch-visible')
-  if (group.badgeRect) assert.ok(group.buttonRect.right < group.badgeRect.left || group.buttonRect.bottom < group.badgeRect.top, 'top control does not overlap usage')
-  await page.click('[data-tool-group] .foxwarm-tool-group-collapse')
+  assert.equal(result.stroke, 'none')
+  assert.notEqual(result.icon, 'none')
+  assert.equal(result.header, beforeHeader)
+  assert.ok(result.lineRect.left >= result.viewRect.left - 1 && result.lineRect.right <= result.viewRect.right, 'contained chevron remains clickable')
+  assert.ok(result.horizontalOverflow <= 1)
+  assert.ok(result.badgeRect, 'group member usage remains available inside the expanded card')
+  assert.ok(result.badgeRect.right <= result.viewRect.right + 1, 'usage stays in viewport')
+  assert.ok(result.badgeHit, `usage badge remains painted and clickable: ${JSON.stringify(result)}`)
+  await page.click('[data-tool-group] .foxwarm-tool-group-header')
   await wait(350)
   assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'false')
 })
-
 
 test('explicit bottom navigation during an active tall group transition wins over the hold', async () => {
   await mount('group-large')
@@ -324,7 +374,7 @@ test('group reversal while still animating restores the collapsed natural box', 
   await mount('group-large')
   await page.$eval('[data-tool-group] [aria-label="Expand tool group"]', node => node.click())
   await wait(70)
-  await page.$eval('[data-tool-group] .foxwarm-tool-group-thread-line', node => node.click())
+  await page.$eval('[data-tool-group] [data-tool-group-card] > .foxwarm-thread-line-button', node => node.click())
   await wait(600)
   const group = await page.$eval('[data-tool-group]', node => ({ height: node.getBoundingClientRect().height, inlineHeight: node.style.height, overflow: node.style.overflow, summary: !!node.querySelector('[aria-label="Expand tool group"]') }))
   assert.ok(group.summary)
@@ -360,11 +410,11 @@ test('reversing both directions targets the new natural height from the currentl
     group.querySelector('[aria-label="Expand tool group"]').click()
     await frames(6)
     const expandingTarget = Number.parseFloat(group.style.height)
-    const toCollapse = await measureReverse(group.querySelector('.foxwarm-tool-group-thread-line'), collapsed)
+    const toCollapse = await measureReverse(group.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button'), collapsed)
     group.querySelector('[aria-label="Expand tool group"]').click()
     await new Promise(resolve => setTimeout(resolve, 420))
     const expanded = height()
-    group.querySelector('.foxwarm-tool-group-thread-line').click()
+    group.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button').click()
     await frames(6)
     const toExpand = await measureReverse(group.querySelector('[aria-label="Expand tool group"]'), expanded)
     return { collapsed, expanded, expandingTarget, toCollapse, toExpand }
@@ -441,4 +491,93 @@ test('two active tall cards do not release each other’s pending follow early',
   await wait(500)
   const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
   assert.ok(after < 5, 'the pending token follows after both animations complete')
+})
+
+
+test('multi-level CTX and nested tool-group disclosures have disjoint hit rectangles', async () => {
+  await mount('ctx-deep')
+  await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
+  await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-card')
+  await page.$eval('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
+  await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-nested [data-tool-group]')
+  const measure = () => page.evaluate(() => {
+    const contexts = [...document.querySelectorAll('.foxwarm-context-block-card')]
+    const group = contexts[1].querySelector('[data-tool-group]')
+    const rect = node => node.getBoundingClientRect().toJSON()
+    return {
+      parentLine: rect(contexts[0].querySelector(':scope > .foxwarm-thread-line-button')),
+      childLine: rect(contexts[1].querySelector(':scope > .foxwarm-thread-line-button')),
+      groupLine: rect(group.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button')),
+      summaryWidth: rect(contexts[0].querySelector('.foxwarm-markdown')).width,
+      parentWidth: rect(contexts[0]).width,
+      horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      nestedAnchors: contexts[0].querySelectorAll('[data-chat-message-anchor-key]').length,
+    }
+  })
+  const collapsed = await measure()
+  assert.ok(collapsed.parentLine.right <= collapsed.childLine.left, `CTX levels have separate hit areas: ${JSON.stringify(collapsed)}`)
+  assert.ok(collapsed.childLine.right <= collapsed.groupLine.left, `CTX/group lines are separate: ${JSON.stringify(collapsed)}`)
+  assert.ok(collapsed.parentWidth - collapsed.summaryWidth <= 25, 'nested inset does not shrink the parent summary')
+  assert.equal(collapsed.nestedAnchors, 0, 'nested CTX timeline does not register top-level viewport anchors')
+  await page.$eval('.foxwarm-context-block-nested [data-tool-group] [aria-label="Expand tool group"]', node => node.click())
+  await wait(400)
+  const groupPair = await page.$eval('.foxwarm-context-block-nested [data-tool-group]', node => {
+    const rect = element => element.getBoundingClientRect().toJSON()
+    return { outer: rect(node.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button')), inner: rect(node.querySelector('.foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button')) }
+  })
+  assert.ok(groupPair.outer.right <= groupPair.inner.left, `group/member nested lines are separate: ${JSON.stringify(groupPair)}`)
+  await page.$eval('.foxwarm-context-block-nested [data-tool-group] .foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button', node => node.click())
+  assert.equal(await page.$eval('.foxwarm-context-block-nested [data-tool-group]', node => node.dataset.toolGroupExpanded), 'true', 'member interaction does not collapse its parent group')
+  const expanded = await measure()
+  assert.ok(expanded.horizontalOverflow <= 1, `nested disclosures do not create horizontal overflow: ${JSON.stringify(expanded)}`)
+})
+
+
+test('narrow multi-level CTX plus nested group preserves touch-size disclosure separation', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
+  await mount('ctx-deep', false, 380, 640)
+  await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-separator-treatment', 'chevron'))
+  await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
+  await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-card')
+  await page.$eval('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
+  await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-nested [data-tool-group]')
+  await page.$eval('.foxwarm-context-block-nested [data-tool-group] [aria-label="Expand tool group"]', node => node.click())
+  await wait(450)
+  const sample = await page.evaluate(() => {
+    const contexts = [...document.querySelectorAll('.foxwarm-context-block-card')]
+    const group = contexts[1].querySelector('[data-tool-group]')
+    const rect = element => element.getBoundingClientRect().toJSON()
+    return { parent: rect(contexts[0].querySelector(':scope > .foxwarm-thread-line-button')),
+      child: rect(contexts[1].querySelector(':scope > .foxwarm-thread-line-button')),
+      group: rect(group.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button')),
+      member: rect(group.querySelector('.foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button')),
+      width: innerWidth, overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth }
+  })
+  assert.ok(sample.width < 500, `actual narrow viewport required: ${JSON.stringify(sample)}`)
+  for (const [parent, child] of [[sample.parent, sample.child], [sample.child, sample.group], [sample.group, sample.member]]) {
+    assert.ok(parent.right <= child.left, `narrow nested touch rectangles do not overlap: ${JSON.stringify(sample)}`)
+  }
+  assert.ok(sample.overflow <= 1, `nested cards stay inside viewport: ${JSON.stringify(sample)}`)
+})
+
+test('expanded group member usage remains outside its card edge and clickable in chevron theme', async () => {
+  await mount('group')
+  await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-separator-treatment', 'chevron'))
+  await page.click('[data-tool-group] [aria-label="Expand tool group"]')
+  await wait(410)
+  await page.$eval('[data-tool-group] [data-usage-badge]', node => node.scrollIntoView({ block: 'center', inline: 'nearest' }))
+  const sample = await page.$eval('[data-tool-group]', node => {
+    const outer = node.querySelector('[data-tool-group-card]')
+    const member = node.querySelector('.foxwarm-tool-card:not(.foxwarm-tool-group-card)')
+    const badge = node.querySelector('[data-usage-badge]')
+    const badgeRect = badge.getBoundingClientRect()
+    return { outerOverflow: getComputedStyle(outer).overflowX, memberRight: member.getBoundingClientRect().right,
+      badgeLeft: badgeRect.left, hit: document.elementFromPoint(badgeRect.left + badgeRect.width / 2, badgeRect.top + badgeRect.height / 2)?.closest('[data-usage-badge]') === badge,
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth }
+  })
+  assert.ok(sample.badgeLeft >= sample.memberRight + 7, `existing 8px member-to-usage gap: ${JSON.stringify(sample)}`)
+  assert.equal(sample.outerOverflow, 'visible', 'outer group card must not clip member usage')
+  assert.ok(sample.hit, `badge is actually clickable outside member card: ${JSON.stringify(sample)}`)
+  assert.ok(sample.documentOverflow <= 1)
+  await page.click('[data-tool-group] [data-usage-badge]')
+  assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'true', 'usage click does not collapse group')
 })

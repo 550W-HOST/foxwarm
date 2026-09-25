@@ -44,6 +44,12 @@ before(async () => {
         sessionId: 'fixture/main', messages, isMobile: false, groupTools, showUsageBadge: false,
       }))
     }
+    window.appendTailEvent = () => roots.tail.render(React.createElement(ChatTimeline, {
+      sessionId: 'fixture/main', messages: [...cases.tail.messages, ${JSON.stringify(event('streaming-tail', 15))}], isMobile: false, groupTools: true, showUsageBadge: false,
+    }))
+    window.restoreTail = () => roots.tail.render(React.createElement(ChatTimeline, {
+      sessionId: 'fixture/main', messages: cases.tail.messages, isMobile: false, groupTools: true, showUsageBadge: false,
+    }))
     window.moveTailToHistory = () => roots.tail.render(React.createElement(ChatTimeline, {
       sessionId: 'fixture/main', messages: [...cases.tail.messages, { role: 'model', parts: [{ text: 'NEW ANSWER' }], __meta: { seq: 15 } }], isMobile: false, groupTools: true, showUsageBadge: false,
     }))
@@ -73,8 +79,8 @@ const snapshot = async (name) => page.$eval(`#${name}`, element => ({
   summaries: element.querySelectorAll('[aria-label="Expand tool group"]').length,
   summaryTags: [...element.querySelectorAll('.foxwarm-tool-card:has([aria-label="Expand tool group"]) [data-tool-tag-tone]')].map(tag => [tag.querySelector('span:last-child')?.textContent, tag.getAttribute('data-tool-tag-tone')]),
   eventCards: [...element.querySelectorAll('[data-system-message-kind="event"]')].map(card => card.textContent),
-  toolCards: element.querySelectorAll('.foxwarm-tool-card:not(:has([aria-label="Expand tool group"]))').length,
-  toolText: [...element.querySelectorAll('.foxwarm-tool-card:not(:has([aria-label="Expand tool group"]))')].map(card => card.textContent),
+  toolCards: element.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card):not(:has([aria-label="Expand tool group"]))').length,
+  toolText: [...element.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card):not(:has([aria-label="Expand tool group"]))')].map(card => card.textContent),
   rows: [...element.querySelectorAll('.foxwarm-chat-timeline [data-chat-message-anchor-key]')].map(row => row.getAttribute('data-chat-message-anchor-key')),
   fullText: element.textContent,
 }))
@@ -148,10 +154,35 @@ test('quoted event text, external input, other system kinds, and a new user turn
 })
 
 
+test('streaming updates within the forced-open tail retain the wrapper and first card DOM state', async () => {
+  const before = await page.$eval('#tail [data-tool-group]', group => {
+    window.stableTailGroup = group
+    window.stableTailCard = group.querySelector('.foxwarm-tool-card')
+    group.querySelector('.foxwarm-tool-card .foxwarm-thread-line-button').click()
+    return { key: group.getAttribute('data-chat-message-anchor-key') }
+  })
+  await page.waitForFunction(() => document.querySelector('#tail .foxwarm-tool-card .foxwarm-thread-line-button')?.getAttribute('aria-expanded') === 'true')
+  await page.evaluate(() => window.appendTailEvent())
+  await page.waitForFunction(() => document.querySelectorAll('#tail [data-system-message-kind="event"]').length === 3)
+  const after = await page.$eval('#tail [data-tool-group]', group => ({
+    wrapperSame: group === window.stableTailGroup,
+    cardSame: group.querySelector('.foxwarm-tool-card') === window.stableTailCard,
+    cardExpanded: group.querySelector('.foxwarm-tool-card .foxwarm-thread-line-button').getAttribute('aria-expanded'),
+    key: group.getAttribute('data-chat-message-anchor-key'),
+    header: group.querySelector('[data-tool-group-card]'),
+  }))
+  assert.ok(after.wrapperSame && after.cardSame, 'new tail content does not remount existing tool UI')
+  assert.equal(after.cardExpanded, 'true', 'local expanded state remains in the still-open tail')
+  assert.equal(after.key, before.key)
+  assert.equal(after.header, null, 'forced-open tail does not acquire a counted header')
+  await page.evaluate(() => window.restoreTail())
+  await page.waitForFunction(() => document.querySelectorAll('#tail [data-system-message-kind="event"]').length === 2)
+})
+
 test('the final keep-expanded group has no collapse control, retains wrapper identity as it becomes history, and then follows ordinary grouping', async () => {
   const before = await page.$eval('#tail [data-tool-group]', node => {
     window.tailGroupNode = node
-    return { key: node.dataset.toolGroup, expanded: node.dataset.toolGroupExpanded, groupControl: !!node.querySelector('.foxwarm-tool-group-collapse') }
+    return { key: node.dataset.toolGroup, expanded: node.dataset.toolGroupExpanded, groupControl: !!node.querySelector('[data-tool-group-card]') }
   })
   assert.equal(before.expanded, 'true')
   assert.equal(before.groupControl, false)
@@ -160,9 +191,9 @@ test('the final keep-expanded group has no collapse control, retains wrapper ide
   assert.equal(await page.$eval('#tail [data-tool-group]', node => node === window.tailGroupNode), true, 'tail-to-history keeps the same group wrapper')
   assert.equal(await page.$eval('#tail [data-tool-group]', node => node.dataset.toolGroup), before.key)
   await page.click('#tail [aria-label="Expand tool group"]')
-  await page.waitForSelector('#tail .foxwarm-tool-group-collapse')
+  await page.waitForSelector('#tail [data-tool-group-card] > [aria-label="Collapse tool group"]')
   assert.equal(await page.$eval('#tail [data-tool-group]', node => node === window.tailGroupNode), true)
   await page.waitForFunction(() => !document.querySelector('#tail [data-tool-group]')?.style.height)
-  await page.click('#tail .foxwarm-tool-group-collapse')
+  await page.click('#tail .foxwarm-tool-group-header')
   await page.waitForSelector('#tail [aria-label="Expand tool group"]')
 })

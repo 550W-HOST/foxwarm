@@ -1767,6 +1767,12 @@ html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-tr
   overflow: hidden;
 }
 
+/* Expanded groups contain member usage badges outside the individual card edge.
+ * Keep that established placement visible while their own header remains rounded. */
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-tool-group-card[data-group-expanded="true"] {
+  overflow: visible;
+}
+
 html[data-foxwarm-separator-treatment="chevron"] .foxwarm-thread-line-button {
   left: 4px !important;
 }
@@ -2020,10 +2026,3 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-webkit-slider-thumb { opacity: 0; }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-moz-range-thumb { opacity: 0; }
-
-/* The group disclosure belongs to the run, not to its individual tool-card rails.
- * The wrapper reserves a separate gutter so both hit targets remain independent. */
-.foxwarm-tool-group > .foxwarm-tool-group-thread-line {
-  left: 0 !important;
-  right: auto !important;
-}

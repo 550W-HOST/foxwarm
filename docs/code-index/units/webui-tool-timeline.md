@@ -12,7 +12,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `InterleavedToolGroup` — renders model call/response pairs selected by `timelineRows`, including pairs separated only by event rows
 - `ToolCallsBlock` — renders tool calls from a single message (no responses yet)
 - `ToolResponsesBlock` — renders tool responses from a single message (orphaned)
-- `ToolGroupSummaryCard` — collapsed summary card for a group of tool calls
+- `ToolGroupSummaryCard` — persistent counted-tag header and Tool-style outer card for a historical tool group
 - `OpenCodeFileHandler` / `ToolCodePath` — callback contract and plain-path wrapper with a keyboard-accessible Code icon action for supported direct file-tool paths
 - `ExecCommandText` — syntax-highlighted shell command with heredoc support
 - `ExecOutputText` — syntax-highlighted or ANSI-parsed command output
@@ -25,7 +25,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
 | `ToolDownloadButton({ url, fileName })` | ~15 | Renders a styled download button that triggers browser download |
-| `ToolGroupSummaryCard({ items, onExpand })` | ~15 | Collapsed card showing tool tags counted per tag (`exec ×4`), failed calls counted in their own entry, most frequent first, with expand toggle |
+| `ToolGroupSummaryCard({ items, onExpand, expanded?, children? })` | ~15 | Neutral Tool-style group card with a persistent counted-tag header (`exec ×4`; failures separate, most frequent first), shared header/line toggle, and nested member body when expanded |
 | `getToolDisplayLabel(call)` | ~1 | Formats a human-readable label for a tool call |
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
 | `truncateToolResultPreview(text)` | ~3 | Truncates a collapsed tool result to the shared 800-character sample |
@@ -101,7 +101,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ### D-webui-tool-group-collapse
 
-Counted tool groups share a keyed wrapper even while forced-open as the final standalone run; row descendants retain their keys, anchors, usage placement, and local card state. Historical expanded groups collapse through a distinct left disclosure or top "Collapse group" button, including themes without a long rail. Collapsed groups expand through their summary. Group tools off remains unwrapped, and the final standalone run retains its forced-open rule. When a tail run becomes historical, the existing collapsed-by-default rule applies without replacing its group wrapper.
+A counted tool run retains one keyed wrapper even while the final standalone group is forced open. Historical runs use a single neutral Tool-style outer card whose counted-tag header remains present in both states; its own header and `ThreadLineButton` toggle the group, and expanded member cards nest below the header with a `pl-4` inset. There is no extra "Collapse group" title/rail or duplicate summary within a member row. The first group-row viewport anchor key stays on the stable wrapper, other visible row anchors remain unchanged, and aggregated collapsed usage remains owned by that group's first row/card frame. Member usage badges remain interactive, including outside the nested card edge in rounded/chevron treatments. The last standalone run keeps its direct cards and forced-open rule; when it becomes historical the established default collapse still unmounts its member cards without replacing the wrapper. Group tools off renders ordinary rows without group chrome.
 
 ### D-webui-malformed-call-args-display
 

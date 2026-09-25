@@ -767,32 +767,32 @@ interface MessageRowProps {
   row: TimelineRowView
   isMobile: boolean
   showUserMessageMetadata: boolean
-  onExpandGroup: (groupKey: string) => void
   sessionId: string
   nestedDepth: number
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
+  groupFirst?: boolean
+  insideGroupCard?: boolean
 }
 
 const MessageRow = memo(function MessageRow({
   row,
   isMobile,
   showUserMessageMetadata,
-  onExpandGroup,
   sessionId,
   nestedDepth,
   onOpenCodeFile,
   onOpenCodeCommit,
   renderNestedMessages,
+  groupFirst = false,
+  insideGroupCard = false,
 }: MessageRowProps) {
   const {
     key: messageKey,
     msg,
     pairedToolResponse,
-    group,
     collapsedGroup,
-    renderSummary,
     hideFoldedThinking,
     suppressWebSearchCards,
     usageBadge,
@@ -835,12 +835,12 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <div
-      className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}
-      data-chat-message-anchor-key={anchorKey}
-      data-context-scrollbar-anchor-key={scrollbarAnchorKey}
+      className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${groupFirst ? '' : marginClass}`}
+      data-chat-message-anchor-key={groupFirst ? undefined : anchorKey}
+      data-context-scrollbar-anchor-key={groupFirst ? undefined : scrollbarAnchorKey}
     >
       <div
-        className={`min-w-0 ${widthClass} ${
+        className={`min-w-0 ${insideGroupCard ? 'w-full' : widthClass} ${
           !systemLikeMessage && msg.role === 'user'
             ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
             : ''
@@ -894,9 +894,6 @@ const MessageRow = memo(function MessageRow({
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
-            {renderSummary && group && (
-              <ToolGroupSummaryCard items={group.summaryItems} onExpand={() => onExpandGroup(group.key)} />
-            )}
             {collapsedGroup ? null : (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
             {collapsedGroup ? null : (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
             {usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} />}
@@ -909,7 +906,8 @@ const MessageRow = memo(function MessageRow({
   prev.row === next.row &&
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
-  prev.onExpandGroup === next.onExpandGroup &&
+  prev.groupFirst === next.groupFirst &&
+  prev.insideGroupCard === next.insideGroupCard &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
@@ -922,7 +920,7 @@ type TimelineGroupRows = { key: string; group: TimelineGroupView | null; rows: T
 interface TimelineGroupProps {
   group: TimelineGroupView
   rows: TimelineRowView[]
-  rowProps: Omit<MessageRowProps, 'row' | 'onExpandGroup'>
+  rowProps: Omit<MessageRowProps, 'row'>
   onToggle: (key: string, expanded: boolean) => void
 }
 
@@ -931,17 +929,30 @@ const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onTog
   const { ref, prepare } = useThreadCardHeightTransition(expanded)
   const expand = useCallback(() => { prepare(); onToggle(group.key, true) }, [group.key, onToggle, prepare])
   const collapse = useCallback(() => { prepare(); onToggle(group.key, false) }, [group.key, onToggle, prepare])
+  const first = rows[0]
   return (
-    <div ref={ref} className={`foxwarm-tool-group relative min-w-0 max-w-full pl-7 ${expanded && !group.keepExpanded ? 'pt-4' : ''}`} data-tool-group={group.key} data-tool-group-expanded={expanded}>
-      {expanded && !group.keepExpanded && (
-        <>
-          <ThreadLineButton expanded onToggle={collapse} label="Collapse tool group" className="foxwarm-tool-group-thread-line text-fw-text-muted hover:text-fw-text-strong" />
-          <button type="button" onClick={collapse} className="foxwarm-tool-group-collapse absolute left-7 top-0 z-10 text-[10px] leading-4 text-fw-text-muted hover:text-fw-text-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-fw-focus-ring" aria-label="Collapse tool group">Collapse group</button>
-        </>
+    <div
+      ref={ref}
+      className={`foxwarm-tool-group relative min-w-0 ${group.keepExpanded ? 'max-w-full' : first.widthClass} ${first.marginClass}`}
+      data-tool-group={group.key}
+      data-tool-group-expanded={expanded}
+      data-chat-message-anchor-key={first.anchorKey}
+      data-context-scrollbar-anchor-key={first.scrollbarAnchorKey}
+    >
+      {group.keepExpanded ? rows.map((row, index) => (
+        <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} />
+      )) : (
+        <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
+          <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
+            {rows.map((row, index) => (
+              <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} insideGroupCard />
+            ))}
+          </ToolGroupSummaryCard>
+          {!expanded && first.usageBadge && (
+            <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} />
+          )}
+        </div>
       )}
-      {rows.map(row => (
-        <MessageRow key={row.key} row={row} {...rowProps} onExpandGroup={expand} />
-      ))}
     </div>
   )
 })
@@ -998,8 +1009,6 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
     })
   }, [])
 
-  const handleExpandGroup = useCallback((key: string) => handleGroupToggle(key, true), [handleGroupToggle])
-
   const rowProps = { isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages }
 
   return (
@@ -1007,7 +1016,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       {groupedRows.map(item => item.group ? (
         <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
       ) : (
-        <MessageRow key={item.key} row={item.rows[0]} {...rowProps} onExpandGroup={handleExpandGroup} />
+        <MessageRow key={item.key} row={item.rows[0]} {...rowProps} />
       ))}
     </div>
   )
