@@ -10,7 +10,7 @@ import { webUiRealtime } from './realtime'
 export interface BoundedChildPage { parentSessionId: string; ids: string[]; total: number; nextCursor: string | null }
 export interface BoundedBranchLoadState { status: 'loading' | 'error'; message?: string }
 interface SidebarPayload { version: 1; sessions: Session[]; nextCursor: string | null; reset?: boolean
-  children?: Array<{ parentSessionId: string; sessions: Session[]; total: number; nextCursor: string | null }>
+  children?: Array<{ parentSessionId: string; sessions: Session[]; total: number }>
   focus?: Array<{ session: Session | null }>; pathContext?: Array<{ session: Session | null }>; forcedChildren?: Record<string, string[]> }
 interface CacheState { rows: Map<string, Session>; rootIds: string[]; rootCursor: string | null; rootTarget: number
   childPages: Map<string, BoundedChildPage>; previewParents: Set<string>; ownedBranches: Map<string, number>
@@ -94,7 +94,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     } })
     const pages = result.pages as Array<SidebarPayload & { items: Session[] }>; const rows: Session[] = [...result.items]
     const childPages = new Map<string, BoundedChildPage>(); const previewParents = new Set<string>(); let forcedChildren: Record<string, string[]> = {}
-    for (const page of pages) { for (const group of page.children || []) { previewParents.add(group.parentSessionId); childPages.set(group.parentSessionId, { parentSessionId: group.parentSessionId, ids: group.sessions.map(row => row.id), total: group.total, nextCursor: group.nextCursor }); rows.push(...group.sessions) }
+    for (const page of pages) { for (const group of page.children || []) { previewParents.add(group.parentSessionId); childPages.set(group.parentSessionId, { parentSessionId: group.parentSessionId, ids: group.sessions.map(row => row.id), total: group.total, nextCursor: null }); rows.push(...group.sessions) }
       rows.push(...(page.focus || []).flatMap(item => item.session ? [item.session] : []), ...(page.pathContext || []).flatMap(item => item.session ? [item.session] : [])); forcedChildren = { ...forcedChildren, ...(page.forcedChildren || {}) } }
     return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childPages, previewParents, forcedChildren, rows, revision: result.revision }
   }, [mode, childLimit, focusIds.join('\0')])

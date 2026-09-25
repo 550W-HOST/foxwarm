@@ -252,7 +252,13 @@ function sanitizeWebUiTransportValue(value: any): any {
 }
 
 function buildWebUiMessage(message: Message): Message {
-  return sanitizeWebUiTransportValue(message) as Message;
+  const projected = sanitizeWebUiTransportValue(message) as Message;
+  projected.parts = projected.parts.map(part => {
+    if (!part.functionCall || part.functionCall.argsParseError !== undefined) return part;
+    const { rawArgsText: _rawArgsText, ...functionCall } = part.functionCall;
+    return { ...part, functionCall };
+  });
+  return projected;
 }
 
 async function materializeWebUiMessages(messages: Message[]): Promise<{ messages: Message[]; canonicalMessages: Message[]; changed: boolean }> {
@@ -1480,7 +1486,8 @@ export class WebUIChannel implements Channel {
             for (let index = 0; index < pathContextIds.length; index += 100) {
               pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
             }
-            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
+            const sidebarChildren = children.children.map(({ nextCursor: _nextCursor, ...preview }) => preview);
+            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: sidebarChildren, focus: focus.results,
               presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list sidebar query');

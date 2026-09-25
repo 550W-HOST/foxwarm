@@ -58,6 +58,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
   focus paths, exact/alias batches, Architecture summaries, descendant preview,
   and explicit JavaScript-compatible search. It does not hydrate semantic
   history or replace the legacy all-list route.
+- Only `/api/session-list/sidebar` omits `nextCursor` from each `children[]` preview. Its top-level root cursor and `/api/session-list/children` continuation cursors remain available; catalog query DTOs and other consumers of child previews are unchanged.
 - Sidebar root/child, exact/by-ID, forced-focus, search, and initial watched-row
   projections attach numeric direct Sidebar child counts through one maintained
   catalog-count batch over the rows in that response. Later state-only SSE
@@ -76,6 +77,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - `GET /api/sessions/:id/history` keeps its query-agnostic full-snapshot compatibility when no recognized range key is present and accepts one mutually exclusive range mode otherwise. `tail` returns the newest bounded rows and a guarded prefix boundary; `prefixLength` plus `historyVersion` returns exactly the older prefix; `afterSeq` plus `historyVersion` returns newly appended sequence-bearing rows while retaining current session/snapshot/queue metadata. Range requests reject unknown/mixed keys, and every form exposes the exact-owner `latestSeq` frontier. Prefix and suffix requests reject a changed history version retryably, and slicing occurs before WebUI image materialization. Queue previews remain separate from committed history; normal Chat bootstrap does not need the full debug-file route.
 - History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Provider-hosted generated images use the same reference-to-API-path materialization, so they reload after refresh, history paging, and server restart without any provider-specific transport. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). It remains an authenticated lightweight state API and compatibility surface; current WebSocket Chat reconnect receives existence/state through its revisioned subscription snapshot.
+- The WebUI message projection omits `functionCall.rawArgsText` only from real `message.parts[].functionCall` values without `argsParseError`. Malformed calls retain raw text, error, and structured args; nested tool/user data with coincidentally named fields remains untouched by this trimming rule. History, context expansion, Debug messages, SSE, and realtime WebSocket/history-append use the same transport projection without rewriting canonical history or archives.
 - `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
 - Each per-session SSE connection sends an immediate SessionRuntime state snapshot, then cloned history/state events plus router-owned transient stream and deletion updates for that session.
 - The global SSE stream sends catalog invalidation without an all-row payload. A client may subscribe with capped repeated `sessionId` parameters; connection sends immediate bounded projections for matching exact/alias rows, and later state/deletion events send `session-list-delta` only for subscribed canonical IDs. This supports loaded/current/open/watch rows without recreating a complete browser mirror.
@@ -105,6 +107,14 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - Persisted session-list presentation metadata may be lost when the metadata index must be rebuilt from history; it is intentionally not duplicated into history files.
 
 ## Design decisions
+
+### D-webui-message-tool-args-transport
+
+[2026-09-25] WebUI message responses omit `rawArgsText` from a real function-call part unless that call has `argsParseError`. Parse failures retain the raw text alongside structured args and the error. Apply this only when projecting WebUI transport messages, never to canonical Session history, archive/replay, provider requests, or arbitrary nested data fields.
+
+### D-webui-sidebar-preview-cursor
+
+[2026-09-25] `/api/session-list/sidebar` omits `nextCursor` inside child previews at its final transport boundary. Root `nextCursor` and `/api/session-list/children` continuation cursors remain; internal child-preview queries and their other API consumers retain their DTOs.
 
 ### D-webui-channel-queue-preview
 

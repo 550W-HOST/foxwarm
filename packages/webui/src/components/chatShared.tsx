@@ -90,6 +90,8 @@ export interface FunctionCall {
   id?: string
   name: string
   args: any
+  rawArgsText?: string
+  argsParseError?: string
 }
 
 const normalizeToolLabelValue = (value: unknown): string | null => {

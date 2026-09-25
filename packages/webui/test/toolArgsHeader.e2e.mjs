@@ -56,6 +56,22 @@ async function buildFixtureBundle() {
         call: { id: 'send-alias-call', name: 'send_to_session', args: { sessionId: '<main>', message: 'alias body' } },
         response: { tool_use_id: 'send-alias-call', name: 'send_to_session', response: { output: 'sent' } },
       },
+      malformedPatch: {
+        call: { id: 'malformed-patch', name: 'apply_patch', args: {}, argsParseError: 'Invalid tool arguments JSON', rawArgsText: '<img src=x onerror=window.rawXss=1>\\n{not-json' },
+        response: { tool_use_id: 'malformed-patch', name: 'apply_patch', response: { error: 'Invalid arguments' } },
+      },
+      malformedExec: {
+        call: { id: 'malformed-exec', name: 'exec', args: {}, argsParseError: 'Invalid tool arguments JSON', rawArgsText: 'invalid command args' },
+        response: { tool_use_id: 'malformed-exec', name: 'exec', response: { error: 'Invalid arguments' } },
+      },
+      rawNoError: {
+        call: { id: 'raw-no-error', name: 'exec', args: { command: 'echo actual command' }, rawArgsText: 'wrong raw command' },
+        response: { tool_use_id: 'raw-no-error', name: 'exec', response: { output: 'ok' } },
+      },
+      rawMissing: {
+        call: { id: 'raw-missing', name: 'exec', args: { command: 'echo fallback' }, argsParseError: 'Invalid tool arguments JSON' },
+        response: { tool_use_id: 'raw-missing', name: 'exec', response: { error: 'Invalid arguments' } },
+      },
     }
     window.openedCodePaths = []
     const onOpenCodeFile = (filePath, lines) => window.openedCodePaths.push({ filePath, lines })
@@ -86,7 +102,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.evaluate(({ style, dark }) => {
     window.setFixtureTheme(style, dark)
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 6)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 10)
 }
 
 async function readVisualState(id) {
@@ -229,7 +245,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -240,6 +256,28 @@ before(async () => {
 after(async () => {
   await browser?.close()
   await new Promise(resolve => server?.close(resolve))
+})
+
+test('invalid tool arguments show escaped raw text instead of structured args in both card states', async () => {
+  await mountFixture({ width: 900, height: 800 })
+  const collapsedPatch = await page.$eval('#malformedPatch .foxwarm-tool-call-summary', element => element.textContent)
+  assert.match(collapsedPatch, /<img src=x onerror=window.rawXss=1>/)
+  assert.doesNotMatch(collapsedPatch, /invalid patch/)
+  assert.equal(await page.$eval('#malformedExec .foxwarm-tool-call-summary', element => element.textContent), 'invalid command args')
+  assert.match(await page.$eval('#rawNoError .foxwarm-tool-call-summary', element => element.textContent), /echo actual command/)
+  assert.doesNotMatch(await page.$eval('#rawNoError .foxwarm-tool-call-summary', element => element.textContent), /wrong raw command/)
+  assert.match(await page.$eval('#rawMissing .foxwarm-tool-call-summary', element => element.textContent), /echo fallback/)
+  assert.match(await page.$eval('#noResult .foxwarm-tool-call-summary', element => element.textContent), /streaming tool call|reason/)
+
+  await page.click('#malformedPatch .foxwarm-tool-header-toggle')
+  const expanded = await page.$eval('#malformedPatch .foxwarm-tool-call-args pre', element => ({ text: element.textContent, whiteSpace: getComputedStyle(element).whiteSpace }))
+  assert.equal(expanded.text, '<img src=x onerror=window.rawXss=1>\n{not-json')
+  assert.equal(expanded.whiteSpace, 'pre-wrap')
+  assert.equal(await page.$eval('#malformedPatch .foxwarm-tool-call-args img', element => element).catch(() => null), null)
+  assert.equal(await page.evaluate(() => window.rawXss), undefined)
+  await page.click('#rawNoError .foxwarm-tool-header-toggle')
+  assert.match(await page.$eval('#rawNoError .foxwarm-tool-call-args', element => element.textContent), /echo actual command/)
+  assert.doesNotMatch(await page.$eval('#rawNoError .foxwarm-tool-call-args', element => element.textContent), /wrong raw command/)
 })
 
 test('default desktop keeps call args in the dark header and results on the light surface', async () => {

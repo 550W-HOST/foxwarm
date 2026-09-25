@@ -192,6 +192,10 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
 )
 
 const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
+  if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
+    const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
+    return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
+  }
   if (options.partial) {
     const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
@@ -294,6 +298,9 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 }
 
 const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
+  if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
+    return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
+  }
   if (options.partial) {
     return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : JSON.stringify(call.args, null, 2)}</pre>
   }

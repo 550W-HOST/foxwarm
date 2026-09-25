@@ -19,6 +19,8 @@ import { getSessionHistoryFilePath } from '../session/metadataStore';
 import sharp from 'sharp';
 import { resolveImageBlobPath } from '../imageBlobs';
 import { writeArchiveMessages } from '../session/archiveStore';
+import { WebSocket } from 'ws';
+import { once } from 'node:events';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -237,7 +239,8 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     assert.deepEqual(sidebar.forcedChildren[ids.root], [ids.child]);
     assert.ok(sidebar.pathContext.some((item: any) => item.session?.id === ids.root));
     const rootChildren = sidebar.children.find((item: any) => item.parentSessionId === ids.root);
-    assert.equal(rootChildren.sessions.length, 1); assert.equal(rootChildren.total, 2); assert.ok(rootChildren.nextCursor);
+    assert.equal(rootChildren.sessions.length, 1); assert.equal(rootChildren.total, 2);
+    assert.equal(Object.prototype.hasOwnProperty.call(rootChildren, 'nextCursor'), false, 'sidebar preview does not expose a continuation cursor');
     assert.equal(rootChildren.sessions[0].id, ids.child); assert.equal(rootChildren.sessions[0].childTotal, 1,
       'a returned child carries its own direct child count before nested expansion');
     assert.equal(rootChildren.sessions[0].sequenceMessageCount, 6,
@@ -249,8 +252,14 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     const volatilePage = await response.json() as any; assert.ok(volatilePage.sessions.some((item: any) => item.id === ids.volatile),
       'an unsaved newly-recent active local projection enters the bounded page before sorting');
 
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 1,
+      parents: [{ parentSessionId: ids.root }] }) });
+    assert.equal(response.status, 200); const firstChildPage = await response.json() as any;
+    assert.deepEqual(firstChildPage.children[0].sessions.map((item: any) => item.id), [ids.child]);
+    assert.ok(firstChildPage.children[0].nextCursor, 'real child pages retain their continuation cursor');
+
     response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
-      parents: [{ parentSessionId: ids.root, cursor: rootChildren.nextCursor }] }) });
+      parents: [{ parentSessionId: ids.root, cursor: firstChildPage.children[0].nextCursor }] }) });
     assert.equal(response.status, 200); const continued = await response.json() as any;
     assertEveryProjectedRowHasChildTotal(continued);
     assert.deepEqual(continued.children[0].sessions.map((item: any) => item.id), [ids.child2]);
@@ -582,7 +591,11 @@ test('WebUI history route returns queued preview messages separately from commit
       inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' },
       __providerImageIdentity: { mimeType: 'image/png', sha256: 'f'.repeat(64) },
       __providerImageDeduplicated: true,
-    }],
+    }, { functionCall: { id: 'success', name: 'exec', args: { command: 'echo ok', rawArgsText: 'nested kept' }, rawArgsText: '{"command":"echo ok"}' } },
+    { functionCall: { id: 'invalid', name: 'apply_patch', args: {}, rawArgsText: '<script>alert(1)</script>\n{', argsParseError: 'Invalid tool arguments JSON' } },
+    { functionCall: { id: 'no-raw', name: 'exec', args: {}, argsParseError: 'Invalid tool arguments JSON' } },
+    { functionCall: { id: 'non-object', name: 'exec', args: {}, rawArgsText: '[]', argsParseError: 'Expected top-level object' } },
+    { functionResponse: { tool_use_id: 'nested', name: 'exec', response: { output: { rawArgsText: 'tool data kept' } } } }],
     __meta: { timestamp: Date.now(), seq: 1 },
   }];
   session.persistentMemorySnapshot = 'persisted system snapshot';
@@ -668,6 +681,15 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(payload.messages[0].parts[1].inlineData, undefined);
     assert.equal(payload.messages[0].parts[1].inlineDataRef.path, undefined);
     assert.match(payload.messages[0].parts[1].inlineDataRef.apiPath, /^\/blobs\//);
+    assert.deepEqual(payload.messages[0].parts[2].functionCall, { id: 'success', name: 'exec', args: { command: 'echo ok', rawArgsText: 'nested kept' } });
+    assert.equal(payload.messages[0].parts[3].functionCall.rawArgsText, '<script>alert(1)</script>\n{');
+    assert.equal(payload.messages[0].parts[3].functionCall.argsParseError, 'Invalid tool arguments JSON');
+    assert.deepEqual(payload.messages[0].parts[3].functionCall.args, {});
+    assert.equal(payload.messages[0].parts[4].functionCall.rawArgsText, undefined);
+    assert.equal(payload.messages[0].parts[5].functionCall.rawArgsText, '[]', 'valid non-object JSON remains a parse error');
+    assert.equal(payload.messages[0].parts[6].functionResponse.response.output.rawArgsText, 'tool data kept');
+    assert.equal(session.history[0].parts[2].functionCall?.rawArgsText, '{"command":"echo ok"}', 'transport must not mutate live history');
+    assert.equal(session.history[0].parts[3].functionCall?.rawArgsText, '<script>alert(1)</script>\n{');
     blobId = payload.messages[0].parts[1].inlineDataRef.blobId;
     assert.equal(JSON.stringify(payload).includes(imageBuffer.toString('base64')), false);
     assert.equal(JSON.stringify(payload).includes('__providerImage'), false);
@@ -691,6 +713,7 @@ test('WebUI history route returns queued preview messages separately from commit
 
     assert.match(payload.queuedMessages[2].parts[0].text, /image\/png attachment preview omitted/);
     const persisted = await readSessionHistorySnapshot(sessionId);
+    assert.equal(persisted.history[0].parts[2].functionCall?.rawArgsText, '{"command":"echo ok"}', 'persisted history retains canonical args');
     assert.equal(JSON.stringify(persisted).includes(imageBuffer.toString('base64')), false);
     assert.equal(JSON.stringify(persisted).includes('__providerImage'), false);
     const metadata = await loadSessionsMetadataSnapshot();
@@ -1020,6 +1043,7 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
   await server.start();
 
   let sse: ReturnType<typeof createSseDataReader> | null = null;
+  let socket: WebSocket | null = null;
   let blobId: string | undefined;
   try {
     const missing = await fetch(`http://127.0.0.1:${port}/api/sessions/missing-session/stream`, {
@@ -1045,6 +1069,33 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(initial.session.busy, false);
     assert.equal(initial.session.messageCount, session.history.length);
     assert.equal(initial.session.historyVersion, session.historyVersion || 0);
+
+    socket = new WebSocket(`ws://127.0.0.1:${port}/api/webui/stream`, { headers: { Cookie: `foxwarm_token=${token}` } });
+    const received: any[] = [];
+    socket.on('message', raw => received.push(JSON.parse(raw.toString())));
+    await once(socket, 'open');
+    socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: [sessionId] }));
+    for (let attempt = 0; attempt < 100 && !received.some(event => event.type === 'subscriptions-applied'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(received.some(event => event.type === 'subscriptions-applied'), 'realtime subscription is ready');
+    const originalCallMessage: Message = { role: 'model', parts: [
+      { functionCall: { id: 'ok', name: 'exec', args: { command: 'echo ok', rawArgsText: 'nested' }, rawArgsText: '{"command":"echo ok"}' } },
+      { functionCall: { id: 'bad', name: 'exec', args: {}, rawArgsText: '{broken', argsParseError: 'Invalid tool arguments JSON' } },
+    ] };
+    channel.broadcastMessage(sessionId, originalCallMessage);
+    const realtimeCall = await sse.read();
+    assert.equal(realtimeCall.type, 'message');
+    assert.equal(realtimeCall.message.parts[0].functionCall.rawArgsText, undefined);
+    assert.equal(realtimeCall.message.parts[0].functionCall.args.rawArgsText, 'nested');
+    assert.equal(realtimeCall.message.parts[1].functionCall.rawArgsText, '{broken');
+    for (let attempt = 0; attempt < 100 && !received.some(event => event.type === 'message'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const wsCall = received.find(event => event.type === 'message');
+    assert.equal(wsCall.sessionId, sessionId);
+    assert.deepEqual(wsCall.message, realtimeCall.message, 'WebSocket and SSE share the projected message');
+    assert.equal(originalCallMessage.parts[0].functionCall?.rawArgsText, '{"command":"echo ok"}', 'broadcast must preserve caller input');
 
     await sessionManager.appendSessionMessage(session, {
       role: 'tool',
@@ -1114,6 +1165,11 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(idle.session.runtimeState.queueLength, 0);
     assert.equal(idle.session.historyVersion, session.historyVersion);
   } finally {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const closed = once(socket, 'close');
+      socket.close();
+      await closed.catch(() => {});
+    }
     await sse?.cancel().catch(() => {});
     await server.stop();
     setHttpServer(null);
