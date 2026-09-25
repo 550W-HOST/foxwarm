@@ -37,9 +37,13 @@ export function useThreadCardHeightTransition(expanded: boolean): {
     // React has committed the new card contents, but the browser has not painted them.
     // Remove the prior target height before reading the new natural height (also handles reversal).
     const previousCancel = cancelRef.current
-    element.style.height = ''
-    const target = element.getBoundingClientRect().height
     previousCancel?.()
+    // Clear any prior transition before measuring natural layout: changing an
+    // animating pixel height straight to auto can otherwise report the old
+    // interpolated height as the target during a rapid reversal.
+    element.style.removeProperty('transition')
+    element.style.removeProperty('height')
+    const target = element.getBoundingClientRect().height
     cancelRef.current = null
     const releaseFollow = notifyChat?.begin(element, start, target)
     releaseBefore?.()
@@ -50,6 +54,7 @@ export function useThreadCardHeightTransition(expanded: boolean): {
     let frame = 0
     let fallback = 0
     let finished = false
+    let started = false
     const finish = () => {
       if (finished) return
       finished = true
@@ -66,7 +71,9 @@ export function useThreadCardHeightTransition(expanded: boolean): {
       cancelRef.current = null
     }
     const onEnd = (event: TransitionEvent) => {
-      if (event.target === element && event.propertyName === 'height') finish()
+      // A cancelled *previous* transition can dispatch after the new listener
+      // is installed. It must not finish the new transition before it starts.
+      if (started && event.target === element && event.propertyName === 'height') finish()
     }
     cancelRef.current = finish
     element.style.boxSizing = 'border-box'
@@ -82,6 +89,7 @@ export function useThreadCardHeightTransition(expanded: boolean): {
     frame = window.requestAnimationFrame(() => {
       element.style.transition = `height ${DURATION_MS}ms ease-in-out`
       element.style.height = `${target}px`
+      started = true
     })
     fallback = window.setTimeout(finish, DURATION_MS + 120)
   }, [expanded, notifyChat])

@@ -285,6 +285,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
   const heightFollowHoldsRef = useRef(new Set<object>())
+  const heightFollowAnimatingRef = useRef(new Set<object>())
+  const heightFollowPendingContentRef = useRef(false)
   const heightFollowPreparesRef = useRef(new Set<object>())
   const heightFollowReleaseTimersRef = useRef(new Set<number>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
@@ -419,6 +421,26 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  const scrollToBottom = useCallback(() => {
+    const container = messagesContainerRef.current
+    if (container) {
+      // Explicit bottom navigation and independent new content win over a card-only hold.
+      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+      heightFollowReleaseTimersRef.current.clear()
+      heightFollowHoldsRef.current.clear()
+      heightFollowAnimatingRef.current.clear()
+      heightFollowPendingContentRef.current = false
+      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
+      container.scrollTop = container.scrollHeight
+      const state: ChatViewportState = { kind: 'bottom' }
+      currentViewportStateRef.current = state
+      currentViewportGeometryRef.current = null
+      shouldAutoScrollRef.current = true
+      pendingUserLeaveBottomRef.current = false
+      storeChatViewportState(viewportSessionId, state)
+    }
+  }, [viewportSessionId])
+
   const prepareCardHeight = useCallback(() => {
     const token = {}
     heightFollowPreparesRef.current.add(token)
@@ -445,6 +467,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (card.getBoundingClientRect().top - bottomAlignmentDelta >= viewport.top) return () => {}
     const hold = {}
     heightFollowHoldsRef.current.add(hold)
+    heightFollowAnimatingRef.current.add(hold)
     // An initial bottom restoration still pending when the user opens a card must
     // not reassert bottom after the temporary hold expires.
     if (pendingViewportRestoreRef.current?.kind === 'state' && pendingViewportRestoreRef.current.state.kind === 'bottom') {
@@ -452,6 +475,17 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
     container.style.overflowAnchor = 'none'
     return () => {
+      heightFollowAnimatingRef.current.delete(hold)
+      // A stream/history update while a tall card is still moving is distinct
+      // from the card's own resize. Follow once after the last active transition,
+      // without letting an earlier reversal release another card's hold.
+      if (heightFollowPendingContentRef.current) queueMicrotask(() => {
+        if (!heightFollowPendingContentRef.current || heightFollowAnimatingRef.current.size) return
+        heightFollowPendingContentRef.current = false
+        if (shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current && !pendingViewportRestoreRef.current) {
+          scrollToBottom()
+        }
+      })
       // The final auto-height cleanup can deliver a ResizeObserver notification
       // after transitionend. Drain that notification before normal follow resumes;
       // a later token/layout update can use the unchanged follow latch as usual.
@@ -464,7 +498,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }, 200)
       heightFollowReleaseTimersRef.current.add(timer)
     }
-  }, [])
+  }, [scrollToBottom])
 
   const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
 
@@ -472,27 +506,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
     heightFollowReleaseTimersRef.current.clear()
     heightFollowHoldsRef.current.clear()
+    heightFollowAnimatingRef.current.clear()
+    heightFollowPendingContentRef.current = false
     heightFollowPreparesRef.current.clear()
     messagesContainerRef.current?.style.removeProperty('overflow-anchor')
   }, [sessionId])
-
-  const scrollToBottom = useCallback(() => {
-    const container = messagesContainerRef.current
-    if (container) {
-      // The explicit bottom action wins even during a tall card's temporary hold.
-      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
-      heightFollowReleaseTimersRef.current.clear()
-      heightFollowHoldsRef.current.clear()
-      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
-      container.scrollTop = container.scrollHeight
-      const state: ChatViewportState = { kind: 'bottom' }
-      currentViewportStateRef.current = state
-      currentViewportGeometryRef.current = null
-      shouldAutoScrollRef.current = true
-      pendingUserLeaveBottomRef.current = false
-      storeChatViewportState(viewportSessionId, state)
-    }
-  }, [viewportSessionId])
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(0, Math.round(height))
@@ -1489,9 +1507,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [subscribeRealtime])
 
   useEffect(() => {
-    if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current && !heightFollowHoldsRef.current.size) {
-      scrollToBottom()
+    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
+    if (heightFollowAnimatingRef.current.size) {
+      heightFollowPendingContentRef.current = true
+      return
     }
+    // A fresh message/draft during only the final observer-settling grace is
+    // independent content: resume the existing follow immediately.
+    scrollToBottom()
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {

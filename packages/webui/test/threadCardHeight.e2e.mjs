@@ -28,6 +28,7 @@ before(async () => {
       __meta: { seq: index + 1, timestamp: 1000 + index },
     }))
     messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 18, timestamp: 1018 } })
+    if (size === 'two-large') messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 19, timestamp: 1019 } })
     if (size === 'cards') {
       messages.splice(17, 1,
         { role: 'model', parts: [{ functionCall: { name: 'exec', id: 'card-tool', args: { command: ('echo a\\n').repeat(24) } } }, { thinking: Array.from({ length: 18 }, (_, n) => 'reasoning step ' + n).join('\\n\\n') }, { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'search', queries: Array.from({ length: 12 }, (_, n) => 'query ' + n), query: 'query 0' } } } } }], __meta: { seq: 18, timestamp: 1018 } },
@@ -329,4 +330,115 @@ test('group reversal while still animating restores the collapsed natural box', 
   assert.ok(group.summary)
   assert.equal(group.inlineHeight, '')
   assert.equal(group.overflow, '')
+})
+
+test('reversing both directions targets the new natural height from the currently visible height', async () => {
+  await mount('group-large')
+  const probe = await page.$eval('[data-tool-group]', async group => {
+    const height = () => group.getBoundingClientRect().height
+    const frames = async count => { for (let index = 0; index < count; index++) await new Promise(requestAnimationFrame) }
+    const measureReverse = async (button, expectedNatural) => {
+      const current = height()
+      const events = []
+      const log = event => { if (event.target === group) events.push([event.type, event.propertyName, event.elapsedTime, Math.round(performance.now()), group.style.height]) }
+      group.addEventListener('transitioncancel', log)
+      group.addEventListener('transitionend', log)
+      button.click()
+      const immediateStyle = group.style.height
+      await frames(1)
+      const firstStyle = group.style.height
+      await frames(1)
+      const target = Number.parseFloat(group.style.height)
+      const intermediate = []
+      for (let index = 0; index < 4; index++) { await frames(1); intermediate.push(height()) }
+      await new Promise(resolve => setTimeout(resolve, 390))
+      group.removeEventListener('transitioncancel', log)
+      group.removeEventListener('transitionend', log)
+      return { current, target, intermediate, natural: height(), auto: group.style.height === '', expectedNatural, immediateStyle, firstStyle, events }
+    }
+    const collapsed = height()
+    group.querySelector('[aria-label="Expand tool group"]').click()
+    await frames(6)
+    const expandingTarget = Number.parseFloat(group.style.height)
+    const toCollapse = await measureReverse(group.querySelector('.foxwarm-tool-group-thread-line'), collapsed)
+    group.querySelector('[aria-label="Expand tool group"]').click()
+    await new Promise(resolve => setTimeout(resolve, 420))
+    const expanded = height()
+    group.querySelector('.foxwarm-tool-group-thread-line').click()
+    await frames(6)
+    const toExpand = await measureReverse(group.querySelector('[aria-label="Expand tool group"]'), expanded)
+    return { collapsed, expanded, expandingTarget, toCollapse, toExpand }
+  })
+  for (const [name, entry] of [['expand→collapse', probe.toCollapse], ['collapse→expand', probe.toExpand]]) {
+    assert.ok(Math.abs(entry.target - entry.expectedNatural) < 2, `${name} target should be natural height: ${JSON.stringify(entry)}`)
+    assert.ok(Math.abs(entry.natural - entry.expectedNatural) < 2, `${name} auto settles at natural height: ${JSON.stringify(entry)}`)
+    assert.ok(entry.auto)
+    const low = Math.min(entry.current, entry.target), high = Math.max(entry.current, entry.target)
+    assert.ok(entry.intermediate.some(value => value > low + 1 && value < high - 1), `${name} transitions through actual heights: ${JSON.stringify(entry)}`)
+  }
+})
+
+test('a token received while the final animation layout settles uses normal attached follow', async () => {
+  await mount('large')
+  await toggle()
+  await wait(275)
+  const held = await page.$eval('.foxwarm-chat-messages', node => ({ distance: node.scrollHeight - node.scrollTop - node.clientHeight, overflowAnchor: node.style.overflowAnchor }))
+  assert.equal(held.overflowAnchor, 'none', 'the animation-only hold has not settled yet')
+  assert.ok(held.distance > 100)
+  await page.evaluate(() => window.emitStream('Next token after expand\n\n'.repeat(18)))
+  await wait(400)
+  const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
+  assert.ok(after < 5, `new token must not be lost to the post-animation observer hold: ${after}`)
+})
+
+
+test('a token during the active height transition waits until completion before following', async () => {
+  await mount('large')
+  const during = await page.$eval('[data-system-message-card] .foxwarm-thread-line-button', async button => {
+    const frames = async count => { for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame) }
+    button.click()
+    await frames(5)
+    window.emitStream('Live token during expansion\n\n'.repeat(18))
+    await frames(4)
+    const view = document.querySelector('.foxwarm-chat-messages')
+    const card = document.querySelector('[data-system-message-card]')
+    return { cardTop: card.getBoundingClientRect().top, viewTop: view.getBoundingClientRect().top, distance: view.scrollHeight - view.scrollTop - view.clientHeight, styleHeight: card.style.height }
+  })
+  assert.ok(during.styleHeight.endsWith('px'), `card still animating: ${JSON.stringify(during)}`)
+  assert.ok(during.cardTop >= during.viewTop - 3, `active height cannot hide top: ${JSON.stringify(during)}`)
+  assert.ok(during.distance > 100, 'the token has not forced a premature bottom jump')
+  await wait(470)
+  const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
+  assert.ok(after < 5, 'the pending token follows once the active animation finishes')
+})
+
+test('manual upward intent during an active expansion cancels pending token follow', async () => {
+  await mount('large')
+  await page.$eval('[data-system-message-card] .foxwarm-thread-line-button', node => node.click())
+  await page.$eval('.foxwarm-chat-messages', node => { node.dispatchEvent(new WheelEvent('wheel', { deltaY: -70, bubbles: true })); node.scrollTop -= 70 })
+  await page.evaluate(() => window.emitStream('Detaching token\n\n'.repeat(18)))
+  await wait(550)
+  const distance = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
+  assert.ok(distance > 100, 'explicit upward intent outranks the pending stream follow')
+})
+
+test('two active tall cards do not release each other’s pending follow early', async () => {
+  await mount('two-large')
+  const during = await page.evaluate(async () => {
+    const frames = async count => { for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame) }
+    const buttons = [...document.querySelectorAll('[data-system-message-card] .foxwarm-thread-line-button')]
+    buttons[0].click()
+    await frames(5)
+    buttons[1].click()
+    await frames(2)
+    window.emitStream('Concurrent card token\n\n'.repeat(20))
+    await frames(10)
+    const view = document.querySelector('.foxwarm-chat-messages')
+    return { distance: view.scrollHeight - view.scrollTop - view.clientHeight, heights: [...document.querySelectorAll('[data-system-message-card]')].map(card => card.style.height) }
+  })
+  assert.ok(during.heights.some(value => value.endsWith('px')), `at least one card still animates: ${JSON.stringify(during)}`)
+  assert.ok(during.distance > 100, `first card must not prematurely restore follow: ${JSON.stringify(during)}`)
+  await wait(500)
+  const after = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
+  assert.ok(after < 5, 'the pending token follows after both animations complete')
 })
