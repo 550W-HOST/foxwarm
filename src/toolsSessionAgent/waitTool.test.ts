@@ -117,6 +117,10 @@ test('buildWaitTimeoutMessage uses fixed text and no custom timeout message', ()
 test('wait tool schema requires declared progress and distinguishes all/any/exec/input/fallback sources', () => {
   const waitDefinition = definitions.find(definition => definition.name === 'wait');
   assert.ok(waitDefinition);
+  for (const combinator of ['allOf', 'anyOf', 'oneOf']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(waitDefinition.parameters, combinator), false,
+      `Anthropic-compatible gateways reject top-level ${combinator} in input_schema`);
+  }
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.uniqueItems, true);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.minItems, 2);
@@ -125,6 +129,13 @@ test('wait tool schema requires declared progress and distinguishes all/any/exec
   assert.equal(waitDefinition.parameters.properties.waitAnySessions?.minItems, 1);
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.items?.type, 'string');
+});
+
+test('wait still rejects combining all-session and any-session waits at execution time', async () => {
+  await assert.rejects(
+    () => tool_wait({ waitAllSessions: ['child-a', 'child-b'], waitAnySessions: ['child-c'] }),
+    /waitAllSessions and waitAnySessions are mutually exclusive/,
+  );
 });
 
 test('waitAllSessions rejects explicit empty/fewer-than-two values and de-dupes valid barriers', async () => {
