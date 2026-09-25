@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ListCollapse, GitBranch, Server } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -1488,7 +1488,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col" data-session-list-density={compact ? 'compact' : 'normal'}>
+      <div className="flex h-full min-h-0 flex-col" data-session-list-density={compact ? 'normal' : 'detailed'}>
         <div className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
           <div className="flex items-center gap-1.5">
             <div className="relative min-w-0 flex-1">
@@ -1525,12 +1525,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             <button
               type="button"
               onClick={toggleCompact}
-              aria-label="Compact session rows"
-              aria-pressed={compact}
-              title={compact ? 'Use normal session rows' : 'Use compact session rows'}
-              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${compact ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
+              aria-label="Detailed session rows"
+              aria-pressed={!compact}
+              title={compact ? 'Use detailed session rows' : 'Use normal session rows'}
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${!compact ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
             >
-              <ListCollapse className="h-3.5 w-3.5" />
+              <List className="h-3.5 w-3.5" />
             </button>
           </div>
           <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
