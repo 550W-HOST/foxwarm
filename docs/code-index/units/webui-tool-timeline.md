@@ -69,6 +69,8 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Behavior
 
+- Tool and counted-group headers publish their own `data-tool-header-tone` for theme-specific surfaces; nested success/error headers are not recolored by a neutral group ancestor.
+
 - Tool cards use the shared one-shot measured height transition for local expand/collapse and return to natural height for streaming content; group-wide collapse controls/transition belong to `ChatTimeline` (see [D-webui-tool-group-collapse](#d-webui-tool-group-collapse)).
 - Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets.
 - View mode toggles between "preview" (formatted diff/command) and "raw" (JSON) display

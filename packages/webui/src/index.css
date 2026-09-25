@@ -918,7 +918,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card {
   background-color: var(--foxwarm-console-panel) !important;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-neutral .foxwarm-tool-header,
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-header-tone="neutral"],
 html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card > .foxwarm-context-block-header {
   background-color: var(--foxwarm-console-hover) !important;
 }
@@ -927,7 +927,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool
   background-color: var(--foxwarm-color-tool-surface);
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success .foxwarm-tool-header {
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-header-tone="success"] {
   background-color: var(--foxwarm-color-tool-surface-strong);
 }
 
@@ -939,8 +939,24 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool
   background-color: var(--foxwarm-color-danger-surface);
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-error .foxwarm-tool-header {
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-header-tone="error"] {
   background-color: var(--foxwarm-color-danger-surface-strong);
+}
+
+/* A nested card may share its ancestor's hover, but only its own controls
+ * should react. Keep the card's direct control/rail ownership explicit. */
+.foxwarm-assistant-message-card:is(:hover, :focus-within) > .foxwarm-assistant-action-buttons,
+.foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
+  opacity: 1;
+}
+
+:is(.foxwarm-tool-card, .foxwarm-context-block-card, [data-model-thread-card], .foxwarm-system-message-card):hover > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke,
+:is(.foxwarm-tool-card, .foxwarm-context-block-card, [data-model-thread-card], .foxwarm-system-message-card) > .foxwarm-thread-line-button:focus-visible > .foxwarm-thread-line-stroke {
+  opacity: 1;
+}
+
+.foxwarm-image-item:is(:hover, :focus-visible) > .foxwarm-image-hover-overlay {
+  background-color: color-mix(in srgb, var(--foxwarm-color-overlay) 10%, transparent);
 }
 
 html[data-foxwarm-component-treatment="console"] [data-model-thread-card] {

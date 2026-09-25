@@ -723,7 +723,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
 
   return (
     <div className="foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group">
-      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="foxwarm-assistant-action-buttons absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
         </IconToggleButton>

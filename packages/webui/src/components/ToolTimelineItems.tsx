@@ -122,6 +122,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
         className={toolThreadLineToneClasses.neutral}
       />
       <div
+        data-tool-header-tone="neutral"
         className={`foxwarm-tool-header foxwarm-tool-group-header -ml-2 -mr-2 flex min-w-0 items-start gap-2 pr-2 ${toolHeaderToneClasses.neutral} ${expanded ? 'cursor-pointer' : ''}`}
         onClick={expanded ? (event) => { event.stopPropagation(); onExpand() } : undefined}
       >
@@ -658,7 +659,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   ) : null
 
   const header = (includeCallPreview = false, includeExpandedCall = false) => (
-    <div className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
+    <div data-tool-header-tone={tagTone} className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
       <div
         className={`foxwarm-tool-header-toggle cursor-pointer ${THREAD_CARD_HEADER_ROW_CLASS}`}
         onClick={(e) => {
@@ -688,7 +689,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
-      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100`}>
+      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity`}>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
