@@ -301,7 +301,8 @@ Example:
             description: "End the current turn and wait for more information before continuing. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
             parameters: {
                 type: 'object',
-                allOf: [{ not: { required: ['waitAllSessions', 'waitAnySessions'] } }],
+                // Anthropic-compatible gateways reject top-level schema combinators.
+                // tool_wait enforces mutual exclusion before starting a wait.
                 properties: {
                     reason: { type: 'string', description: "Briefly explain what you are waiting for." },
                     wakeIfNoActivityAfterSeconds: { type: 'number', exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Use this as a fallback so you can check progress or decide what to do next." },
