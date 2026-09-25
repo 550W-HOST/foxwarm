@@ -263,7 +263,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
           <div className="py-1 text-xs text-fw-text-muted">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
         )}
         {expanded && !expansion.loading && nestedMessages.length > 0 && (
-          <div className="foxwarm-context-block-nested min-w-0 pl-4">
+          <div className="foxwarm-context-block-nested min-w-0 pl-2">
             {renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
           </div>
         )}

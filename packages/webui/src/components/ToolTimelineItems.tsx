@@ -127,7 +127,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
       >
         <ToolTagList items={countedItems} />
       </div>
-      {expanded && <div className="foxwarm-tool-group-body mt-1 min-w-0 max-w-full pl-4">{children}</div>}
+      {expanded && <div className="foxwarm-tool-group-body mt-1 min-w-0 max-w-full pl-2">{children}</div>}
     </div>
   )
 })

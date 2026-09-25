@@ -184,7 +184,7 @@ test('reduced-motion does not leave a transition height or clip', async () => {
 })
 
 
-test('group card keeps its counted-tag header and transitions nested members without overlapping disclosure hits', async () => {
+test('group card keeps its header and transitions nested members with independently clickable disclosures', async () => {
   await mount('group')
   const group = '[data-tool-group]'
   const before = await page.$eval(group, node => ({
@@ -228,6 +228,8 @@ test('group card keeps its counted-tag header and transitions nested members wit
       outerLeft: outer.getBoundingClientRect().left,
       outerLine: outer.querySelector(':scope > .foxwarm-thread-line-button').getBoundingClientRect().toJSON(),
       memberLine: member.querySelector(':scope > .foxwarm-thread-line-button').getBoundingClientRect().toJSON(),
+      outerHit: (() => { const button = outer.querySelector(':scope > .foxwarm-thread-line-button'); const r = button.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('button') === button })(),
+      memberHit: (() => { const button = member.querySelector(':scope > .foxwarm-thread-line-button'); const r = button.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('button') === button })(),
       firstAnchor: node.getAttribute('data-chat-message-anchor-key'),
       duplicateFirstAnchors: document.querySelectorAll(`[data-chat-message-anchor-key="${node.getAttribute('data-chat-message-anchor-key')}"]`).length,
     }
@@ -238,7 +240,8 @@ test('group card keeps its counted-tag header and transitions nested members wit
   assert.equal(after.outerLeft, before.outerLeft, 'collapsed and expanded outer card align')
   assert.equal(after.firstAnchor, before.firstAnchor)
   assert.equal(after.duplicateFirstAnchors, 1)
-  assert.ok(after.outerLine.right <= after.memberLine.left, `outer/inner hit rectangles do not intersect: ${JSON.stringify(after)}`)
+  assert.ok(after.outerLine.right - after.memberLine.left >= 1 && after.outerLine.right - after.memberLine.left <= 3, `pl-2 gives about 2px group hit-box overlap: ${JSON.stringify(after)}`)
+  assert.ok(after.outerHit && after.memberHit, `both disclosure centers hit their intended button: ${JSON.stringify(after)}`)
   assert.equal(after.styleHeight, '')
   await page.click(`${group} .foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button`)
   assert.equal(await page.$eval(group, node => node.dataset.toolGroupExpanded), 'true', 'member toggle does not collapse the outer card')
@@ -494,12 +497,13 @@ test('two active tall cards do not release each other’s pending follow early',
 })
 
 
-test('multi-level CTX and nested tool-group disclosures have disjoint hit rectangles', async () => {
+test('multi-level CTX and nested tool-group disclosures remain independently clickable at compact inset', async () => {
   await mount('ctx-deep')
   await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
   await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-card')
   await page.$eval('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
   await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-nested [data-tool-group]')
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-context-block-card')].every(card => !card.style.height))
   const measure = () => page.evaluate(() => {
     const contexts = [...document.querySelectorAll('.foxwarm-context-block-card')]
     const group = contexts[1].querySelector('[data-tool-group]')
@@ -515,8 +519,8 @@ test('multi-level CTX and nested tool-group disclosures have disjoint hit rectan
     }
   })
   const collapsed = await measure()
-  assert.ok(collapsed.parentLine.right <= collapsed.childLine.left, `CTX levels have separate hit areas: ${JSON.stringify(collapsed)}`)
-  assert.ok(collapsed.childLine.right <= collapsed.groupLine.left, `CTX/group lines are separate: ${JSON.stringify(collapsed)}`)
+  assert.ok(collapsed.parentLine.right - collapsed.childLine.left >= 1 && collapsed.parentLine.right - collapsed.childLine.left <= 3, `pl-2 gives about 2px CTX hit-box overlap: ${JSON.stringify(collapsed)}`)
+  assert.ok(collapsed.childLine.right - collapsed.groupLine.left >= 1 && collapsed.childLine.right - collapsed.groupLine.left <= 3, `pl-2 gives about 2px CTX/group overlap: ${JSON.stringify(collapsed)}`)
   assert.ok(collapsed.parentWidth - collapsed.summaryWidth <= 25, 'nested inset does not shrink the parent summary')
   assert.equal(collapsed.nestedAnchors, 0, 'nested CTX timeline does not register top-level viewport anchors')
   await page.$eval('.foxwarm-context-block-nested [data-tool-group] [aria-label="Expand tool group"]', node => node.click())
@@ -525,21 +529,26 @@ test('multi-level CTX and nested tool-group disclosures have disjoint hit rectan
     const rect = element => element.getBoundingClientRect().toJSON()
     return { outer: rect(node.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button')), inner: rect(node.querySelector('.foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button')) }
   })
-  assert.ok(groupPair.outer.right <= groupPair.inner.left, `group/member nested lines are separate: ${JSON.stringify(groupPair)}`)
+  assert.ok(groupPair.outer.right - groupPair.inner.left >= 1 && groupPair.outer.right - groupPair.inner.left <= 3, `pl-2 gives about 2px nested group overlap: ${JSON.stringify(groupPair)}`)
   await page.$eval('.foxwarm-context-block-nested [data-tool-group] .foxwarm-tool-card:not(.foxwarm-tool-group-card) > .foxwarm-thread-line-button', node => node.click())
   assert.equal(await page.$eval('.foxwarm-context-block-nested [data-tool-group]', node => node.dataset.toolGroupExpanded), 'true', 'member interaction does not collapse its parent group')
   const expanded = await measure()
   assert.ok(expanded.horizontalOverflow <= 1, `nested disclosures do not create horizontal overflow: ${JSON.stringify(expanded)}`)
+  await page.click('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button')
+  assert.equal(await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.getAttribute('aria-expanded')), 'true', 'child CTX rail click leaves parent open')
+  await page.click('.foxwarm-context-block-card > .foxwarm-thread-line-button')
+  assert.equal(await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.getAttribute('aria-expanded')), 'false', 'parent CTX rail click collapses parent')
 })
 
 
-test('narrow multi-level CTX plus nested group preserves touch-size disclosure separation', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
+test('narrow multi-level CTX plus nested group keeps compact disclosures independently clickable', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
   await mount('ctx-deep', false, 380, 640)
   await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-separator-treatment', 'chevron'))
   await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
   await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-card')
   await page.$eval('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.click())
   await page.waitForSelector('.foxwarm-context-block-nested .foxwarm-context-block-nested [data-tool-group]')
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-context-block-card')].every(card => !card.style.height))
   await page.$eval('.foxwarm-context-block-nested [data-tool-group] [aria-label="Expand tool group"]', node => node.click())
   await wait(450)
   const sample = await page.evaluate(() => {
@@ -554,9 +563,13 @@ test('narrow multi-level CTX plus nested group preserves touch-size disclosure s
   })
   assert.ok(sample.width < 500, `actual narrow viewport required: ${JSON.stringify(sample)}`)
   for (const [parent, child] of [[sample.parent, sample.child], [sample.child, sample.group], [sample.group, sample.member]]) {
-    assert.ok(parent.right <= child.left, `narrow nested touch rectangles do not overlap: ${JSON.stringify(sample)}`)
+    assert.ok(parent.right - child.left >= 1 && parent.right - child.left <= 3, `pl-2 gives about 2px narrow-rail overlap: ${JSON.stringify(sample)}`)
   }
   assert.ok(sample.overflow <= 1, `nested cards stay inside viewport: ${JSON.stringify(sample)}`)
+  await page.click('.foxwarm-context-block-nested [data-tool-group] [data-tool-group-card] > .foxwarm-thread-line-button')
+  assert.equal(await page.$eval('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.getAttribute('aria-expanded')), 'true', 'group chevron click leaves child CTX open')
+  await page.click('.foxwarm-context-block-nested .foxwarm-context-block-card > .foxwarm-thread-line-button')
+  assert.equal(await page.$eval('.foxwarm-context-block-card > .foxwarm-thread-line-button', node => node.getAttribute('aria-expanded')), 'true', 'child chevron click leaves parent CTX open')
 })
 
 test('expanded group member usage remains outside its card edge and clickable in chevron theme', async () => {
