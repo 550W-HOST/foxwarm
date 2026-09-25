@@ -1626,6 +1626,7 @@ type PreparedToolCall = {
 
 type ExecutedToolCall = PreparedToolCall & {
     result: any;
+    executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
     imageParts: MessagePart[];
     stopCurrentTurn: boolean;
     waitForReply: boolean;
@@ -1794,6 +1795,7 @@ function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
 
 async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
     let result = prepared.result;
+    let executionTiming: ExecutedToolCall['executionTiming'];
     let imageParts: MessagePart[] = [];
     let stopCurrentTurn = false;
     let waitForReply = false;
@@ -1815,7 +1817,17 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                     deferSessionCwdSync: prepared.call.name === 'exec',
                 }
                 : runtimeContext;
-            result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
+            const startedAt = Date.now();
+            const monotonicStart = performance.now();
+            try {
+                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
+            } finally {
+                executionTiming = {
+                    startedAt,
+                    completedAt: Math.max(startedAt, Date.now()),
+                    durationMs: Math.max(0, performance.now() - monotonicStart),
+                };
+            }
         } else if (result === undefined) {
             result = { error: `Unknown tool: ${prepared.call.name}` };
         }
@@ -1866,6 +1878,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     return {
         ...prepared,
         result: normalizeExecutedToolResult(result),
+        ...(executionTiming ? { executionTiming } : {}),
         imageParts,
         stopCurrentTurn,
         waitForReply,
@@ -2087,6 +2100,7 @@ export async function executeTools(
             functionResponse: {
                 tool_use_id: execution.toolId,
                 name: execution.call.name,
+                ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
                 ...(execution.index === 0 && toolContext.previousLlmRequest ? {
                     previousLlmRequest: {
                         time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),
