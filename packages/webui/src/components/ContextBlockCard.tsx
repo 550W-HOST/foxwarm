@@ -11,6 +11,7 @@ import {
 } from './chatShared'
 import ThreadLineButton from './ThreadLineButton'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
 export type ContextBlockExpansionKind = 'child-blocks' | 'messages'
 
@@ -161,6 +162,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
   renderNestedMessages,
 }: ContextBlockCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const [expansion, setExpansion] = useState<ExpansionState>({})
   const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
   const summaryFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
@@ -191,19 +193,21 @@ const ContextBlockCard = memo(function ContextBlockCard({
   }, [block.id, sessionId])
 
   const expand = useCallback(() => {
+    prepare()
     setExpanded(true)
     if (!expansion.response && !expansion.loading) {
       void loadExpansion()
     }
-  }, [expansion.loading, expansion.response, loadExpansion])
+  }, [expansion.loading, expansion.response, loadExpansion, prepare])
 
   const toggleExpanded = useCallback(() => {
     if (expanded) {
+      prepare()
       setExpanded(false)
       return
     }
     expand()
-  }, [expand, expanded])
+  }, [expand, expanded, prepare])
 
   const handleRetry = useCallback(() => {
     void loadExpansion()
@@ -216,6 +220,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
 
   return (
     <div
+      ref={heightRef}
       className={`foxwarm-context-block-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${contextBlockSurfaceClasses} ${expanded ? 'pb-1' : ''} ${contextBlockTextClasses} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? expand : undefined}
     >
@@ -227,7 +232,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
       />
       <div
         className={`foxwarm-context-block-header ${expanded ? 'mb-1' : ''} ${THREAD_CARD_HEADER_ROW_CLASS} ${contextBlockHeaderClasses} ${expanded ? `cursor-pointer ${contextBlockHeaderHoverClasses}` : ''}`}
-        onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
+        onClick={expanded ? (e) => { e.stopPropagation(); toggleExpanded() } : undefined}
       >
         <ToolTag name="ctx-block" label="CTX-BLOCK" tone="neutral" className="foxwarm-context-block-tag" />
         <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className="foxwarm-context-block-preview min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px] text-fw-text-muted" title={blockMetaLabel}>{blockMetaLabel}</span>

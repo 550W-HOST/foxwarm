@@ -28,6 +28,7 @@ import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
 import { splitCommitMarkers } from '../commitMarker'
 import {
@@ -52,6 +53,7 @@ import {
   buildTimelineRows,
   type NormalizedTokenUsage,
   type TimelineRowView,
+  type TimelineGroupView,
   type TimelineRowsCache,
   type UsageAttribution,
 } from './timelineRows'
@@ -550,6 +552,8 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
 
 const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, messageKey }: { msg: Message; messageKey: string }) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
   const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
   const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
   const allLines = useMemo(() => msg.parts.flatMap((part) => {
@@ -582,21 +586,22 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   return (
     <div className="w-full min-w-0">
       <div
+        ref={heightRef}
         data-system-message-card
         data-system-message-kind={messageKind.kind}
         data-system-message-tone="system"
         className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded || interAgentPreview ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
-        onClick={!expanded ? () => setExpanded(true) : undefined}
+        onClick={!expanded ? toggle : undefined}
       >
         <ThreadLineButton
           expanded={expanded}
-          onToggle={() => setExpanded(current => !current)}
+          onToggle={toggle}
           label={expanded ? `Collapse ${messageKind.kind} message` : `Expand ${messageKind.kind} message`}
           className={`foxwarm-system-message-thread-line ${threadLineClass}`}
         />
         <div
           className={`foxwarm-system-message-header -ml-2 -mr-2 ${THREAD_CARD_HEADER_ROW_CLASS} px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
-          onClick={expanded ? (event) => { event.stopPropagation(); setExpanded(false) } : undefined}
+          onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
         >
           <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
@@ -912,6 +917,35 @@ const MessageRow = memo(function MessageRow({
   (!getContextBlockMetaFromMessage(prev.row.msg) || prev.renderNestedMessages === next.renderNestedMessages)
 ))
 
+type TimelineGroupRows = { key: string; group: TimelineGroupView | null; rows: TimelineRowView[] }
+
+interface TimelineGroupProps {
+  group: TimelineGroupView
+  rows: TimelineRowView[]
+  rowProps: Omit<MessageRowProps, 'row' | 'onExpandGroup'>
+  onToggle: (key: string, expanded: boolean) => void
+}
+
+const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onToggle }: TimelineGroupProps) {
+  const expanded = group.keepExpanded || !rows[0].collapsedGroup
+  const { ref, prepare } = useThreadCardHeightTransition(expanded)
+  const expand = useCallback(() => { prepare(); onToggle(group.key, true) }, [group.key, onToggle, prepare])
+  const collapse = useCallback(() => { prepare(); onToggle(group.key, false) }, [group.key, onToggle, prepare])
+  return (
+    <div ref={ref} className={`foxwarm-tool-group relative min-w-0 max-w-full pl-7 ${expanded && !group.keepExpanded ? 'pt-4' : ''}`} data-tool-group={group.key} data-tool-group-expanded={expanded}>
+      {expanded && !group.keepExpanded && (
+        <>
+          <ThreadLineButton expanded onToggle={collapse} label="Collapse tool group" className="foxwarm-tool-group-thread-line text-fw-text-muted hover:text-fw-text-strong" />
+          <button type="button" onClick={collapse} className="foxwarm-tool-group-collapse absolute left-7 top-0 z-10 text-[10px] leading-4 text-fw-text-muted hover:text-fw-text-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-fw-focus-ring" aria-label="Collapse tool group">Collapse group</button>
+        </>
+      )}
+      {rows.map(row => (
+        <MessageRow key={row.key} row={row} {...rowProps} onExpandGroup={expand} />
+      ))}
+    </div>
+  )
+})
+
 const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
@@ -941,29 +975,39 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
   }, [expandedToolGroups, groupTools, isMobile, messages, nestedDepth, showUsageBadge])
 
 
-  const handleExpandGroup = useCallback((groupKey: string) => {
+  const groupedRows = useMemo(() => {
+    const result: TimelineGroupRows[] = []
+    for (const row of rows) {
+      const group = groupTools && row.group && row.group.summaryItems.length > 0 ? row.group : null
+      const previous = result[result.length - 1]
+      if (group && previous?.group?.key === group.key) {
+        previous.rows.push(row)
+      } else {
+        result.push({ key: group?.key || row.key, group, rows: [row] })
+      }
+    }
+    return result
+  }, [groupTools, rows])
+
+  const handleGroupToggle = useCallback((groupKey: string, expanded: boolean) => {
     setExpandedToolGroups(prev => {
       const next = new Set(prev)
-      next.add(groupKey)
+      if (expanded) next.add(groupKey)
+      else next.delete(groupKey)
       return next
     })
   }, [])
 
+  const handleExpandGroup = useCallback((key: string) => handleGroupToggle(key, true), [handleGroupToggle])
+
+  const rowProps = { isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages }
+
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
-      {rows.map((row) => (
-        <MessageRow
-          key={row.key}
-          row={row}
-          isMobile={isMobile}
-          showUserMessageMetadata={showUserMessageMetadata}
-          onExpandGroup={handleExpandGroup}
-          sessionId={sessionId}
-          nestedDepth={nestedDepth}
-          onOpenCodeFile={onOpenCodeFile}
-          onOpenCodeCommit={onOpenCodeCommit}
-          renderNestedMessages={renderNestedMessages}
-        />
+      {groupedRows.map(item => item.group ? (
+        <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
+      ) : (
+        <MessageRow key={item.key} row={item.rows[0]} {...rowProps} onExpandGroup={handleExpandGroup} />
       ))}
     </div>
   )

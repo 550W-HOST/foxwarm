@@ -129,6 +129,7 @@ async function assertThreadLineContract(cardSelector, lineSelector, { expectedWi
   assert.equal(await page.evaluate(({ x, y, lineSelector }) => document.elementFromPoint(x, y)?.closest(lineSelector) !== null, { ...outerGutterPoint, lineSelector }), true, 'outer gutter point remains owned by ThreadLineButton')
   await clickPoint(outerGutterPoint.x, outerGutterPoint.y)
   await page.waitForFunction(({ cardSelector, lineSelector }) => document.querySelector(cardSelector)?.querySelector(lineSelector)?.getAttribute('aria-expanded') === 'true', {}, { cardSelector, lineSelector })
+  await page.waitForFunction(cardSelector => !document.querySelector(cardSelector)?.style.height, {}, cardSelector)
 
   const expanded = await page.$eval(cardSelector, (card, lineSelector) => {
     const button = card.querySelector(lineSelector)
@@ -234,6 +235,8 @@ test('top-level and nested thread-card gutters remain clickable with the 2px car
   const contextButton = await page.$('.foxwarm-context-block-header')
   await contextButton.click()
   await page.waitForSelector('.foxwarm-context-block-header ~ .min-w-0 .foxwarm-chat-timeline [data-system-message-card]')
+  // Nested gutter hit testing starts once its parent card has completed the new height.
+  await page.waitForFunction(() => !document.querySelector('.foxwarm-context-block-card')?.style.height)
   await assertThreadLineContract('.foxwarm-context-block-header ~ .min-w-0 .foxwarm-chat-timeline [data-system-message-card]', '.foxwarm-system-message-thread-line')
   await page.click('[data-chat-timeline="committed"] > .foxwarm-chat-timeline > div [data-system-message-card]')
   await page.click('.foxwarm-context-block-header ~ .min-w-0 .foxwarm-chat-timeline [data-system-message-card]')

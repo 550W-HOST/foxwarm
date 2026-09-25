@@ -35,6 +35,7 @@ import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
 
@@ -559,6 +560,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onOpenCodeFile?: OpenCodeFileHandler
 }) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && viewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
   const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && viewMode === 'default')
@@ -569,10 +572,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const setToolViewMode = useCallback((mode: ToolViewMode) => {
     if (mode === 'json') {
-      setExpanded(true)
+      if (!expanded) { prepare(); setExpanded(true) }
     }
     setViewMode(mode)
-  }, [])
+  }, [expanded, prepare])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -650,7 +653,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         className={`foxwarm-tool-header-toggle cursor-pointer ${THREAD_CARD_HEADER_ROW_CLASS}`}
         onClick={(e) => {
           e.stopPropagation()
-          setExpanded(current => !current)
+          toggle()
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
@@ -666,11 +669,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   return (
     <div
+      ref={heightRef}
       className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''}`}
     >
       <ThreadLineButton
         expanded={expanded}
-        onToggle={() => setExpanded(current => !current)}
+        onToggle={toggle}
         label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />

@@ -69,6 +69,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Behavior
 
+- Tool cards use the shared one-shot measured height transition for local expand/collapse and return to natural height for streaming content; group-wide collapse controls/transition belong to `ChatTimeline` (see [D-webui-tool-group-collapse](#d-webui-tool-group-collapse)).
 - Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets.
 - View mode toggles between "preview" (formatted diff/command) and "raw" (JSON) display
 - Default tool response rendering formats the whole `functionResponse.response` object via the shared WebUI formatter. Single-key objects (for example `{ output: "ok" }` or `{ error: "bad" }`) display the single value, while multi-key objects stay structured/YAML-like. Special renderers such as exec/read still use this formatter as their fallback for non-standard or error-shaped results.
@@ -97,6 +98,10 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Download functionality connects to the authenticated `/download?path=...` route used by WebUI `send_file` results
 
 ## Design Decisions
+
+### D-webui-tool-group-collapse
+
+Counted tool groups share a keyed wrapper even while forced-open as the final standalone run; row descendants retain their keys, anchors, usage placement, and local card state. Historical expanded groups collapse through a distinct left disclosure or top "Collapse group" button, including themes without a long rail. Collapsed groups expand through their summary. Group tools off remains unwrapped, and the final standalone run retains its forced-open rule. When a tail run becomes historical, the existing collapsed-by-default rule applies without replacing its group wrapper.
 
 ### D-webui-malformed-call-args-display
 

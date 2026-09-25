@@ -2,6 +2,7 @@ import { type ReactNode, useState } from 'react'
 import { THREAD_CARD_HEADER_PREVIEW_CLASS, THREAD_CARD_HEADER_ROW_CLASS, ToolTag } from './chatShared'
 import ThreadLineButton from './ThreadLineButton'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
 type ModelThreadTone = 'message' | 'processing'
 
@@ -57,26 +58,29 @@ const ModelThreadCard = ({
   defaultExpanded,
 }: ModelThreadCardProps) => {
   const [expanded, setExpanded] = useState(defaultExpanded ?? tone === 'processing')
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
   const previewFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
   const semanticPrefix = `foxwarm-${kind}`
   const readableKind = kind === 'web-search' ? 'web search' : kind
 
   return (
     <div
+      ref={heightRef}
       data-model-thread-card={kind}
       data-model-thread-tone={tone}
       className={`${semanticPrefix}-card ${semanticPrefix}-card-${tone} relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${textClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
-      onClick={!expanded ? () => setExpanded(true) : undefined}
+      onClick={!expanded ? toggle : undefined}
     >
       <ThreadLineButton
         expanded={expanded}
-        onToggle={() => setExpanded(current => !current)}
+        onToggle={toggle}
         label={expanded ? `Collapse ${readableKind}` : `Expand ${readableKind}`}
         className={`${semanticPrefix}-thread-line ${lineToneClasses[tone]}`}
       />
       <div
         className={`${semanticPrefix}-header ${expanded ? 'mb-1' : ''} ${THREAD_CARD_HEADER_ROW_CLASS} ${headerClasses[tone]} ${expanded ? `cursor-pointer ${headerHoverClasses[tone]}` : ''}`}
-        onClick={expanded ? (event) => { event.stopPropagation(); setExpanded(false) } : undefined}
+        onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
       >
         <ToolTag name={kind} iconName={iconName} label={label} tone="neutral" className={`${semanticPrefix}-tag`} />
         {!expanded && (

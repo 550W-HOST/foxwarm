@@ -1,0 +1,332 @@
+import test, { before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { readdir, readFile } from 'node:fs/promises'
+import { build } from 'esbuild'
+import puppeteer from 'puppeteer-core'
+
+const packageDir = new URL('..', import.meta.url).pathname
+const assetsDirectory = new URL('../dist/assets/', import.meta.url)
+const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
+let browser, page, server, baseUrl
+
+before(async () => {
+  const assetNames = await readdir(assetsDirectory)
+  const cssAsset = assetNames.find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssAsset, 'build the WebUI before running this browser fixture')
+  const css = await readFile(new URL(cssAsset, assetsDirectory), 'utf8')
+  const source = `
+    import React from 'react'
+    import { createRoot } from 'react-dom/client'
+    import Chat from ${JSON.stringify(chatEntry)}
+
+    const size = new URLSearchParams(location.search).get('size') || 'large'
+    const lines = size === 'small' ? 2 : 85
+    const body = Array.from({ length: lines }, (_, n) => 'event detail line ' + n).join('\\n')
+    const messages = Array.from({ length: 17 }, (_, index) => ({
+      role: 'model', parts: [{ text: 'earlier message ' + index + ' with enough text to fill the chat viewport' }],
+      __meta: { seq: index + 1, timestamp: 1000 + index },
+    }))
+    messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 18, timestamp: 1018 } })
+    if (size === 'cards') {
+      messages.splice(17, 1,
+        { role: 'model', parts: [{ functionCall: { name: 'exec', id: 'card-tool', args: { command: ('echo a\\n').repeat(24) } } }, { thinking: Array.from({ length: 18 }, (_, n) => 'reasoning step ' + n).join('\\n\\n') }, { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'search', queries: Array.from({ length: 12 }, (_, n) => 'query ' + n), query: 'query 0' } } } } }], __meta: { seq: 18, timestamp: 1018 } },
+        { role: 'model', parts: [{ text: 'Last answer' }], __meta: { seq: 19, timestamp: 1019 } })
+    }
+    if (size === 'ctx') {
+      messages.splice(17, 1, { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#4 raw#1-#3] ' + ('summary paragraph\\n\\n').repeat(10) }], __meta: { seq: 18, timestamp: 1018, contextBlock: { id: 4, level: 1, rawStartSeq: 1, rawEndSeq: 3, sourceKind: 'message' } } })
+    }
+    if (size === 'group' || size === 'group-large') {
+      const call = (id, seq) => ({ role: 'model', parts: [{ functionCall: { id, name: 'exec', args: { command: 'echo ' + id } } }], __meta: { seq, timestamp: 1000 + seq, usage: { inputTokens: 500, outputTokens: 100 } } })
+      const result = (id, seq) => ({ role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: id, response: { output: id + ' result\\n' + 'line\\n'.repeat(25) } } }], __meta: { seq, timestamp: 1000 + seq } })
+      const entries = size === 'group-large' ? Array.from({ length: 14 }, (_, n) => [call('call-' + n, 18 + 2 * n), result('call-' + n, 19 + 2 * n)]).flat() : [call('first', 18), result('first', 19), call('second', 20), result('second', 21)]
+      messages.splice(17, 1, ...entries, { role: 'model', parts: [{ text: 'Final answer' }], __meta: { seq: 18 + entries.length, timestamp: 1018 + entries.length } })
+    }
+
+    window.fetch = async input => {
+      const url = String(input)
+      if (url.includes('/context-blocks/4/expand')) {
+        await new Promise(resolve => setTimeout(resolve, 125))
+        return new Response(JSON.stringify({ sessionId: 'fixture/height', blockId: 4, expansionKind: 'messages', messages: [{ role: 'model', parts: [{ text: 'Loaded archive detail ' + 'line\\n'.repeat(60) }], __meta: { seq: 1 } }, { role: 'model', parts: [{ functionCall: { id: 'nested-tool', name: 'exec', args: { command: 'echo nested' } } }], __meta: { seq: 2 } }, { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'nested-tool', response: { output: 'nested result' } } }], __meta: { seq: 3 } }, { role: 'model', parts: [{ text: 'archive tail' }], __meta: { seq: 4 } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      const data = url.includes('/history')
+        ? { session: { id: 'fixture/height', busy: true, runtimeState: 'requesting-model', queueLength: 0 }, messages, queuedMessages: [], queueLength: 0 }
+        : url.includes('/models') ? { models: [] }
+        : url.includes('/asr/status') ? { configured: false, available: false }
+        : {}
+      return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    class FixtureSocket {
+      static CLOSED = 3
+      static instances = []
+      constructor() { this.readyState = 0; FixtureSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) }) }
+      close() { this.readyState = FixtureSocket.CLOSED }
+      send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; queueMicrotask(() => {
+        this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: { 'fixture/height': 'fixture/height' } })
+        this.emit({ type: 'subscriptions-applied', revision: payload.revision })
+      }) }
+      emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }) }
+    }
+    window.WebSocket = FixtureSocket
+    window.emitStream = text => FixtureSocket.instances.at(-1)?.emit({ type: 'session-event', sessionId: 'fixture/height', event: { type: 'model-stream-update', streamId: 'fixture-stream', text } })
+    createRoot(document.getElementById('root')).render(React.createElement(Chat, {
+      sessionId: 'fixture/height', canonicalSessionId: 'fixture/height', sessionDisplayName: 'Height test', groupTools: size.startsWith('group') || size === 'ctx',
+    }))
+  `
+  const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'height-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  server = createServer((request, response) => {
+    const reduced = new URL(request.url, 'http://localhost').searchParams.get('reduced') === '1'
+    const mediaOverride = reduced ? `<script>const nativeMatchMedia = window.matchMedia.bind(window); window.matchMedia = query => query === '(prefers-reduced-motion: reduce)' ? { matches: true, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} } : nativeMatchMedia(query)</script>` : ''
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}.foxwarm-chat-root{height:100%;display:flex;flex-direction:column}.foxwarm-chat-root>header{flex:0 0 48px}.foxwarm-chat-message-region{position:relative;min-height:0;flex:1}.foxwarm-chat-messages{height:100%;overflow-y:auto;padding:8px}.foxwarm-chat-root form{display:none}[data-chat-message-anchor-key]{min-height:66px}.foxwarm-tool-group [data-chat-message-anchor-key]{min-height:0}</style></head><body><div id="root"></div>${mediaOverride}<script>${result.outputFiles[0].text}</script></body></html>`)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  baseUrl = `http://127.0.0.1:${server.address().port}`
+  browser = await puppeteer.launch({ browser: process.env.FOXWARM_E2E_BROWSER === 'firefox' ? 'firefox' : 'chrome', executablePath: process.env.FOXWARM_E2E_BROWSER === 'firefox' ? (process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox') : (process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'), headless: true, args: process.env.FOXWARM_E2E_BROWSER === 'firefox' ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
+  page = await browser.newPage()
+})
+
+after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve)) })
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+const geometry = () => page.evaluate(() => {
+  const container = document.querySelector('.foxwarm-chat-messages')
+  const card = document.querySelector('[data-system-message-card]')
+  const view = container.getBoundingClientRect()
+  const rect = card.getBoundingClientRect()
+  return { top: rect.top, height: rect.height, viewportTop: view.top, scrollTop: container.scrollTop, distance: container.scrollHeight - container.scrollTop - container.clientHeight, styleHeight: card.style.height, clipPath: card.style.clipPath }
+})
+async function mount(size, reduced = false) {
+  if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
+  if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.setViewport({ width: 900, height: 600 })
+  await page.goto(`${baseUrl}/?size=${size}&reduced=${reduced ? '1' : '0'}`, { waitUntil: 'load' })
+  await page.waitForSelector(size.startsWith('group') ? '[data-tool-group]' : size === 'ctx' ? '.foxwarm-context-block-card' : size === 'cards' ? '.foxwarm-tool-card' : '[data-system-message-card]')
+  await wait(80)
+  await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
+  await wait(40)
+}
+
+// Clicking the line instead of the card surface verifies the existing disclosure control.
+const toggle = () => page.click('[data-system-message-card] .foxwarm-thread-line-button')
+
+test('short expansion follows bottom; height interpolates and returns to auto', async () => {
+  await mount('small')
+  const start = await geometry()
+  assert.ok(start.distance < 3)
+  await toggle()
+  const early = await geometry()
+  assert.ok(early.styleHeight.endsWith('px'), 'layout commit installs a pixel start height')
+  await wait(115)
+  const middle = await geometry()
+  await wait(260)
+  const final = await geometry()
+  assert.ok(middle.height > start.height + 1 && middle.height < final.height - 1, `intermediate height ${middle.height} between ${start.height} and ${final.height}`)
+  assert.ok(final.distance < 3, 'small expansion retains bottom follow: ' + JSON.stringify({start, early, middle, final}))
+  assert.equal(final.styleHeight, '')
+  assert.equal(final.clipPath, '')
+  await toggle()
+  await wait(370)
+  const collapsed = await geometry()
+  assert.ok(collapsed.height < final.height)
+  assert.ok(collapsed.distance < 3, 'collapse clamps the attached scroller naturally')
+})
+
+test('large attached expansion keeps the card top visible without snapshot restoration', async () => {
+  await mount('large')
+  const start = await geometry()
+  assert.ok(start.distance < 3)
+  await toggle()
+  await wait(610)
+  const expanded = await geometry()
+  assert.ok(expanded.top >= expanded.viewportTop - 3, `expanded top ${expanded.top}, viewport ${expanded.viewportTop}; start ${JSON.stringify(start)} expanded ${JSON.stringify(expanded)}`)
+  assert.ok(expanded.distance > 100, 'bottom follow is suppressed for the oversized card')
+  assert.ok(Math.abs(expanded.scrollTop - start.scrollTop) < 5, 'no synthetic scroll position compensation')
+  assert.equal(expanded.styleHeight, '')
+  await toggle()
+  await wait(400)
+  const collapsed = await geometry()
+  assert.ok(collapsed.height < expanded.height && collapsed.styleHeight === '')
+})
+
+test('detached expansion does not jump; rapid reversal cleans up', async () => {
+  await mount('large')
+  await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop -= 80; node.dispatchEvent(new WheelEvent('wheel', { deltaY: -80, bubbles: true })) })
+  const start = await geometry()
+  await page.$eval('[data-system-message-card] .foxwarm-thread-line-button', node => node.click())
+  await wait(80)
+  await page.$eval('[data-system-message-card] .foxwarm-thread-line-button', node => node.click())
+  await wait(400)
+  const end = await geometry()
+  assert.ok(Math.abs(start.scrollTop - end.scrollTop) < 5, 'detached viewport stays detached through reversal: ' + JSON.stringify({start, end}))
+  assert.equal(end.styleHeight, '')
+  assert.equal(end.clipPath, '')
+})
+
+test('reduced-motion does not leave a transition height or clip', async () => {
+  await mount('large', true)
+  await toggle()
+  const result = await geometry()
+  assert.equal(result.styleHeight, '')
+  assert.equal(result.clipPath, '')
+})
+
+
+test('group expansion interpolates; rail and header collapse whole group; controls stay separate from inner cards', async () => {
+  await mount('group')
+  const group = '[data-tool-group]'
+  const before = await page.$eval(group, node => ({ height: node.getBoundingClientRect().height, cards: node.querySelectorAll('.foxwarm-tool-card').length, rail: node.querySelector('.foxwarm-tool-group-thread-line') }))
+  assert.equal(before.cards, 1)
+  assert.equal(before.rail, null)
+  const samples = await page.$eval(`${group} [aria-label="Expand tool group"]`, async button => {
+    const node = button.closest('[data-tool-group]')
+    button.click()
+    const heights = []
+    let target = ''
+    const started = performance.now()
+    do {
+      await new Promise(requestAnimationFrame)
+      heights.push(node.getBoundingClientRect().height)
+      target ||= node.style.height
+    } while (performance.now() - started < 320)
+    return { heights, target }
+  })
+  assert.ok(samples.target.endsWith('px'), 'group layout commit measures a target pixel height')
+  await wait(140)
+  const after = await page.$eval(group, node => ({ height: node.getBoundingClientRect().height, cards: node.querySelectorAll('.foxwarm-tool-card').length, rail: !!node.querySelector('.foxwarm-tool-group-thread-line'), header: !!node.querySelector('.foxwarm-tool-group-collapse'), styleHeight: node.style.height, railRight: node.querySelector('.foxwarm-tool-group-thread-line')?.getBoundingClientRect().right, innerLeft: node.querySelector('.foxwarm-tool-thread-line')?.getBoundingClientRect().left, buttonBottom: node.querySelector('.foxwarm-tool-group-collapse')?.getBoundingClientRect().bottom, cardTop: node.querySelector('.foxwarm-tool-card')?.getBoundingClientRect().top }))
+  assert.ok(samples.heights.some(value => value > before.height + 1 && value < after.height - 1), `group has an actual intermediate height between ${before.height} and ${after.height}: ${JSON.stringify(samples.heights)}`)
+  assert.equal(after.cards, 2)
+  assert.ok(after.rail && after.header)
+  assert.ok(after.railRight <= after.innerLeft + 2, 'group rail and member rail have distinct hit areas')
+  assert.ok(after.buttonBottom <= after.cardTop + 1, 'group text control occupies its own strip above card controls')
+  assert.equal(after.styleHeight, '')
+  await page.click(`${group} .foxwarm-tool-group-thread-line`)
+  await wait(370)
+  assert.equal(await page.$eval(group, node => node.querySelectorAll('.foxwarm-tool-card').length), 1)
+  await page.click(`${group} [aria-label="Expand tool group"]`)
+  await wait(370)
+  await page.click(`${group} .foxwarm-tool-group-collapse`)
+  await wait(370)
+  assert.equal(await page.$eval(group, node => node.querySelectorAll('.foxwarm-tool-card').length), 1)
+})
+
+
+test('oversized group preserves its top until new content or explicit bottom navigation', async () => {
+  await mount('group-large')
+  const start = await page.$eval('.foxwarm-chat-messages', element => element.scrollTop)
+  await page.click('[data-tool-group] [aria-label="Expand tool group"]')
+  await wait(610)
+  const expanded = await page.evaluate(() => {
+    const view = document.querySelector('.foxwarm-chat-messages')
+    const group = document.querySelector('[data-tool-group]')
+    return { top: group.getBoundingClientRect().top, viewportTop: view.getBoundingClientRect().top, scrollTop: view.scrollTop, distance: view.scrollHeight - view.scrollTop - view.clientHeight }
+  })
+  assert.ok(expanded.top >= expanded.viewportTop - 3, JSON.stringify(expanded))
+  assert.ok(Math.abs(expanded.scrollTop - start) < 5, JSON.stringify({start, expanded}))
+  assert.ok(expanded.distance > 100)
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
+  await page.click('[aria-label="Scroll to bottom"]')
+  await wait(80)
+  const bottom = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
+  assert.ok(bottom < 3, 'explicit bottom action overrides the animation hold')
+})
+
+
+test('individual tool, reasoning, and hosted web-search cards transition on local toggles', async () => {
+  await mount('cards')
+  for (const selector of ['.foxwarm-tool-card', '[data-model-thread-card="reasoning"]', '[data-model-thread-card="web-search"]']) {
+    const before = await page.$eval(selector, node => node.getBoundingClientRect().height)
+    await page.$eval(`${selector} .foxwarm-thread-line-button`, node => node.click())
+    await wait(115)
+    const middle = await page.$eval(selector, node => node.getBoundingClientRect().height)
+    await wait(340)
+    const after = await page.$eval(selector, node => ({ height: node.getBoundingClientRect().height, style: node.style.height }))
+    assert.ok(after.height > before + 4, `${selector}: actual expansion ${before} -> ${after.height}`)
+    assert.ok(middle > before && middle < after.height, `${selector}: measured intermediate ${middle}`)
+    assert.equal(after.style, '')
+    await page.$eval(`${selector} .foxwarm-thread-line-button`, node => node.click())
+    await wait(350)
+  }
+})
+
+test('CTX asynchronous archive content grows after toggle and returns to natural height', async () => {
+  await mount('ctx')
+  const selector = '.foxwarm-context-block-card'
+  await page.$eval(`${selector} .foxwarm-thread-line-button`, node => node.click())
+  await wait(70)
+  const interim = await page.$eval(selector, node => ({ height: node.getBoundingClientRect().height, style: node.style.height }))
+  await page.waitForSelector('.foxwarm-context-block-card .foxwarm-chat-timeline')
+  await wait(550)
+  const loaded = await page.$eval(selector, node => ({ height: node.getBoundingClientRect().height, style: node.style.height, text: node.textContent }))
+  assert.ok(loaded.height > interim.height + 40, `async content restores natural size ${interim.height} -> ${loaded.height}`)
+  assert.ok(loaded.text.includes('Loaded archive detail'))
+  assert.equal(loaded.style, '')
+  const nestedGroup = `${selector} [data-tool-group]`
+  assert.equal(await page.$eval(nestedGroup, node => node.querySelector('[aria-label="Expand tool group"]') !== null), true)
+  await page.$eval(`${nestedGroup} [aria-label="Expand tool group"]`, node => node.click())
+  await wait(370)
+  assert.equal(await page.$eval(nestedGroup, node => node.querySelector('.foxwarm-tool-card:not(:has([aria-label="Expand tool group"]))') !== null), true)
+  await page.$eval(`${nestedGroup} .foxwarm-tool-group-collapse`, node => node.click())
+  await wait(370)
+  assert.equal(await page.$eval(nestedGroup, node => node.querySelector('[aria-label="Expand tool group"]') !== null), true)
+})
+
+test('new streaming content after a tall expansion resumes the existing bottom follow latch', async () => {
+  await mount('large')
+  await toggle()
+  await wait(650)
+  await page.evaluate(() => window.emitStream('New assistant output\n\n'.repeat(20)))
+  await page.waitForSelector('.foxwarm-assistant-message-card')
+  await wait(240)
+  const afterStream = await page.$eval('.foxwarm-chat-messages', node => node.scrollHeight - node.scrollTop - node.clientHeight)
+  assert.ok(afterStream < 5, `next stream update follows bottom after the temporary hold: ${afterStream}`)
+})
+
+
+test('mobile chevron treatment keeps a discoverable group collapse button without a drawn long rail', { skip: process.env.FOXWARM_E2E_BROWSER === 'firefox' && 'Puppeteer BiDi does not support Firefox viewport emulation' }, async () => {
+  await page.setViewport({ width: 380, height: 640 })
+  await mount('group')
+  await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-separator-treatment', 'chevron'))
+  await page.click('[data-tool-group] [aria-label="Expand tool group"]')
+  await wait(350)
+  const group = await page.$eval('[data-tool-group]', node => {
+    const rail = node.querySelector('.foxwarm-tool-group-thread-line')
+    const button = node.querySelector('.foxwarm-tool-group-collapse')
+    const stroke = rail.querySelector('.foxwarm-thread-line-stroke')
+    const icon = rail.querySelector('.foxwarm-thread-disclosure-icon')
+    const badge = node.querySelector('.foxwarm-model-usage-badge')
+    return { stroke: getComputedStyle(stroke).display, icon: getComputedStyle(icon).display, buttonRect: button.getBoundingClientRect().toJSON(), railRect: rail.getBoundingClientRect().toJSON(), badgeRect: badge?.getBoundingClientRect().toJSON(), viewRect: document.querySelector('.foxwarm-chat-messages').getBoundingClientRect().toJSON() }
+  })
+  assert.equal(group.stroke, 'none')
+  assert.notEqual(group.icon, 'none')
+  assert.ok(group.railRect.left >= group.viewRect.left - 1, 'group disclosure remains inside the viewport')
+  assert.ok(group.buttonRect.left >= group.viewRect.left && group.buttonRect.right < group.viewRect.right, 'text control is touch-visible')
+  if (group.badgeRect) assert.ok(group.buttonRect.right < group.badgeRect.left || group.buttonRect.bottom < group.badgeRect.top, 'top control does not overlap usage')
+  await page.click('[data-tool-group] .foxwarm-tool-group-collapse')
+  await wait(350)
+  assert.equal(await page.$eval('[data-tool-group]', node => node.dataset.toolGroupExpanded), 'false')
+})
+
+
+test('explicit bottom navigation during an active tall group transition wins over the hold', async () => {
+  await mount('group-large')
+  await page.click('[data-tool-group] [aria-label="Expand tool group"]')
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
+  await page.click('[aria-label="Scroll to bottom"]')
+  await wait(600)
+  const result = await page.$eval('.foxwarm-chat-messages', node => ({ distance: node.scrollHeight - node.scrollTop - node.clientHeight, anchor: node.style.overflowAnchor }))
+  assert.ok(result.distance < 3, `explicit bottom wins while height changes: ${JSON.stringify(result)}`)
+  assert.equal(result.anchor, '', 'anchor override is released after the user action')
+})
+
+
+test('group reversal while still animating restores the collapsed natural box', async () => {
+  await mount('group-large')
+  await page.$eval('[data-tool-group] [aria-label="Expand tool group"]', node => node.click())
+  await wait(70)
+  await page.$eval('[data-tool-group] .foxwarm-tool-group-thread-line', node => node.click())
+  await wait(600)
+  const group = await page.$eval('[data-tool-group]', node => ({ height: node.getBoundingClientRect().height, inlineHeight: node.style.height, overflow: node.style.overflow, summary: !!node.querySelector('[aria-label="Expand tool group"]') }))
+  assert.ok(group.summary)
+  assert.equal(group.inlineHeight, '')
+  assert.equal(group.overflow, '')
+})

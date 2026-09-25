@@ -2020,3 +2020,10 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-webkit-slider-thumb { opacity: 0; }
 .foxwarm-model-effort-slider[data-unresolved="true"]::-moz-range-thumb { opacity: 0; }
+
+/* The group disclosure belongs to the run, not to its individual tool-card rails.
+ * The wrapper reserves a separate gutter so both hit targets remain independent. */
+.foxwarm-tool-group > .foxwarm-tool-group-thread-line {
+  left: 0 !important;
+  right: auto !important;
+}

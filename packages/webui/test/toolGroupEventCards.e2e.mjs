@@ -37,11 +37,16 @@ before(async () => {
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
     const cases = ${JSON.stringify(CASES)}
+    const roots = {}
     for (const [name, { messages, groupTools }] of Object.entries(cases)) {
-      createRoot(document.getElementById(name)).render(React.createElement(ChatTimeline, {
+      roots[name] = createRoot(document.getElementById(name))
+      roots[name].render(React.createElement(ChatTimeline, {
         sessionId: 'fixture/main', messages, isMobile: false, groupTools, showUsageBadge: false,
       }))
     }
+    window.moveTailToHistory = () => roots.tail.render(React.createElement(ChatTimeline, {
+      sessionId: 'fixture/main', messages: [...cases.tail.messages, { role: 'model', parts: [{ text: 'NEW ANSWER' }], __meta: { seq: 15 } }], isMobile: false, groupTools: true, showUsageBadge: false,
+    }))
   `
   const bundle = await build({
     stdin: { contents: fixture, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'tool-group-event-fixture.tsx' },
@@ -70,7 +75,7 @@ const snapshot = async (name) => page.$eval(`#${name}`, element => ({
   eventCards: [...element.querySelectorAll('[data-system-message-kind="event"]')].map(card => card.textContent),
   toolCards: element.querySelectorAll('.foxwarm-tool-card:not(:has([aria-label="Expand tool group"]))').length,
   toolText: [...element.querySelectorAll('.foxwarm-tool-card:not(:has([aria-label="Expand tool group"]))')].map(card => card.textContent),
-  rows: [...element.querySelectorAll('.foxwarm-chat-timeline > div[data-chat-message-anchor-key]')].map(row => row.getAttribute('data-chat-message-anchor-key')),
+  rows: [...element.querySelectorAll('.foxwarm-chat-timeline [data-chat-message-anchor-key]')].map(row => row.getAttribute('data-chat-message-anchor-key')),
   fullText: element.textContent,
 }))
 
@@ -91,8 +96,9 @@ test('event wrappers between tool calls collapse into counted tags; expanding re
   assert.deepEqual(expanded.rows, ['seq-local-1', 'seq-local-2', 'seq-local-4', 'seq-local-5', 'seq-local-7'])
   assert.ok(expanded.eventCards[0].includes('EVENT BODY one'))
   assert.ok(expanded.eventCards[1].includes('EVENT BODY two'))
+  await page.waitForFunction(() => !document.querySelector('#collapsed [data-tool-group]')?.style.height)
   await page.click('#collapsed [data-system-message-kind="event"] [aria-label="Expand event message"]')
-  assert.equal(await page.$eval('#collapsed .foxwarm-system-message-body', el => el.textContent.includes('EVENT BODY one')), true)
+  assert.equal(await page.$eval('#collapsed', el => !!el.querySelector('.foxwarm-system-message-body') && el.querySelector('.foxwarm-system-message-body').textContent.includes('EVENT BODY one')), true, JSON.stringify(await page.$eval('#collapsed', el => [...el.querySelectorAll('[data-system-message-kind=event] button')].map(b => [b.getAttribute('aria-label'), b.getAttribute('aria-expanded')]))))
 })
 
 test('a final tool run with a trailing event stays expanded, including a result separated from its call by an event', async () => {
@@ -139,4 +145,24 @@ test('quoted event text, external input, other system kinds, and a new user turn
   assert.ok(boundary.fullText.includes('NEW USER INPUT'))
   assert.ok(boundary.fullText.includes('FINAL ANSWER'))
   assert.deepEqual(boundary.rows, ['seq-local-70', 'seq-local-73', 'seq-local-74'])
+})
+
+
+test('the final keep-expanded group has no collapse control, retains wrapper identity as it becomes history, and then follows ordinary grouping', async () => {
+  const before = await page.$eval('#tail [data-tool-group]', node => {
+    window.tailGroupNode = node
+    return { key: node.dataset.toolGroup, expanded: node.dataset.toolGroupExpanded, groupControl: !!node.querySelector('.foxwarm-tool-group-collapse') }
+  })
+  assert.equal(before.expanded, 'true')
+  assert.equal(before.groupControl, false)
+  await page.evaluate(() => window.moveTailToHistory())
+  await page.waitForSelector('#tail [aria-label="Expand tool group"]')
+  assert.equal(await page.$eval('#tail [data-tool-group]', node => node === window.tailGroupNode), true, 'tail-to-history keeps the same group wrapper')
+  assert.equal(await page.$eval('#tail [data-tool-group]', node => node.dataset.toolGroup), before.key)
+  await page.click('#tail [aria-label="Expand tool group"]')
+  await page.waitForSelector('#tail .foxwarm-tool-group-collapse')
+  assert.equal(await page.$eval('#tail [data-tool-group]', node => node === window.tailGroupNode), true)
+  await page.waitForFunction(() => !document.querySelector('#tail [data-tool-group]')?.style.height)
+  await page.click('#tail .foxwarm-tool-group-collapse')
+  await page.waitForSelector('#tail [aria-label="Expand tool group"]')
 })
