@@ -186,8 +186,11 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
   )
 }
 
-const hasTextContent = (msg: Message): boolean => msg.parts.some((part) => (
-  (part.text && part.text.trim()) || (part.system && String(part.system).trim())
+/** Ordinary model output breaks a tool run; tool-linked images stay with their tool response. */
+export const getGroupContentPartIndex = (msg: Message): number => msg.parts.findIndex((part) => (
+  (part.text && part.text.trim()) || (part.system && String(part.system).trim()) ||
+  (msg.role === 'model' && !part.toolUseId && !part.functionResponse &&
+    (part.inlineData || part.inlineDataRef || part.inlineDataUnavailable))
 ))
 
 const hasToolCalls = (msg: Message): boolean => msg.parts.some((part) => part.functionCall)
@@ -210,10 +213,6 @@ const precedingPairedModelCallIndex = (messages: Message[], index: number): numb
     ? previousIndex
     : -1
 }
-
-const firstContentPartIndex = (msg: Message): number => msg.parts.findIndex((part) => (
-  (part.text && part.text.trim()) || (part.system && String(part.system).trim())
-))
 
 /** A tool response that the preceding model call already renders stays in that call's card. */
 const isHandledByPreviousGroup = (messages: Message[], index: number): boolean => (
@@ -239,8 +238,8 @@ interface GroupScan {
   readonly start: number
   /** Exclusive end of the group's message range. */
   readonly end: number
-  /** Index of the model text that ends this group, or -1 when the group ends any other way. */
-  readonly textBreakIdx: number
+  /** Index of the model message whose ordinary content ends this group, or -1 for any other boundary. */
+  readonly contentBreakIdx: number
 }
 
 /**
@@ -251,12 +250,12 @@ const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: 
   const startMsg = messages[start]
 
   // A standalone event cannot capture a later tool run; it can only join a run already underway.
-  if (isGroupableEventMessage(startMsg)) return { start, end: start + 1, textBreakIdx: -1 }
+  if (isGroupableEventMessage(startMsg)) return { start, end: start + 1, contentBreakIdx: -1 }
 
-  // A message that only carries text does not own the tool run that follows it: that run forms its
+  // A message that only carries ordinary output does not own the tool run that follows it: that run forms its
   // own group with the same messages, so counting them here would render the same summary twice.
-  if (startMsg.role === 'model' && !hasToolCalls(startMsg) && firstContentPartIndex(startMsg) !== -1) {
-    return { start, end: start + 1, textBreakIdx: -1 }
+  if (startMsg.role === 'model' && !hasToolCalls(startMsg) && getGroupContentPartIndex(startMsg) !== -1) {
+    return { start, end: start + 1, contentBreakIdx: -1 }
   }
 
   let end = start + 1
@@ -264,12 +263,12 @@ const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: 
     if (finalStandaloneStartIdx !== -1 && start < finalStandaloneStartIdx && index >= finalStandaloneStartIdx) break
     const msg = messages[index]
     if (!isToolGroupableMessage(msg)) break
-    // A model text splits the group that contains it: the text and everything after it belong to
-    // the next group, while thinking before the text stays with the group that ends here.
-    if (msg.role === 'model' && hasTextContent(msg)) return { start, end: index, textBreakIdx: index }
+    // Ordinary model output splits the group: content and everything after it belong to the
+    // next group, while thinking before that content stays with the group that ends here.
+    if (msg.role === 'model' && getGroupContentPartIndex(msg) !== -1) return { start, end: index, contentBreakIdx: index }
     end = index + 1
   }
-  return { start, end, textBreakIdx: -1 }
+  return { start, end, contentBreakIdx: -1 }
 }
 
 interface GroupDerivation {
@@ -281,7 +280,7 @@ interface GroupDerivation {
 }
 
 const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: DerivedRequestTiming[]): GroupDerivation => {
-  const { start, end, textBreakIdx } = scan
+  const { start, end, contentBreakIdx } = scan
 
   // Call statuses are resolved over the whole range first, because a response can appear after the
   // call it answers, and the counted tags below need the final status.
@@ -302,8 +301,8 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
   }
 
   const startMsg = messages[start]
-  const startFirstContentIdx = startMsg.role === 'model' ? firstContentPartIndex(startMsg) : -1
-  // Only the parts from the start message's own text on belong to this group's summary.
+  const startFirstContentIdx = startMsg.role === 'model' ? getGroupContentPartIndex(startMsg) : -1
+  // Only the parts from the start message's own ordinary output on belong to this group's summary.
   const startPartFrom = startFirstContentIdx > 0 ? startFirstContentIdx : 0
 
   const items: ToolTagItem[] = []
@@ -352,18 +351,18 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     attributedCallCount++
   }
 
-  // The message whose text ends this group keeps its own group for everything after the text, but
-  // the thinking before the text belongs here: it is counted in this summary and stays folded
+  // The message whose ordinary output ends this group keeps its own group for everything after that
+  // content, but earlier thinking belongs here: it is counted in this summary and stays folded
   // while this group is collapsed.
-  const trailing = textBreakIdx !== -1 ? messages[textBreakIdx] : undefined
+  const trailing = contentBreakIdx !== -1 ? messages[contentBreakIdx] : undefined
   let foldedThinkingIdx = -1
   if (groupHasToolCalls && trailing) {
-    const trailingFirstContentIdx = trailing.role === 'model' ? firstContentPartIndex(trailing) : -1
+    const trailingFirstContentIdx = trailing.role === 'model' ? getGroupContentPartIndex(trailing) : -1
     const foldedThoughts = trailingFirstContentIdx === -1
       ? []
       : trailing.parts.slice(0, trailingFirstContentIdx).filter((part) => part.thinking && part.thinking.trim())
     if (foldedThoughts.length > 0) {
-      foldedThinkingIdx = textBreakIdx
+      foldedThinkingIdx = contentBreakIdx
       foldedThoughts.forEach(() => items.push({ name: 'reasoning', tone: 'neutral' }))
     }
   }
@@ -555,7 +554,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     }
 
     foldedThinkingOwnerKey = derivation.foldedThinkingIdx !== -1 ? groupKey : null
-    cursor = scan.textBreakIdx !== -1 ? scan.textBreakIdx : scan.end
+    cursor = scan.contentBreakIdx !== -1 ? scan.contentBreakIdx : scan.end
   }
 
   return { rows, cache: { rows: rowCache, groups: groupCache } }

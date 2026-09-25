@@ -51,6 +51,7 @@ import {
 } from '../usageTiming'
 import {
   buildTimelineRows,
+  getGroupContentPartIndex,
   type NormalizedTokenUsage,
   type TimelineRowView,
   type TimelineGroupView,
@@ -773,7 +774,7 @@ interface MessageRowProps {
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
   groupFirst?: boolean
-  insideGroupCard?: boolean
+  surface?: 'all' | 'ordinary' | 'grouped'
 }
 
 const MessageRow = memo(function MessageRow({
@@ -786,7 +787,7 @@ const MessageRow = memo(function MessageRow({
   onOpenCodeCommit,
   renderNestedMessages,
   groupFirst = false,
-  insideGroupCard = false,
+  surface = 'all',
 }: MessageRowProps) {
   const {
     key: messageKey,
@@ -832,15 +833,32 @@ const MessageRow = memo(function MessageRow({
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
   const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
   const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
+  const firstGroupContentPartIndex = useMemo(() => getGroupContentPartIndex(msg), [msg])
+  // A row may contain both ordinary model content and a call in one persisted message.
+  // Grouping the row does not make its text/images (or thinking owned by the previous
+  // group) content of this group's card. The existing row flags still own visibility.
+  const belongsToOrdinarySurface = (item: typeof visibleModelParts[number]) => {
+    if (msg.role !== 'model') return false // Tool/result and event rows remain group content.
+    if (item.webSearchAction) return hasVisibleTextContent // Preserve the text-bearing hosted-search exception.
+    if (item.part.thinking) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
+    return true
+  }
+  const ordinaryParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(belongsToOrdinarySurface)
+  const groupedParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(item => !belongsToOrdinarySurface(item))
+  const displayedParts = surface === 'ordinary' ? ordinaryParts : groupedParts
+  const ordinaryContent = msg.role === 'model' && (ordinaryParts.length > 0 || imageParts.length > 0)
+  if (surface === 'ordinary' && !ordinaryContent) return null
+  if (surface === 'grouped' && msg.role === 'model' && groupedParts.length === 0 && !msg.parts.some(part => part.functionCall || part.functionResponse)) return null
+  const suppressAnchor = groupFirst || (surface === 'grouped' && ordinaryContent)
 
   return (
     <div
       className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${groupFirst ? '' : marginClass}`}
-      data-chat-message-anchor-key={groupFirst ? undefined : anchorKey}
-      data-context-scrollbar-anchor-key={groupFirst ? undefined : scrollbarAnchorKey}
+      data-chat-message-anchor-key={suppressAnchor ? undefined : anchorKey}
+      data-context-scrollbar-anchor-key={suppressAnchor ? undefined : scrollbarAnchorKey}
     >
       <div
-        className={`min-w-0 ${insideGroupCard ? 'w-full' : widthClass} ${
+        className={`min-w-0 ${surface !== 'all' ? 'w-full' : widthClass} ${
           !systemLikeMessage && msg.role === 'user'
             ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
             : ''
@@ -865,7 +883,7 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
-            {visibleModelParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
+            {displayedParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
               if (webSearchAction) {
                 if (suppressWebSearchCards && !hasVisibleTextContent) {
                   return null
@@ -876,10 +894,9 @@ const MessageRow = memo(function MessageRow({
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                // A model text splits the group: thinking before the text belongs to the group
-                // that ends there, so it follows that group's expansion, while thinking after
-                // the text (and in text-free messages) follows this message's own group.
-                const foldedIntoGroupAbove = firstTextPartIndex !== -1 && partIndex < firstTextPartIndex
+                // Ordinary model output splits a group: thinking before that content belongs
+                // to the group that ends there; later thinking belongs to this row's group.
+                const foldedIntoGroupAbove = firstGroupContentPartIndex !== -1 && partIndex < firstGroupContentPartIndex
                 const folded = foldedIntoGroupAbove ? hideFoldedThinking : collapsedGroup
                 if (folded) {
                   return null
@@ -893,10 +910,10 @@ const MessageRow = memo(function MessageRow({
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
             })}
-            <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
-            {collapsedGroup ? null : (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
-            {collapsedGroup ? null : (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
-            {usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} />}
+            {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
+            {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} />}
           </div>
         )}
       </div>
@@ -907,7 +924,7 @@ const MessageRow = memo(function MessageRow({
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.groupFirst === next.groupFirst &&
-  prev.insideGroupCard === next.insideGroupCard &&
+  prev.surface === next.surface &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
@@ -942,16 +959,19 @@ const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onTog
       {group.keepExpanded ? rows.map((row, index) => (
         <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} />
       )) : (
-        <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
-          <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
-            {rows.map((row, index) => (
-              <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} insideGroupCard />
-            ))}
-          </ToolGroupSummaryCard>
-          {!expanded && first.usageBadge && (
-            <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} />
-          )}
-        </div>
+        <>
+          {rows.map((row, index) => <MessageRow key={`${row.key}-ordinary`} row={row} {...rowProps} groupFirst={index === 0} surface="ordinary" />)}
+          <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
+            <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
+              {rows.map((row, index) => (
+                <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} surface="grouped" />
+              ))}
+            </ToolGroupSummaryCard>
+            {!expanded && first.usageBadge && (
+              <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} />
+            )}
+          </div>
+        </>
       )}
     </div>
   )
