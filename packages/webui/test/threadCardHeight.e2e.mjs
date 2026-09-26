@@ -21,7 +21,7 @@ before(async () => {
     import Chat from ${JSON.stringify(chatEntry)}
 
     const size = new URLSearchParams(location.search).get('size') || 'large'
-    const lines = size === 'small' ? 2 : 85
+    const lines = size === 'small' || size === 'small-with-tail' ? 2 : 85
     const body = Array.from({ length: lines }, (_, n) => 'event detail line ' + n).join('\\n')
     const messages = Array.from({ length: 17 }, (_, index) => ({
       role: 'model', parts: [{ text: 'earlier message ' + index + ' with enough text to fill the chat viewport' }],
@@ -29,6 +29,11 @@ before(async () => {
     }))
     messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 18, timestamp: 1018 } })
     if (size === 'two-large') messages.push({ role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\n' + body + '\\n</foxwarm-system>' }], __meta: { seq: 19, timestamp: 1019 } })
+    if (size === 'small-with-tail') messages.push({ role: 'model', parts: [{ text: 'Final reference' }], __meta: { seq: 19, timestamp: 1019 } })
+    if (size === 'tool-small') messages.splice(17, 1,
+      { role: 'model', parts: [{ functionCall: { name: 'exec', id: 'reference-tool', args: { command: ('echo reference\\n').repeat(8) } } }], __meta: { seq: 18, timestamp: 1018 } },
+      { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: 'reference-tool', response: { output: 'reference result' } } }], __meta: { seq: 19, timestamp: 1019 } },
+      { role: 'model', parts: [{ text: 'Final reference' }], __meta: { seq: 20, timestamp: 1020 } })
     if (size === 'cards') {
       messages.splice(17, 1,
         { role: 'model', parts: [{ functionCall: { name: 'exec', id: 'card-tool', args: { command: ('echo a\\n').repeat(24) } } }, { thinking: Array.from({ length: 18 }, (_, n) => 'reasoning step ' + n).join('\\n\\n') }, { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'search', queries: Array.from({ length: 12 }, (_, n) => 'query ' + n), query: 'query 0' } } } } }], __meta: { seq: 18, timestamp: 1018 } },
@@ -113,7 +118,7 @@ async function mount(size, reduced = false, width = 900, height = 600) {
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
   if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') await page.setViewport({ width, height })
   await page.goto(`${baseUrl}/?size=${size}&reduced=${reduced ? '1' : '0'}`, { waitUntil: 'load' })
-  await page.waitForSelector(size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' ? '.foxwarm-tool-card' : '[data-system-message-card]')
+  await page.waitForSelector(size.startsWith('group') ? '[data-tool-group]' : size.startsWith('ctx') ? '.foxwarm-context-block-card' : size === 'cards' || size === 'tool-small' ? '.foxwarm-tool-card' : '[data-system-message-card]')
   await wait(80)
   await page.$eval('.foxwarm-chat-messages', node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')) })
   await wait(40)
@@ -121,6 +126,190 @@ async function mount(size, reduced = false, width = 900, height = 600) {
 
 // Clicking the line instead of the card surface verifies the existing disclosure control.
 const toggle = () => page.click('[data-system-message-card] .foxwarm-thread-line-button')
+
+async function reattachViaBottomButton() {
+  const box = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
+  await page.mouse.move(box.left + box.width * 0.7, box.top + box.height * 0.5)
+  await page.mouse.wheel({ deltaY: -330 })
+  await page.waitForSelector('[aria-label="Scroll to bottom"]')
+  await page.click('[aria-label="Scroll to bottom"]')
+  await wait(80)
+}
+
+async function countReferencePixels(frames, reference) {
+  return page.evaluate(async ({ frames, reference }) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = innerWidth
+    canvas.height = innerHeight
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    const counts = []
+    for (const frame of frames) {
+      const image = new Image()
+      image.src = `data:image/png;base64,${frame}`
+      await image.decode()
+      context.drawImage(image, 0, 0)
+      const { data } = context.getImageData(reference.left, reference.top, reference.width, reference.height)
+      let dark = 0
+      for (let i = 0; i < data.length; i += 4) if (data[i] < 120 && data[i + 1] < 120 && data[i + 2] < 120) dark++
+      counts.push(dark)
+    }
+    return counts
+  }, { frames, reference })
+}
+
+test('attached collapse keeps a local slot during the natural-height read and preserves the first painted reference row', async () => {
+  for (const [size, cardSelector, disclosure] of [
+    ['small-with-tail', '[data-system-message-card]', '[data-system-message-card] .foxwarm-thread-line-button'],
+    ['tool-small', '.foxwarm-tool-card', '.foxwarm-tool-card > .foxwarm-thread-line-button'],
+    ['group', '[data-tool-group]', '[data-tool-group-card] > .foxwarm-thread-line-button'],
+  ]) {
+    await mount(size)
+    await page.click(disclosure)
+    await wait(390)
+    await reattachViaBottomButton()
+    const before = await page.$eval(cardSelector, card => {
+      const scroll = document.querySelector('.foxwarm-chat-messages')
+      const reference = [...document.querySelectorAll('[data-chat-message-anchor-key]')].at(-1)
+      const rect = reference.getBoundingClientRect()
+      const viewport = scroll.getBoundingClientRect()
+      const button = card.querySelector('.foxwarm-thread-line-button')
+      const controlRect = button.getBoundingClientRect()
+      return { height: card.getBoundingClientRect().height, width: card.getBoundingClientRect().width,
+        scrollTop: scroll.scrollTop, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight,
+        reference: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(Math.min(rect.width, 690)), height: Math.round(Math.min(rect.height, 44)) },
+        visibleControl: controlRect.top >= viewport.top && controlRect.bottom <= viewport.bottom,
+        slot: card.parentElement.className }
+    })
+    assert.ok(before.visibleControl, `${size}: collapse control must be physically visible`)
+    assert.equal(before.scrollHeight - before.scrollTop - before.clientHeight, 0, `${size}: real bottom action reattached`)
+
+    await page.evaluate(selector => {
+      const card = document.querySelector(selector)
+      const scroll = document.querySelector('.foxwarm-chat-messages')
+      const original = card.getBoundingClientRect.bind(card)
+      window.collapseHeightProbe = { natural: [], moment: 0 }
+      card.getBoundingClientRect = (...args) => {
+        const rect = original(...args)
+        const collapsed = card.hasAttribute('data-tool-group')
+          ? card.dataset.toolGroupExpanded === 'false'
+          : card.querySelector('.foxwarm-thread-line-button')?.getAttribute('aria-expanded') === 'false'
+        if (collapsed && !card.style.height && window.collapseHeightProbe.natural.length === 0) {
+          window.collapseHeightProbe.moment = Date.now() / 1000
+          window.collapseHeightProbe.natural.push({ height: rect.height, width: rect.width,
+            scrollTop: scroll.scrollTop, scrollHeight: scroll.scrollHeight,
+            slotMinHeight: card.parentElement.style.minHeight })
+        }
+        return rect
+      }
+    }, cardSelector)
+
+    let cdp = null
+    const frames = []
+    if (process.env.FOXWARM_E2E_BROWSER !== 'firefox') {
+      cdp = await page.createCDPSession()
+      await cdp.send('Page.enable')
+      cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
+        frames.push({ data, timestamp: metadata.timestamp })
+        void cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
+      })
+      await cdp.send('Page.startScreencast', { format: 'png', everyNthFrame: 1 })
+      await wait(60)
+    }
+    await page.click(disclosure)
+    const first = await page.$eval('.foxwarm-chat-messages', scroll => ({
+      scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+    }))
+    await wait(85)
+    if (cdp) { await cdp.send('Page.stopScreencast'); await cdp.detach() }
+    const measurement = await page.evaluate(() => window.collapseHeightProbe)
+    assert.equal(measurement.natural.length, 1, `${size}: measure the changed card's natural height`)
+    const natural = measurement.natural[0]
+    assert.ok(natural.height < before.height - 5, `${size}: actual collapsed target, not the preserved slot: ${JSON.stringify({ before, natural })}`)
+    assert.ok(Math.abs(natural.width - before.width) <= 1, `${size}: width unchanged during measurement`)
+    assert.ok(natural.slotMinHeight.endsWith('px'), `${size}: measured slot stays in flow`)
+    assert.ok(natural.scrollTop >= before.scrollTop - 3 && natural.scrollHeight >= before.scrollHeight - 3,
+      `${size}: natural-height measurement must not clamp the scroller: ${JSON.stringify({ before, natural })}`)
+    assert.ok(first.distance <= 3, `${size}: restored start height must not paint with a bottom gap: ${JSON.stringify({ before, natural, first })}`)
+    if (cdp) {
+      const painted = frames.filter(frame => frame.timestamp >= measurement.moment).slice(0, 3)
+      assert.ok(painted.length >= 2, `at least two composited frames after ${size} collapse`)
+      const referencePixels = await countReferencePixels(painted.map(frame => frame.data), before.reference)
+      assert.ok(referencePixels.every(count => count >= 900), `the final reference row remains painted during collapse: ${referencePixels}`)
+    }
+    await wait(320)
+    assert.deepEqual(await page.$eval(cardSelector, card => ({
+      height: card.style.height, slotMinHeight: card.parentElement.style.minHeight,
+    })), { height: '', slotMinHeight: '' }, `${size}: the animation restores auto height and releases the local slot`)
+  }
+})
+
+test('detached collapse preserves user position until the animated range itself forces a clamp', async () => {
+  for (const [size, cardSelector, disclosure, remainsInRange] of [
+    ['group', '[data-tool-group]', '[data-tool-group-card] > .foxwarm-thread-line-button', true],
+    ['large', '[data-system-message-card]', '[data-system-message-card] .foxwarm-thread-line-button', false],
+  ]) {
+    await mount(size)
+    await page.click(disclosure)
+    await wait(390)
+    await reattachViaBottomButton()
+    const box = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
+    await page.mouse.move(box.left + box.width * 0.7, box.top + box.height * 0.5)
+    await page.mouse.wheel({ deltaY: -160 })
+    await wait(110)
+    const before = await page.$eval('.foxwarm-chat-messages', (scroll, selector) => ({
+      scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+      cardHeight: document.querySelector(selector).getBoundingClientRect().height,
+    }), cardSelector)
+    assert.ok(before.distance >= 125, `${size}: actual wheel detached the user from bottom`)
+    await page.evaluate(selector => {
+      const card = document.querySelector(selector)
+      const scroll = document.querySelector('.foxwarm-chat-messages')
+      const original = card.getBoundingClientRect.bind(card)
+      window.detachedCollapseRead = null
+      card.getBoundingClientRect = (...args) => {
+        const rect = original(...args)
+        const collapsed = card.hasAttribute('data-tool-group')
+          ? card.dataset.toolGroupExpanded === 'false'
+          : card.querySelector('.foxwarm-thread-line-button')?.getAttribute('aria-expanded') === 'false'
+        if (collapsed && !card.style.height && !window.detachedCollapseRead) {
+          window.detachedCollapseRead = { height: rect.height, scrollTop: scroll.scrollTop,
+            scrollHeight: scroll.scrollHeight, slotMinHeight: card.parentElement.style.minHeight }
+        }
+        return rect
+      }
+    }, cardSelector)
+    // The group header stays clickable, while its full-height rail extends past
+    // the viewport; Puppeteer would scroll the latter into view and reattach.
+    // A tall card's header is truly offscreen, so invoke it without auto-scroll.
+    if (remainsInRange) await page.click('[data-tool-group] .foxwarm-tool-group-header')
+    else await page.$eval(disclosure, node => node.click())
+    const natural = await page.evaluate(() => window.detachedCollapseRead)
+    assert.ok(natural?.height < 80, `${size}: read the actual collapsed target: ${JSON.stringify(natural)}`)
+    assert.ok(natural.slotMinHeight.endsWith('px'))
+    assert.ok(Math.abs(natural.scrollTop - before.scrollTop) <= 3,
+      `${size}: natural measurement must not move detached scrollTop: ${JSON.stringify({ before, natural })}`)
+    if (!remainsInRange) {
+      await page.waitForFunction(({ selector, start }) => {
+        const height = document.querySelector(selector).getBoundingClientRect().height
+        return height < start - 350 && height > 300
+      }, { polling: 'raf', timeout: 900 }, { selector: cardSelector, start: before.cardHeight })
+      const moving = await page.$eval('.foxwarm-chat-messages', scroll => scroll.scrollTop)
+      assert.ok(moving < before.scrollTop - 20 && moving > 745,
+        `oversized detached card should clamp progressively, not all at measurement: ${JSON.stringify({ before, natural, moving })}`)
+    }
+    await wait(330)
+    const final = await page.$eval('.foxwarm-chat-messages', scroll => ({
+      scrollTop: scroll.scrollTop, distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+    }))
+    if (remainsInRange) {
+      assert.ok(Math.abs(final.scrollTop - before.scrollTop) <= 3 && final.distance > 3,
+        `shorter detached group must not reattach: ${JSON.stringify({ before, natural, final })}`)
+    } else {
+      assert.ok(final.scrollTop < before.scrollTop - 1000 && final.distance < 3,
+        `oversized final range must still clamp naturally: ${JSON.stringify({ before, natural, final })}`)
+    }
+  }
+})
 
 test('short expansion follows bottom; height interpolates and returns to auto', async () => {
   await mount('small')
@@ -181,6 +370,7 @@ test('reduced-motion does not leave a transition height or clip', async () => {
   const result = await geometry()
   assert.equal(result.styleHeight, '')
   assert.equal(result.clipPath, '')
+  assert.equal(await page.$eval('[data-system-message-card]', card => card.parentElement.style.minHeight), '')
 })
 
 
@@ -379,10 +569,11 @@ test('group reversal while still animating restores the collapsed natural box', 
   await wait(70)
   await page.$eval('[data-tool-group] [data-tool-group-card] > .foxwarm-thread-line-button', node => node.click())
   await wait(600)
-  const group = await page.$eval('[data-tool-group]', node => ({ height: node.getBoundingClientRect().height, inlineHeight: node.style.height, overflow: node.style.overflow, summary: !!node.querySelector('[aria-label="Expand tool group"]') }))
+  const group = await page.$eval('[data-tool-group]', node => ({ height: node.getBoundingClientRect().height, inlineHeight: node.style.height, overflow: node.style.overflow, slotMinHeight: node.parentElement.style.minHeight, summary: !!node.querySelector('[aria-label="Expand tool group"]') }))
   assert.ok(group.summary)
   assert.equal(group.inlineHeight, '')
   assert.equal(group.overflow, '')
+  assert.equal(group.slotMinHeight, '')
 })
 
 test('reversing both directions targets the new natural height from the currently visible height', async () => {
@@ -420,8 +611,9 @@ test('reversing both directions targets the new natural height from the currentl
     group.querySelector('[data-tool-group-card] > .foxwarm-thread-line-button').click()
     await frames(6)
     const toExpand = await measureReverse(group.querySelector('[aria-label="Expand tool group"]'), expanded)
-    return { collapsed, expanded, expandingTarget, toCollapse, toExpand }
+    return { collapsed, expanded, expandingTarget, toCollapse, toExpand, slotMinHeight: group.parentElement.style.minHeight }
   })
+  assert.equal(probe.slotMinHeight, '', 'rapid reversals release the shared local slot')
   for (const [name, entry] of [['expand→collapse', probe.toCollapse], ['collapse→expand', probe.toExpand]]) {
     assert.ok(Math.abs(entry.target - entry.expectedNatural) < 2, `${name} target should be natural height: ${JSON.stringify(entry)}`)
     assert.ok(Math.abs(entry.natural - entry.expectedNatural) < 2, `${name} auto settles at natural height: ${JSON.stringify(entry)}`)

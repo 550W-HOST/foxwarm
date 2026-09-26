@@ -1023,31 +1023,33 @@ const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onTog
   const collapse = useCallback(() => { prepare(); onToggle(group.key, false) }, [group.key, onToggle, prepare])
   const first = rows[0]
   return (
-    <div
-      ref={ref}
-      className={`foxwarm-tool-group relative min-w-0 ${group.keepExpanded ? 'max-w-full' : first.widthClass} ${first.marginClass}`}
-      data-tool-group={group.key}
-      data-tool-group-expanded={expanded}
-      data-chat-message-anchor-key={first.anchorKey}
-      data-context-scrollbar-anchor-key={first.scrollbarAnchorKey}
-    >
-      {group.keepExpanded ? rows.map((row, index) => (
-        <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} />
-      )) : (
-        <>
-          {rows.map((row, index) => <MessageRow key={`${row.key}-ordinary`} row={row} {...rowProps} groupFirst={index === 0} surface="ordinary" />)}
-          <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
-            <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
-              {rows.map((row, index) => (
-                <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} surface="grouped" />
-              ))}
-            </ToolGroupSummaryCard>
-            {!expanded && first.usageBadge && (
-              <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} sessionId={rowProps.sessionId} />
-            )}
-          </div>
-        </>
-      )}
+    <div className="foxwarm-tool-group-slot min-w-0 max-w-full">
+      <div
+        ref={ref}
+        className={`foxwarm-tool-group relative min-w-0 ${group.keepExpanded ? 'max-w-full' : first.widthClass} ${first.marginClass}`}
+        data-tool-group={group.key}
+        data-tool-group-expanded={expanded}
+        data-chat-message-anchor-key={first.anchorKey}
+        data-context-scrollbar-anchor-key={first.scrollbarAnchorKey}
+      >
+        {group.keepExpanded ? rows.map((row, index) => (
+          <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} />
+        )) : (
+          <>
+            {rows.map((row, index) => <MessageRow key={`${row.key}-ordinary`} row={row} {...rowProps} groupFirst={index === 0} surface="ordinary" />)}
+            <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
+              <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
+                {rows.map((row, index) => (
+                  <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} surface="grouped" />
+                ))}
+              </ToolGroupSummaryCard>
+              {!expanded && first.usageBadge && (
+                <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} sessionId={rowProps.sessionId} />
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 })
