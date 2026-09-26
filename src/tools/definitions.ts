@@ -46,7 +46,7 @@ const TOOL_RULES_SCHEMA = {
 const FORCE_MODEL_SCHEMA = {
     type: 'object',
     additionalProperties: false,
-    description: "Override the model or effort for the new session. Omit to use the normal inherited defaults; an empty object also leaves them unchanged.",
+    description: "Only use when the user explicitly requests a model or effort override for this task or session. Otherwise omit this parameter to use the normal inherited defaults; an empty object also leaves them unchanged.",
     properties: {
         modelId: { type: 'string', description: "Configured model key to use." },
         effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: "Effort override. Can be set without modelId to use the otherwise selected model." },
@@ -898,7 +898,7 @@ Example:
         },
         {
             name: 'create_session',
-            description: "Create a conversation under an existing agent, reusing that agent's memory and workspace. Use forceModel only when intentionally overriding the normal model or effort defaults.",
+            description: "Create a conversation under an existing agent, reusing that agent's memory and workspace.",
             parameters: {
                 type: 'object',
                 properties: {
