@@ -108,7 +108,10 @@ test('parallel exec returns ordered success and failure responses without discar
     const responses = functionResponses(result);
     assert.deepEqual(responses.map(item => item.tool_use_id), ['ok', 'bad']);
     assert.match(responses[0].response.output, /ok/);
+    assert.ok(responses[0].executionTiming?.durationMs >= 0);
+    assert.ok(responses[0].executionTiming?.completedAt >= responses[0].executionTiming?.startedAt);
     assert.match(String(responses[1].response.error), /Working directory|does not exist/i);
+    assert.ok(responses[1].executionTiming?.durationMs >= 0, 'executed failures have measured durations');
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(root);
@@ -157,6 +160,7 @@ test('stop waits for the active exec segment and skips the following barrier too
     const responses = functionResponses(result);
     assert.deepEqual(responses.map(item => item.tool_use_id), ['a', 'b', 'barrier']);
     assert.match(String(responses[2].response.error), /not started because the session was stopped/);
+    assert.equal(responses[2].executionTiming, undefined, 'skipped tools must not claim a duration');
   } finally {
     session.stopping = false;
     await sessionManager.deleteSession(sessionId).catch(() => false);

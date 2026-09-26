@@ -1,5 +1,6 @@
+import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Activity, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
+import { Activity, ArrowDownLeft, ArrowUpRight, Database, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import AgentCreationMenu from './AgentCreationMenu'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -109,6 +110,95 @@ function SummaryMetric({ label, value, detail, icon, active, onClick }: {
   return onClick ? <button type="button" onClick={onClick} className={classes}>{content}</button> : <div className={classes}>{content}</div>
 }
 
+type LoadedUsage = { cachedTokens: number; inputTokens: number; outputTokens: number; count: number }
+
+function addLoadedUsage(total: LoadedUsage, session: Session) {
+  if (!session.tokenUsage) return total
+  total.cachedTokens += session.tokenUsage.cachedTokens || 0
+  total.inputTokens += session.tokenUsage.inputTokens || 0
+  total.outputTokens += session.tokenUsage.outputTokens || 0
+  total.count += 1
+  return total
+}
+
+const emptyLoadedUsage = (): LoadedUsage => ({ cachedTokens: 0, inputTokens: 0, outputTokens: 0, count: 0 })
+
+const usageNumber = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+
+function UsageDetails({ usage, loaded = false, detailed = false }: {
+  usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }
+  loaded?: boolean
+  detailed?: boolean
+}) {
+  const total = usage ? usage.cachedTokens + usage.inputTokens + usage.outputTokens : 0
+  const parts = [
+    { label: 'Cached', value: usage?.cachedTokens || 0, color: 'bg-fw-text-subtle', ink: 'text-fw-text-muted', icon: Database },
+    { label: 'Input', value: usage?.inputTokens || 0, color: 'bg-fw-accent', ink: 'text-fw-accent', icon: ArrowDownLeft },
+    { label: 'Output', value: usage?.outputTokens || 0, color: 'bg-fw-special', ink: 'text-fw-special', icon: ArrowUpRight },
+  ]
+  const label = loaded ? 'Loaded tokens' : 'Tokens'
+  const description = usage ? `${label}: ${total.toLocaleString('en')}. ${parts.map(part => `${part.label}: ${part.value.toLocaleString('en')}`).join(', ')}` : `${label}: unavailable`
+  return (
+    <div className="min-w-0" title={description}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-[10px] text-fw-text-muted"><Layers3 className="h-3 w-3" aria-hidden="true" />{label}</span>
+        <strong className={`${detailed ? 'text-lg' : 'text-sm'} font-semibold tabular-nums leading-none text-fw-text-strong`}>{usage ? usageNumber(total) : '—'}</strong>
+      </div>
+      <div role="img" aria-label={description} className="mt-2 flex h-1 overflow-hidden rounded-full bg-fw-border-muted">
+        {total > 0 ? parts.filter(part => part.value > 0).map(part => <span key={part.label} className={part.color} style={{ width: `${part.value / total * 100}%` }} />) : null}
+      </div>
+      {detailed && usage ? <div className="mt-3 space-y-2">
+        {parts.map(part => <div key={part.label} className="flex min-w-0 items-center gap-2 text-xs tabular-nums">
+          <part.icon className={`h-3 w-3 shrink-0 ${part.ink}`} aria-hidden="true" />
+          <span className="text-fw-text-muted">{part.label}</span>
+          <span className="ml-auto shrink-0 font-medium text-fw-text-strong">{usageNumber(part.value)}</span>
+          <span className="w-14 shrink-0 text-right text-fw-text-muted">{total > 0 ? (part.value / total * 100).toFixed(1) : '0.0'}%</span>
+        </div>)}
+      </div> : null}
+    </div>
+  )
+}
+
+function UsagePie({ usage, loaded = false, global = false }: { usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }; loaded?: boolean; global?: boolean }) {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const popup = useRef<HTMLDivElement>(null)
+  const total = usage ? usage.cachedTokens + usage.inputTokens + usage.outputTokens : 0
+  const cached = total ? usage!.cachedTokens / total * 100 : 0
+  const inputEnd = cached + (total ? usage!.inputTokens / total * 100 : 0)
+  useEffect(() => {
+    if (!position) return
+    const dismiss = (event: PointerEvent) => {
+      if (!popup.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setPosition(null)
+    }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setPosition(null); trigger.current?.focus() } }
+    const close = () => setPosition(null)
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); window.removeEventListener('resize', close); window.removeEventListener('scroll', close, true) }
+  }, [position])
+  return <>
+    <button ref={trigger} type="button" aria-label={global ? 'Global token usage' : loaded ? 'Loaded token usage' : 'Token usage'} aria-haspopup="dialog" aria-expanded={!!position}
+      title={usage ? `${usageNumber(total)} ${loaded ? 'loaded tokens' : 'tokens'}` : 'Token usage unavailable'}
+      onKeyDown={event => event.stopPropagation()}
+      onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setPosition(position ? null : { left: Math.max(8, Math.min(rect.right - 280, window.innerWidth - 288)), top: rect.bottom + 210 < window.innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 210) }) }}
+      className={`flex shrink-0 items-center rounded-lg transition-colors hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${global ? 'gap-3 px-3 py-1.5 text-left' : 'h-8 w-8 justify-center'}`}>
+      <span aria-hidden="true" className={`${global ? 'h-8 w-8' : 'h-5 w-5'} shrink-0 rounded-full ring-1 ring-inset ring-fw-border/30`} style={{ background: total ? `conic-gradient(var(--foxwarm-color-text-subtle) 0% ${cached}%, var(--foxwarm-color-accent) ${cached}% ${inputEnd}%, var(--foxwarm-color-special) ${inputEnd}% 100%)` : 'var(--foxwarm-color-border)' }} />
+      {global ? <>
+        <span className="flex flex-col gap-0.5"><span className="text-[10px] font-medium tracking-wide text-fw-text-muted">Usage</span><strong className="text-lg font-semibold leading-none tabular-nums text-fw-text-strong">{usage ? usageNumber(total) : '—'}</strong></span>
+        <ChevronRight aria-hidden="true" className={`ml-1 h-3.5 w-3.5 text-fw-text-muted transition-transform ${position ? '-rotate-90' : 'rotate-90'}`} />
+      </> : null}
+    </button>
+    {position ? createPortal(<div ref={popup} role="dialog" aria-label="Token usage" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
+      className="fixed z-[1000] w-[280px] max-w-[calc(100vw-16px)] rounded-xl border border-fw-border bg-fw-surface p-4 shadow-xl" style={position}>
+      <UsageDetails usage={usage} loaded={loaded} detailed />
+    </div>, document.body) : null}
+  </>
+}
+
+
 function SessionOperationRow({ session, selected, current, now, onInspect, onOpen }: {
   session: Session
   selected: boolean
@@ -153,7 +243,9 @@ function SessionOperationRow({ session, selected, current, now, onInspect, onOpe
             {queueLength > 0 ? <span className="text-fw-warning dark:text-fw-warning">queued {queueLength}</span> : null}
             {model ? <span className="max-w-[180px] truncate" title={model}>model {model}</span> : null}
           </div>
+
         </div>
+        <UsagePie usage={session.tokenUsage} />
         <button
           type="button"
           onClick={(event) => { event.stopPropagation(); onOpen() }}
@@ -177,6 +269,7 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
   onOpen: (sessionId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const usage = useMemo(() => rows.reduce(addLoadedUsage, emptyLoadedUsage()), [rows])
   const activeCount = rows.filter(isSessionRuntimeActive).length
   const waitingCount = rows.filter(session => getSessionRuntimeStateName(session) === 'waiting').length
   const serviceCount = Object.keys(node.services || {}).length
@@ -204,12 +297,14 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
         </div>
         <div className="flex items-center gap-3 text-[11px] text-fw-text-muted">
           <span>{rows.length} loaded</span>
+          <UsagePie usage={usage.count ? usage : undefined} loaded />
           {activeCount > 0 ? <span className="text-fw-accent dark:text-fw-accent">{activeCount} active</span> : null}
           {waitingCount > 0 ? <span className="text-fw-warning dark:text-fw-warning">{waitingCount} waiting</span> : null}
         </div>
       </header>
       {rows.length > 0 ? (
         <>
+
           <div data-architecture-node-session-scroll className="max-h-[360px] overflow-y-auto overscroll-contain">
             <div className="grid gap-2 p-3 lg:grid-cols-2">
               {visibleRows.map(session => (
@@ -379,10 +474,12 @@ const formatBytes = (size: number) => {
   return `${size} B`
 }
 
-function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistryEntry; selected: boolean; onSelect: () => void }) {
+function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent: AgentRegistryEntry; usage?: LoadedUsage; selected: boolean; onSelect: () => void }) {
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
+      onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect() } }}
       data-architecture-agent-id={agent.id}
       data-architecture-agent-selected={selected ? 'true' : 'false'}
       onClick={onSelect}
@@ -398,6 +495,7 @@ function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistry
             <p className="mt-0.5 truncate text-[11px] text-fw-text-muted">{agent.inherit ? `inherits ${agent.inherit}` : 'independent memory'}</p>
           </div>
         </div>
+        <UsagePie usage={usage?.count ? usage : undefined} loaded />
         {agent.isolated ? renderMetaBadge(agent.isolatedNode ? `isolated · ${agent.isolatedNode}` : 'isolated', 'warning') : null}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
@@ -405,11 +503,12 @@ function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistry
         <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-accent dark:text-fw-accent">{agent.activeSessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">active</div></div>
         <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.memoryFileCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">memory</div></div>
       </div>
+
       <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-fw-text-muted">
         <span>{agent.queuedSessionCount > 0 ? `${agent.queuedSessionCount} queued` : 'queue clear'}</span>
         <span>{agent.memoryLastModified ? `memory ${formatRelativeTime(agent.memoryLastModified)}` : 'no memory files'}</span>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -735,6 +834,17 @@ export default function ArchitectureView({
     return map
   }, [childIds, sessionMap, filteredSessionSet, focusPathIds])
 
+  const loadedAgentUsage = useMemo(() => {
+    const totals = new Map<string, LoadedUsage>()
+    for (const session of sessions) {
+      const agent = session.agent || 'main'
+      const total = totals.get(agent) || emptyLoadedUsage()
+      addLoadedUsage(total, session)
+      totals.set(agent, total)
+    }
+    return totals
+  }, [sessions])
+
   const summary = {
     agentCount: agentCounts.length,
     sessionCount: globalSummary.total,
@@ -805,7 +915,6 @@ export default function ArchitectureView({
   ]
 
   const readyNodes = displayNodes.filter(node => node.online && node.protocolStatus !== 'upgrade-required').length
-  const totalTokens = summary.totalCachedTokens + summary.totalInputTokens + summary.totalOutputTokens
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
   const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
 
@@ -892,48 +1001,44 @@ export default function ArchitectureView({
 
         </header>
 
-        {surface === 'topology' ? <div className="mb-4 rounded-xl border border-fw-border bg-fw-surface p-3 shadow-sm dark:border-fw-border dark:bg-fw-surface">
-          <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center">
-            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
-              <label className="relative min-w-0 flex-1 sm:min-w-64">
+        {surface === 'topology' ? <div className="mb-5 border-b border-fw-border-muted pb-4">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <label className="relative w-full sm:w-72 lg:w-80 sm:shrink-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
-                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search sessions, models, tools…" className="w-full rounded-lg border border-fw-border bg-fw-surface-sunken py-2 pl-9 pr-3 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring" />
+                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} aria-label="Search sessions, models, tools" placeholder="Search sessions…" className="h-9 w-full rounded-lg border border-fw-border bg-fw-surface py-0 pl-9 pr-3 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring hover:bg-fw-hover dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring" />
               </label>
-              <label className="relative sm:w-56">
+              <label className="relative min-w-0 flex-1 sm:w-48 sm:flex-none">
                 <Bot className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
-                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-fw-border bg-fw-surface-sunken py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong">
+                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border hover:bg-fw-hover dark:text-fw-text-strong">
                   <option value="">All agents · {summary.sessionCount}</option>
                   {agents.map(agent => <option key={agent.name} value={agent.name}>{agent.name} · {agent.sessionCount}</option>)}
                 </select>
                 <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
               </label>
-              <label className="relative sm:w-44">
+              <label className="relative min-w-0 flex-1 sm:w-36 sm:flex-none">
                 <ListFilter className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
-                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-fw-border bg-fw-surface-sunken py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong">
+                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border hover:bg-fw-hover dark:text-fw-text-strong">
                   {statusFilters.map(filter => <option key={filter.id} value={filter.id}>{filter.label}{typeof filter.count === 'number' ? ` · ${filter.count}` : ''}</option>)}
                 </select>
                 <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
               </label>
             </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-fw-border-muted pt-3 text-[11px] text-fw-text-muted dark:border-fw-border dark:text-fw-text-muted 2xl:border-l 2xl:border-t-0 2xl:pl-4 2xl:pt-0">
-              <span className="font-semibold uppercase tracking-[0.12em] text-fw-text-muted">Traffic</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(totalTokens)}</strong> total</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalCachedTokens)}</strong> cached</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalInputTokens)}</strong> input</span>
-              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalOutputTokens)}</strong> output</span>
+            <div className="ml-auto flex shrink-0 items-center">
+              <UsagePie global usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens }} />
             </div>
           </div>
         </div> : null}
 
         {surface === 'topology' ? <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <main className="min-w-0 space-y-3">
-            <div className="flex items-center justify-between gap-3 px-1">
+            <div className="flex items-center justify-between gap-3 px-1 xl:col-span-2 xl:pr-[376px]">
               <div>
                 <h2 className="text-sm font-semibold text-fw-text-strong">Execution topology</h2>
                 <p className="mt-0.5 text-xs text-fw-text-muted">Sessions are grouped by their effective tool-execution node, not sidebar hierarchy.</p>
               </div>
               <span className="text-xs text-fw-text-muted">{visibleSessions.length} matching</span>
             </div>
+          <main className="min-w-0 space-y-3">
             {displayNodes.map(node => (
               <NodeLane
                 key={node.id}
@@ -975,7 +1080,7 @@ export default function ArchitectureView({
               </div>
               {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{agentRegistryError}</div> : null}
               <div className="grid gap-3 md:grid-cols-2">
-                {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
+                {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} usage={loadedAgentUsage.get(agent.id)} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
                 {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted dark:border-fw-border">No agents found.</div> : null}
               </div>
             </main>

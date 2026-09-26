@@ -1804,7 +1804,7 @@ test('model columns preserve child policy and commit effort only after dragging 
   await attachRequestMocks(desktopPage)
   try {
     await desktopPage.goto(`${baseUrl}/normal/#session/model-effort-default-desktop`, { waitUntil: 'networkidle2' })
-    const modelButton = await desktopPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const modelButton = await desktopPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await modelButton.click()
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     await desktopPage.click('button[title="leaf/model-a"]')
@@ -1856,7 +1856,7 @@ test('desktop model popup remains bounded and supports single-selection rows', a
   await attachRequestMocks(desktopPage)
   try {
     await desktopPage.goto(`${baseUrl}/normal/#session/model-popup-geometry`, { waitUntil: 'networkidle2' })
-    await desktopPage.click('button[aria-haspopup="dialog"]')
+    await desktopPage.click('.foxwarm-model-selector-trigger')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     const bounded = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
       const rect = popup.getBoundingClientRect()
@@ -1881,15 +1881,28 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
   const normalPage = await browser.newPage()
   await attachRequestMocks(normalPage)
   try {
+    const assertConfigureModelsHitTarget = async () => {
+      const state = await normalPage.$eval('button[aria-label="Configure models"]', (button) => {
+        const rect = button.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return {
+          visible: button.checkVisibility(),
+          hit: hit === button || button.contains(hit),
+        }
+      })
+      assert.deepEqual(state, { visible: true, hit: true })
+    }
+
     await normalPage.evaluateOnNewDocument(() => {
       try {
         localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
-    const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const modelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await assertConfigureModelsHitTarget()
     const pickerState = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => ({
       treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
       columnCount: popup.querySelectorAll('[data-model-column]').length,
@@ -1916,9 +1929,10 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     await normalPage.click('[data-setup-tab="config"]')
     await normalPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
     await normalPage.click('[data-tab-id="chat:model-filter-normal"]')
-    const reopenedModelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const reopenedModelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await reopenedModelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await assertConfigureModelsHitTarget()
     await normalPage.click('button[aria-label="Configure models"]')
     await normalPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await normalPage.waitForFunction(() => (
@@ -1937,7 +1951,7 @@ test('effort dragging saves concrete levels without flashing, and automatic mode
   await attachRequestMocks(p, { heldEffortRequests: held })
   try {
     await p.goto(`${baseUrl}/normal/#session/effort-interaction`, { waitUntil: 'networkidle2' })
-    await p.click('button[aria-haspopup="dialog"]')
+    await p.click('.foxwarm-model-selector-trigger')
     await p.waitForSelector('button[title="leaf/model-a"]')
     await p.click('button[title="leaf/model-a"]')
     const sliderSelector = 'input[aria-label="Current effort"]'

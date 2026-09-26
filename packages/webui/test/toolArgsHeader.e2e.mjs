@@ -42,7 +42,7 @@ async function buildFixtureBundle() {
       },
       edit: {
         call: { id: 'edit-call', name: 'edit', args: { filePath: longPath, oldText: 'before', newText: 'after' } },
-        response: { tool_use_id: 'edit-call', name: 'edit', response: { output: 'File edited successfully' } },
+        response: { tool_use_id: 'edit-call', name: 'edit', response: { output: 'File edited successfully' }, executionTiming: { startedAt: 200, completedAt: 150, durationMs: 100 } },
       },
       error: {
         call: { id: 'error-call', name: 'exec', args: { command: longCommand } },
@@ -50,7 +50,7 @@ async function buildFixtureBundle() {
       },
       send: {
         call: { id: 'send-call', name: 'send_to_session', args: { sessionId: 'agent/child', message: 'handoff body' } },
-        response: { tool_use_id: 'send-call', name: 'send_to_session', response: { output: 'sent' } },
+        response: { tool_use_id: 'send-call', name: 'send_to_session', response: { output: 'sent' }, executionTiming: { startedAt: 100, completedAt: 350, durationMs: 250 } },
       },
       sendAlias: {
         call: { id: 'send-alias-call', name: 'send_to_session', args: { sessionId: '<main>', message: 'alias body' } },
@@ -278,6 +278,16 @@ test('invalid tool arguments show escaped raw text instead of structured args in
   await page.click('#rawNoError .foxwarm-tool-header-toggle')
   assert.match(await page.$eval('#rawNoError .foxwarm-tool-call-args', element => element.textContent), /echo actual command/)
   assert.doesNotMatch(await page.$eval('#rawNoError .foxwarm-tool-call-args', element => element.textContent), /wrong raw command/)
+})
+
+test('original tool header shows only valid measured invocation durations', async () => {
+  await mountFixture({ width: 900, height: 800 })
+  assert.equal(await page.$eval('#send [data-tool-execution-time]', element => element.textContent.trim()), '250ms')
+  for (const id of ['exec', 'edit', 'noResult']) {
+    assert.equal(await page.$$eval(`#${id} [data-tool-execution-time]`, elements => elements.length), 0)
+  }
+  await page.click('#send .foxwarm-tool-tag')
+  assert.equal(await page.$eval('#send [data-tool-execution-time]', element => element.textContent.trim()), '250ms')
 })
 
 test('default desktop keeps call args in the dark header and results on the light surface', async () => {
