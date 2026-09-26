@@ -41,6 +41,8 @@ export type UsageAttribution = {
   timestamps: Array<number | null | 'invalid'>
   apiDurationsMs: DurationSample[]
   betweenRequestsMs: DurationSample[]
+  /** One persisted model-message sequence per usage-bearing model message, in source order. */
+  messageSeqs: Array<number | null>
 }
 
 /** Shared per-group view: every row of one tool-call group carries the same object. */
@@ -149,11 +151,17 @@ const getUsageTimestamp = (msg: Message): number | null | 'invalid' => {
   return timestamp
 }
 
+const getValidMessageSeq = (msg: Message): number | null => {
+  const seq = msg.__meta?.seq
+  return typeof seq === 'number' && Number.isSafeInteger(seq) && seq > 0 ? seq : null
+}
+
 const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming): UsageAttribution => ({
   models: [formatUsageModel(msg)],
   timestamps: [getUsageTimestamp(msg)],
   apiDurationsMs: [timing.apiDurationMs],
   betweenRequestsMs: [timing.betweenRequestsMs],
+  messageSeqs: [getValidMessageSeq(msg)],
 })
 
 /** Only a whole event wrapper represents a timeline event; quoted tags inside authored text do not. */
@@ -307,7 +315,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
 
   const items: ToolTagItem[] = []
   const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], betweenRequestsMs: [] }
+  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], betweenRequestsMs: [], messageSeqs: [] }
   let callCount = 0
   let attributedCallCount = 0
 
@@ -345,6 +353,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     attribution.models.push(...messageAttribution.models)
     attribution.timestamps.push(...messageAttribution.timestamps)
     attribution.apiDurationsMs.push(...messageAttribution.apiDurationsMs)
+    attribution.messageSeqs.push(...messageAttribution.messageSeqs)
     // The first request begins the collapsed group; only later gaps represent tool/orchestration
     // work performed inside that group.
     if (attributedCallCount > 0) attribution.betweenRequestsMs.push(...messageAttribution.betweenRequestsMs)
@@ -398,12 +407,17 @@ const sameStringList = (a: string[], b: string[]): boolean => (
   a === b || (a.length === b.length && a.every((value, index) => value === b[index]))
 )
 
+const sameMessageSeqs = (a: Array<number | null>, b: Array<number | null>): boolean => (
+  a === b || (a.length === b.length && a.every((seq, index) => seq === b[index]))
+)
+
 const sameAttribution = (a: UsageAttribution, b: UsageAttribution): boolean => (
   a === b || (
     sameStringList(a.models, b.models)
     && sameSampleList(a.timestamps, b.timestamps)
     && sameSampleList(a.apiDurationsMs, b.apiDurationsMs)
     && sameSampleList(a.betweenRequestsMs, b.betweenRequestsMs)
+    && sameMessageSeqs(a.messageSeqs, b.messageSeqs)
   )
 )
 

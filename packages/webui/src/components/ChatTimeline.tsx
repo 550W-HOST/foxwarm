@@ -110,6 +110,21 @@ const formatUsageTimes = (timestamps: UsageAttribution['timestamps']): string =>
   return labels.join(' • ') || 'unavailable'
 }
 
+const formatUsageMessageSeq = (seqs: UsageAttribution['messageSeqs']): { label: string; target: string } | null => {
+  if (seqs.length === 0) return null
+  let first = Infinity
+  let last = 0
+  for (const seq of seqs) {
+    // An incomplete aggregate cannot be attributed to just the known messages.
+    if (seq === null) return null
+    first = Math.min(first, seq)
+    last = Math.max(last, seq)
+  }
+  return first === last
+    ? { label: String(first), target: String(first) }
+    : { label: `${first} ~ ${last}`, target: `${first}-${last}` }
+}
+
 const formatDurationSummary = (samples: DurationSample[]): string => {
   const summary = summarizeDurationSamples(samples)
   const labels: string[] = []
@@ -141,14 +156,51 @@ const ModelUsageTextRow = ({ label, value }: { label: string; value: string }) =
   </span>
 )
 
-const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, expanded, onToggle }: {
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, sessionId, expanded, onToggle }: {
   usage: NormalizedTokenUsage
   isMobile: boolean
   callCount?: number
   attribution: UsageAttribution
+  sessionId: string
   expanded: boolean
   onToggle: () => void
 }) {
+  const [copied, setCopied] = useState(false)
+  const copyResetTimeoutRef = useRef<number | null>(null)
+  const messageSeq = formatUsageMessageSeq(attribution.messageSeqs)
+  const reference = messageSeq ? `sessionId=${sessionId} msg#${messageSeq.target}` : null
+  const currentReferenceRef = useRef(reference)
+  currentReferenceRef.current = reference
+
+  useEffect(() => {
+    setCopied(false)
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+        copyResetTimeoutRef.current = null
+      }
+    }
+  }, [reference])
+
+  const copyReference = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!reference) return
+    try {
+      await copyTextToClipboard(reference)
+      if (currentReferenceRef.current !== reference) return
+      setCopied(true)
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copyResetTimeoutRef.current = null
+      }, 1500)
+    } catch (error) {
+      setCopied(false)
+      console.error('Failed to copy message reference:', error)
+    }
+  }
+
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
   const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
   const betweenRequestsMs = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
@@ -157,13 +209,11 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
     : null
 
   return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
+    <div
       data-usage-badge
-      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} pointer-events-auto rounded-md border border-fw-border bg-fw-surface/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-fw-border dark:bg-fw-canvas/85 ${expanded ? 'w-fit' : ''} cursor-pointer appearance-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring`}
-      title={formatUsageTitle(usage, attribution, callCount)}
+      role="group"
+      aria-label="Request usage"
+      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left w-fit' : 'inline-flex flex-row items-center'} pointer-events-auto rounded-md border border-fw-border bg-fw-surface/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-fw-border dark:bg-fw-canvas/85`}
       onPointerDown={stopUsageBadgeEvent}
       onClick={(event) => {
         event.preventDefault()
@@ -171,8 +221,15 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
         onToggle()
       }}
     >
-      {expanded ? (
-        <>
+      <button
+        type="button"
+        data-usage-badge-toggle
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
+        className={`${expanded ? 'flex w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} min-w-0 cursor-pointer appearance-none font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring`}
+        title={formatUsageTitle(usage, attribution, callCount)}
+      >
+        {expanded ? <>
           {callCount ? <ModelUsageRow label="Calls" value={callCount} tone="normal" /> : null}
           <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
@@ -181,9 +238,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
           <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
           <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
-        </>
-      ) : (
-        <>
+        </> : <>
           {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
           <ModelUsageRow label="C" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
@@ -215,17 +270,37 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
               ) : null}
             </span>
           ) : null}
-        </>
+        </>}
+      </button>
+      {expanded && (
+        <div data-usage-seq-row className="flex min-w-0 items-center justify-between gap-2 text-fw-text-muted">
+          <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Seq</span>
+          <span data-usage-seq-value className="ml-auto min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{messageSeq?.label || 'unavailable'}</span>
+          {reference && (
+            <button
+              type="button"
+              data-usage-seq-copy
+              aria-label={copied ? 'Copied message reference' : 'Copy message reference'}
+              title={copied ? 'Copied message reference' : 'Copy message reference'}
+              className="shrink-0 rounded p-0.5 text-fw-text-muted hover:bg-fw-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring"
+              onPointerDown={stopUsageBadgeEvent}
+              onClick={copyReference}
+            >
+              {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+            </button>
+          )}
+        </div>
       )}
-    </button>
+    </div>
   )
 })
 
-const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount, attribution }: {
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount, attribution, sessionId }: {
   usage: NormalizedTokenUsage
   isMobile: boolean
   callCount?: number
   attribution: UsageAttribution
+  sessionId: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const [expandedClampOffset, setExpandedClampOffset] = useState(0)
@@ -266,7 +341,7 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   if (isMobile) {
     return (
       <div data-usage-badge-anchor className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
-        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
+        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} sessionId={sessionId} expanded={expanded} onToggle={toggleExpanded} />
       </div>
     )
   }
@@ -278,7 +353,7 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
       className={`pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)] ${expanded ? 'max-w-full' : ''}`}
       style={expanded ? { transform: `translateX(calc(100% + 0.5rem - ${expandedClampOffset}px))` } : undefined}
     >
-      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
+      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} sessionId={sessionId} expanded={expanded} onToggle={toggleExpanded} />
     </div>
   )
 })
@@ -913,7 +988,7 @@ const MessageRow = memo(function MessageRow({
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
             {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
-            {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} />}
+            {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} sessionId={sessionId} />}
           </div>
         )}
       </div>
@@ -968,7 +1043,7 @@ const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onTog
               ))}
             </ToolGroupSummaryCard>
             {!expanded && first.usageBadge && (
-              <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} />
+              <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} sessionId={rowProps.sessionId} />
             )}
           </div>
         </>
