@@ -259,7 +259,6 @@ test('guest realtime accepts only bound session subscriptions and never exposes 
   for (const request of [
     { sessionListActive: true, sessionListIds: ['guest/main'], sessionIds: [] as string[] },
     { sessionListActive: false, sessionListIds: [] as string[], sessionIds: ['private/main'] },
-    { sessionListActive: false, sessionListIds: [] as string[], sessionIds: ['alias'] },
   ]) {
     const hub = makeGuestHub();
     const socket = new FakeSocket();
@@ -283,6 +282,14 @@ test('guest realtime accepts only bound session subscriptions and never exposes 
   assert.equal(socket.sent.some(message => message.sessionId === 'private/main'), false);
   assert.equal(socket.sent.some(message => message.type === 'message' && message.sessionId === 'guest/main'), true);
   socket.close();
+
+  const oldId = new FakeSocket();
+  await hub.handleConnection(oldId as any, {} as http.IncomingMessage);
+  oldId.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['alias'] });
+  await flush();
+  assert.equal(oldId.sent.some(message => message.type === 'protocol-error'), false);
+  assert.equal(oldId.sent.some(message => message.type === 'session-state' && message.sessionId === 'guest/main'), true);
+  oldId.close();
 });
 
 test('guest realtime periodically revalidates revoked credentials and releases presentation subscription', async () => {
@@ -307,7 +314,7 @@ test('guest realtime periodically revalidates revoked credentials and releases p
   assert.equal(hub.getConnectionCount(), 0);
 });
 
-test('guest realtime drops a snapshot if a bound ID becomes an alias during initialization', async () => {
+test('guest realtime refreshes a snapshot when a Session moves during initialization', async () => {
   let target = 'guest/main';
   let release!: () => void;
   const loading = new Promise<void>(resolve => { release = resolve; });
@@ -327,7 +334,7 @@ test('guest realtime drops a snapshot if a bound ID becomes an alias during init
   await hub.handleConnection(socket as any, {} as http.IncomingMessage);
   socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
   await flush();
-  target = 'private/main';
+  target = 'renamed/main';
   release();
   await flush();
   assert.equal(socket.sent.some(event => event.type === 'session-state'), false);
@@ -335,7 +342,7 @@ test('guest realtime drops a snapshot if a bound ID becomes an alias during init
   assert.equal(socket.closes[0]?.code, 1011);
 });
 
-test('guest realtime closes a connected bound stream when its ID is retargeted to an alias', async () => {
+test('guest realtime reconnects a connected bound stream after a committed identity move', async () => {
   let target = 'guest/main';
   const hub = new WebUiRealtimeHub({
     checkToken: () => false,
@@ -351,8 +358,14 @@ test('guest realtime closes a connected bound stream when its ID is retargeted t
   socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
   await flush();
   assert.equal(hub.hasSessionSubscribers('guest/main'), true);
-  target = 'private/main';
+  target = 'renamed/main';
   for (let attempt = 0; attempt < 20 && socket.closes.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(socket.closes[0]?.code, 1008);
+  assert.equal(socket.closes[0]?.code, 1012);
   assert.equal(hub.hasSessionSubscribers('guest/main'), false);
+  const reconnect = new FakeSocket();
+  await hub.handleConnection(reconnect as any, {} as http.IncomingMessage);
+  reconnect.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  await flush();
+  assert.equal(reconnect.sent.some(message => message.type === 'session-state' && message.sessionId === 'renamed/main'), true);
+  reconnect.close();
 });

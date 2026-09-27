@@ -101,6 +101,8 @@ test('one realtime transport multiplexes every page subscription onto one socket
   assert.equal(sockets.length, 1)
   assert.equal(transport.getUnderlyingConnectionCount(), 1)
   sockets[0].open()
+  assert.deepEqual(sockets[0].sent, [], 'wait for the authenticated server handler before sending subscriptions')
+  sockets[0].receive({ type: 'connected' })
   assert.deepEqual(sockets[0].sent, [{
     type: 'set-subscriptions',
     revision: 3,
@@ -154,6 +156,8 @@ test('one realtime transport multiplexes every page subscription onto one socket
   clock.runNext()
   assert.equal(sockets.length, 2)
   sockets[1].open()
+  assert.deepEqual(sockets[1].sent, [])
+  sockets[1].receive({ type: 'connected' })
   assert.deepEqual(sockets[1].sent.at(-1), {
     type: 'set-subscriptions',
     revision: 6,
@@ -216,6 +220,7 @@ test('a list controller can resync once per physical socket generation across lo
   const keepAlive = transport.subscribeSession('agent/main', { onMessage() {} })
   let unsubscribeList = transport.subscribeSessionList(['agent/main'], handlers)
   sockets[0].open()
+  sockets[0].receive({ type: 'connected' })
   sockets[0].receive({ type: 'subscriptions-accepted', revision: 2 })
   assert.deepEqual(resyncedGenerations, [1], 'initial registration closes the mount race once')
 
@@ -227,6 +232,7 @@ test('a list controller can resync once per physical socket generation across lo
   sockets[0].drop()
   clock.runNext()
   sockets[1].open()
+  sockets[1].receive({ type: 'connected' })
   sockets[1].receive({ type: 'subscriptions-accepted', revision: 4 })
   assert.deepEqual(resyncedGenerations, [1, 2], 'a physical reconnect gets one new safety resync')
 

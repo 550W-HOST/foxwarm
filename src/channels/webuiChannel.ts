@@ -856,10 +856,14 @@ export class WebUIChannel implements Channel {
     if (auth.role === 'admin') {
       return { role: 'admin' as const, features: WEBUI_ADMIN_FEATURES };
     }
+    const sessionIds = [...new Set(auth.sessionIds.flatMap(id => {
+      const session = sessionManager.getSessionCatalog(id);
+      return session ? [session.id] : [];
+    }))];
     return {
       role: 'guest' as const,
       tokenId: auth.tokenId,
-      sessionIds: auth.sessionIds,
+      sessionIds,
       label: auth.label || null,
       expiresAt: auth.expiresAt || null,
       features: WEBUI_GUEST_FEATURES,
@@ -867,8 +871,9 @@ export class WebUIChannel implements Channel {
   }
 
   private guestCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
-    return auth.role === 'admin' || (auth.sessionIds.includes(sessionId)
-      && sessionManager.getSessionCatalog(sessionId)?.id === sessionId);
+    if (auth.role === 'admin') return true;
+    const session = sessionManager.getSessionCatalog(sessionId);
+    return !!session && auth.sessionIds.some(id => sessionManager.getSessionCatalog(id)?.id === session.id);
   }
 
   private async requireSessionAccess(req: express.Request, res: express.Response, sessionId: string): Promise<HttpAuthContext | null> {
@@ -1077,7 +1082,7 @@ export class WebUIChannel implements Channel {
 
             const missing: string[] = [];
             for (const sessionId of sessionIds) {
-              if (sessionManager.getSessionCatalog(sessionId)?.id !== sessionId) {
+              if (!sessionManager.getSessionCatalog(sessionId)) {
                 missing.push(sessionId);
               }
             }
@@ -2118,7 +2123,7 @@ export class WebUIChannel implements Channel {
             if (auth.role === 'guest') {
               const snapshot = await sessionRuntime.getHistory(sessionId);
               if (!snapshot) return res.status(404).json({ error: 'Session not found' });
-              if (snapshot.session.id !== sessionId || !this.guestCanAccessSession(auth, sessionId)) {
+              if (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id || !this.guestCanAccessSession(auth, sessionId)) {
                 return res.status(403).json({ error: 'Guest session binding changed.' });
               }
               if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
@@ -2259,7 +2264,8 @@ export class WebUIChannel implements Channel {
             if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            if (auth.role === 'guest' && (snapshot.session.id !== sessionId || !this.guestCanAccessSession(auth, sessionId))) {
+            if (auth.role === 'guest' && (sessionManager.getSessionCatalog(sessionId)?.id !== snapshot.session.id
+              || !this.guestCanAccessSession(auth, sessionId))) {
               return res.status(403).json({ error: 'Guest session binding changed.' });
             }
             const historyVersion = snapshot.session.historyVersion;
@@ -2872,7 +2878,8 @@ export class WebUIChannel implements Channel {
             res.status(404).json({ error: 'Session not found' });
             return;
           }
-          if (auth.role === 'guest' && (session.id !== requestedSessionId || !this.guestCanAccessSession(auth, requestedSessionId))) {
+          if (auth.role === 'guest' && (sessionManager.getSessionCatalog(requestedSessionId)?.id !== session.id
+            || !this.guestCanAccessSession(auth, requestedSessionId))) {
             return res.status(403).json({ error: 'Guest session binding changed.' });
           }
           const sessionId = session.id;
@@ -2905,7 +2912,9 @@ export class WebUIChannel implements Channel {
           const keepAliveInterval = setInterval(() => {
             if (auth.role === 'guest') {
               void this.getAuthContext(req).then(fresh => {
-                if (fresh?.role !== 'guest' || fresh.tokenId !== auth.tokenId || !this.guestCanAccessSession(fresh, sessionId)) {
+                if (fresh?.role !== 'guest' || fresh.tokenId !== auth.tokenId
+                  || !this.guestCanAccessSession(fresh, requestedSessionId)
+                  || sessionManager.getSessionCatalog(requestedSessionId)?.id !== sessionId) {
                   res.end();
                   clearInterval(keepAliveInterval);
                   return;
@@ -3257,7 +3266,8 @@ export class WebUIChannel implements Channel {
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            if (auth.role === 'guest' && existingSession.id !== sessionId) {
+            if (auth.role === 'guest' && (sessionManager.getSessionCatalog(sessionId)?.id !== existingSession.id
+              || !this.guestCanAccessSession(auth, existingSession.id))) {
               return res.status(403).json({ error: 'Guest session binding changed.' });
             }
 
@@ -3326,7 +3336,9 @@ export class WebUIChannel implements Channel {
               for (const entry of uploadedEntries) {
                 const filePath = typeof entry === 'string' ? entry : entry?.path;
                 const owner = typeof filePath === 'string' ? this.guestUploads.get(filePath) : null;
-                if (!owner || owner.sessionId !== sessionId || owner.tokenId !== auth.tokenId) {
+                if (!owner || owner.tokenId !== auth.tokenId
+                  || sessionManager.getSessionCatalog(owner.sessionId)?.id !== existingSession.id
+                  || !this.guestCanAccessSession(auth, owner.sessionId)) {
                   return res.status(403).json({ error: 'Attachment is not bound to this guest session.' });
                 }
               }
@@ -3360,7 +3372,7 @@ export class WebUIChannel implements Channel {
                       : 'application/octet-stream');
                   const isImage = mimeType.startsWith('image/');
                   const saved = await saveInboundSessionFile({
-                    sessionId,
+                    sessionId: auth.role === 'guest' ? existingSession.id : sessionId,
                     platform: 'webui',
                     buffer: fileBuffer,
                     fileName: originalName,
@@ -3395,9 +3407,11 @@ export class WebUIChannel implements Channel {
 
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel
+            const attachmentSessionId = auth.role === 'guest' ? sessionManager.getSessionCatalog(sessionId)?.id : sessionId;
+            if (!attachmentSessionId) return res.status(403).json({ error: 'Guest session binding changed.' });
             let existingSessionId = sessionManager.getSessionByChannel('webui', sessionId);
-            if (!existingSessionId || existingSessionId !== sessionId) {
-              sessionManager.attachChannel('webui', sessionId, sessionId);
+            if (!existingSessionId || existingSessionId !== attachmentSessionId) {
+              sessionManager.attachChannel('webui', sessionId, attachmentSessionId);
             }
 
             // Return immediately - don't wait for processing

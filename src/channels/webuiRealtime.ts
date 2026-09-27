@@ -107,6 +107,14 @@ export class WebUiRealtimeHub {
     this.dependencies = dependencies;
   }
 
+  private resolvedGuestBindings(auth: Extract<HttpAuthContext, { role: 'guest' }>): Set<string> {
+    const canonical = new Set<string>();
+    for (let index = 0; index < auth.sessionIds.length; index += 200) {
+      for (const id of this.dependencies.resolveIds(auth.sessionIds.slice(index, index + 200)).canonicalIds) canonical.add(id);
+    }
+    return canonical;
+  }
+
   hasSessionSubscribers(sessionId: string): boolean {
     for (const client of this.clients) {
       if (!client.closed && client.sessionIds.has(sessionId)) return true;
@@ -200,12 +208,12 @@ export class WebUiRealtimeHub {
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
     if (client.auth.role === 'guest') {
-      const allowed = new Set(client.auth.sessionIds);
+      const allowed = this.resolvedGuestBindings(client.auth);
       // The guest UI never subscribes to the catalog. Reject rather than
       // filtering to prevent list snapshots or invalidations leaking topology.
       if (message.sessionListActive || message.sessionListIds.length
-        || message.sessionIds.some(id => !allowed.has(id))
-        || resolvedSessions.canonicalIds.some(id => !allowed.has(id))) {
+        || message.sessionIds.some(id => !resolvedSessions.requestedToCanonical[id]
+          || !allowed.has(resolvedSessions.requestedToCanonical[id]))) {
         throw new Error('Guest subscription is not bound to this session.');
       }
     }
@@ -240,7 +248,10 @@ export class WebUiRealtimeHub {
     }
     if (client.auth.role === 'guest') {
       const latest = this.dependencies.resolveIds(message.sessionIds);
-      if (message.sessionIds.some(id => latest.requestedToCanonical[id] !== id)
+      const allowed = this.resolvedGuestBindings(client.auth);
+      if (message.sessionIds.some(id => !latest.requestedToCanonical[id]
+        || !allowed.has(latest.requestedToCanonical[id])
+        || latest.requestedToCanonical[id] !== resolvedSessions.requestedToCanonical[id])
         || sessionSnapshots.some((snapshot, index) => snapshot.type === 'session-state'
           && (snapshot.session as { id?: string } | undefined)?.id !== resolvedSessions.canonicalIds[index])) {
         throw new Error('Guest session binding changed during subscription.');
@@ -307,10 +318,19 @@ export class WebUiRealtimeHub {
       checking = true;
       void this.dependencies.getAuthContext(client.request).then(auth => {
         if (client.closed) return;
-        if (auth?.role !== 'guest' || auth.tokenId !== tokenId
-          || [...client.sessionIds].some(id => !auth.sessionIds.includes(id)
-            || this.dependencies.resolveIds([id]).requestedToCanonical[id] !== id)) {
+        if (auth?.role !== 'guest' || auth.tokenId !== tokenId) {
           try { client.socket.close(1008, 'Unauthorized'); } catch {}
+          this.cleanupClient(client);
+          return;
+        }
+        const bound = this.resolvedGuestBindings(auth);
+        if ([...client.sessionIds].some(id => {
+          const current = this.dependencies.resolveIds([id]).requestedToCanonical[id];
+          return !current || !bound.has(current) || current !== id;
+        })) {
+          // The old canonical stream has ended. Reconnect so its requested ID
+          // can resolve through the committed alias to the new canonical ID.
+          try { client.socket.close(1012, 'Session identity changed'); } catch {}
           this.cleanupClient(client);
           return;
         }

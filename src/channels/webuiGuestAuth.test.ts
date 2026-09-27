@@ -6,7 +6,11 @@ import path from 'path';
 import { WebUIChannel } from './webuiChannel';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
-import { createWebUiGuestToken, getWebUiGuestTokensPath, setWebUiGuestTokenStorePathForTests } from '../webuiGuestTokens';
+import { getWebUiGuestTokensPath, setWebUiGuestTokenStorePathForTests } from '../webuiGuestTokens';
+import { putImageBlob, resolveImageBlobPath } from '../imageBlobs';
+import sharp from 'sharp';
+import { WebSocket } from 'ws';
+import { once } from 'node:events';
 import { MessageRouter } from '../messageRouter';
 import type { QueueItem } from '../types';
 
@@ -177,81 +181,142 @@ test('webui guest token filters sessions and denies admin-only APIs', async () =
 });
 
 
-test('guest bindings require exact Session IDs at creation and after alias retargeting', async () => {
+test('guest token follows public Session identity moves through old, intermediate, and current IDs', async () => {
   await sessionManager.loadSessions();
   const suffix = Math.random().toString(36).slice(2, 9);
-  const firstId = `guest_exact_first_${suffix}`;
-  const secondId = `guest_exact_second_${suffix}`;
-  const alias = `guest_shared_alias_${suffix}`;
-  await sessionManager.createEmptySession(firstId);
-  await sessionManager.createEmptySession(secondId);
+  const originalId = `guest_move_original_${suffix}`;
+  const middleId = `guest_move_middle_${suffix}`;
+  const currentId = `guest_move_current_${suffix}`;
+  const otherId = `guest_move_other_${suffix}`;
+  await sessionManager.createEmptySession(originalId);
+  await sessionManager.createEmptySession(otherId);
+  const image = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#114488' } }).png().toBuffer();
+  const imageRef = await putImageBlob({ buffer: image, mimeType: 'image/png', imageId: 'guest-move-image' });
   try {
-    const first = sessionManager.getSessionCatalog(firstId)!;
-    const second = sessionManager.getSessionCatalog(secondId)!;
-    first.aliases = [alias];
-    await sessionManager.saveSessionCatalogEntries([firstId]);
-    await sessionManager.appendSessionMessage(firstId, { role: 'model', parts: [{ text: 'FIRST-ONLY' }] });
-    await sessionManager.appendSessionMessage(secondId, { role: 'model', parts: [{ text: 'SECOND-ONLY' }] });
-
+    await sessionManager.appendSessionMessage(originalId, { role: 'model', parts: [{ text: 'ORIGINAL-SESSION' }, { inlineDataRef: imageRef }] });
+    await sessionManager.appendSessionMessage(otherId, { role: 'model', parts: [{ text: 'UNBOUND-SESSION' }] });
     await withWebUiServer(async (baseUrl, adminToken, calls) => {
-      const request = (route: string, token: string) => fetch(`${baseUrl}${route}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const get = (route: string, token: string) => fetch(`${baseUrl}${route}`, { headers: { Authorization: `Bearer ${token}` } });
+      const issue = async (id: string) => {
+        const response = await fetch(`${baseUrl}/api/guest-tokens`, {
+          method: 'POST', headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionIds: [id] }),
+        });
+        assert.equal(response.status, 200);
+        return await response.json() as { token: string; sessionIds: string[] };
+      };
+      const message = (id: string, token: string, body: object) => fetch(`${baseUrl}/api/sessions/${id}/message`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
-      const create = (sessionIds: string[]) => fetch(`${baseUrl}/api/guest-tokens`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionIds }),
-      });
-      const aliasIssue = await create([alias]);
-      assert.equal(aliasIssue.status, 400, 'an alias is not an exact token binding');
-      const { token: guestToken } = await (await create([firstId])).json() as { token: string };
-      const legacyAlias = (await createWebUiGuestToken({ sessionIds: [alias] })).token;
-      assert.equal((await request(`/api/sessions/${alias}/history`, legacyAlias)).status, 403, 'previously persisted alias binding fails closed');
-      const initial = await request(`/api/sessions/${firstId}/history`, guestToken);
-      assert.equal(initial.status, 200);
-      assert.equal((await initial.json() as any).messages[0].parts[0].text, 'FIRST-ONLY');
-      assert.equal((await request(`/api/sessions/${alias}/history`, adminToken)).status, 200);
+      const upload = (id: string, token: string) => {
+        const form = new FormData();
+        form.append('file', new Blob(['moved-file'], { type: 'text/plain' }), 'moved.txt');
+        form.append('sessionId', id);
+        return fetch(`${baseUrl}/api/upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+      };
+      const assertChat = async (id: string, token: string, canonicalId: string) => {
+        const response = await get(`/api/sessions/${id}/history`, token);
+        assert.equal(response.status, 200, `history at ${id}`);
+        const payload = await response.json() as any;
+        assert.equal(payload.session.id, canonicalId);
+        assert.equal(payload.messages[0].parts[0].text, 'ORIGINAL-SESSION');
+      };
+      const assertProjection = async (token: string, canonicalId: string) => {
+        const auth = await (await get('/api/auth/session', token)).json() as { sessionIds: string[] };
+        assert.deepEqual(auth.sessionIds, [canonicalId]);
+        const list = await (await get('/api/sessions', token)).json() as { sessions: Array<{ id: string }> };
+        assert.deepEqual(list.sessions.map(session => session.id), [canonicalId]);
+      };
+      const assertRealtime = async (id: string, token: string, canonicalId: string) => {
+        const socket = new WebSocket(`${baseUrl.replace('http:', 'ws:')}/api/webui/stream`, {
+          headers: { Cookie: `foxwarm_token=${token}` },
+        });
+        const frames: any[] = [];
+        socket.on('message', raw => frames.push(JSON.parse(raw.toString())));
+        try {
+          await once(socket, 'open');
+          for (let attempt = 0; attempt < 80 && !frames.some(frame => frame.type === 'connected'); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          assert.equal(frames.some(frame => frame.type === 'connected'), true);
+          socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionListActive: false,
+            sessionListIds: [], sessionIds: [id] }));
+          for (let attempt = 0; attempt < 80 && !frames.some(frame => frame.type === 'subscriptions-applied'); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          assert.equal(frames.some(frame => frame.type === 'protocol-error'), false);
+          assert.equal(frames.some(frame => frame.type === 'session-state' && frame.sessionId === canonicalId
+            && frame.session?.id === canonicalId), true, `realtime alias ${id} -> ${canonicalId}: ${JSON.stringify(frames)}`);
+        } finally {
+          socket.close();
+          await once(socket, 'close').catch(() => {});
+        }
+      };
+      const issuedBeforeMove = await issue(originalId);
+      const guestToken = issuedBeforeMove.token;
+      const pendingUpload = await upload(originalId, guestToken);
+      assert.equal(pendingUpload.status, 200);
+      const uploadedPath = (await pendingUpload.json() as { path: string }).path;
 
-      first.aliases = [];
-      second.aliases = [alias];
-      await sessionManager.saveSessionCatalogEntries([firstId, secondId]);
-      const reboundAlias = await request(`/api/sessions/${alias}/history`, adminToken);
-      assert.equal((await reboundAlias.json() as any).messages[0].parts[0].text, 'SECOND-ONLY', 'administrator aliases retain existing behavior');
-      assert.equal((await request(`/api/sessions/${alias}/history`, legacyAlias)).status, 403);
-
-      await sessionManager.deleteSession(firstId);
-      second.aliases = [alias, firstId];
-      await sessionManager.saveSessionCatalogEntries([secondId]);
-      assert.equal((await request(`/api/sessions/${firstId}/history`, adminToken)).status, 200, 'administrator may resolve a moved alias');
-      for (const route of [
-        `/api/sessions/${firstId}/history`,
-        `/api/sessions/${firstId}/stream`,
-        `/api/sessions/${firstId}/blobs/${'0'.repeat(64)}.png`,
-      ]) {
-        const response = await request(route, guestToken);
-        assert.equal(response.status, 403, route);
+      const firstMove = await sessionManager.moveSessionToTarget({ sourceSessionId: originalId, newSessionId: middleId });
+      assert.equal(firstMove.targetSessionId, middleId);
+      for (const id of [originalId, middleId]) await assertChat(id, guestToken, middleId);
+      await assertProjection(guestToken, middleId);
+      const issuedFromOldAlias = await issue(originalId);
+      assert.deepEqual(issuedFromOldAlias.sessionIds, [originalId], 'persisted binding retains the issued alias spelling');
+      await assertProjection(issuedFromOldAlias.token, middleId);
+      await assertRealtime(originalId, guestToken, middleId);
+      await assertRealtime(middleId, guestToken, middleId);
+      assert.equal((await message(middleId, guestToken, { text: 'file after move', uploadedFiles: [
+        { path: uploadedPath, filename: 'moved.txt', mimeType: 'text/plain' },
+      ] })).status, 200, 'upload acquired under old ID can be sent under its new ID');
+      assert.equal(await fs.pathExists(uploadedPath), false);
+      assert.equal((await message(originalId, issuedFromOldAlias.token, { text: 'chat through old ID' })).status, 200);
+      assert.equal(calls.count, 2);
+      assert.equal(sessionManager.getSessionByChannel('webui', originalId), middleId,
+        'the old conversation routes to the actual moved Session');
+      for (const id of [originalId, middleId]) {
+        const blob = await get(`/api/sessions/${id}/blobs/${imageRef.blobId}`, guestToken);
+        assert.equal(blob.status, 200, `bound image through ${id}`);
+        assert.deepEqual(Buffer.from(await blob.arrayBuffer()), image);
       }
-      const message = await fetch(`${baseUrl}/api/sessions/${firstId}/message`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${guestToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'must not reach second Session' }),
+      const sseAbort = new AbortController();
+      const sse = await fetch(`${baseUrl}/api/sessions/${originalId}/stream`, {
+        headers: { Authorization: `Bearer ${guestToken}` }, signal: sseAbort.signal,
       });
-      assert.equal(message.status, 403);
-      assert.equal(calls.count, 0);
-      const form = new FormData();
-      form.append('file', new Blob(['safe'], { type: 'text/plain' }), 'safe.txt');
-      form.append('sessionId', firstId);
-      const upload = await fetch(`${baseUrl}/api/upload`, {
-        method: 'POST', headers: { Authorization: `Bearer ${guestToken}` }, body: form,
-      });
-      assert.equal(upload.status, 403);
-      const list = await request('/api/sessions', guestToken);
-      assert.deepEqual((await list.json() as any).sessions, [], 'a deleted exact ID does not list an alias target');
-      assert.equal((await request(`/api/sessions/${secondId}/history`, guestToken)).status, 403);
+      assert.equal(sse.status, 200);
+      sseAbort.abort();
+
+      const secondMove = await sessionManager.moveSessionToTarget({ sourceSessionId: middleId, newSessionId: currentId });
+      assert.equal(secondMove.targetSessionId, currentId);
+      assert.equal(sessionManager.getSessionByChannel('webui', originalId), currentId,
+        'subsequent identity moves rebind the existing guest conversation');
+      const existing = await sessionManager.createEmptySession(originalId);
+      assert.equal(existing.created, false, 'the committed old ID cannot start a different Session lifetime');
+      assert.equal(existing.session.id, currentId);
+      await assert.rejects(sessionManager.moveSessionToTarget({ sourceSessionId: otherId, newSessionId: originalId }),
+        'another Session cannot move into the committed old ID');
+      for (const id of [originalId, middleId, currentId]) await assertChat(id, guestToken, currentId);
+      await assertProjection(guestToken, currentId);
+      await assertProjection(issuedFromOldAlias.token, currentId);
+      await assertRealtime(originalId, issuedFromOldAlias.token, currentId);
+      await assertRealtime(middleId, guestToken, currentId);
+      assert.equal((await message(currentId, guestToken, { text: 'chat through current ID' })).status, 200);
+      assert.equal(calls.count, 3);
+      assert.equal((await get(`/api/sessions/${otherId}/history`, guestToken)).status, 403);
+      assert.equal((await upload(otherId, guestToken)).status, 403);
+      assert.equal((await message(otherId, guestToken, { text: 'unbound' })).status, 403);
+      assert.equal(calls.count, 3);
+      await sessionManager.deleteSession(currentId);
+      assert.equal((await get(`/api/sessions/${originalId}/history`, guestToken)).status, 403);
+      const afterDelete = await (await get('/api/auth/session', guestToken)).json() as { sessionIds: string[] };
+      assert.deepEqual(afterDelete.sessionIds, []);
+      const afterDeleteList = await (await get('/api/sessions', guestToken)).json() as { sessions: unknown[] };
+      assert.deepEqual(afterDeleteList.sessions, []);
     });
   } finally {
-    await sessionManager.deleteSession(firstId).catch(() => {});
-    await sessionManager.deleteSession(secondId).catch(() => {});
+    for (const id of [originalId, middleId, currentId, otherId]) await sessionManager.deleteSession(id).catch(() => {});
+    if (imageRef.blobId) await fs.remove(resolveImageBlobPath(imageRef.blobId));
   }
 });
 

@@ -22,6 +22,8 @@ test('guest role mounts bound chat without admin/popup surfaces and can send a m
   let server
   let channel
   const bound = `guest/browser_bound_${Date.now()}`
+  const renamedName = `guest_browser_bound_${Date.now()}_renamed`
+  const renamed = `guest/${renamedName}`
   const second = `guest/browser_second_${Date.now()}`
   const unbound = `guest/browser_unbound_${Date.now()}`
   const received = []
@@ -70,6 +72,23 @@ test('guest role mounts bound chat without admin/popup surfaces and can send a m
     assert.equal(received[0].parts.some(part => part.text?.includes('Hello from guest browser')), true)
     const forbidden = await page.evaluate(async id => (await fetch(`/api/sessions/${encodeURIComponent(id)}/history`)).status, unbound)
     assert.equal(forbidden, 403)
+    const moved = await sessionManager.moveSessionToTarget({ sourceSessionId: bound, newSessionId: renamedName })
+    assert.equal(moved.targetSessionId, renamed)
+    const oldUrl = await page.evaluate(async id => (await fetch(`/api/sessions/${encodeURIComponent(id)}/history`)).status, bound)
+    const newUrl = await page.evaluate(async id => (await fetch(`/api/sessions/${encodeURIComponent(id)}/history`)).status, renamed)
+    assert.equal(oldUrl, 200)
+    assert.equal(newUrl, 200)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-webui-role="guest"]', { timeout: 10_000 })
+    for (let attempt = 0; attempt < 30 && !channel.realtimeHub.hasSessionSubscribers(renamed); attempt++) await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(channel.realtimeHub.hasSessionSubscribers(renamed), true, 'the renamed Session owns the refreshed realtime subscription')
+    const currentBinding = await page.evaluate(async () => (await (await fetch('/api/auth/session')).json()).sessionIds)
+    assert.deepEqual(currentBinding, [renamed, second])
+    await page.waitForFunction(() => document.body.textContent?.includes('Bound history sentinel'))
+    await page.waitForFunction(() => {
+      const image = document.querySelector('.foxwarm-image-item img')
+      return image?.complete && image.naturalWidth > 0
+    }, { timeout: 10_000 })
     await page.select('[aria-label="Guest session"]', second)
     await page.waitForFunction(() => document.body.textContent?.includes('Second bound history sentinel'), { timeout: 10_000 })
     assert.equal(await page.evaluate(() => document.body.textContent?.includes('Private history sentinel')), false)
@@ -93,6 +112,7 @@ test('guest role mounts bound chat without admin/popup surfaces and can send a m
     await server?.stop()
     setHttpServer(null)
     await sessionManager.deleteSession(bound).catch(() => {})
+    await sessionManager.deleteSession(renamed).catch(() => {})
     await sessionManager.deleteSession(second).catch(() => {})
     await sessionManager.deleteSession(unbound).catch(() => {})
     await fs.rm(dataRoot, { recursive: true, force: true })

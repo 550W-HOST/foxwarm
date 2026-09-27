@@ -5,7 +5,7 @@ Secondary files: src/httpServer.ts, src/channels/webuiChannel.ts, src/channels/w
 
 ## Purpose
 
-Persists hashed WebUI guest credentials with exact existing canonical Session ID bindings; issue-time aliases and retargeted persisted aliases are not guest authority. A guest token is browser-channel authority only and never creates a Session, Agent, or agent tool policy.
+Persists hashed WebUI guest credentials with bindings to existing Sessions by their issued ID or a committed old-to-current alias. Guest access resolves the stored spelling through the normal live Session catalog, without rewriting the persisted token record. A guest token is browser-channel authority only and never creates a Session, Agent, or agent tool policy.
 
 ## Public functions
 
@@ -16,4 +16,4 @@ Persists hashed WebUI guest credentials with exact existing canonical Session ID
 
 ## Integration
 
-The WebUI channel configures the HTTP guest verifier and exposes administrator-only token creation. Selected browser routes and multiplexed Session subscriptions check the verified role and exact bound ID. Canonical browser scope: [D-webui-guest-session-scope](../modules/webui.md#d-webui-guest-session-scope).
+The WebUI channel configures the HTTP guest verifier and exposes administrator-only token creation. Selected browser routes and multiplexed Session subscriptions check that requested and stored IDs resolve to the same current live Session. Canonical browser scope: [D-webui-guest-session-scope](../modules/webui.md#d-webui-guest-session-scope).
