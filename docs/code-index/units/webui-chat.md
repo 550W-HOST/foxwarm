@@ -29,6 +29,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 - `handleStop`, `handleRunQueued`, and `handleContinue` send `/stop`, `/dequeue`, and `/continue` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.
 - There are no current message-index edit/delete/regenerate handlers in this component.
 - The composer's microphone ASR uses the deployment-relative `/asr/stream` endpoint. `getAsrStreamUrl()` builds `${window.location.origin}${API_BASE_PATH}/asr/stream` and switches the HTTP(S) prefix to WS(S); it does not call `makeWebSocketUrl`. The former audio-file transcription UI and its Chat-side `/asr/transcribe` caller are removed; the server endpoint remains available independently.
+- After ASR `ready`, a WebSocket close without a final or error terminates the recording through the composer error callback, preserving any partial draft text and unlocking editing. A completed final, deliberate cancel, and a preceding socket error suppress duplicate close errors. Before `ready`, an unexplained close still rejects transcriber startup.
 
 ## Per-session state and streaming
 

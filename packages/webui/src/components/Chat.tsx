@@ -1836,8 +1836,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const socket = new WebSocket(getAsrStreamUrl())
       let resolved = false
       let settled = false
+      let terminal = false
 
       const fail = (message: string) => {
+        if (terminal) return
+        terminal = true
         onError(message)
         if (!settled) {
           settled = true
@@ -1853,6 +1856,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
+        if (terminal) return
         onDebug(`ws open; contextLength=${context.length} language=auto`)
         socket.send(JSON.stringify({
           type: 'start',
@@ -1862,6 +1866,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
 
       socket.onmessage = (event) => {
+        if (terminal) return
         try {
           const payload = JSON.parse(String(event.data))
           if (payload.type === 'ready') {
@@ -1889,6 +1894,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 }
               },
               cancel: () => {
+                terminal = true
                 onDebug('ws cancel called')
                 try {
                   socket.close()
@@ -1905,6 +1911,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           }
 
           if (payload.type === 'final') {
+            terminal = true
             onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
@@ -1929,8 +1936,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
 
       socket.onclose = () => {
-        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)}`)
-        if (!resolved && !settled) {
+        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)} terminal=${String(terminal)}`)
+        if (terminal) return
+        if (resolved) fail('Streaming ASR connection closed before the final transcript')
+        else {
+          terminal = true
+          settled = true
           reject(new Error('Streaming ASR connection closed before ready'))
         }
       }

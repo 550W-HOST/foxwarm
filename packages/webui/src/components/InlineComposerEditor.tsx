@@ -726,7 +726,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     // A pointer on the microphone may have blurred an in-progress composition.
     // Flush its committed text before reserving the transcription position.
     flushForSubmit()
-    const selection = caretWasPlacedRef.current ? getSelectionOffsets() || lastSelectionRef.current : null
+    const selection = caretWasPlacedRef.current
+      ? (document.activeElement === editorRef.current ? getSelectionOffsets() : null) || lastSelectionRef.current
+      : null
     const offset = selection?.focus ?? getNodeUnits(editorRef.current)
     transcriptionRef.current = {
       draftId, offset, node: null, text: '',
