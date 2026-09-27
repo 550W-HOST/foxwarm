@@ -87,15 +87,16 @@ async function buildFixtureBundle() {
         isMobile: window.innerWidth < 768,
         groupTools: fixture.groupTools || false,
         showUsageBadge: fixture.showUsageBadge !== false,
+        showTimeDividers: false,
       }))
     }
     window.commitStreamSeq = seq => {
       streamMessage.__meta.seq = seq
-      roots.stream.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...cases.stream.messages], isMobile: false, groupTools: false, showUsageBadge: true }))
+      roots.stream.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...cases.stream.messages], isMobile: false, groupTools: false, showUsageBadge: true, showTimeDividers: false }))
     }
     window.commitGroupSeq = seq => {
       manyCalls.__meta.seq = seq
-      roots.groupSeq.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...groupSeqMessages], isMobile: false, groupTools: true, showUsageBadge: true }))
+      roots.groupSeq.render(React.createElement(ChatTimeline, { sessionId: 'example/main', messages: [...groupSeqMessages], isMobile: false, groupTools: true, showUsageBadge: true, showTimeDividers: false }))
     }
   `
   const result = await build({
@@ -202,7 +203,7 @@ test('collapsed badge preserves compact labels and mouse, Enter, and Space toggl
   await page.click('#concrete [data-usage-badge]')
   const expanded = await badgeState('concrete')
   assert.equal(expanded.expanded, 'true')
-  for (const label of ['Cached11', 'Input22', 'Output33', 'Betweenunavailable', 'API1s (1000ms)', 'Time', 'Modelprovider/real-model']) {
+  for (const label of ['Cached11', 'Input22', 'Output33', 'API1s (1000ms)', 'Time', 'Modelprovider/real-model']) {
     assert.ok(expanded.text.includes(label), `expanded badge should include ${label}`)
   }
 
@@ -229,7 +230,7 @@ test('details use persisted concrete/virtual metadata and show legacy omissions 
   assert.ok(invalid.text.includes('APIinvalid timing'))
 })
 
-test('request timing shows API latency and the tool-inclusive interval between requests', async () => {
+test('request timing still shows API latency without an obsolete Between field', async () => {
   await mountFixture()
   assert.deepEqual(await page.$$eval('#timed [data-usage-timing-kind]', items => items.map(item => ({
     kind: item.getAttribute('data-usage-timing-kind'),
@@ -241,32 +242,22 @@ test('request timing shows API latency and the tool-inclusive interval between r
 
   await page.click('#timed [data-usage-badge]')
   const expanded = await badgeState('timed')
-  assert.ok(expanded.text.includes('Between3s (3000ms)'), expanded.text)
   assert.ok(expanded.text.includes('API1s (1500ms)'), expanded.text)
+  assert.ok(!expanded.text.includes('Between'), expanded.text)
+  assert.ok(!(await page.$eval('#timed [data-usage-badge-toggle]', badge => badge.title)).includes('between'))
 })
 
-test('collapsed ordinary and grouped badges show between timing only from the raw one-minute boundary', async () => {
+test('all collapsed and expanded badges omit Between while retaining API timing', async () => {
   await mountFixture()
 
-  for (const id of ['ordinaryBelowMinute', 'groupBelowMinute']) {
+  for (const id of ['ordinaryBelowMinute', 'groupBelowMinute', 'ordinaryAtMinute', 'groupAtMinute']) {
     assert.deepEqual(await page.$$eval(`#${id} [data-usage-timing-kind]`, items => items.map(item => item.getAttribute('data-usage-timing-kind'))), ['api'])
     const collapsed = await badgeState(id)
     assert.ok(collapsed.text.includes('C'), collapsed.text)
     await page.click(`#${id} [data-usage-badge]`)
     const expanded = await badgeState(id)
-    assert.ok(expanded.text.includes('Between59s (59999ms)'), expanded.text)
+    assert.ok(!expanded.text.includes('Between'), expanded.text)
     assert.ok(expanded.text.includes('API'), expanded.text)
-  }
-
-  for (const id of ['ordinaryAtMinute', 'groupAtMinute']) {
-    assert.deepEqual(await page.$$eval(`#${id} [data-usage-timing-kind]`, items => items.map(item => ({
-      kind: item.getAttribute('data-usage-timing-kind'),
-      text: item.textContent.trim(),
-      title: item.getAttribute('title'),
-    }))), [
-      { kind: 'between', text: '1m', title: 'Between requests: 1m (60000ms)' },
-      { kind: 'api', text: id === 'ordinaryAtMinute' ? '1s' : '2s', title: id === 'ordinaryAtMinute' ? 'API response: 1s (1500ms)' : 'API response: 2s (2500ms)' },
-    ])
   }
 })
 
@@ -276,8 +267,8 @@ test('collapsed tool-group details aggregate calls without attributing them to t
   const same = await badgeState('groupSame')
   assert.ok(same.text.includes('Calls2'), same.text)
   assert.ok(same.text.includes('Modelvirtual/same → provider/real-model'), same.text)
-  assert.ok(same.text.includes('Between3s (3000ms)'), same.text)
   assert.ok(same.text.includes('API3s (3000ms)'), same.text)
+  assert.ok(!same.text.includes('Between'), same.text)
   assert.equal(await page.$eval('#groupSame [data-usage-badge-toggle]', button => button.getAttribute('aria-expanded')), 'true')
   assert.equal(await page.$eval('#groupSame button[aria-label="Expand tool group"]', button => button.getAttribute('aria-expanded')), 'false', 'badge click must not expand the tool group')
   assert.equal(await page.$$eval('#groupSame .foxwarm-tool-card', cards => cards.length), 1, 'the collapsed group keeps its one summary card')

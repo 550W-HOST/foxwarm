@@ -10,6 +10,7 @@ import {
 import { deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
+import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
 
 /**
  * Explicit view model for one `ChatTimeline` render pass.
@@ -40,7 +41,6 @@ export type UsageAttribution = {
   models: string[]
   timestamps: Array<number | null | 'invalid'>
   apiDurationsMs: DurationSample[]
-  betweenRequestsMs: DurationSample[]
   /** One persisted model-message sequence per usage-bearing model message, in source order. */
   messageSeqs: Array<number | null>
 }
@@ -82,6 +82,7 @@ export interface TimelineRowView {
   readonly hideFoldedThinking: boolean
   readonly suppressWebSearchCards: boolean
   readonly usageBadge: TimelineUsageBadgeView | null
+  readonly timeMarker: TimelineTimeMarker | null
   readonly usageAnchorRelative: boolean
   readonly systemLikeMessage: boolean
   readonly interleavedToolGroup: boolean
@@ -96,6 +97,7 @@ export interface TimelineRowsInput {
   readonly isMobile: boolean
   readonly groupTools: boolean
   readonly showUsageBadge: boolean
+  readonly showTimeDividers: boolean
   readonly nestedDepth: number
   readonly expandedGroupKeys: ReadonlySet<string>
 }
@@ -160,7 +162,6 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
   models: [formatUsageModel(msg)],
   timestamps: [getUsageTimestamp(msg)],
   apiDurationsMs: [timing.apiDurationMs],
-  betweenRequestsMs: [timing.betweenRequestsMs],
   messageSeqs: [getValidMessageSeq(msg)],
 })
 
@@ -254,7 +255,7 @@ interface GroupScan {
  * Resolves one group's message range. This single walk replaces the previous separate backward
  * start scan and the two forward summary/usage scans, which each repeated the same break rules.
  */
-const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: number): GroupScan => {
+const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: number, timeMarkers: readonly (TimelineTimeMarker | null)[]): GroupScan => {
   const startMsg = messages[start]
 
   // A standalone event cannot capture a later tool run; it can only join a run already underway.
@@ -274,6 +275,8 @@ const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: 
     // Ordinary model output splits the group: content and everything after it belong to the
     // next group, while thinking before that content stays with the group that ends here.
     if (msg.role === 'model' && getGroupContentPartIndex(msg) !== -1) return { start, end: index, contentBreakIdx: index }
+    // A visible time marker belongs outside the group, after any complete call/result pair.
+    if (msg.role === 'model' && hasToolCalls(msg) && timeMarkers[index]) break
     end = index + 1
   }
   return { start, end, contentBreakIdx: -1 }
@@ -315,9 +318,8 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
 
   const items: ToolTagItem[] = []
   const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], betweenRequestsMs: [], messageSeqs: [] }
+  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
   let callCount = 0
-  let attributedCallCount = 0
 
   for (let index = start; index < end; index++) {
     const msg = messages[index]
@@ -354,10 +356,6 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     attribution.timestamps.push(...messageAttribution.timestamps)
     attribution.apiDurationsMs.push(...messageAttribution.apiDurationsMs)
     attribution.messageSeqs.push(...messageAttribution.messageSeqs)
-    // The first request begins the collapsed group; only later gaps represent tool/orchestration
-    // work performed inside that group.
-    if (attributedCallCount > 0) attribution.betweenRequestsMs.push(...messageAttribution.betweenRequestsMs)
-    attributedCallCount++
   }
 
   // The message whose ordinary output ends this group keeps its own group for everything after that
@@ -386,7 +384,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
 }
 
 const sameRequestTiming = (a: DerivedRequestTiming, b: DerivedRequestTiming): boolean => (
-  a === b || (a.apiDurationMs === b.apiDurationMs && a.betweenRequestsMs === b.betweenRequestsMs)
+  a === b || a.apiDurationMs === b.apiDurationMs
 )
 
 const sameTokenUsage = (a: NormalizedTokenUsage | null, b: NormalizedTokenUsage | null): boolean => (
@@ -416,7 +414,6 @@ const sameAttribution = (a: UsageAttribution, b: UsageAttribution): boolean => (
     sameStringList(a.models, b.models)
     && sameSampleList(a.timestamps, b.timestamps)
     && sameSampleList(a.apiDurationsMs, b.apiDurationsMs)
-    && sameSampleList(a.betweenRequestsMs, b.betweenRequestsMs)
     && sameMessageSeqs(a.messageSeqs, b.messageSeqs)
   )
 )
@@ -452,6 +449,7 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.anchorKey === b.anchorKey
   && a.scrollbarAnchorKey === b.scrollbarAnchorKey
   && a.usageAnchorRelative === b.usageAnchorRelative
+  && (a.timeMarker === b.timeMarker || (a.timeMarker?.timestamp === b.timeMarker?.timestamp && a.timeMarker?.laterMs === b.timeMarker?.laterMs))
   && sameRequestTiming(a.requestTiming, b.requestTiming)
   && sameUsageBadge(a.usageBadge, b.usageBadge)
 )
@@ -461,8 +459,9 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 )
 
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
-  const { messages, isMobile, groupTools, showUsageBadge, nestedDepth, expandedGroupKeys } = input
+  const { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
   const requestTimings = deriveRequestTimings(messages)
+  const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableEventMessage) : []
   const messageKeys = messages.map((msg, index) => getMessageStableKey(msg, index))
   const finalStandaloneStartIdx = getFinalStandaloneStartIdx(messages)
 
@@ -520,6 +519,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       // from hiding its own cards.
       suppressWebSearchCards: collapsedGroup,
       usageBadge,
+      timeMarker: timeMarkers[index] ?? null,
       usageAnchorRelative: usageBadge !== null && !isMobile,
       systemLikeMessage,
       interleavedToolGroup: pairedToolResponse !== null,
@@ -549,7 +549,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       continue
     }
 
-    const scan = scanGroup(messages, cursor, finalStandaloneStartIdx)
+    const scan = scanGroup(messages, cursor, finalStandaloneStartIdx, timeMarkers)
     const derivation = deriveGroup(messages, scan, requestTimings)
     const groupKey = `${messageKeys[scan.start]}-toolgroup`
     const nextGroup: TimelineGroupView = {
