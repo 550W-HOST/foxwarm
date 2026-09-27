@@ -45,7 +45,7 @@ export function getLegacyBackupPath(filePath: string): string {
   return `${filePath}.bak`;
 }
 
-function shouldIgnoreDirectorySyncError(error: any): boolean {
+export function shouldIgnoreDirectorySyncError(error: any): boolean {
   return error?.code === 'EINVAL'
     || error?.code === 'ENOTSUP'
     || error?.code === 'ENOSYS'
@@ -53,7 +53,7 @@ function shouldIgnoreDirectorySyncError(error: any): boolean {
     || error?.code === 'EISDIR';
 }
 
-async function syncDirectory(dirPath: string): Promise<void> {
+export async function syncDirectoryDurably(dirPath: string): Promise<void> {
   let handle: FileHandle | null = null;
   try {
     handle = await fsPromises.open(dirPath, 'r');
@@ -268,7 +268,7 @@ export class DiskJsonData<T> {
       await writeFileDurably(tempPath, queuedWrite.serialized);
       await this.hooks?.beforeRename?.({ filePath: this.filePath, tempPath, data: queuedWrite.data, requestId: queuedWrite.requestId });
       await fsPromises.rename(tempPath, this.filePath);
-      await syncDirectory(path.dirname(this.filePath));
+      await syncDirectoryDurably(path.dirname(this.filePath));
       await this.hooks?.afterRename?.({ filePath: this.filePath, tempPath, data: queuedWrite.data, requestId: queuedWrite.requestId });
     } catch (error) {
       await fs.remove(tempPath).catch(() => {});

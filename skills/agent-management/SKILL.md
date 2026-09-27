@@ -12,7 +12,8 @@ Typical cases:
 - understanding what an agent is vs what a session is
 - creating a new agent cleanly
 - deciding where to put long-term instructions or project memory
-- editing an agent's memory and knowing when snapshots must be refreshed
+- bootstrapping collaboration rules and starter memory for agents that use child sessions
+- editing an agent's memory and choosing when a snapshot refresh is worth its cache cost
 - binding or unbinding an agent to an isolated node
 - moving work from one agent/session layout to another
 - cleaning up an old agent safely
@@ -31,9 +32,9 @@ These are the things an agent can normally use directly when they are in the too
 - `move_session`
 - `set_agent_inherit`
 - `set_agent_isolated`
-- `update_session_snapshot`
+- `refresh_session_snapshot`
 - `list_agents`
-- `list_sessions`
+- `session` (status by default, list with `action: "list"`)
 - `read_memory` / `write_memory` / `edit_memory` / `apply_patch_memory` for the **current** agent
 - ordinary file tools for other paths, if your current permissions allow that access
 
@@ -67,28 +68,53 @@ An agent session normally works from a prompt snapshot assembled from:
 Important details from current implementation:
 
 - the skills catalog injected into the snapshot is only a **catalog/summary**
-- full skill documents are loaded on demand with `load_skill`
+- full skill documents are loaded on demand with `skill({ action: "load", skillName: ... })`
+- `skill({ action: "load", ... })` returns the skill entry and may list supporting resource paths; those resources are not read until needed
 - session snapshots are cached per session, so editing memory on disk does not always change an already-open session immediately
-- the prompt snapshot also includes directory hints such as the current agent's `agent_memory` and `agent_folder` paths
+- the prompt snapshot also includes runtime hints such as the current agent folder and context-recall guidance
 
-## Special file: `agents/main/memory/00_SYSTEM.md`
+## Progressive disclosure: where knowledge belongs
+
+Use progressive disclosure so future sessions see the right amount of knowledge at the right time:
+
+1. **Framework/system prompt** — universal rules every agent must know. Keep tiny and generic.
+2. **Agent memory** — always-needed stable behavior, repeated user preferences, durable environment facts, confirmed decisions, and short pointers. This is injected into prompt snapshots.
+3. **Agent docs** — detailed analysis, runbooks, historical notes, design writeups, and artifacts. These are available on disk but not injected by default.
+4. **Skills** — reusable workflows or capability packages. Only name + description are shown in the catalog until `skill({ action: "load", ... })` is called.
+5. **Skill resources** — references, scripts, assets, examples, evals, or other supporting files listed or linked by the skill entry. Read these only when needed.
+
+When deciding where to put information, ask:
+
+- Should every session under this agent behave differently because of this fact? Put a short durable version in memory.
+- Is it reusable across tasks or agents as a procedure/capability? Make or update a skill.
+- Is it detailed evidence, historical context, a long runbook, or an artifact? Put it in docs and link from memory or a skill.
+- Is it a helper file for one skill? Put it under that skill as a resource and link or list it from `SKILL.md`.
+
+If a directory contains `SKILL.md`, treat it as a skill boundary. Files and subdirectories inside it are supporting resources for that skill; do not expect nested `SKILL.md` files inside references, examples, scripts, docs, or assets to appear as separate catalog entries.
+
+## Special file: `agents/00_SYSTEM.md`
 
 This file is special.
 
 Current prompt assembly injects:
 
-- `agents/main/memory/00_SYSTEM.md`
+- `agents/00_SYSTEM.md`
 
 as a framework-level system block for **all agents**.
+
+Older installations may still rely on the legacy fallback path:
+
+- `agents/main/memory/00_SYSTEM.md`
 
 Also important:
 
 - default agent memory loading explicitly skips `00_SYSTEM.md` in per-agent memory directories
-- that means ordinary agents should **not** create their own per-agent `00_SYSTEM.md` expecting it to behave like the main global one
+- that means ordinary agents should **not** create their own per-agent `00_SYSTEM.md` expecting it to behave like the global one
 
 So the guidance is:
 
-- treat `agents/main/memory/00_SYSTEM.md` as the framework/global system layer
+- treat `agents/00_SYSTEM.md` as the framework/global system layer
+- treat `agents/main/memory/00_SYSTEM.md` as a legacy compatibility fallback, not the preferred location for new installs
 - for agent-specific instructions, use normal memory files such as:
   - `MEMORY.md`
   - `SOUL.md`
@@ -107,6 +133,33 @@ That means:
 
 - renaming or moving a **session** is comparatively lightweight
 - changing an **agent** is heavier because agent identity is tied to workspace paths, memory location, metadata, and all sessions under it
+
+Node selection and isolation are also separate:
+
+- a session's `currentNode` selects where ordinary runtime tools execute
+- `create_child_session({ suffix: "worker", node: "node-id", confirmation: "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed." })` sets `currentNode` but does not make the child isolated. Keep and complete `confirmation` only when the current tool schema requires it; otherwise it may be omitted
+- isolation is agent-level; an isolated agent binds all of its sessions to one non-master node and narrows their permissions
+
+If different workers need different real isolation boundaries, use different
+temporary agents, not several sessions under one agent. Load `isolated-worker`
+for the reusable parent-linked workflow.
+
+## Collaboration and memory bootstrapping
+
+If you are creating or configuring an agent that may use child sessions, do not improvise its collaboration rules from scratch.
+
+Read the reference docs next to this skill first:
+
+- `references/COLLABORATION-PATTERNS.md` — organizer/executor defaults, role detection, fork/non-fork/reuse guidance, handoff checklists, tunable preferences, and memory hygiene.
+- `references/memory-templates/` — copyable starter memory files for shared base agents and specialized agents.
+
+These reference files are intentionally not part of the normal `skill({ action: "load", ... })` payload. Keep this `SKILL.md` as the short entry point; read references explicitly when configuring agent memory.
+
+Recommended default: use an **Organizer / Executor** pattern inside each agent. The main/direct session coordinates scope, ownership, parallelism, and user-facing decisions; child sessions execute bounded tasks and report back through the required reply path.
+
+For multi-agent setups, put generic Organizer / Executor rules in a shared/base agent and let specialized agents inherit them. Each specialized agent should keep only domain-specific durable memory in its own memory files.
+
+Keep agent memory small. Long session history is already preserved by layered context, compaction summaries, archives, and `recall`; do not copy routine progress logs into `MEMORY.md`. As a rule of thumb, if an agent's `MEMORY.md` grows past about **500 lines**, it is probably carrying too much. Move reusable processes into skills, move knowledge/artifact notes into `agent-dir/docs/`, and keep only short pointers plus always-needed rules in memory.
 
 ## What isolated agents are for
 
@@ -140,6 +193,17 @@ So for an isolated agent, the mental model is:
 - durable local files on `master`: own agent area only
 - other nodes / other agent directories: not allowed
 
+Isolation does not create or reserve a VM/container. The operator supplies that
+environment, and binding does not prevent another agent/session from sharing the
+same node.
+
+Coordinator communication is intentionally narrow: the supported isolated
+worker pattern uses an explicit parent/child session relation. Builds that
+support parent-linked cross-agent isolation allow messaging only across that
+direct link; unrelated cross-agent access remains denied. Older builds with a
+blanket cross-agent isolated deny cannot complete that workflow and will reject
+the initial `send_to_session` call.
+
 ## Common workflow: create a new agent
 
 ### If you are using tools
@@ -158,6 +222,19 @@ Useful fields in current implementation include:
 If you also need a separate extra session afterward, use:
 
 - `create_session`
+
+For an isolated worker controlled by the current session, do not create an
+unrelated isolated agent main session and assume it can report back. The intended
+shape is:
+
+1. `create_agent` with `isolatedNode` and `createMainSession:false`
+2. `create_session` under that agent with `parentSessionId` set to the coordinator
+3. `send_to_session` to deliver the task
+
+The bundled `isolated-worker` skill packages this sequence in a ToolScript with
+read-only validation mode and partial-failure recovery reporting. It can also
+optionally compose a configured provider `ensure` plus exact read-only inspect
+for one existing worktree before creating the agent/session.
 
 ### If you are guiding the user
 
@@ -199,34 +276,33 @@ Typical target location would be:
 
 Be careful not to over-assume permissions. Some isolated or restricted contexts may not allow this.
 
-## Common workflow: refresh snapshots after memory changes
+## Common workflow: memory edits and snapshot refresh
 
-A session does not always re-read memory files instantly just because a file changed on disk.
+Do not automatically refresh a snapshot after editing memory. Foxwarm keeps a composed system-prompt snapshot per Session; changing that prefix can lose prompt-cache reuse and make the next request substantially more expensive.
 
-Foxwarm stores a composed prompt snapshot for each session.
+### Changes made in this Session
 
-So after editing another agent's memory, inherit settings, or visible skills, an already-existing session may need a snapshot refresh to pick up the latest state immediately.
+The edit and its explanation are already in this conversation. Use that context to continue; normally leave the current snapshot alone. An explicit refresh is appropriate when the user requests it or when testing snapshot assembly/filtering itself, not as routine cleanup after an edit. New or normally refreshed snapshots will incorporate the saved file.
 
-### Agent-facing path
+### Changes another Session needs immediately
 
-Use the tool:
+Prefer sending that Session a concise change summary with `send_to_session`, including the affected file, the new rule, and any action it needs to take. This adds the information to its conversation without replacing the cached system-prompt prefix. Notify only relevant Sessions and preserve ordinary messaging permissions.
 
-- `update_session_snapshot`
-
-### User-facing path
-
-Tell the user to run:
+If the target must immediately use the complete rebuilt snapshot or updated skill catalog, refresh that exact Session explicitly:
 
 ```text
-/session update-snapshot [session-id]
+refresh_session_snapshot({ sessionId: "target-agent/target-session" })
 ```
 
-### When snapshot refresh is especially important
+Do not omit `sessionId` when intending to refresh another Session: omission targets the caller. A message communicates the change; it does not itself rebuild the snapshot or alter runtime authorization.
 
-- one session edits another agent's memory files
-- you changed inheritance with `set_agent_inherit`
-- you changed isolation and want existing sessions to rebuild prompt/runtime state cleanly
-- skill visibility changed and an already-open session should see the updated catalog now
+The equivalent user-facing command is:
+
+```text
+/session refresh-snapshot target-agent/target-session
+```
+
+Inheritance changes leave existing Session snapshots unchanged by default. Isolation changes still update affected Sessions. Check the operation result before adding another refresh, and do not broadcast refreshes merely because a shared memory file changed.
 
 ## Common workflow: set or clear agent inheritance
 
@@ -235,6 +311,8 @@ Tell the user to run:
 Use:
 
 - `set_agent_inherit`
+
+By default this changes only Agent metadata, so existing Session snapshots keep their current cached prefix. `refreshSnapshots:true` immediately refreshes affected Sessions that have not been inactive for more than one hour; older Sessions are skipped because their next ordinary turn performs the existing automatic refresh. To refresh one exact Session immediately regardless of inactivity, use `refresh_session_snapshot`. New Sessions and later normal refreshes use the new inheritance automatically.
 
 ### User-facing path
 
@@ -270,6 +348,7 @@ Important behavior:
 - changing isolation updates affected sessions accordingly
 - an isolated session cannot switch itself to some other arbitrary node for normal work
 - if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent use other nodes directly
+- binding currently does not guarantee that the node is online or exclusively assigned; verify with `node({ action: "list" })` before starting work
 
 ## Common workflow: move work between agents/sessions
 
@@ -286,9 +365,17 @@ Agent-facing path:
 User-facing path:
 
 ```text
-/session move <new-session-id>
-/session move <existing-agent>/<new-session-id>
+/session move <new-session-id> [--parent <parent-session-id>]
+/session move <existing-agent>/<new-session-id> [--parent <parent-session-id>]
 ```
+
+Identity moves preserve the session's existing incoming parent relation by
+default and rewrite direct child references to the moved ID. A batch may move
+the sessions in an existing tree individually without reconstructing those
+relations. Use `parentSessionId` on the agent-facing `move_session` tool, or
+`--parent` on `/session move`, only when the moved session should intentionally
+receive a different existing parent. Keep `/session unparent` as the explicit
+detach operation; there is no recursive tree-move API.
 
 ### Agent migration
 
@@ -300,7 +387,7 @@ Preferred migration flow:
 2. copy or rewrite the important memory files
 3. move/recreate the sessions you still want
 4. set inherit/isolation on the replacement agent as needed
-5. refresh snapshots for surviving sessions that should immediately see the new state
+5. notify relevant surviving sessions; refresh specific snapshots only when the rebuilt prefix is needed immediately
 6. only then consider deleting the old agent
 
 ## Why there is no simple direct agent rename
@@ -340,6 +427,11 @@ So as an agent, your normal behavior should be:
 - verify the migration/cleanup preconditions
 - then tell the user the exact delete command to run if deletion is still wanted
 
+This also means a multi-step create-agent/create-session workflow cannot promise
+transactional rollback. Validate first, report exactly which resources survived
+a failure, and use user-confirmed deletion for cleanup rather than manually
+removing directories.
+
 ### What delete does
 
 Current command behavior deletes:
@@ -357,7 +449,7 @@ Avoid ad-hoc manual mutation such as:
 - creating per-agent `00_SYSTEM.md` and assuming it will be loaded by default
 - deleting agent folders without going through the intended flow
 - editing persistent state files blindly to "fake" a rename
-- assuming an already-open session will instantly consume memory edits without refreshing its snapshot
+- assuming another Session knows about a file edit without a change message or a snapshot refresh
 - treating user-facing `/agent` or `/node` commands as if you can casually execute them yourself
 
 ## Quick scenario checklist for ordinary agent work
@@ -375,9 +467,9 @@ Covered path:
 
 Covered path:
 
-- snapshot caching explanation
-- `update_session_snapshot`
-- `/session update-snapshot` user command fallback
+- distinguish changed files from the target Session's existing snapshot
+- prefer a concise change message to that Session
+- use an explicitly targeted snapshot refresh only when the rebuilt prefix is needed immediately
 
 ### Scenario C: "The agent name was bad; should I rename it?"
 
@@ -394,7 +486,16 @@ Covered path:
 - tool path vs user command path
 - handoff to `node-setup` for node-side details
 
-### Scenario E: "Can I delete the old agent now?"
+### Scenario E: "Create one temporary isolated worker on an existing node"
+
+Covered path:
+
+- load `isolated-worker`
+- dry-run its bundled ToolScript
+- create a parent-linked isolated agent/session and send the task
+- report partial resources honestly if a later step fails
+
+### Scenario F: "Can I delete the old agent now?"
 
 Covered path:
 
@@ -409,7 +510,7 @@ Before telling the user to delete an old agent:
 1. confirm the needed memory files were migrated
 2. confirm any wanted sessions were moved/recreated
 3. confirm isolation/inherit settings on the replacement agent are correct
-4. refresh snapshots for important surviving sessions
+4. notify important surviving sessions of the change, or explicitly refresh their snapshots if needed immediately
 5. only then suggest `/agent delete <name> --confirm`
 
 ## Related skill
@@ -420,3 +521,7 @@ Use **`node-setup`** when the task is primarily about:
 - pairing / approval
 - sandbox node setup
 - isolated-agent binding as part of node deployment
+
+Use **`isolated-worker`** when the task is to create one parent-linked temporary
+isolated worker on an already-online Node or through a configured
+Docker-worktree provider for one exact existing worktree.

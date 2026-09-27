@@ -47,6 +47,7 @@ export type McpServerConfig = {
   token?: string;
   headers?: Record<string, string>;
   description?: string;
+  timeoutSeconds?: number;
   enable?: boolean;
   transport?: McpTransport;
   type?: string;
@@ -69,6 +70,7 @@ export type McpServerSummary = {
   envKeys: string[];
   headerKeys: string[];
   hasToken: boolean;
+  timeoutSeconds: number | null;
 };
 
 type StandardTransportKind = 'streamable-http' | 'sse' | 'stdio';
@@ -93,6 +95,8 @@ type PooledStdioConnection = StandardConnection & {
 };
 
 const VALID_TRANSPORTS = new Set<McpTransport>(['streamable-http', 'sse', 'stdio', 'auto']);
+export const MIN_MCP_TOOL_TIMEOUT_SECONDS = 1;
+export const MAX_MCP_TOOL_TIMEOUT_SECONDS = 3600;
 const STDIO_POOL_IDLE_TTL_MS = 60_000;
 const stdioConnectionPool = new Map<string, PooledStdioConnection>();
 
@@ -119,9 +123,15 @@ export function createMcpConfigStore(filePath: string = MCP_CONFIG_PATH): DiskJs
 }
 
 let mcpConfigStore = createMcpConfigStore();
+let liveMcpConfig: McpConfig | null = null;
+let liveMcpConfigLoad: Promise<McpConfig> | null = null;
+let mcpConfigMutationQueue: Promise<void> = Promise.resolve();
 
 export function setMcpConfigStoreForTests(store: DiskJsonData<McpConfig> | null): void {
   mcpConfigStore = store || createMcpConfigStore();
+  liveMcpConfig = null;
+  liveMcpConfigLoad = null;
+  mcpConfigMutationQueue = Promise.resolve();
 }
 
 function normalizeTransport(server: McpServerConfig): McpTransport {
@@ -149,8 +159,30 @@ function sanitizeServerConfig(server: McpServerConfig): McpServerConfig {
   if (next.transport !== undefined) {
     next.transport = normalizeTransport(next);
   }
+  if (next.timeoutSeconds !== undefined) {
+    if (typeof next.timeoutSeconds !== 'number' || !Number.isFinite(next.timeoutSeconds)) {
+      throw new Error('MCP timeoutSeconds must be a finite number.');
+    }
+    if (next.timeoutSeconds === 0) {
+      delete next.timeoutSeconds;
+    } else if (next.timeoutSeconds < MIN_MCP_TOOL_TIMEOUT_SECONDS || next.timeoutSeconds > MAX_MCP_TOOL_TIMEOUT_SECONDS) {
+      throw new Error(`MCP timeoutSeconds must be 0 to clear or between ${MIN_MCP_TOOL_TIMEOUT_SECONDS} and ${MAX_MCP_TOOL_TIMEOUT_SECONDS}.`);
+    }
+  }
   delete next.type;
   return next;
+}
+
+/** Canonical semantic validator for a fully merged managed configuration. */
+export function normalizeManagedMcpServerConfig(server: McpServerConfig): McpServerConfig {
+  const normalized = sanitizeServerConfig(server);
+  const transport = normalizeTransport(normalized);
+  if (transport === 'stdio') {
+    if (!normalized.command) throw new Error('MCP transport stdio requires command.');
+  } else if (!normalized.url) {
+    throw new Error(`MCP transport ${transport} requires url.`);
+  }
+  return normalized;
 }
 
 export function summarizeServerConfig(name: string, server: McpServerConfig): McpServerSummary {
@@ -172,6 +204,7 @@ export function summarizeServerConfig(name: string, server: McpServerConfig): Mc
       ? Object.keys(normalized.headers).sort()
       : [],
     hasToken: Boolean(normalized.token),
+    timeoutSeconds: normalized.timeoutSeconds ?? null,
   };
 }
 
@@ -182,22 +215,76 @@ export function summarizeServers(servers: Record<string, McpServerConfig> | unde
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function loadConfig(): Promise<McpConfig> {
+function cloneMcpConfig(config: McpConfig): McpConfig {
+  return {
+    servers: Object.fromEntries(
+      Object.entries(config.servers || {}).map(([name, server]) => [name, {
+        ...sanitizeServerConfig(server),
+        ...(Array.isArray(server.args) ? { args: [...server.args] } : {}),
+        ...(server.env ? { env: { ...server.env } } : {}),
+        ...(server.headers ? { headers: { ...server.headers } } : {}),
+      }]),
+    ),
+  };
+}
+
+async function loadConfigFromStore(store: DiskJsonData<McpConfig>): Promise<McpConfig> {
   try {
-    const loaded = await mcpConfigStore.loadFirstAvailable();
+    const loaded = await store.loadFirstAvailable();
     if (!loaded) return { servers: {} };
-    if (loaded.source !== mcpConfigStore.filePath) {
+    if (loaded.source !== store.filePath) {
       logger.warn({ source: loaded.source }, 'Recovering MCP config from fallback source');
-      await mcpConfigStore.write(loaded.data);
+      await store.write(loaded.data);
     }
-    return loaded.data;
+    return cloneMcpConfig(loaded.data);
   } catch (e) {
     throw new Error(`Failed to load MCP config: ${e}`);
   }
 }
 
-async function saveConfig(config: McpConfig) {
-  await mcpConfigStore.write(config);
+async function loadConfig(): Promise<McpConfig> {
+  if (liveMcpConfig) {
+    return liveMcpConfig;
+  }
+
+  const store = mcpConfigStore;
+  if (!liveMcpConfigLoad) {
+    liveMcpConfigLoad = loadConfigFromStore(store);
+  }
+  const pendingLoad = liveMcpConfigLoad;
+
+  try {
+    const loaded = await pendingLoad;
+    if (store !== mcpConfigStore) {
+      return loadConfig();
+    }
+    liveMcpConfig = loaded;
+    return liveMcpConfig;
+  } finally {
+    if (store === mcpConfigStore && liveMcpConfigLoad === pendingLoad) {
+      liveMcpConfigLoad = null;
+    }
+  }
+}
+
+async function saveConfig(config: McpConfig): Promise<void> {
+  const store = mcpConfigStore;
+  const nextConfig = cloneMcpConfig(config);
+  await store.write(nextConfig);
+  if (store === mcpConfigStore) {
+    liveMcpConfig = nextConfig;
+    liveMcpConfigLoad = null;
+  }
+}
+
+function mutateConfig(mutator: (config: McpConfig) => void): Promise<void> {
+  const operation = mcpConfigMutationQueue.then(async () => {
+    const nextConfig = cloneMcpConfig(await loadConfig());
+    mutator(nextConfig);
+    await saveConfig(nextConfig);
+  });
+  mcpConfigMutationQueue = operation.catch(() => {});
+  return operation;
 }
 
 async function getServerConfig(name?: string): Promise<{ name: string; config: McpServerConfig }> {
@@ -206,7 +293,7 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
   const fallbackName = name || 'default';
   const serverName = servers[fallbackName] ? fallbackName : Object.keys(servers)[0];
   if (!serverName) {
-    throw new Error('No MCP servers configured. Use mcp_config to add one.');
+    throw new Error('No MCP servers configured. Discover the hidden mcp_config builtin with search_tools and invoke it through call_tool.');
   }
   const server = sanitizeServerConfig(servers[serverName]);
   if (server.enable === false) {
@@ -217,18 +304,37 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
 
 function getHeaders(config: McpServerConfig): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
-  
-  // Add custom headers first
-  if (config.headers && typeof config.headers === 'object') {
-    Object.assign(headers, config.headers);
-  }
-  
-  // Add Authorization header from token (can be overridden by custom headers)
+
+  // The token supplies a default; an explicitly configured header wins.
   if (config.token) {
     headers['Authorization'] = `Bearer ${config.token}`;
   }
-  
+
+  if (config.headers && typeof config.headers === 'object') {
+    for (const [key, value] of Object.entries(config.headers)) {
+      if (config.token && key.toLowerCase() === 'authorization') {
+        delete headers['Authorization'];
+      }
+      headers[key] = value;
+    }
+  }
+
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+export function buildMcpHttpHeadersForTests(config: McpServerConfig): Record<string, string> | undefined {
+  return getHeaders(config);
+}
+
+export function setMcpSdkForTests(sdk: McpSdkModules | null): void {
+  cachedMcpSdk = sdk;
+}
+
+export async function resetMcpConnectionsForTests(): Promise<void> {
+  const entries = Array.from(stdioConnectionPool.values());
+  stdioConnectionPool.clear();
+  await Promise.all(entries.map(entry => closePooledStdioConnection(entry)));
+  cachedMcpSdk = null;
 }
 
 function requireUrl(config: McpServerConfig, transport: McpTransport): string {
@@ -489,10 +595,52 @@ function hasPreservableMcpResultMetadata(result: Record<string, any>): boolean {
   return false;
 }
 
+function normalizeMcpImageContent(result: Record<string, any>): Record<string, any> {
+  if (!Array.isArray(result.content)) {
+    return result;
+  }
+
+  const inlineDataItems: Array<Record<string, any>> = [];
+  const remainingContent: any[] = [];
+  for (const item of result.content) {
+    const isImage = item
+      && typeof item === 'object'
+      && !Array.isArray(item)
+      && item.type === 'image'
+      && typeof item.data === 'string'
+      && typeof item.mimeType === 'string'
+      && item.mimeType.startsWith('image/');
+    if (isImage) {
+      const { type: _type, data, mimeType, ...metadata } = item;
+      inlineDataItems.push({ ...metadata, data, mimeType });
+    } else {
+      remainingContent.push(item);
+    }
+  }
+
+  if (inlineDataItems.length === 0) {
+    return result;
+  }
+
+  const normalized = { ...result };
+  if (remainingContent.length > 0) {
+    normalized.content = remainingContent;
+  } else {
+    delete normalized.content;
+  }
+  normalized.inlineDataItems = [
+    ...(Array.isArray(result.inlineDataItems) ? result.inlineDataItems : []),
+    ...inlineDataItems,
+  ];
+  return normalized;
+}
+
 export function normalizeMcpToolResult(result: any): any {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return result;
   }
+
+  result = normalizeMcpImageContent(result);
 
   if (hasPreservableMcpResultMetadata(result)) {
     return result;
@@ -507,41 +655,54 @@ export function normalizeMcpToolResult(result: any): any {
   return parsed !== undefined ? parsed : content[0].text;
 }
 
-export async function listTools(serverName?: string) {
+export async function listTools(serverName?: string, signal?: AbortSignal) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
-    return await client.listTools();
+    return signal ? await client.listTools(undefined, { signal }) : await client.listTools();
   });
 }
 
-export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>) {
+export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean } = {}) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
-    const result = await client.callTool({ name: tool, arguments: args || {} });
-    return normalizeMcpToolResult(result);
+    const params = { name: tool, arguments: args || {} };
+    const requestOptions = {
+      ...(config.timeoutSeconds === undefined ? {} : { timeout: config.timeoutSeconds * 1000 }),
+      ...(options.signal ? { signal: options.signal } : {}),
+    };
+    try {
+      const result = !Object.keys(requestOptions).length
+        ? await client.callTool(params)
+        : await client.callTool(params, undefined, requestOptions);
+      return options.rawResult ? result : normalizeMcpToolResult(result);
+    } catch (error) {
+      // The SDK dispatches cancellation asynchronously. Keep this short-lived HTTP
+      // transport open briefly so its best-effort notification can reach the server.
+      if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
+      throw error;
+    }
   });
 }
 
 export async function upsertServer(name: string, server: McpServerConfig) {
-  const cfg = await loadConfig();
-  cfg.servers = cfg.servers || {};
-  cfg.servers[name] = sanitizeServerConfig({ ...cfg.servers[name], ...server });
-  await saveConfig(cfg);
+  await mutateConfig((config) => {
+    config.servers = config.servers || {};
+    config.servers[name] = normalizeManagedMcpServerConfig({ ...config.servers[name], ...server });
+  });
 }
 
 export async function setServerEnabled(name: string, enable: boolean) {
-  const cfg = await loadConfig();
-  cfg.servers = cfg.servers || {};
-  if (!cfg.servers[name]) {
-    throw new Error(`MCP server \"${name}\" not found.`);
-  }
-  cfg.servers[name].enable = enable;
-  await saveConfig(cfg);
+  await mutateConfig((config) => {
+    config.servers = config.servers || {};
+    if (!config.servers[name]) {
+      throw new Error(`MCP server \"${name}\" not found.`);
+    }
+    config.servers[name].enable = enable;
+  });
 }
 
 export async function getServers() {
-  const cfg = await loadConfig();
-  return cfg.servers || {};
+  return cloneMcpConfig(await loadConfig()).servers;
 }
 
 export async function listServers() {

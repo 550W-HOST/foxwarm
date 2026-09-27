@@ -1,0 +1,353 @@
+import assert from 'node:assert/strict'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import * as esbuild from 'esbuild'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const webuiRoot = path.resolve(__dirname, '..')
+const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-webui-markdown-test-'))
+const bundledRendererPath = path.join(tempDir, 'markdownRenderer.mjs')
+
+await esbuild.build({
+  entryPoints: [path.join(webuiRoot, 'src/components/markdownRenderer.ts')],
+  outfile: bundledRendererPath,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node20',
+  logLevel: 'silent',
+})
+
+const {
+  renderAssistantMarkdownSegmentsWithSanitizer,
+  renderMarkdownSegmentsWithSanitizer,
+  renderMarkdownWithSanitizer,
+} = await import(pathToFileURL(bundledRendererPath).href)
+const identitySanitizer = (html) => html
+
+test('inline \\(...\\) math renders KaTeX HTML', () => {
+  const html = renderMarkdownWithSanitizer('Euler: \\(e^{i\\pi}+1=0\\)', identitySanitizer)
+
+  assert.match(html, /class="katex"/)
+  assert.match(html, /e\^{i\\pi}\+1=0/)
+  assert.doesNotMatch(html, /FOXWARM_MATH/)
+})
+
+test('display \\[...\\] math renders display KaTeX HTML', () => {
+  const html = renderMarkdownWithSanitizer('\\[E=mc^2\\]', identitySanitizer)
+
+  assert.match(html, /class="katex-display"/)
+  assert.match(html, /E=mc\^2/)
+})
+
+test('standalone multiline display math is claimed before Markdown block parsing', () => {
+  const html = renderMarkdownWithSanitizer(`\\[
+c_{\\text{self}}
+=
+\\frac{0.813}{3,000,000}
+\\approx 2.71\\times10^{-7}\\text{ seconds/byte}
+\\]`, identitySanitizer)
+
+  assert.match(html, /class="katex-display"/)
+  assert.match(html, /c_\{\\text\{self\}\}/)
+  assert.doesNotMatch(html, /<h1>/)
+  assert.doesNotMatch(html, /FOXWARM_MATH/)
+})
+
+test('standalone display math interrupts an adjacent ordinary paragraph', () => {
+  const html = renderMarkdownWithSanitizer('Before\n\\[\na\n=\nb\n\\]\nAfter', identitySanitizer)
+
+  assert.match(html, /^<p>Before<\/p>\n<span class="katex-display"/)
+  assert.match(html, /<\/span><p>After<\/p>\n$/)
+  assert.doesNotMatch(html, /<h1>/)
+})
+
+test('standalone display math keeps Markdown block interrupters opaque', () => {
+  const cases = [
+    ['minus', '\\[\na\n-\nb\n\\]'],
+    ['blank line', '\\[\na\n\nb\n\\]'],
+    ['heading marker', '\\[\na\n# b\n\\]'],
+    ['list marker', '\\[\na\n- b\n\\]'],
+    ['blockquote marker', '\\[\na\n> b\n\\]'],
+    ['fence marker', '\\[\na\n```\nb\n```\n\\]'],
+  ]
+
+  for (const [label, source] of cases) {
+    const html = renderMarkdownWithSanitizer(source, identitySanitizer)
+    assert.match(html, /class="(?:katex-display|katex-error)"/, `${label} should stay math-owned`)
+    assert.doesNotMatch(html, /<(?:h[1-6]|ul|ol|blockquote|pre)>/, `${label} should not become a Markdown block`)
+  }
+})
+
+test('standalone display math supports LF, CRLF, and up to three leading spaces', () => {
+  const lfHtml = renderMarkdownWithSanitizer('\\[\na+b\nc+d\n\\]', identitySanitizer)
+  const crlfHtml = renderMarkdownWithSanitizer('  \\[ \t\r\na+b\r\n   \\]\t\r\n', identitySanitizer)
+
+  assert.match(lfHtml, /class="katex-display"/)
+  assert.match(crlfHtml, /class="katex-display"/)
+  assert.doesNotMatch(lfHtml, /^<p>/)
+  assert.doesNotMatch(crlfHtml, /^<p>/)
+})
+
+test('embedded same-line display math remains supported', () => {
+  const html = renderMarkdownWithSanitizer('Before \\[E=mc^2\\] after', identitySanitizer)
+
+  assert.match(html, /class="katex-display"/)
+  assert.match(html, /Before /)
+  assert.match(html, / after/)
+})
+
+test('dollar delimiters are not rendered as math', () => {
+  const html = renderMarkdownWithSanitizer('$x$', identitySanitizer)
+
+  assert.doesNotMatch(html, /class="katex"/)
+  assert.match(html, /\$x\$/)
+})
+
+test('math delimiters inside code span and fenced code block are not rendered', () => {
+  const inlineHtml = renderMarkdownWithSanitizer('`\\(x\\)`', identitySanitizer)
+  const displayInlineHtml = renderMarkdownWithSanitizer('`code\n\\[\nx+y\n\\]\n`', identitySanitizer)
+  const blockHtml = renderMarkdownWithSanitizer('```\n\\(x\\)\n```', identitySanitizer)
+  const displayBlockHtml = renderMarkdownWithSanitizer('```\n\\[\nx\n=\ny\n\\]\n```', identitySanitizer)
+
+  assert.doesNotMatch(inlineHtml, /class="katex"/)
+  assert.match(inlineHtml, /<code>\\\(x\\\)<\/code>/)
+  assert.doesNotMatch(displayInlineHtml, /class="katex"/)
+  assert.match(displayInlineHtml, /<code>code \\\[ x\+y \\\] <\/code>/)
+  assert.doesNotMatch(blockHtml, /class="katex"/)
+  assert.match(blockHtml, /<pre><code>\\\(x\\\)\n<\/code><\/pre>/)
+  assert.doesNotMatch(displayBlockHtml, /class="katex"/)
+  assert.match(displayBlockHtml, /<pre><code>\\\[\nx\n=\ny\n\\\]\n<\/code><\/pre>/)
+})
+
+test('non-block display forms preserve existing fallbacks', () => {
+  const cases = [
+    ['unclosed', '\\[\nx'],
+    ['empty', '\\[\n\\]'],
+    ['four-space indent', '    \\[\n    x\n    \\]'],
+  ]
+
+  for (const [label, source] of cases) {
+    const html = renderMarkdownWithSanitizer(source, identitySanitizer)
+    assert.doesNotMatch(html, /class="katex-display"/, `${label} should not be claimed as a display block`)
+  }
+
+  for (const source of ['\\[ x\ny\n\\]', '\\[\nx\n\\] after']) {
+    const html = renderMarkdownWithSanitizer(source, identitySanitizer)
+    assert.match(html, /^<p><span class="katex-display"/)
+  }
+
+  const headingHtml = renderMarkdownWithSanitizer('# Heading\n\nEscaped \\[ bracket', identitySanitizer)
+  assert.match(headingHtml, /<h1>Heading<\/h1>/)
+  assert.match(headingHtml, /Escaped \[ bracket/)
+  assert.doesNotMatch(headingHtml, /class="katex/)
+})
+
+test('incomplete display candidates do not split ordinary paragraphs', () => {
+  for (const source of ['Before\n\\[\nx\nAfter', 'Before\n\\[\n\\]\nAfter']) {
+    const html = renderMarkdownWithSanitizer(source, identitySanitizer)
+    assert.equal((html.match(/<p>/g) ?? []).length, 1)
+    assert.match(html, /^<p>Before<br>/)
+    assert.doesNotMatch(html, /class="katex/)
+  }
+})
+
+test('math HTML crosses the sanitizer boundary only through placeholders', () => {
+  let sanitizerInput = ''
+  const html = renderMarkdownWithSanitizer('\\[\na=b\n\\]', (value) => {
+    sanitizerInput = value
+    return value
+  })
+
+  assert.match(sanitizerInput, /FOXWARM_MATH/)
+  assert.doesNotMatch(sanitizerInput, /class="katex/)
+  assert.match(html, /class="katex-display"/)
+  assert.doesNotMatch(html, /FOXWARM_MATH/)
+})
+
+test('malformed TeX does not crash and still outputs safe content', () => {
+  assert.doesNotThrow(() => renderMarkdownWithSanitizer('Bad: \\(\\frac{\\)', identitySanitizer))
+
+  const html = renderMarkdownWithSanitizer('Bad: \\(\\frac{\\)', identitySanitizer)
+  assert.match(html, /\\frac\{/)
+  assert.doesNotMatch(html, /<script/i)
+})
+
+test('GFM tables retain semantic table markup for the scrollable Markdown style', () => {
+  const html = renderMarkdownWithSanitizer('| left | right |\n| --- | --- |\n| a | b |', identitySanitizer)
+
+  assert.match(html, /<table>/)
+  assert.match(html, /<thead>/)
+  assert.match(html, /<tbody>/)
+  assert.match(html, /<th>left<\/th>/)
+  assert.match(html, /<td>b<\/td>/)
+})
+
+test('ordinary Markdown segments preserve stable top-level token positions', () => {
+  const initial = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph.', identitySanitizer)
+  const extendedTail = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph grows.', identitySanitizer)
+  const appendedBlock = renderMarkdownSegmentsWithSanitizer('First paragraph.\n\nSecond paragraph grows.\n\nThird paragraph.', identitySanitizer)
+
+  assert.deepEqual(initial.map(segment => segment.tokenIndex), [0, 2])
+  assert.deepEqual(extendedTail.map(segment => segment.tokenIndex), [0, 2])
+  assert.deepEqual(appendedBlock.map(segment => segment.tokenIndex), [0, 2, 4])
+  assert.equal(initial[0].html, extendedTail[0].html)
+  assert.equal(extendedTail[0].html, appendedBlock[0].html)
+  assert.notEqual(initial[1].html, extendedTail[1].html)
+})
+
+test('segmented rendering retains complete Markdown semantics', () => {
+  const sources = [
+    '[ref]: https://example.com\n\nUse [link][ref].',
+    'Use [link][ref].\n\n[ref]: https://example.com',
+    '- one\n- two\n\nafter',
+    '> quote one\n>\n> quote two\n\nafter',
+    '```js\nconst value = 1\n```\n\nInline \\(x\\).',
+    '| left | right |\n| --- | --- |\n| a | b |',
+  ]
+
+  for (const source of sources) {
+    const segmented = renderMarkdownSegmentsWithSanitizer(source, identitySanitizer).map(segment => segment.html).join('')
+    assert.equal(segmented, renderMarkdownWithSanitizer(source, identitySanitizer), source)
+  }
+})
+
+test('later reference definitions update the affected earlier token without shifting its identity', () => {
+  const unresolved = renderMarkdownSegmentsWithSanitizer('Use [link][ref].', identitySanitizer)
+  const resolved = renderMarkdownSegmentsWithSanitizer('Use [link][ref].\n\n[ref]: https://example.com', identitySanitizer)
+
+  assert.equal(unresolved[0].tokenIndex, 0)
+  assert.equal(resolved[0].tokenIndex, 0)
+  assert.doesNotMatch(unresolved[0].html, /<a /)
+  assert.match(resolved[0].html, /<a [^>]*href="https:\/\/example.com"[^>]*>link<\/a>/)
+})
+
+test('assistant Mermaid fences become special blocks with exact raw source', () => {
+  const source = 'Before\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nAfter'
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html'])
+  assert.match(segments[0].html, /<p>Before<\/p>/)
+  assert.equal(segments[1].source, 'graph TD\n  A --> B')
+  assert.equal(segments[1].raw, '```mermaid\ngraph TD\n  A --> B\n```')
+  assert.match(segments[2].html, /<p>After<\/p>/)
+})
+
+test('non-Mermaid fences and near-match languages retain ordinary code rendering', () => {
+  for (const language of ['', 'js', 'mermaid-js', 'diagram']) {
+    const source = `\`\`\`${language}\nmermaid\n\\[x\\]\n\`\`\``
+    const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+    assert.deepEqual(segments.map(segment => segment.kind), ['html'])
+    assert.match(segments[0].html, /<pre><code/)
+    assert.doesNotMatch(segments[0].html, /class="katex/)
+  }
+})
+
+test('multiple Mermaid and display-math blocks preserve mixed source order', () => {
+  const source = [
+    'Inline \\(x\\) stays inline.',
+    '```mermaid',
+    'flowchart LR',
+    '  A --> B',
+    '```',
+    '\\[',
+    'y = x^2',
+    '\\]',
+    '```mermaid',
+    'sequenceDiagram',
+    '  A->>B: Hi',
+    '```',
+  ].join('\n')
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'latex', 'mermaid'])
+  assert.match(segments[0].html, /class="katex"/)
+  assert.doesNotMatch(segments[0].html, /katex-display/)
+  assert.equal(segments[1].source, 'flowchart LR\n  A --> B')
+  assert.equal(segments[2].source, 'y = x^2')
+  assert.match(segments[2].raw, /^\\\[\ny = x\^2\n\\\]\n$/)
+  assert.equal(segments[3].source, 'sequenceDiagram\n  A->>B: Hi')
+})
+
+test('only top-level multiline display math becomes a special block', () => {
+  const source = 'Embedded \\[a=b\\] compatibility and inline \\(c=d\\).\n\n\\[E=mc^2\\]'
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'html'])
+  const html = segments.map(segment => segment.html).join('')
+  assert.match(html, /katex-display/)
+  assert.match(html, /class="katex"/)
+})
+
+test('special-block extraction stays behind the ordinary Markdown sanitizer', () => {
+  const sanitizerInputs = []
+  const source = '<script>alert(1)</script>\n\n```mermaid\ngraph TD\nA-->B\n```\n\n[bad](javascript:alert(2))'
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, (html) => {
+    sanitizerInputs.push(html)
+    return html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/href="javascript:[^"]*"/gi, '')
+  })
+
+  assert.equal(sanitizerInputs.length, 3)
+  assert.doesNotMatch(sanitizerInputs.join(''), /<pre><code class="language-mermaid"/)
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html'])
+  const ordinaryHtml = segments.filter(segment => segment.kind === 'html').map(segment => segment.html).join('')
+  assert.doesNotMatch(ordinaryHtml, /<script|javascript:/i)
+  assert.equal(segments[1].source, 'graph TD\nA-->B')
+})
+
+test('assistant special extraction keeps nested Markdown in complete baseline HTML trees', () => {
+  const nestedMermaid = '- Diagram:\n\n  ```mermaid\n  flowchart LR\n    A --> B\n  ```\n- After'
+  const nestedMath = '> Formula:\n> \\[\n> x = y\n> \\]\n'
+  const oneLineListMath = '- first \\[x\\]\n- second'
+
+  for (const source of [nestedMermaid, nestedMath, oneLineListMath]) {
+    const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+    assert.deepEqual(segments.map(segment => segment.kind), ['html'])
+    assert.equal(segments[0].html, renderMarkdownWithSanitizer(source, identitySanitizer))
+  }
+
+  const listHtml = renderAssistantMarkdownSegmentsWithSanitizer(nestedMermaid, identitySanitizer)[0].html
+  assert.equal((listHtml.match(/<ul>/g) ?? []).length, 1)
+  assert.equal((listHtml.match(/<li>/g) ?? []).length, 2)
+  assert.match(listHtml, /<li><p>Diagram:<\/p>[\s\S]*<pre><code class="language-mermaid">[\s\S]*<\/code><\/pre>[\s\S]*<\/li>/)
+
+  const quoteHtml = renderAssistantMarkdownSegmentsWithSanitizer(nestedMath, identitySanitizer)[0].html
+  assert.match(quoteHtml, /^<blockquote>[\s\S]*class="katex-display"[\s\S]*<\/blockquote>\n$/)
+
+  const oneLineHtml = renderAssistantMarkdownSegmentsWithSanitizer(oneLineListMath, identitySanitizer)[0].html
+  assert.equal((oneLineHtml.match(/<ul>/g) ?? []).length, 1)
+  assert.match(oneLineHtml, /<li>first [\s\S]*class="katex-display"[\s\S]*<\/li>\n<li>second<\/li>/)
+})
+
+test('mixed top-level and nested specials extract only complete top-level tokens', () => {
+  const source = [
+    'Top',
+    '',
+    '```mermaid',
+    'flowchart LR',
+    'A-->B',
+    '```',
+    '',
+    '- nested',
+    '',
+    '  ```mermaid',
+    '  flowchart LR',
+    '  B-->C',
+    '  ```',
+    '',
+    '\\[',
+    'z=1',
+    '\\]',
+  ].join('\n')
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html', 'latex'])
+  assert.match(segments[2].html, /^<ul>[\s\S]*language-mermaid[\s\S]*<\/ul>\n$/)
+})

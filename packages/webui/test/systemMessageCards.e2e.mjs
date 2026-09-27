@@ -1,0 +1,404 @@
+import test, { after, before } from 'node:test'
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { readdir, readFile } from 'node:fs/promises'
+import { build } from 'esbuild'
+import puppeteer from 'puppeteer-core'
+
+const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.url).pathname
+const assetsDirectory = new URL('../dist/assets/', import.meta.url)
+
+let browser
+let page
+let server
+let fixtureUrl
+
+function normalizeCssColors(value) {
+  if (typeof value === 'string') {
+    const match = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/.exec(value)
+    if (!match) return value
+    const channels = match.slice(1, 4).map(channel => Math.round(Number(channel) * 255))
+    return match[4] === undefined
+      ? `rgb(${channels.join(', ')})`
+      : `rgba(${channels.join(', ')}, ${Number(match[4])})`
+  }
+  if (Array.isArray(value)) return value.map(normalizeCssColors)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeCssColors(item)]))
+  return value
+}
+
+async function buildFixtureBundle() {
+  const source = `
+    import React from 'react'
+    import { createRoot } from 'react-dom/client'
+    import ChatTimeline from ${JSON.stringify(timelineEntry)}
+    import { ToolTag } from './src/components/chatShared'
+    import ReasoningCard from './src/components/ReasoningCard'
+    import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
+
+    initializeThemeRuntime()
+    window.setFixtureTheme = (_style, dark) => setThemeSelection({
+      themeId: 'foxwarm.default',
+      colorMode: dark ? 'dark' : 'light',
+    })
+
+    const image = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', mimeType: 'image/png' }
+    const longBody = 'overflow-safe-body-' + 'x'.repeat(360)
+    const interAgentBody = ['first inter-agent preview line', 'second inter-agent preview line', 'third inter-agent preview line', 'fourth inter-agent preview line'].join('\\n')
+    const cases = {
+      event: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nwait timeout reached for sessionId: \`child/session\`\\n</foxwarm-system>' }, { inlineData: image }], __meta: { seq: 1 } }] },
+      interAgent: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">\\n' + interAgentBody + '\\n</foxwarm-message>' }], __meta: { seq: 2 } }] },
+      sessionBoundary: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="session-boundary" event="new-child">\\nboundary body\\n</foxwarm-system>' }], __meta: { seq: 21 } }] },
+      goalReminder: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="goal-reminder">\\nremember this goal\\n</foxwarm-system>' }], __meta: { seq: 22 } }] },
+      systemPrompt: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="system-prompt">\\nprompt body\\n</foxwarm-system>' }], __meta: { seq: 23 } }] },
+      unknown: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="future-system-kind">\\nunknown body\\n</foxwarm-system>' }], __meta: { seq: 24 } }] },
+      legacy: { messages: [{ role: 'user', parts: [{ system: 'legacy system notification' }], __meta: { seq: 3 } }] },
+      direct: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\ndirect user body\\n</foxwarm-message>\\n<foxwarm-file name="中文测试.txt" node="master" path="/tmp/中文测试.txt" mime="text/plain" />' }, { inlineData: image }], __meta: { seq: 4 } }] },
+      externalInput: { messages: [{ role: 'user', parts: [
+        { system: '<foxwarm-system kind="external-input" externalId="alpha" contextId="fixture" hint="Message from an external MCP client." />' },
+        { text: 'ordinary external user input' },
+      ], __meta: { seq: 25 } }] },
+      mixed: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\nold wrapper\\n</foxwarm-message>\\n<foxwarm-system kind="event">\\n' + longBody + '\\n</foxwarm-system>' }], __meta: { seq: 5 } }] },
+      nested: { nestedDepth: 1, messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="snapshot">\\nnested system body\\n</foxwarm-system>' }], __meta: { seq: 6 } }] },
+      spacing: { messages: [
+        { role: 'model', parts: [{ text: 'first model response' }], __meta: { seq: 7 } },
+        { role: 'user', parts: [{ text: '<foxwarm-system kind="event">\\nevent row\\n</foxwarm-system>' }], __meta: { seq: 8 } },
+        { role: 'user', parts: [{ text: '<foxwarm-message type="inter-agent">\\nchild row\\n</foxwarm-message>' }], __meta: { seq: 9 } },
+        { role: 'model', parts: [{ text: 'second model response' }], __meta: { seq: 10 } },
+        { role: 'user', parts: [{ text: 'a direct user turn' }], __meta: { seq: 11 } },
+        { role: 'model', parts: [{ text: 'model after direct user' }], __meta: { seq: 12 } },
+      ] },
+    }
+
+    for (const [id, fixture] of Object.entries(cases)) {
+      createRoot(document.getElementById(id)).render(React.createElement(ChatTimeline, {
+        sessionId: 'fixture/main',
+        messages: fixture.messages,
+        isMobile: window.innerWidth < 768,
+        groupTools: false,
+        showUsageBadge: false,
+        nestedDepth: fixture.nestedDepth || 0,
+      }))
+    }
+    createRoot(document.getElementById('unknownTool')).render(React.createElement(ToolTag, { name: 'future-tool', className: 'foxwarm-unknown-tool-tag' }))
+    createRoot(document.getElementById('sendToSessionTool')).render(React.createElement(ToolTag, { name: 'send_to_session', className: 'foxwarm-send-to-session-tool-tag' }))
+    createRoot(document.getElementById('reasoningMessage')).render(React.createElement(ReasoningCard, { thinking: 'message **strong** <code>code</code>', tone: 'message', defaultExpanded: true }))
+    createRoot(document.getElementById('reasoningProcessing')).render(React.createElement(ReasoningCard, { thinking: 'processing **strong** <code>code</code>', tone: 'processing', defaultExpanded: true }))
+  `
+  const result = await build({
+    stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'system-message-cards-fixture.tsx' },
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    target: 'chrome120',
+    write: false,
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
+    logLevel: 'silent',
+  })
+  return result.outputFiles[0].text
+}
+
+async function mountFixture(width = 900, dark = false, style = 'default') {
+  await page.setViewport({ width, height: 700, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.evaluate(({ dark, style }) => {
+    window.setFixtureTheme(style, dark)
+  }, { dark, style })
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 12)
+}
+
+before(async () => {
+  const assetNames = await readdir(assetsDirectory)
+  const cssAsset = assetNames.find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssAsset, 'build packages/webui before running the system message card browser test')
+  const css = await readFile(new URL(cssAsset, assetsDirectory), 'utf8')
+  const bundle = await buildFixtureBundle()
+
+  server = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:20px}</style></head><body><main>${['event', 'interAgent', 'sessionBoundary', 'goalReminder', 'systemPrompt', 'unknown', 'legacy', 'direct', 'externalInput', 'mixed', 'nested', 'spacing', 'unknownTool', 'sendToSessionTool', 'reasoningMessage', 'reasoningProcessing'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  fixtureUrl = `http://127.0.0.1:${server.address().port}`
+  browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  page = await browser.newPage()
+})
+
+after(async () => {
+  await browser?.close()
+  await new Promise(resolve => server?.close(resolve))
+})
+
+test('console reasoning selectors do not borrow system-message declarations', async () => {
+  const css = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
+  const reasoningBlocks = css.match(/[^{}]+\{[^{}]*\}/g)?.filter(block => (
+    block.includes('data-foxwarm-component-treatment="console"') && block.includes('.foxwarm-reasoning')
+  )) || []
+  assert.ok(reasoningBlocks.length > 0)
+  assert.equal(reasoningBlocks.some(block => block.includes('--foxwarm-console-blue')), false)
+})
+
+test('heavy system and non-channel messages use kind-tagged thread cards while direct users stay bubbles', async () => {
+  await mountFixture()
+  for (const [id, kind] of [['event', 'event'], ['interAgent', 'inter-agent'], ['sessionBoundary', 'session-boundary'], ['goalReminder', 'goal-reminder'], ['systemPrompt', 'system-prompt'], ['unknown', 'future-system-kind'], ['legacy', 'system'], ['mixed', 'event'], ['nested', 'snapshot']]) {
+    const card = await page.$eval(`#${id} [data-system-message-card]`, element => ({
+      kind: element.getAttribute('data-system-message-kind'),
+      expanded: element.querySelector('button')?.getAttribute('aria-expanded'),
+      tag: element.querySelector('.foxwarm-system-message-tag')?.textContent?.trim(),
+      hasThreadLine: !!element.querySelector('.foxwarm-system-message-thread-line'),
+      marginTop: getComputedStyle(element).marginTop,
+      marginBottom: getComputedStyle(element).marginBottom,
+    }))
+    assert.equal(card.kind, kind, `${id} tag kind`)
+    assert.equal(card.expanded, 'false', `${id} starts collapsed`)
+    assert.equal(card.tag, kind, `${id} visible tag`)
+    assert.equal(card.hasThreadLine, true, `${id} has shared thread-line control`)
+    assert.equal(card.marginTop, '2px', `${id} uses the shared thread-card top margin`)
+    assert.equal(card.marginBottom, '2px', `${id} uses the shared thread-card bottom margin`)
+  }
+  assert.match((await page.$eval('#event [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-bell/)
+  assert.match((await page.$eval('#interAgent [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-messages-square/)
+  assert.match((await page.$eval('#sessionBoundary [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-separator-horizontal/)
+  assert.match((await page.$eval('#goalReminder [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-target/)
+  assert.match((await page.$eval('#systemPrompt [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-scroll-text/)
+  assert.match((await page.$eval('#unknown [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-bell/)
+  assert.match((await page.$eval('#legacy [data-system-message-card]', element => element.querySelector('.foxwarm-system-message-tag svg')?.getAttribute('class') || '')).toString(), /lucide-info/)
+  assert.match((await page.$eval('#unknownTool .foxwarm-unknown-tool-tag svg', element => element.getAttribute('class') || '')).toString(), /lucide-wrench/)
+  assert.match((await page.$eval('#sendToSessionTool .foxwarm-send-to-session-tool-tag svg', element => element.getAttribute('class') || '')).toString(), /lucide-messages-square/)
+
+  assert.equal(await page.$$('#direct [data-system-message-card]').then(nodes => nodes.length), 0)
+  assert.equal(await page.$$('#direct .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
+  assert.equal(await page.$$('#externalInput [data-system-message-card]').then(nodes => nodes.length), 0,
+    'an external-origin user message must not render as a framework system-delivered card')
+  assert.equal(await page.$$('#externalInput .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
+  assert.match(await page.$eval('#externalInput .foxwarm-user-message-bubble', bubble => bubble.textContent), /ordinary external user input/)
+  assert.equal(await page.$eval('#direct .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-end')
+  assert.deepEqual(await page.$eval('#direct .foxwarm-lightweight-metadata-line:last-of-type', line => ({
+    text: line.textContent,
+    fontSize: line.style.fontSize,
+    opacity: line.style.opacity,
+  })), {
+    text: '<foxwarm-file name="中文测试.txt" node="master" path="/tmp/中文测试.txt" mime="text/plain" />',
+    fontSize: '70%',
+    opacity: '0.7',
+  })
+  assert.equal(await page.$$('#direct img').then(nodes => nodes.length), 1, 'direct attachment metadata preserves inline image rendering')
+  assert.equal(await page.$eval('#event .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-start')
+  assert.equal(await page.$eval('#event .foxwarm-system-message-preview', preview => preview.textContent), 'wait-timeout: wait timeout reached for sessionId: `child/session`')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview', preview => preview.textContent), 'From parent/child:')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => preview.textContent), 'first inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line')
+  assert.deepEqual(await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
+    lineHeight: preview.style.lineHeight,
+    maxHeight: preview.style.maxHeight,
+    overflow: preview.style.overflow,
+    whiteSpace: getComputedStyle(preview).whiteSpace,
+  })), {
+    lineHeight: '1.3em',
+    maxHeight: 'calc(3.9em)',
+    overflow: 'hidden',
+    whiteSpace: 'pre-wrap',
+  }, 'inter-agent preview reuses the ordinary three-line result clamp')
+  assert.equal(await page.$eval('#interAgent [data-system-message-card]', card => getComputedStyle(card).paddingBottom), '4px', 'inter-agent preview keeps ordinary result-area bottom padding')
+  assert.equal(await page.$eval('#sessionBoundary .foxwarm-system-message-preview', preview => preview.textContent), 'new-child: boundary body')
+  assert.equal(await page.$eval('#spacing [data-system-message-kind="inter-agent"] .foxwarm-system-message-preview', preview => preview.textContent), 'child row', 'missing sourceSessionId has no From prefix or dangling colon')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview a', link => link.getAttribute('href')), '#session/parent%2Fchild')
+  await page.click('#interAgent .foxwarm-system-message-preview a')
+  assert.match(page.url(), /#session\/parent%2Fchild$/)
+  assert.equal(await page.$eval('#interAgent [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'false', 'preview link navigation does not expand the card')
+  assert.equal(await page.$$('#event img').then(nodes => nodes.length), 1, 'event image remains rendered')
+})
+
+test('user metadata follows userText rather than an unrelated inverse-control color', async () => {
+  await mountFixture()
+  await page.evaluate(() => {
+    window.setFixtureTheme('default', true)
+    document.documentElement.style.setProperty('--foxwarm-color-text-inverse', '#0b1220')
+    document.documentElement.style.setProperty('--foxwarm-color-user-surface', '#263b60')
+    document.documentElement.style.setProperty('--foxwarm-color-user-text', '#eef3fb')
+  })
+  const colors = await page.$eval('#direct .foxwarm-user-message-bubble', bubble => ({
+    body: getComputedStyle(bubble.querySelector('.foxwarm-user-message-text')).color,
+    metadata: getComputedStyle(bubble.querySelector('.foxwarm-lightweight-metadata-line')).color,
+    background: getComputedStyle(bubble).backgroundColor,
+  }))
+  assert.equal(colors.metadata, colors.body)
+  assert.notEqual(colors.metadata, 'rgb(11, 18, 32)', 'metadata does not borrow the dark inverse label color')
+  assert.equal(colors.background, 'rgb(38, 59, 96)')
+})
+
+test('system cards expand/collapse, preserve session links, and retain width containment', async () => {
+  await mountFixture(390)
+  await page.click('#event [data-system-message-card]')
+  assert.equal(await page.$eval('#event [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'true')
+  assert.equal(await page.$eval('#event .foxwarm-system-message-body a', link => link.getAttribute('href')), '#session/child%2Fsession')
+  assert.ok(await page.$eval('#event .foxwarm-system-message-body', body => body.textContent.includes('wait timeout reached')))
+
+  await page.click('#event .foxwarm-system-message-header')
+  assert.equal(await page.$eval('#event [data-system-message-card] button', button => button.getAttribute('aria-expanded')), 'false')
+
+  await page.click('#interAgent [data-system-message-card] button')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body a', link => link.getAttribute('href')), '#session/parent%2Fchild')
+  assert.equal(await page.$eval('#interAgent .foxwarm-system-message-body', body => body.textContent), '<foxwarm-message type="inter-agent" sourceSessionId="parent/child">first inter-agent preview line\nsecond inter-agent preview line\nthird inter-agent preview line\nfourth inter-agent preview line</foxwarm-message>')
+  const interAgentLineMetrics = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
+    const [metadataLine, bodyLine] = body.children
+    const nextBodyLine = body.children[2]
+    const metadataRect = metadataLine.getBoundingClientRect()
+    const bodyRect = bodyLine.getBoundingClientRect()
+    const nextBodyRect = nextBodyLine.getBoundingClientRect()
+    return {
+      bodyParentLineHeight: body.style.lineHeight,
+      metadataDisplay: getComputedStyle(metadataLine).display,
+      bodyDisplay: getComputedStyle(bodyLine).display,
+      metadataLineHeight: Number.parseFloat(getComputedStyle(metadataLine).lineHeight),
+      bodyLineHeight: Number.parseFloat(getComputedStyle(bodyLine).lineHeight),
+      metadataToBodyGap: bodyRect.top - metadataRect.bottom,
+      bodyToBodyStep: nextBodyRect.top - bodyRect.top,
+    }
+  })
+  assert.equal(interAgentLineMetrics.bodyParentLineHeight, '1.5em', 'ordinary body text retains the normal pre line-height')
+  assert.equal(interAgentLineMetrics.metadataDisplay, 'block', 'metadata wrappers control their own visual line box')
+  assert.equal(interAgentLineMetrics.bodyDisplay, 'inline', 'ordinary body lines remain in the normal pre flow')
+  assert.ok(interAgentLineMetrics.metadataLineHeight < interAgentLineMetrics.bodyLineHeight, 'metadata wrappers use a more compact line-height than normal body lines')
+  assert.ok(interAgentLineMetrics.metadataToBodyGap < interAgentLineMetrics.bodyLineHeight, 'metadata blocks do not create a giant blank row before body text')
+  assert.ok(interAgentLineMetrics.bodyToBodyStep <= interAgentLineMetrics.bodyLineHeight + 0.5, 'body-to-body newlines advance by one normal visual row')
+
+  const overflow = await page.$eval('#mixed', fixture => ({
+    fixture: fixture.scrollWidth - fixture.clientWidth,
+    document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    nestedWidth: document.querySelector('#nested [data-system-message-card]')?.getBoundingClientRect().width || 0,
+    nestedTimelineWidth: document.querySelector('#nested .foxwarm-chat-timeline')?.getBoundingClientRect().width || 0,
+  }))
+  assert.ok(overflow.fixture <= 1)
+  assert.ok(overflow.document <= 1)
+  assert.ok(overflow.nestedWidth <= overflow.nestedTimelineWidth + 1)
+})
+
+test('inter-agent preview and expanded body preserve matching body text styling', async () => {
+  await mountFixture()
+  const collapsed = await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
+    color: getComputedStyle(preview).color,
+    opacity: getComputedStyle(preview).opacity,
+  }))
+
+  await page.click('#interAgent [data-system-message-card]')
+  const expanded = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
+    const firstBodyLine = [...body.querySelectorAll('span')].find(line => line.textContent?.includes('first inter-agent preview line'))
+    return {
+      color: firstBodyLine ? getComputedStyle(firstBodyLine).color : '',
+      opacity: firstBodyLine ? getComputedStyle(firstBodyLine).opacity : '',
+    }
+  })
+
+  assert.deepEqual(expanded, collapsed)
+})
+
+test('every system kind uses the blue thread-card palette in default light and dark themes', async () => {
+  await mountFixture()
+  const previewLight = await page.$$eval('#event .foxwarm-system-message-preview, #interAgent .foxwarm-system-message-preview', previews => previews.map(preview => getComputedStyle(preview).color))
+  await page.click('#event [data-system-message-card]')
+  await page.click('#interAgent [data-system-message-card]')
+  await page.mouse.move(0, 0)
+  await new Promise(resolve => setTimeout(resolve, 200))
+
+  const colors = await page.evaluate(() => {
+    const sample = (id) => {
+      const card = document.querySelector(`#${id} [data-system-message-card]`)
+      const header = card.querySelector('.foxwarm-system-message-header')
+      const tag = card.querySelector('.foxwarm-system-message-tag')
+      const line = card.querySelector('.foxwarm-system-message-thread-line')
+      const body = card.querySelector('.foxwarm-system-message-body')
+      return {
+        tone: card.getAttribute('data-system-message-tone'),
+        surface: getComputedStyle(card).backgroundColor,
+        header: getComputedStyle(header).backgroundColor,
+        tag: getComputedStyle(tag).backgroundColor,
+        line: getComputedStyle(line).color,
+        body: getComputedStyle(body).color,
+      }
+    }
+    return { event: sample('event'), interAgent: sample('interAgent') }
+  })
+
+  assert.deepEqual(normalizeCssColors(colors.event), {
+    tone: 'system',
+    surface: 'rgba(239, 246, 255, 0.55)',
+    header: 'rgba(219, 234, 254, 0.8)',
+    tag: 'rgb(219, 234, 254)',
+    line: 'rgb(147, 197, 253)',
+    body: 'rgb(51, 65, 85)',
+  })
+  assert.deepEqual(normalizeCssColors(colors.interAgent), normalizeCssColors(colors.event), 'every system kind shares the blue card tone')
+  assert.deepEqual(previewLight, ['rgb(51, 65, 85)', 'rgb(51, 65, 85)'])
+
+  await mountFixture(900, true)
+  const previewDark = await page.$$eval('#event .foxwarm-system-message-preview, #interAgent .foxwarm-system-message-preview', previews => previews.map(preview => getComputedStyle(preview).color))
+  await page.click('#event [data-system-message-card]')
+  await page.click('#interAgent [data-system-message-card]')
+  await page.mouse.move(0, 0)
+  await new Promise(resolve => setTimeout(resolve, 200))
+  const systemDark = await page.evaluate(() => {
+    const sample = (id) => {
+      const card = document.querySelector(`#${id} [data-system-message-card]`)
+      return {
+        surface: getComputedStyle(card).backgroundColor,
+        header: getComputedStyle(card.querySelector('.foxwarm-system-message-header')).backgroundColor,
+        tag: getComputedStyle(card.querySelector('.foxwarm-system-message-tag')).backgroundColor,
+        line: getComputedStyle(card.querySelector('.foxwarm-system-message-thread-line')).color,
+        body: getComputedStyle(card.querySelector('.foxwarm-system-message-body')).color,
+      }
+    }
+    return { event: sample('event'), interAgent: sample('interAgent') }
+  })
+  const expectedDark = {
+    surface: 'rgba(30, 58, 138, 0.1)',
+    header: 'rgba(30, 64, 175, 0.2)',
+    tag: 'rgba(30, 58, 138, 0.2)',
+    line: 'rgb(29, 78, 216)',
+    body: 'rgb(203, 213, 225)',
+  }
+  assert.deepEqual(normalizeCssColors(systemDark.event), expectedDark)
+  assert.deepEqual(normalizeCssColors(systemDark.interAgent), expectedDark)
+  assert.deepEqual(previewDark, ['rgb(203, 213, 225)', 'rgb(203, 213, 225)'])
+})
+
+test('default reasoning retains its finished slate and active processing-blue distinction', async () => {
+  const readReasoning = () => page.evaluate(() => {
+    const sample = (id) => {
+      const root = document.querySelector(`#${id} .foxwarm-reasoning-card`)
+      return {
+        surface: getComputedStyle(root).backgroundColor,
+        header: getComputedStyle(root.querySelector('.foxwarm-reasoning-header')).backgroundColor,
+      }
+    }
+    return { message: sample('reasoningMessage'), processing: sample('reasoningProcessing') }
+  })
+
+  await mountFixture()
+  assert.deepEqual(normalizeCssColors(await readReasoning()), {
+    message: { surface: 'rgba(241, 245, 249, 0.45)', header: 'rgba(226, 232, 240, 0.8)' },
+    processing: { surface: 'rgba(239, 246, 255, 0.55)', header: 'rgba(219, 234, 254, 0.8)' },
+  })
+
+  await mountFixture(900, true)
+  assert.deepEqual(normalizeCssColors(await readReasoning()), {
+    message: { surface: 'rgba(30, 41, 59, 0.2)', header: 'rgba(51, 65, 85, 0.25)' },
+    processing: { surface: 'rgba(30, 58, 138, 0.1)', header: 'rgba(30, 64, 175, 0.2)' },
+  })
+})
+
+test('heavy system cards stay in thread row groups while direct users remain turn breaks', async () => {
+  await mountFixture()
+  const rows = await page.$$eval('#spacing .foxwarm-chat-timeline > div', rows => rows.map(row => ({
+    hasTopMargin: row.classList.contains('mt-4'),
+    justifyContent: getComputedStyle(row).justifyContent,
+  })))
+  assert.deepEqual(rows, [
+    { hasTopMargin: true, justifyContent: 'flex-start' },
+    { hasTopMargin: false, justifyContent: 'flex-start' },
+    { hasTopMargin: false, justifyContent: 'flex-start' },
+    { hasTopMargin: false, justifyContent: 'flex-start' },
+    { hasTopMargin: true, justifyContent: 'flex-end' },
+    { hasTopMargin: true, justifyContent: 'flex-start' },
+  ])
+})

@@ -114,6 +114,379 @@ html.dark {
   background-color: var(--foxwarm-scrollbar-thumb-hover);
 }
 
+/* The chat context overview owns a dedicated desktop gutter while the native
+ * message element remains the actual scroll container. */
+.foxwarm-context-scrollbar-shell {
+  display: none;
+}
+
+.foxwarm-chat-root {
+  container-type: inline-size;
+}
+
+.foxwarm-display-effect-overlay {
+  display: none;
+}
+
+@keyframes foxwarm-crt-refresh-roll {
+  from { background-position: 0 0, 0 0, 0 -24%; }
+  to { background-position: 0 0, 0 0, 0 124%; }
+}
+
+html[data-foxwarm-display-effect="crt"] .foxwarm-chat-message-region {
+  overflow: hidden;
+  border-radius: var(--foxwarm-crt-glass-radius);
+  background: var(--foxwarm-color-canvas);
+}
+
+html[data-foxwarm-display-effect="crt"][data-foxwarm-crt-bezel="inset"] .foxwarm-chat-message-region {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, white 8%, transparent),
+    inset 0 0 24px rgb(0 0 0 / 0.11);
+}
+
+html[data-foxwarm-display-effect="crt"][data-foxwarm-crt-bezel="frame"] .foxwarm-chat-message-region {
+  margin: 6px 8px 0;
+  border: 1px solid var(--foxwarm-color-border-strong);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, white 8%, transparent),
+    inset 0 0 32px rgb(0 0 0 / 0.13),
+    0 2px 8px rgb(0 0 0 / 0.16);
+}
+
+html[data-foxwarm-display-effect="crt"] .foxwarm-chat-messages-content {
+  text-shadow: 0 0 var(--foxwarm-crt-bloom-px) var(--foxwarm-crt-bloom-color);
+}
+
+html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--foxwarm-crt-glass-radius);
+  pointer-events: none;
+}
+
+html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::before,
+html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::before {
+  background-image:
+    repeating-linear-gradient(0deg, rgb(0 0 0 / var(--foxwarm-crt-scan-opacity)) 0 1px, transparent 1px var(--foxwarm-crt-scan-pitch)),
+    var(--foxwarm-crt-mask-image);
+  background-size: auto, var(--foxwarm-crt-mask-size);
+  background-blend-mode: multiply;
+}
+
+html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
+  background-image:
+    linear-gradient(115deg, rgb(255 255 255 / var(--foxwarm-crt-reflection-opacity)) 0%, transparent 14%, transparent 72%, rgb(255 255 255 / calc(var(--foxwarm-crt-reflection-opacity) * 0.35)) 100%),
+    radial-gradient(ellipse at center, transparent 54%, rgb(0 0 0 / var(--foxwarm-crt-vignette-opacity)) 100%),
+    linear-gradient(to bottom, transparent 0%, rgb(255 255 255 / var(--foxwarm-crt-roll-opacity)) 48%, transparent 100%);
+  background-repeat: no-repeat;
+  background-size: 100% 100%, 100% 100%, 100% 18%;
+  background-position: 0 0, 0 0, 0 -24%;
+  animation: foxwarm-crt-refresh-roll var(--foxwarm-crt-roll-duration) linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
+    animation: none;
+  }
+}
+
+.foxwarm-safe-area-shell,
+.foxwarm-viewport-shell,
+.foxwarm-fixed-viewport-shell {
+  background-image: var(--foxwarm-background-image);
+  background-size: var(--foxwarm-background-size);
+}
+
+[data-theme-manager] [data-theme-control] {
+  min-height: var(--foxwarm-control-height-px);
+  border-width: var(--foxwarm-border-width-px);
+  border-radius: var(--foxwarm-radius-small-px);
+  transition-duration: var(--foxwarm-transition-ms);
+}
+
+[data-theme-manager] [data-theme-control]:active:not(:disabled) {
+  transform: var(--foxwarm-press-transform);
+}
+
+[data-theme-manager] [data-theme-surface="medium"] {
+  border-width: var(--foxwarm-border-width-px);
+  border-radius: var(--foxwarm-radius-medium-px);
+}
+
+[data-theme-manager] [data-theme-surface="large"] {
+  border-width: var(--foxwarm-border-width-px);
+  border-radius: var(--foxwarm-radius-large-px);
+}
+
+[data-theme-manager] [data-theme-option][aria-pressed="true"] {
+  box-shadow: var(--foxwarm-accent-glow);
+}
+
+.foxwarm-assistant-message-markdown {
+  --tw-prose-body: var(--foxwarm-color-assistant-text);
+  --tw-prose-headings: var(--foxwarm-color-text-strong);
+  --tw-prose-bold: var(--foxwarm-color-text-strong);
+  --tw-prose-code: var(--foxwarm-color-inline-code-text);
+  --tw-prose-pre-code: var(--foxwarm-color-assistant-code-text);
+  --tw-prose-pre-bg: var(--foxwarm-color-assistant-code-surface);
+}
+
+.foxwarm-assistant-message-markdown :where(code):not(:where(pre *)) {
+  border-radius: var(--foxwarm-radius-small-px);
+  background: var(--foxwarm-color-inline-code-surface);
+  color: var(--foxwarm-color-inline-code-text);
+  padding: 0.1em 0.25em;
+}
+
+@media (min-width: 769px) {
+  .foxwarm-chat-message-region {
+    display: flex;
+  }
+
+  .foxwarm-chat-messages {
+    min-width: 0;
+    flex: 1 1 auto;
+    position: relative;
+    container-type: size;
+    scrollbar-width: none;
+  }
+
+  .foxwarm-chat-messages::-webkit-scrollbar {
+    display: none;
+  }
+
+  .foxwarm-chat-messages[data-show-system-scrollbar="true"] {
+    scrollbar-width: auto;
+  }
+
+  .foxwarm-chat-messages[data-show-system-scrollbar="true"]::-webkit-scrollbar {
+    display: block;
+  }
+
+  .foxwarm-context-scrollbar-shell {
+    display: block;
+    position: relative;
+    width: 32px;
+    flex: 0 0 32px;
+    padding: 0;
+    background: transparent;
+    z-index: 30;
+    opacity: 0.5;
+    transition: opacity 120ms ease;
+  }
+
+  .foxwarm-context-scrollbar-shell:hover,
+  .foxwarm-context-scrollbar-shell:has(.foxwarm-context-scrollbar:focus-visible) {
+    opacity: 1;
+  }
+
+  .foxwarm-context-scrollbar-shell[data-context-scrollbar-dragging="true"] {
+    opacity: 1;
+  }
+
+  .foxwarm-context-scrollbar-overlay {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-overlay .foxwarm-context-scrollbar-shell {
+    position: absolute;
+    top: 0;
+    right: -16px;
+    height: 100cqh;
+    pointer-events: auto;
+  }
+
+  .foxwarm-chat-messages-content {
+    padding-right: 32px;
+  }
+
+  .foxwarm-chat-messages[data-show-context-minimap="false"] .foxwarm-chat-messages-content {
+    padding-right: 0;
+  }
+
+  @container (max-width: 1151px) {
+    .foxwarm-chat-root .foxwarm-chat-composer-inner {
+      max-width: calc(100% - 48px);
+      margin-left: 0;
+      margin-right: 48px;
+    }
+  }
+
+  .foxwarm-context-scrollbar {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 24px;
+    overflow: hidden;
+    cursor: pointer;
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
+    border-radius: 0.5rem 0 0 0.5rem;
+    background: color-mix(in srgb, var(--foxwarm-scrollbar-track) 72%, var(--foxwarm-scrollbar-thumb));
+  }
+
+  .foxwarm-context-scrollbar:focus-visible {
+    box-shadow: 0 0 0 2px rgb(var(--foxwarm-color-focus-ring-rgb) / 0.72);
+  }
+
+  .foxwarm-context-scrollbar-used {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .foxwarm-context-scrollbar-segment {
+    width: 100%;
+  }
+
+  .foxwarm-context-scrollbar-tone-user { background: var(--foxwarm-color-user-surface); }
+  .foxwarm-context-scrollbar-tone-assistant { background: var(--foxwarm-color-assistant-surface); }
+  .foxwarm-context-scrollbar-tone-reasoning { background: var(--foxwarm-color-text-subtle); }
+  .foxwarm-context-scrollbar-tone-tool-neutral { background: var(--foxwarm-color-neutral); }
+  .foxwarm-context-scrollbar-tone-tool-success { background: var(--foxwarm-color-tool); }
+  .foxwarm-context-scrollbar-tone-tool-error { background: var(--foxwarm-color-danger); }
+  .foxwarm-context-scrollbar-tone-system { background: var(--foxwarm-color-info); }
+  .foxwarm-context-scrollbar-tone-context-block { background: var(--foxwarm-color-text-subtle); }
+
+  .foxwarm-context-scrollbar-free {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: rgb(var(--foxwarm-color-text-subtle-rgb) / 0.12);
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-viewport {
+    position: absolute;
+    right: 0;
+    left: 0;
+    border-radius: 0;
+    background: rgb(var(--foxwarm-color-context-viewport-rgb) / 0.38);
+    box-shadow: inset 0 0 0 1px rgb(var(--foxwarm-color-context-viewport-rgb) / 0.46);
+    pointer-events: auto;
+  }
+
+  .foxwarm-context-scrollbar-viewport:hover {
+    background: rgb(var(--foxwarm-color-context-viewport-rgb) / 0.56);
+    box-shadow: inset 0 0 0 1px rgb(var(--foxwarm-color-context-viewport-rgb) / 0.68);
+  }
+
+  .foxwarm-context-scrollbar-shell[data-context-scrollbar-dragging="true"] .foxwarm-context-scrollbar-viewport {
+    background: rgb(var(--foxwarm-color-context-viewport-rgb) / 0.47);
+    box-shadow: inset 0 0 0 1px rgb(var(--foxwarm-color-context-viewport-rgb) / 0.57);
+  }
+
+  .foxwarm-context-scrollbar-info {
+    position: absolute;
+    left: 16px;
+    bottom: calc((32px - 17px) / 2);
+    z-index: 2;
+    transform: translateX(-50%);
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .foxwarm-context-scrollbar-info-button {
+    display: grid;
+    width: 17px;
+    height: 17px;
+    place-items: center;
+    border: 1px solid rgb(var(--foxwarm-color-text-muted-rgb) / 0.56);
+    border-radius: 9999px;
+    background: rgb(var(--foxwarm-color-surface-rgb) / 0.72);
+    color: rgb(var(--foxwarm-color-text-rgb) / 0.86);
+    font-family: var(--foxwarm-code-font-family);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+    touch-action: none;
+  }
+
+  .foxwarm-context-scrollbar-info-button:hover,
+  .foxwarm-context-scrollbar-info-button:focus-visible {
+    background: var(--foxwarm-color-surface-raised);
+    outline: none;
+  }
+
+  .foxwarm-context-scrollbar-tooltip {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    display: none;
+    width: max-content;
+    min-width: 190px;
+    max-width: 250px;
+    padding: 6px 7px;
+    border: 1px solid rgb(var(--foxwarm-color-text-muted-rgb) / 0.36);
+    border-radius: 0.5rem;
+    background: rgb(var(--foxwarm-color-surface-rgb) / 0.94);
+    color: var(--foxwarm-color-text);
+    box-shadow: 0 4px 12px rgb(var(--foxwarm-color-overlay-rgb) / var(--foxwarm-shadow-opacity));
+    pointer-events: none;
+  }
+
+  .foxwarm-context-scrollbar-info:hover .foxwarm-context-scrollbar-tooltip,
+  .foxwarm-context-scrollbar-info:focus-within .foxwarm-context-scrollbar-tooltip {
+    display: grid;
+    gap: 3px;
+  }
+
+  .foxwarm-context-scrollbar-legend-row {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    line-height: 14px;
+    white-space: nowrap;
+  }
+
+  .foxwarm-context-scrollbar-legend-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .foxwarm-context-scrollbar-legend-label { overflow: hidden; text-overflow: ellipsis; }
+  .foxwarm-context-scrollbar-legend-value { color: var(--foxwarm-color-text-muted); font-variant-numeric: tabular-nums; }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-snapshot,
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-system { background: var(--foxwarm-color-info); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-tools { background: var(--foxwarm-color-tool); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-user { background: var(--foxwarm-color-user-surface); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-reasoning { background: var(--foxwarm-color-text-subtle); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-free { background: rgb(var(--foxwarm-color-text-subtle-rgb) / 0.12); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model,
+  .foxwarm-context-scrollbar-segment-model-content { background: var(--foxwarm-color-assistant-surface); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model { box-shadow: inset 0 0 0 1px rgb(var(--foxwarm-color-text-muted-rgb) / 0.52); }
+
+  .foxwarm-chat-message-region > button[aria-label="Scroll to top"],
+  .foxwarm-chat-message-region > button[aria-label="Scroll to bottom"] {
+    right: calc(32px + 1rem) !important;
+  }
+}
+
 /* Mobile: fixed positioning to prevent Safari address bar issues */
 @media (max-width: 768px) {
   html, body {
@@ -130,9 +503,7 @@ html.dark {
 body {
   margin: 0;
   min-height: 100dvh;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: var(--foxwarm-ui-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* Prevent iOS Safari zoom on input focus and double-tap */
@@ -156,13 +527,20 @@ input, textarea, select {
 
 @layer components {
   .foxwarm-markdown {
-    --tw-prose-headings: rgb(17 24 39);
-    --tw-prose-body: rgb(17 24 39);
+    --tw-prose-headings: var(--foxwarm-color-text-strong);
+    --tw-prose-body: var(--foxwarm-color-text);
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
-  .dark .foxwarm-markdown {
-    --tw-prose-headings: rgb(243 244 246);
-    --tw-prose-body: rgb(243 244 246);
+  .foxwarm-markdown > .foxwarm-markdown-segment:first-child > :first-child {
+    margin-top: 0;
+  }
+
+  .foxwarm-markdown > .foxwarm-markdown-segment:last-child > :last-child {
+    margin-bottom: 0;
   }
 
   .foxwarm-markdown :where(h1):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
@@ -187,7 +565,7 @@ input, textarea, select {
   }
 
   .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-    color: rgb(59 130 246);
+    color: var(--foxwarm-color-accent);
     text-decoration: underline;
     text-decoration-style: dotted;
     text-underline-offset: 2px;
@@ -195,15 +573,1471 @@ input, textarea, select {
   }
 
   .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)):hover {
-    color: rgb(37 99 235);
+    color: var(--foxwarm-color-accent-muted);
     text-decoration-style: solid;
   }
 
-  .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-    color: rgb(147 197 253);
+  .foxwarm-markdown :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    margin: 0.5rem 0;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
-  .dark .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)):hover {
-    color: rgb(191 219 254);
+  .foxwarm-markdown :where(pre code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    white-space: inherit;
+    overflow-wrap: inherit;
+    word-break: inherit;
+  }
+
+  .foxwarm-special-block :where([data-special-block-rendered], [data-special-block-raw]) {
+    padding: 0.5rem;
+  }
+
+  .foxwarm-special-block[data-special-block-kind="mermaid"] :where([data-special-block-rendered], [data-special-block-raw]) {
+    padding-top: 2rem;
+  }
+
+  .foxwarm-special-block[data-special-block-kind="latex"] .katex-display {
+    margin: 0;
+  }
+
+  .foxwarm-special-block [data-special-block-controls] {
+    opacity: 0;
+    transition: opacity 150ms ease;
+  }
+
+  .foxwarm-special-block:hover [data-special-block-controls],
+  .foxwarm-special-block:focus-within [data-special-block-controls] {
+    opacity: 1;
+  }
+
+  .foxwarm-markdown :where(table):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overflow-wrap: normal;
+    word-break: normal;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .foxwarm-markdown :where(.katex-display):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.2rem;
+  }
+
+  .foxwarm-markdown :where(.katex-display > .katex):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+    min-width: max-content;
+  }
+
+  .foxwarm-tool-code-path {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font: inherit;
+    color: inherit;
+  }
+
+  .foxwarm-tool-call-summary {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .foxwarm-tool-call-summary .foxwarm-tool-code-path-collapsed {
+    overflow: hidden;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+    text-overflow: ellipsis;
   }
 }
+
+/* Console component treatment ---------------------------------------------
+ * The built-in 550A manifest selects this bounded treatment, but it is not a
+ * theme-ID branch: imported manifests can select the same treatment and feed
+ * it their own validated semantic tokens. This layer is progressively being
+ * reduced as component rules move to direct semantic utilities.
+ */
+html[data-foxwarm-component-treatment="console"] {
+  color-scheme: dark;
+  --foxwarm-console-font: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace;
+  --foxwarm-console-code-font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace;
+  --foxwarm-console-message-font: ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --foxwarm-console-font-ui: 13px;
+  --foxwarm-console-font-ui-small: 11.5px;
+  --foxwarm-console-font-control: 12.5px;
+  --foxwarm-console-font-message: 15px;
+  --foxwarm-console-font-composer: 16px;
+  --foxwarm-console-font-code: 12.5px;
+  --foxwarm-console-line-ui: 1.45;
+  --foxwarm-console-line-message: 1.65;
+  --foxwarm-console-line-code: 1.55;
+  --foxwarm-console-accent: #ee5555;
+  --foxwarm-console-accent-dim: #bb4444;
+  --foxwarm-console-accent-glow: rgba(238, 85, 85, 0.3);
+  --foxwarm-console-accent-wash: rgba(238, 85, 85, 0.12);
+  --foxwarm-console-accent-wash-strong: rgba(238, 85, 85, 0.18);
+  --foxwarm-console-bg: #0c0c0c;
+  --foxwarm-console-bg-edge: #080808;
+  --foxwarm-console-panel: #111111;
+  --foxwarm-console-input: #0a0a0a;
+  --foxwarm-console-hover: #181818;
+  --foxwarm-console-border: #1e1e1e;
+  --foxwarm-console-border-panel: #252525;
+  --foxwarm-console-border-hover: #444444;
+  --foxwarm-console-text: #999999;
+  --foxwarm-console-text-dim: #555555;
+  --foxwarm-console-text-bright: #cccccc;
+  --foxwarm-console-green: #55aa55;
+  --foxwarm-console-green-dim: #3a7a3a;
+  --foxwarm-console-green-border: #1a3a28;
+  --foxwarm-console-green-surface: rgba(10, 31, 10, 0.82);
+  --foxwarm-console-green-surface-strong: rgba(18, 50, 18, 0.86);
+  --foxwarm-console-green-glow: rgba(85, 170, 85, 0.24);
+  --foxwarm-console-green-deep: #1a3a28;
+  --foxwarm-console-green-deep-hover: #214a32;
+  --foxwarm-console-green-button-idle: rgba(85, 170, 85, 0.14);
+  --foxwarm-console-green-button-idle-hover: rgba(85, 170, 85, 0.22);
+  --foxwarm-console-green-button-active-text: #77bb99;
+  --foxwarm-console-orange: #d08a45;
+  --foxwarm-console-orange-border: #5a351c;
+  --foxwarm-console-orange-surface: rgba(92, 48, 16, 0.34);
+  --foxwarm-console-orange-surface-strong: rgba(140, 78, 28, 0.42);
+  --foxwarm-console-diff-removed-surface: rgba(118, 64, 22, 0.46);
+  --foxwarm-console-diff-removed-surface-strong: rgba(190, 112, 40, 0.52);
+  --foxwarm-console-diff-added-surface: rgba(22, 82, 36, 0.48);
+  --foxwarm-console-diff-added-surface-strong: rgba(70, 150, 78, 0.54);
+  --foxwarm-console-blue: #77aabb;
+  --foxwarm-console-blue-dim: #4f7f99;
+  --foxwarm-console-blue-border: #26445f;
+  --foxwarm-console-blue-surface: rgba(12, 24, 36, 0.78);
+  --foxwarm-console-blue-surface-strong: rgba(26, 53, 85, 0.78);
+  --foxwarm-console-blue-glow: rgba(119, 170, 187, 0.20);
+  --foxwarm-console-fail: #8866ee;
+  --foxwarm-console-fail-border: #3a2a64;
+  --foxwarm-console-fail-deep: #251a3f;
+  --foxwarm-console-fail-deep-hover: #312552;
+  --foxwarm-console-fail-button-idle: rgba(136, 102, 238, 0.14);
+  --foxwarm-console-fail-button-idle-hover: rgba(136, 102, 238, 0.22);
+  --foxwarm-console-fail-button-active-text: #b8a6ff;
+  --foxwarm-console-fail-glow: rgba(136, 102, 238, 0.24);
+  --foxwarm-console-radius: 3px;
+  --foxwarm-console-grid-background:
+    linear-gradient(rgba(238, 85, 85, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(238, 85, 85, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    var(--foxwarm-console-bg);
+  --foxwarm-app-background: var(--foxwarm-console-bg);
+  --foxwarm-scrollbar-track: var(--foxwarm-console-bg);
+  --foxwarm-scrollbar-thumb: #2a2a2a;
+  --foxwarm-scrollbar-thumb-hover: #3a3a3a;
+}
+
+html:not(.dark)[data-foxwarm-component-treatment="console"] {
+  color-scheme: light;
+  --foxwarm-console-accent: #cc3333;
+  --foxwarm-console-accent-dim: #aa3333;
+  --foxwarm-console-accent-glow: rgba(204, 51, 51, 0.15);
+  --foxwarm-console-accent-wash: rgba(204, 51, 51, 0.07);
+  --foxwarm-console-accent-wash-strong: rgba(204, 51, 51, 0.12);
+  --foxwarm-console-bg: #f4f3ef;
+  --foxwarm-console-bg-edge: #edece7;
+  --foxwarm-console-panel: #ffffff;
+  --foxwarm-console-input: #fafaf8;
+  --foxwarm-console-hover: #eeeeea;
+  --foxwarm-console-border: #e8e4dc;
+  --foxwarm-console-border-panel: #dddddd;
+  --foxwarm-console-border-hover: #bbbbbb;
+  --foxwarm-console-text: #444444;
+  --foxwarm-console-text-dim: #999999;
+  --foxwarm-console-text-bright: #222222;
+  --foxwarm-console-green: #3a7a3a;
+  --foxwarm-console-green-dim: #2a6a2a;
+  --foxwarm-console-green-border: #c0e0c0;
+  --foxwarm-console-green-surface: rgba(240, 248, 240, 0.88);
+  --foxwarm-console-green-surface-strong: rgba(224, 240, 224, 0.92);
+  --foxwarm-console-green-glow: rgba(58, 122, 58, 0.12);
+  --foxwarm-console-green-deep: #2a6040;
+  --foxwarm-console-green-deep-hover: #34704b;
+  --foxwarm-console-green-button-idle: #f0f8f0;
+  --foxwarm-console-green-button-idle-hover: #e0f0e0;
+  --foxwarm-console-green-button-active-text: #ffffff;
+  --foxwarm-console-orange: #a8652a;
+  --foxwarm-console-orange-border: #dec3a3;
+  --foxwarm-console-orange-surface: rgba(250, 238, 220, 0.92);
+  --foxwarm-console-orange-surface-strong: rgba(244, 216, 180, 0.94);
+  --foxwarm-console-diff-removed-surface: #f6dfbf;
+  --foxwarm-console-diff-removed-surface-strong: #edc487;
+  --foxwarm-console-diff-added-surface: #dcefd6;
+  --foxwarm-console-diff-added-surface-strong: #bfe3b5;
+  --foxwarm-console-blue: #3a6a9a;
+  --foxwarm-console-blue-dim: #2f587f;
+  --foxwarm-console-blue-border: #b8cad8;
+  --foxwarm-console-blue-surface: rgba(237, 244, 248, 0.92);
+  --foxwarm-console-blue-surface-strong: rgba(221, 235, 245, 0.94);
+  --foxwarm-console-blue-glow: rgba(58, 106, 154, 0.13);
+  --foxwarm-console-fail: #6d57c8;
+  --foxwarm-console-fail-border: #c9bff0;
+  --foxwarm-console-fail-deep: #6b4fa0;
+  --foxwarm-console-fail-deep-hover: #7a5db4;
+  --foxwarm-console-fail-button-idle: #f3f0fb;
+  --foxwarm-console-fail-button-idle-hover: #e9e2f7;
+  --foxwarm-console-fail-button-active-text: #ffffff;
+  --foxwarm-console-fail-glow: rgba(107, 79, 160, 0.14);
+  --foxwarm-console-grid-background:
+    linear-gradient(rgba(204, 51, 51, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(204, 51, 51, 0.05) 1px, transparent 1px),
+    linear-gradient(rgba(0, 0, 0, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.035) 1px, transparent 1px),
+    var(--foxwarm-console-bg);
+  --foxwarm-app-background: var(--foxwarm-console-bg);
+  --foxwarm-scrollbar-track: var(--foxwarm-console-bg);
+  --foxwarm-scrollbar-thumb: #cccccc;
+  --foxwarm-scrollbar-thumb-hover: #aaaaaa;
+}
+
+html[data-foxwarm-component-treatment="console"],
+html[data-foxwarm-component-treatment="console"] body,
+html[data-foxwarm-component-treatment="console"] #root {
+  background: var(--foxwarm-console-bg);
+  color: var(--foxwarm-console-text);
+  font-family: var(--foxwarm-console-font);
+}
+
+html[data-foxwarm-component-treatment="console"] body,
+html[data-foxwarm-component-treatment="console"] #root {
+  font-size: var(--foxwarm-console-font-ui);
+  line-height: var(--foxwarm-console-line-ui);
+}
+
+html[data-foxwarm-component-treatment="console"] :is(
+  button,
+  input,
+  textarea,
+  select
+) {
+  font-family: var(--foxwarm-console-font) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] :is(
+  code,
+  pre,
+  kbd,
+  samp,
+  .font-mono
+) {
+  font-family: var(--foxwarm-console-code-font-family) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] :is(button, input, select) {
+  font-size: var(--foxwarm-console-font-control);
+  line-height: var(--foxwarm-console-line-ui);
+}
+
+html[data-foxwarm-component-treatment="console"] .text-xs {
+  font-size: var(--foxwarm-console-font-ui-small) !important;
+  line-height: 1.35 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .text-sm {
+  font-size: var(--foxwarm-console-font-control) !important;
+  line-height: var(--foxwarm-console-line-ui) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .text-base {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .text-lg {
+  font-size: 15px !important;
+  line-height: 1.45 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .text-xl {
+  font-size: 16px !important;
+  line-height: 1.35 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .text-2xl {
+  font-size: 18px !important;
+  line-height: 1.3 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] button {
+  letter-spacing: 0.04em;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-architecture-surface-tab[data-active="true"],
+html[data-foxwarm-component-treatment="console"] .foxwarm-architecture-surface-tab[data-active="true"]:hover {
+  background-color: var(--foxwarm-console-text-bright) !important;
+  color: var(--foxwarm-console-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-safe-area-shell,
+html[data-foxwarm-component-treatment="console"] .foxwarm-viewport-shell,
+html[data-foxwarm-component-treatment="console"] .foxwarm-fixed-viewport-shell {
+  background-color: var(--foxwarm-console-bg) !important;
+  background-image: var(--foxwarm-background-image) !important;
+  background-size: var(--foxwarm-background-size) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-messages {
+  background: var(--foxwarm-console-grid-background) !important;
+  background-size: var(--foxwarm-background-size), auto !important;
+  background-position: 0 0 !important;
+  /* Anchor the grid to scrollable timeline content instead of the viewport. */
+  background-attachment: local !important;
+}
+
+/* Semantic fw-* utilities now consume manifest colors directly. */
+
+html:not([data-foxwarm-component-treatment="console"]) [data-tool-tag-tone="system"] {
+  border-color: var(--foxwarm-color-info-border);
+  color: color-mix(
+    in srgb,
+    var(--foxwarm-color-info) 30%,
+    var(--foxwarm-color-system-text)
+  );
+}
+
+/* Console treatment consumes named card surfaces as final colors. */
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-neutral,
+html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card {
+  background-color: var(--foxwarm-console-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-header-tone="neutral"],
+html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card > .foxwarm-context-block-header {
+  background-color: var(--foxwarm-console-hover) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success {
+  background-color: var(--foxwarm-color-tool-surface);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-header-tone="success"] {
+  background-color: var(--foxwarm-color-tool-surface-strong);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success .foxwarm-tool-thread-line {
+  color: var(--foxwarm-color-tool) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-error {
+  background-color: var(--foxwarm-color-danger-surface);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-header-tone="error"] {
+  background-color: var(--foxwarm-color-danger-surface-strong);
+}
+
+/* A nested card may share its ancestor's hover, but only its own controls
+ * should react. Keep the card's direct control/rail ownership explicit. */
+.foxwarm-assistant-message-card:is(:hover, :focus-within) > .foxwarm-assistant-action-buttons,
+.foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
+  opacity: 1;
+}
+
+:is(.foxwarm-tool-card, .foxwarm-context-block-card, [data-model-thread-card], .foxwarm-system-message-card):hover > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke,
+:is(.foxwarm-tool-card, .foxwarm-context-block-card, [data-model-thread-card], .foxwarm-system-message-card) > .foxwarm-thread-line-button:focus-visible > .foxwarm-thread-line-stroke {
+  opacity: 1;
+}
+
+.foxwarm-image-item:is(:hover, :focus-visible) > .foxwarm-image-hover-overlay {
+  background-color: color-mix(in srgb, var(--foxwarm-color-overlay) 10%, transparent);
+}
+
+html[data-foxwarm-component-treatment="console"] [data-model-thread-card] {
+  background-color: var(--foxwarm-color-reasoning-surface);
+}
+
+html[data-foxwarm-component-treatment="console"] [data-model-thread-card] > :is(.foxwarm-reasoning-header, .foxwarm-web-search-header) {
+  background-color: var(--foxwarm-color-reasoning-surface-strong);
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="neutral"] {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+  color: var(--foxwarm-console-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="success"] {
+  background-color: var(--foxwarm-color-tool-surface) !important;
+  border-color: var(--foxwarm-color-tool-border) !important;
+  color: var(--foxwarm-color-tool) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="error"] {
+  background-color: var(--foxwarm-color-danger-surface) !important;
+  border-color: var(--foxwarm-color-danger-border) !important;
+  color: var(--foxwarm-color-danger) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="system"] {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-color-system-border) !important;
+  color: var(--foxwarm-color-system-accent) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card.foxwarm-reasoning-card {
+  background-color: var(--foxwarm-color-reasoning-surface) !important;
+  color: var(--foxwarm-console-text) !important;
+  box-shadow: inset 0 0 0 1px var(--foxwarm-console-border) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card.foxwarm-reasoning-card-processing {
+  background-color: var(--foxwarm-color-reasoning-surface) !important;
+  box-shadow: inset 0 0 0 1px var(--foxwarm-console-border-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-thread-line {
+  color: var(--foxwarm-console-text-dim) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-thread-line > span {
+  background-color: var(--foxwarm-console-text-dim) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-header {
+  background-color: var(--foxwarm-color-reasoning-surface-strong) !important;
+  color: var(--foxwarm-console-text) !important;
+  box-shadow: inset 0 1px 0 var(--foxwarm-console-border-panel), inset 0 -1px 0 var(--foxwarm-console-border-panel) !important;
+  text-shadow: none;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card.foxwarm-reasoning-card .foxwarm-reasoning-header:hover {
+  color: var(--foxwarm-console-text-bright) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-tag {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+  color: var(--foxwarm-console-text) !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-preview {
+  color: var(--foxwarm-console-text-bright) !important;
+  font-family: var(--foxwarm-console-font) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-body {
+  color: var(--foxwarm-console-text) !important;
+  font-family: var(--foxwarm-console-font) !important;
+  font-size: var(--foxwarm-console-font-control) !important;
+  line-height: var(--foxwarm-console-line-code) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-body :where(p, li, blockquote, td, th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-console-text) !important;
+  line-height: var(--foxwarm-console-line-code) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-body :where(h1, h2, h3, h4, strong):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-console-text-bright) !important;
+  text-shadow: none;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-body :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-body :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card.foxwarm-system-message-card {
+  background-color: var(--foxwarm-console-blue-surface) !important;
+  color: var(--foxwarm-console-text) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foxwarm-console-blue) 6%, transparent) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-system-message-thread-line {
+  color: var(--foxwarm-console-blue) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-system-message-thread-line > span {
+  background-color: var(--foxwarm-console-blue) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-system-message-header {
+  background-color: var(--foxwarm-console-blue-surface-strong) !important;
+  color: var(--foxwarm-console-blue) !important;
+  box-shadow: inset 0 1px 0 var(--foxwarm-console-blue-border), inset 0 -1px 0 var(--foxwarm-console-blue-border) !important;
+  text-shadow: 0 0 4px var(--foxwarm-console-blue-glow);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-system-message-header:hover {
+  color: var(--foxwarm-console-text-bright) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-system-message-tag {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-blue-border) !important;
+  color: var(--foxwarm-console-blue) !important;
+  box-shadow: 0 0 6px var(--foxwarm-console-blue-glow) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card :is(.foxwarm-system-message-preview, .foxwarm-system-message-result-preview, .foxwarm-system-message-body) {
+  color: var(--foxwarm-console-text) !important;
+  text-shadow: none;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-session-hash-link:hover {
+  color: var(--foxwarm-console-blue) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] :is(
+  .rounded,
+  .rounded-md
+) {
+  border-radius: var(--foxwarm-console-radius) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .rounded-lg {
+  border-radius: var(--foxwarm-console-radius-medium) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] :is(.rounded-xl, .rounded-2xl, .rounded-\[30px\]) {
+  border-radius: var(--foxwarm-console-radius-large) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] :is(
+  .shadow-sm,
+  .shadow,
+  .shadow-lg,
+  .shadow-xl,
+  .shadow-2xl
+) {
+  --tw-shadow: var(--foxwarm-panel-shadow) !important;
+  --tw-shadow-colored: 0 2px 8px var(--tw-shadow-color) !important;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] :is(button, a, label) {
+  transition-duration: var(--foxwarm-transition-ms);
+}
+
+html[data-foxwarm-component-treatment="console"] button:hover:not(:disabled),
+html[data-foxwarm-component-treatment="console"] label:hover {
+  border-color: var(--foxwarm-console-border-hover);
+}
+
+html[data-foxwarm-component-treatment="console"] button:active:not(:disabled) {
+  transform: var(--foxwarm-press-transform);
+}
+
+/* The active send control is the console's single sensor beacon. */
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-send-button:not(:disabled) {
+  border: 5px solid var(--foxwarm-color-surface-raised) !important;
+  outline: 1px solid var(--foxwarm-color-border-strong);
+  background: var(--foxwarm-color-accent) !important;
+  color: var(--foxwarm-color-text-inverse) !important;
+  box-shadow:
+    0 0 0 2px var(--foxwarm-color-accent-surface-strong),
+    0 0 14px var(--foxwarm-console-accent-glow),
+    inset 0 0 0 1px var(--foxwarm-color-accent-border) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-send-button:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foxwarm-color-accent) 84%, white) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-model-effort-select {
+  border-color: var(--foxwarm-console-border-panel) !important;
+  background: var(--foxwarm-console-input) !important;
+  color: var(--foxwarm-console-text-bright) !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+}
+
+.foxwarm-model-effort-select {
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+  padding-inline: 0.375rem 1.25rem !important;
+}
+
+@media (max-width: 640px) {
+  .foxwarm-model-effort-select,
+  html[data-foxwarm-component-treatment="console"] .foxwarm-model-effort-select {
+    font-size: 16px !important;
+    padding-inline: 0.25rem 0.5rem !important;
+  }
+}
+
+.foxwarm-model-selector-grid {
+  grid-template-columns: minmax(0, 1fr) 100px 100px;
+}
+
+.foxwarm-context-menu-split-row:hover,
+.foxwarm-context-menu-split-row:focus-within {
+  background-color: var(--foxwarm-color-hover);
+}
+
+.foxwarm-context-menu-split-row-danger:hover,
+.foxwarm-context-menu-split-row-danger:focus-within {
+  background-color: var(--foxwarm-color-danger-surface);
+}
+
+.foxwarm-model-selector-scrollbar-aligned {
+  width: calc(100% - var(--foxwarm-model-selector-scrollbar-width, 0px));
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-markdown {
+  font-family: var(--foxwarm-console-message-font) !important;
+  --tw-prose-headings: var(--foxwarm-console-text-bright);
+  --tw-prose-body: var(--foxwarm-console-text-bright);
+  --tw-prose-bold: var(--foxwarm-console-text-bright);
+  --tw-prose-links: var(--foxwarm-console-accent);
+  --tw-prose-code: var(--foxwarm-console-text-bright);
+  --tw-prose-pre-code: var(--foxwarm-console-text-bright);
+  --tw-prose-pre-bg: var(--foxwarm-console-input);
+  --tw-prose-quotes: var(--foxwarm-console-text);
+  --tw-prose-hr: var(--foxwarm-console-border-panel);
+  --tw-prose-th-borders: var(--foxwarm-console-border-panel);
+  --tw-prose-td-borders: var(--foxwarm-console-border-panel);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-markdown :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-console-accent);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-markdown :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-component-treatment="console"] pre {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-system-message-card .foxwarm-system-message-body {
+  background-color: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-component-treatment="console"] h1.text-xl,
+html[data-foxwarm-component-treatment="console"] h1.text-2xl {
+  color: var(--foxwarm-console-accent) !important;
+  text-shadow: 0 0 12px var(--foxwarm-console-accent-glow);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form {
+  background-color: color-mix(in srgb, var(--foxwarm-console-panel) 88%, transparent) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+  border-radius: var(--foxwarm-console-radius) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foxwarm-console-accent) 4%, transparent), var(--foxwarm-panel-shadow) !important;
+  backdrop-filter: none !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form:focus-within {
+  background-color: var(--foxwarm-console-panel) !important;
+  border-color: var(--foxwarm-console-accent-dim) !important;
+  box-shadow: 0 0 0 1px var(--foxwarm-console-accent-dim), 0 0 18px var(--foxwarm-console-accent-glow) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-model-filter-input:focus {
+  border-color: var(--foxwarm-console-accent-dim) !important;
+  outline: none !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 0 1px var(--foxwarm-console-accent-dim) !important;
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), 0 0 12px var(--foxwarm-console-accent-glow) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea {
+  color: var(--foxwarm-console-text-bright) !important;
+  caret-color: var(--foxwarm-console-accent);
+  font-family: var(--foxwarm-console-message-font) !important;
+  font-size: var(--foxwarm-console-font-composer) !important;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: var(--foxwarm-console-line-ui) !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-textarea::placeholder {
+  color: var(--foxwarm-console-text-dim) !important;
+  opacity: 0.8;
+}
+
+.foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
+  color: var(--foxwarm-color-text-muted);
+  content: attr(data-placeholder);
+  pointer-events: none;
+  position: absolute;
+  inset-inline-start: 0.75rem;
+  top: 0.25rem;
+}
+
+.foxwarm-composer-caret-anchor {
+  display: inline-block;
+  width: 0.25rem;
+  min-height: 1em;
+  overflow: hidden;
+  vertical-align: text-bottom;
+  white-space: nowrap;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-inline-composer-editor[data-empty="true"]:not([data-composition-visible="true"])::before {
+  color: var(--foxwarm-console-text-dim) !important;
+  inset-inline-start: 0;
+  opacity: 0.8;
+}
+
+html[data-foxwarm-component-treatment="console"] .absolute.inset-x-0.bottom-0.z-20:has(.foxwarm-chat-composer-form) > .absolute.inset-0.bg-fw-accent-surface\/80 {
+  z-index: 1;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form button[type="submit"] {
+  height: var(--foxwarm-control-height-px) !important;
+  width: auto !important;
+  min-width: 58px;
+  padding: 0 11px !important;
+  border: 1px solid var(--foxwarm-console-accent-dim) !important;
+  border-radius: var(--foxwarm-console-radius) !important;
+  background-color: var(--foxwarm-console-accent-dim) !important;
+  color: var(--foxwarm-color-text-inverse) !important;
+  box-shadow: 0 0 12px var(--foxwarm-console-accent-glow) !important;
+  font-family: var(--foxwarm-console-font) !important;
+  font-size: var(--foxwarm-console-font-control) !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form button[type="submit"] svg {
+  display: none !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form button[type="submit"]::after {
+  content: "SEND";
+  line-height: 1;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form button[type="submit"]:hover:not(:disabled) {
+  background-color: var(--foxwarm-console-accent) !important;
+  border-color: var(--foxwarm-console-accent) !important;
+  box-shadow: 0 0 16px var(--foxwarm-console-accent-glow) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-chat-composer-form button[type="submit"]:disabled {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+  color: var(--foxwarm-console-text-dim) !important;
+  box-shadow: none !important;
+  opacity: 0.72;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-modal-actions {
+  gap: 8px !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-cancel-button,
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-confirm-button {
+  min-width: 82px;
+  border-radius: var(--foxwarm-console-radius) !important;
+  font-family: var(--foxwarm-console-font) !important;
+  font-size: 12px !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1 !important;
+  text-transform: uppercase;
+  transition: background-color var(--foxwarm-transition-ms) ease, border-color var(--foxwarm-transition-ms) ease, color var(--foxwarm-transition-ms) ease, box-shadow var(--foxwarm-transition-ms) ease;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-cancel-button {
+  background-color: var(--foxwarm-console-input) !important;
+  border: 1px solid var(--foxwarm-console-border-panel) !important;
+  box-shadow: none !important;
+  color: var(--foxwarm-console-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-cancel-button:hover {
+  background-color: var(--foxwarm-console-hover) !important;
+  border-color: var(--foxwarm-console-border-hover) !important;
+  color: var(--foxwarm-console-text-bright) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-confirm-button {
+  background-color: var(--foxwarm-console-accent-dim) !important;
+  border: 1px solid var(--foxwarm-console-accent-dim) !important;
+  box-shadow: 0 0 12px var(--foxwarm-console-accent-glow) !important;
+  color: var(--foxwarm-color-text-inverse) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-session-delete-confirm-button:hover {
+  background-color: var(--foxwarm-console-accent) !important;
+  border-color: var(--foxwarm-console-accent) !important;
+  box-shadow: 0 0 16px var(--foxwarm-console-accent-glow) !important;
+  color: var(--foxwarm-color-text-inverse) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip {
+  background-color: var(--foxwarm-console-panel) !important;
+  border: 1px solid var(--foxwarm-console-border-panel) !important;
+  border-radius: var(--foxwarm-console-radius) !important;
+  box-shadow: none !important;
+  color: var(--foxwarm-console-text) !important;
+  font-family: var(--foxwarm-console-font) !important;
+  letter-spacing: 0.02em;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip:hover {
+  background-color: var(--foxwarm-console-hover) !important;
+  border-color: var(--foxwarm-console-border-hover) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip svg {
+  color: var(--foxwarm-console-text-dim) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip span {
+  color: var(--foxwarm-console-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip button {
+  color: var(--foxwarm-console-text-dim) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-composer-attachment-chip button:hover {
+  color: var(--foxwarm-console-accent) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--foxwarm-console-panel) 78%, var(--foxwarm-console-accent) 22%),
+    color-mix(in srgb, var(--foxwarm-console-panel) 86%, var(--foxwarm-console-accent-dim) 14%)
+  ) !important;
+  border: 1px solid var(--foxwarm-console-accent-dim) !important;
+  border-radius: var(--foxwarm-console-radius) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foxwarm-console-accent) 8%, transparent), 0 0 var(--foxwarm-shadow-blur-px) var(--foxwarm-console-accent-glow) !important;
+  color: var(--foxwarm-console-text-bright) !important;
+  font-size: var(--foxwarm-console-font-message) !important;
+  line-height: var(--foxwarm-console-line-message) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble pre,
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble .foxwarm-user-message-text {
+  background: transparent !important;
+  border: 0 !important;
+  color: inherit !important;
+  font-family: var(--foxwarm-console-message-font) !important;
+  font-size: inherit;
+  letter-spacing: normal;
+  line-height: var(--foxwarm-console-line-message) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble .foxwarm-user-line-layout {
+  line-height: 0 !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-user-message-bubble button {
+  color: var(--foxwarm-console-accent) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-assistant-message-card {
+  font-size: var(--foxwarm-console-font-message) !important;
+  line-height: var(--foxwarm-console-line-message) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-assistant-message-markdown {
+  font-family: var(--foxwarm-console-message-font) !important;
+  font-size: var(--foxwarm-console-font-message) !important;
+  line-height: var(--foxwarm-console-line-message) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-assistant-message-markdown :where(p, li, blockquote, td, th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  line-height: var(--foxwarm-console-line-message) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-assistant-message-markdown :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-component-treatment="console"] .foxwarm-assistant-message-markdown :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-component-treatment="console"] .foxwarm-assistant-message-raw {
+  font-family: var(--foxwarm-console-code-font-family) !important;
+  font-size: var(--foxwarm-console-font-code) !important;
+  line-height: var(--foxwarm-console-line-code) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-body {
+  color: var(--foxwarm-console-text) !important;
+  font-family: var(--foxwarm-console-font) !important;
+  font-size: var(--foxwarm-console-font-control) !important;
+  line-height: var(--foxwarm-console-line-code) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-body :where(p, li, blockquote, td, th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-console-text) !important;
+  line-height: var(--foxwarm-console-line-code) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-body :where(h1, h2, h3, h4, strong):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: var(--foxwarm-console-text-bright) !important;
+  text-shadow: none;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-body :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)),
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-body :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+  font-family: var(--foxwarm-console-code-font-family) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-color-tool-surface);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-color-tool-surface-strong);
+  --foxwarm-tool-action-border: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-color: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-color: var(--foxwarm-color-text-inverse);
+  --foxwarm-tool-action-glow: color-mix(in srgb, var(--foxwarm-color-tool) 24%, transparent);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-neutral {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-console-input);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-console-hover);
+  --foxwarm-tool-action-border: var(--foxwarm-console-border-panel);
+  --foxwarm-tool-action-color: var(--foxwarm-console-text-dim);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-console-hover);
+  --foxwarm-tool-action-active-hover-bg: color-mix(in srgb, var(--foxwarm-console-hover) 82%, var(--foxwarm-console-text-bright));
+  --foxwarm-tool-action-active-color: var(--foxwarm-console-text-bright);
+  --foxwarm-tool-action-glow: transparent;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-success {
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-color-tool-surface);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-color-tool-surface-strong);
+  --foxwarm-tool-action-border: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-color: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-color: var(--foxwarm-color-text-inverse);
+  --foxwarm-tool-action-glow: color-mix(in srgb, var(--foxwarm-color-tool) 24%, transparent);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-error {
+  --foxwarm-tool-action-idle-bg: color-mix(in srgb, var(--foxwarm-console-accent) 12%, var(--foxwarm-console-panel));
+  --foxwarm-tool-action-idle-hover-bg: color-mix(in srgb, var(--foxwarm-console-accent) 20%, var(--foxwarm-console-panel));
+  --foxwarm-tool-action-border: var(--foxwarm-console-accent-dim);
+  --foxwarm-tool-action-color: var(--foxwarm-console-accent);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-console-accent-dim);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-console-accent);
+  --foxwarm-tool-action-active-color: var(--foxwarm-color-text-inverse);
+  --foxwarm-tool-action-glow: var(--foxwarm-console-accent-glow);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons button {
+  background-color: var(--foxwarm-tool-action-idle-bg) !important;
+  border: 1px solid var(--foxwarm-tool-action-border) !important;
+  color: var(--foxwarm-tool-action-color) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foxwarm-tool-action-color) 8%, transparent) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons button:hover:not(:disabled) {
+  background-color: var(--foxwarm-tool-action-idle-hover-bg) !important;
+  border-color: var(--foxwarm-tool-action-color) !important;
+  color: var(--foxwarm-console-text-bright) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons button[data-active="true"] {
+  background-color: var(--foxwarm-tool-action-active-bg) !important;
+  border-color: var(--foxwarm-tool-action-color) !important;
+  color: var(--foxwarm-tool-action-active-color) !important;
+  box-shadow: 0 0 8px var(--foxwarm-tool-action-glow) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons button[data-active="true"]:hover:not(:disabled) {
+  background-color: var(--foxwarm-tool-action-active-hover-bg) !important;
+  color: var(--foxwarm-tool-action-active-color) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons button:focus-visible {
+  outline-color: var(--foxwarm-tool-action-color) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card .foxwarm-diff-removed-count,
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
+  color: var(--foxwarm-color-diff-removed-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card .foxwarm-diff-added-count,
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-header {
+  color: var(--foxwarm-color-diff-added-text) !important;
+}
+
+/* Portable composition recipes. These are bounded manifest choices rather
+ * than theme-ID selectors, so imported themes receive the same visual grammar
+ * as built-ins without arbitrary CSS. */
+:root {
+  --foxwarm-thread-card-gap: 2px;
+  --foxwarm-thread-header-py: 4px;
+  --foxwarm-markdown-block-gap: 0.5em;
+  --foxwarm-effective-control-radius: var(--foxwarm-control-radius-px);
+}
+
+html[data-foxwarm-theme-density="compact"] {
+  --foxwarm-thread-card-gap: 1px;
+  --foxwarm-thread-header-py: 2px;
+  --foxwarm-markdown-block-gap: 0.3em;
+}
+
+html[data-foxwarm-theme-density="airy"] {
+  --foxwarm-thread-card-gap: 5px;
+  --foxwarm-thread-header-py: 6px;
+  --foxwarm-markdown-block-gap: 0.8em;
+}
+
+html[data-foxwarm-theme-density] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) {
+  margin-block: var(--foxwarm-card-gap-px) !important;
+  padding-left: var(--foxwarm-card-inset-px) !important;
+  padding-right: var(--foxwarm-card-inset-px) !important;
+  border-radius: var(--foxwarm-card-radius-px);
+}
+
+/* Banded and tab headers paint to the card boundary while preserving the
+ * manifest-defined inset for their content. Integrated and plate headers are
+ * intentionally transparent/inset and keep their separate recipe below. */
+html[data-foxwarm-theme-density]:is([data-foxwarm-header-treatment="banded"], [data-foxwarm-header-treatment="tab"]) .foxwarm-tool-card .foxwarm-tool-header {
+  margin-left: calc(-1 * var(--foxwarm-card-inset-px));
+  margin-right: calc(-1 * var(--foxwarm-card-inset-px));
+  padding-left: var(--foxwarm-card-inset-px);
+  padding-right: var(--foxwarm-card-inset-px);
+}
+
+html[data-foxwarm-theme-density]:is([data-foxwarm-header-treatment="integrated"], [data-foxwarm-header-treatment="plate"]) .foxwarm-tool-card .foxwarm-tool-header {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* The collapse rail remains a full-height hit target, but its visible stroke
+ * terminates inside rounded corners instead of cutting through their arc. */
+html[data-foxwarm-theme-density] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke {
+  margin-top: min(var(--foxwarm-card-radius-px), 16px);
+  margin-bottom: min(var(--foxwarm-card-radius-px), 16px);
+  border-radius: 999px;
+}
+
+html[data-foxwarm-theme-density] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  padding-block: var(--foxwarm-thread-header-py) !important;
+  border-radius: var(--foxwarm-card-radius-px) var(--foxwarm-card-radius-px) 0 0;
+}
+
+html[data-foxwarm-theme-density] .foxwarm-assistant-message-card,
+html[data-foxwarm-theme-density] .foxwarm-user-message-bubble {
+  border-radius: var(--foxwarm-message-radius-px) !important;
+}
+
+html[data-foxwarm-theme-density] .foxwarm-chat-composer-form {
+  border-radius: var(--foxwarm-composer-radius-px) !important;
+}
+
+html[data-foxwarm-card-treatment="outlined"] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card, .foxwarm-assistant-message-card) {
+  box-sizing: border-box;
+  border-width: var(--foxwarm-border-width-px);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--foxwarm-color-border-strong) 72%, transparent);
+  box-shadow: none;
+}
+
+/* Console flat cards are open chassis rows: one semantic rail and no second
+ * enclosing stroke. This deliberately wins over legacy per-family rings. */
+html[data-foxwarm-component-treatment="console"][data-foxwarm-card-treatment="flat"] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-card-treatment="elevated"] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card, .foxwarm-assistant-message-card) {
+  box-sizing: border-box;
+  border-width: var(--foxwarm-border-width-px);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--foxwarm-color-border-strong) 52%, transparent);
+  box-shadow: var(--foxwarm-panel-shadow);
+}
+
+html[data-foxwarm-header-treatment="integrated"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Legacy console family rules have an extra specificity level. Repeat the
+ * bounded integrated recipe at matching specificity so an imported console
+ * manifest receives the composition it declares rather than a banded remnant. */
+html[data-foxwarm-component-treatment="console"][data-foxwarm-header-treatment="integrated"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 0 !important;
+  background-color: transparent !important;
+  border-block: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-header-treatment="tab"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  background-color: transparent !important;
+  border-bottom: 0 !important;
+  background-image: linear-gradient(90deg, transparent, var(--foxwarm-color-border) 10%, var(--foxwarm-color-border) 90%, transparent) !important;
+  background-position: bottom;
+  background-repeat: no-repeat;
+  background-size: 100% var(--foxwarm-border-width-px);
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-header-treatment="plate"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  background-color: transparent !important;
+  background-image: linear-gradient(90deg, color-mix(in srgb, currentColor 8%, transparent), transparent 76%) !important;
+  border-block: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-component-treatment="console"][data-foxwarm-header-treatment="plate"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 0 !important;
+  background-color: transparent !important;
+  background-image: linear-gradient(90deg, color-mix(in srgb, currentColor 8%, transparent), transparent 76%) !important;
+  border-block: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-control-treatment="plain"] { --foxwarm-effective-control-radius: 2px; }
+html[data-foxwarm-control-treatment="pill"] { --foxwarm-effective-control-radius: 999px; }
+
+:is([data-theme-control], [data-tool-tag-tone], input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+  border-radius: var(--foxwarm-effective-control-radius) !important;
+}
+
+[data-tool-tag-tone] {
+  border-radius: var(--foxwarm-tag-radius-px) !important;
+}
+
+html[data-foxwarm-control-treatment="pill"] [data-tool-tag-tone] {
+  border-radius: 999px !important;
+}
+
+html[data-foxwarm-label-treatment="normal"] [data-tool-tag-tone] {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+html[data-foxwarm-label-treatment="tracked"] [data-tool-tag-tone] {
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+
+html[data-foxwarm-label-treatment="uppercase"] [data-tool-tag-tone] {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html[data-foxwarm-icon-treatment="compact"] .lucide {
+  stroke-width: 2.25;
+}
+
+html[data-foxwarm-separator-treatment="line"] .foxwarm-thread-line-stroke {
+  width: 1px;
+  opacity: 0.55;
+}
+
+html[data-foxwarm-separator-treatment="segmented"] .foxwarm-thread-line-stroke {
+  background-color: transparent !important;
+  background-image: repeating-linear-gradient(to bottom, currentColor 0 4px, transparent 4px 7px);
+}
+
+html[data-foxwarm-card-treatment="outlined"][data-foxwarm-separator-treatment="segmented"] .foxwarm-thread-line-stroke {
+  transform: translateX(calc(-1 * var(--foxwarm-border-width-px)));
+}
+
+/* Rounded card families use a conventional disclosure affordance rather than
+ * forcing a vertical timeline rail into curved geometry. */
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-button {
+  bottom: auto !important;
+  top: var(--foxwarm-thread-header-py) !important;
+  width: 18px !important;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--foxwarm-tag-radius-px);
+}
+
+/* Disclosure controls are contained by these card families, so their role
+ * surfaces can be clipped as one coherent rounded shape. Edge-rail themes
+ * intentionally remain unclipped because their rail lives outside the card. */
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) {
+  overflow: hidden;
+}
+
+/* Expanded groups contain member usage badges outside the individual card edge.
+ * Keep that established placement visible while their own header remains rounded. */
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-tool-group-card[data-group-expanded="true"] {
+  overflow: visible;
+}
+
+html[data-foxwarm-separator-treatment="chevron"] .foxwarm-thread-line-button {
+  left: 4px !important;
+}
+
+html[data-foxwarm-separator-treatment="chevron-right"] .foxwarm-thread-line-button {
+  left: auto !important;
+  right: 4px;
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-button:hover {
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-stroke {
+  display: none;
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-disclosure-icon {
+  display: block !important;
+  transition: transform var(--foxwarm-transition-ms) ease;
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-button[aria-expanded="true"] .foxwarm-thread-disclosure-icon {
+  transform: rotate(90deg);
+}
+
+html[data-foxwarm-separator-treatment="chevron"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  padding-left: 22px !important;
+}
+
+html[data-foxwarm-separator-treatment="chevron-right"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  padding-right: 26px !important;
+}
+
+html[data-foxwarm-separator-treatment="chevron-right"] .foxwarm-tool-action-buttons {
+  right: 26px !important;
+}
+
+html[data-foxwarm-theme-density] .foxwarm-markdown :where(p, ul, ol, blockquote):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  margin-block: var(--foxwarm-markdown-block-gap);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-line,
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
+  background-color: var(--foxwarm-console-diff-removed-surface) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-token {
+  background-color: var(--foxwarm-console-diff-removed-surface-strong) !important;
+  color: var(--foxwarm-color-diff-removed-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-token :where(*) {
+  color: var(--foxwarm-color-diff-removed-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-line,
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-header {
+  background-color: var(--foxwarm-console-diff-added-surface) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-token {
+  background-color: var(--foxwarm-console-diff-added-surface-strong) !important;
+  color: var(--foxwarm-color-diff-added-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-token :where(*) {
+  color: var(--foxwarm-color-diff-added-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-header,
+html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-header {
+  border-color: var(--foxwarm-console-border-panel) !important;
+}
+
+html .foxwarm-composer-pasted-text-chip[data-composer-block-selected],
+html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
+  background-color: var(--foxwarm-color-accent-surface-strong) !important;
+  border-color: var(--foxwarm-color-accent-border) !important;
+  box-shadow: inset 0 0 0 2px rgb(var(--foxwarm-color-focus-ring-rgb) / 0.72) !important;
+}
+
+/* Sidebar density changes presentation only; drag targets remain row-relative. */
+.session-compact-disclosure > button,
+.session-pin[aria-pressed="false"] {
+  opacity: 0;
+}
+.session-row-compact:hover .session-compact-disclosure > button,
+.session-row-compact:focus-within .session-compact-disclosure > button,
+.session-row:hover .session-pin,
+.session-row:focus-within .session-pin {
+  opacity: 1;
+}
+.session-compact-status {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.session-compact-status[data-session-status="requesting-model"],
+.session-compact-status[data-session-status="running-tool"] {
+  box-shadow: 0 0 5px 1px currentColor;
+  animation: session-compact-glow 2s ease-in-out infinite;
+}
+@keyframes session-compact-glow {
+  50% { box-shadow: 0 0 2px 0 currentColor; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-compact-status { animation: none !important; }
+}
+@media (pointer: coarse) {
+  .session-compact-disclosure > button,
+  .session-row .session-pin { opacity: 1; }
+  .session-row-compact { min-height: 44px; }
+  .session-compact-disclosure { width: 32px; }
+  .session-row-compact button,
+  .session-pin { min-height: 40px; min-width: 32px; }
+}
+
+/* Discrete model-effort slider. The separate fill avoids decorative gradients. */
+.foxwarm-effort-slider-wrap {
+  height: 28px;
+}
+.foxwarm-effort-slider-track {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  left: 8px;
+  height: 10px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--foxwarm-color-border);
+}
+.foxwarm-effort-slider-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--foxwarm-effort-progress);
+  border-radius: inherit;
+  background: var(--foxwarm-effort-color, var(--foxwarm-color-accent));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--foxwarm-effort-color, var(--foxwarm-color-accent)) 58%, transparent);
+  transition: width 100ms ease-out, background-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+.foxwarm-model-effort-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  appearance: none;
+  cursor: pointer;
+  background: transparent;
+}
+.foxwarm-model-effort-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.foxwarm-model-effort-slider::-webkit-slider-runnable-track {
+  height: 10px;
+  background: transparent;
+}
+.foxwarm-model-effort-slider::-moz-range-track {
+  height: 10px;
+  background: transparent;
+}
+.foxwarm-model-effort-slider::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -6px;
+  appearance: none;
+  border: 3px solid var(--foxwarm-color-surface);
+  border-radius: 50%;
+  background: var(--foxwarm-effort-color, var(--foxwarm-color-accent));
+  box-shadow:
+    0 0 0 1px var(--foxwarm-color-border-strong),
+    0 0 12px color-mix(in srgb, var(--foxwarm-effort-color, var(--foxwarm-color-accent)) 70%, transparent);
+  transition: background-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+.foxwarm-model-effort-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 3px solid var(--foxwarm-color-surface);
+  border-radius: 50%;
+  background: var(--foxwarm-effort-color, var(--foxwarm-color-accent));
+  box-shadow:
+    0 0 0 1px var(--foxwarm-color-border-strong),
+    0 0 12px color-mix(in srgb, var(--foxwarm-effort-color, var(--foxwarm-color-accent)) 70%, transparent);
+  transition: background-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+.foxwarm-model-effort-slider:focus-visible {
+  outline: 2px solid var(--foxwarm-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.foxwarm-model-filter-input {
+  font-size: 13px !important;
+  line-height: 1.2 !important;
+}
+
+@media (max-width: 640px) {
+  .foxwarm-model-filter-input {
+    font-size: 16px !important;
+  }
+}
+
+.foxwarm-model-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.foxwarm-model-columns[data-model-columns="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.foxwarm-model-column + .foxwarm-model-column {
+  border-left: 1px solid var(--foxwarm-color-border);
+}
+.foxwarm-model-selector-trigger {
+  flex: 0 1 auto;
+}
+.foxwarm-model-child-trigger {
+  flex: 0 4 auto;
+}
+@media (max-width: 640px) {
+  .foxwarm-model-columns[data-model-columns="2"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .foxwarm-model-column + .foxwarm-model-column {
+    border-left: 0;
+    border-top: 1px solid var(--foxwarm-color-border);
+  }
+}
+@media (max-width: 420px) {
+  .foxwarm-model-child-trigger {
+    flex-shrink: 0;
+  }
+  .foxwarm-model-child-trigger > span {
+    display: none;
+  }
+}
+
+/* Saving model settings locks mutations without dimming or moving the picker. */
+[data-model-selector-popup][data-model-saving="true"] [data-model-option-row]:disabled,
+[data-model-selector-popup][data-model-saving="true"] [data-model-child-mode]:disabled,
+[data-model-selector-popup][data-model-saving="true"] input:disabled {
+  opacity: 1;
+}
+.foxwarm-model-effort-slider[data-unresolved="true"]::-webkit-slider-thumb { opacity: 0; }
+.foxwarm-model-effort-slider[data-unresolved="true"]::-moz-range-thumb { opacity: 0; }

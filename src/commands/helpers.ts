@@ -1,16 +1,34 @@
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from '../channel';
-import { inspectChannelAuthorizationFromContext, formatAuthorizationInspection } from '../channelAuth';
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses } from '../channelRuntime';
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
-import { COMPACT_PERCENT, HTTP_PORT, resolveModelConfig } from '../config';
-import { Session } from '../types';
+import * as sessionRuntime from '../sessionRuntime';
+import { COMPACT_KEEP_PERCENT, HTTP_PORT, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
+import { commandSessionMessageCount, type CommandSession } from './types';
+import { CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE, negotiateNodeProtocol } from '../../packages/shared/dist/nodeProtocol';
 
 export function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
   const date = new Date(timestamp)
   return Number.isNaN(date.getTime()) ? 'n/a' : date.toISOString()
+}
+
+export function parseEffortFlag(tokens: string[]): { remaining: string[]; present: boolean; effort?: ModelEffort; error?: string } {
+  const remaining: string[] = [];
+  let present = false;
+  let effort: ModelEffort | undefined;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] !== '--effort') { remaining.push(tokens[index]); continue; }
+    if (present) return { remaining, present, error: '--effort may be specified only once.' };
+    present = true;
+    const raw = tokens[++index]?.trim().toLowerCase();
+    if (!raw) return { remaining, present, error: '--effort requires a value.' };
+    if (raw === 'default' || raw === 'unset') effort = undefined;
+    else if (MODEL_EFFORTS.includes(raw as ModelEffort)) effort = raw as ModelEffort;
+    else return { remaining, present, error: `Effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, or unset.` };
+  }
+  return { remaining, present, effort };
 }
 
 export function parseTimerFlags(tokens: string[]) {
@@ -79,6 +97,28 @@ export function parseSessionMoveTarget(rawTarget: string): { newSessionId: strin
   sessionManager.validateSessionName(newSessionId)
 
   return { newAgentName, newSessionId }
+}
+
+export function parseSessionMoveArgs(tokens: string[]): {
+  newSessionId: string;
+  newAgentName?: string;
+  parentSessionId?: string;
+} {
+  if (tokens.length === 0) throw new Error('Missing move target.')
+  const target = parseSessionMoveTarget(tokens[0])
+  let parentSessionId: string | undefined
+
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token !== '--parent') throw new Error(`Unknown /session move option: ${token}`)
+    if (parentSessionId !== undefined) throw new Error('--parent may be specified only once.')
+    const value = tokens[index + 1]?.trim()
+    if (!value) throw new Error('Missing parent session ID after --parent.')
+    parentSessionId = value
+    index += 1
+  }
+
+  return { ...target, ...(parentSessionId ? { parentSessionId } : {}) }
 }
 
 export function parseCompactThresholdInput(raw: string): number | null {
@@ -198,8 +238,18 @@ export function buildNodePairHelp(token: string): string {
     '**Bare metal (recommended Linux host bootstrap)**',
     '```bash',
     `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --pairing=${token} \
   --node-id=my-node`,
+    '```',
+    '',
+    '**Bare metal with systemd boot startup**',
+    '```bash',
+    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
+  --pairing=${token} \
+  --node-id=my-node \
+  --install`,
     '```',
     '',
     '**Docker bootstrap**',
@@ -212,6 +262,7 @@ export function buildNodePairHelp(token: string): string {
     '**Explicit host override example**',
     '```bash',
     `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
   --host=http://192.168.1.50:${HTTP_PORT} \
   --pairing=${token} \
   --node-id=my-node`,
@@ -238,7 +289,7 @@ export function buildNodePairHelp(token: string): string {
     '```',
     '',
     'Notes:',
-    '- `/node/run.sh` = bare-metal bootstrap; runs in foreground by default, use `-d` to detach',
+    '- `/node/run.sh` = bare-metal bootstrap; requires `--dir`; runs in foreground by default, use `-d` for tmux/nohup background mode or `--install` for a systemd service',
     '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
     '- `/node/run-interactive.sh` = cli-node TUI mode (tool approvals plus bound-session chat)',
     '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
@@ -258,18 +309,20 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
     reply += `🔒 Runtime is bound by agent isolation to \`${boundNode}\`.\n`
   }
 
-  reply += '\n**Approved Nodes**\n'
-  reply += currentNode === 'master' ? '- ✅ `master` (local)\n' : '- `master` (local)\n'
+  reply += '\n**Nodes**\n'
+  reply += '- `master` [master] ready\n'
 
-  if (approved.length === 0) {
-    reply += '- (No approved remote nodes yet)\n'
-  } else {
+  if (approved.length > 0) {
     for (const node of approved) {
-      const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
-      const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
+      const runtimeNode = nodesManager.getNode(node.nodeId)
+      const connected = !!runtimeNode
+      const compatibility = runtimeNode?.protocolCompatibility || node.protocolCompatibility
+      const online = compatibility?.status === 'upgrade-required'
+        ? `${connected ? '⚠️ connected' : 'offline'} · upgrade required`
+        : connected ? '✅ online' : 'offline'
+      const requestedName = node.requestedName && node.requestedName !== node.nodeId ? ` requested=\`${node.requestedName}\`` : ''
       const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
-      const currentMarker = currentNode === node.nodeId ? '✅ ' : ''
-      reply += `- ${currentMarker}\`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
+      reply += `- \`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
     }
   }
 
@@ -278,10 +331,18 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
     reply += '- (No pending pairing requests)\n'
   } else {
     for (const entry of pending) {
-      const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
-      const connected = entry.connected ? ' online' : ' offline'
+      const requestedName = entry.requestedName && (!entry.approvedNodeId || entry.requestedName !== entry.approvedNodeId)
+        ? ` requested=\`${entry.requestedName}\`` : ''
+      const connected = entry.connected ? ' ✅ online' : ' offline'
       const approvedMarker = entry.approvedNodeId ? ` approved→\`${entry.approvedNodeId}\`` : ''
-      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}\n`
+      const compatibility = (entry.approvedNodeId ? nodesManager.getNode(entry.approvedNodeId)?.protocolCompatibility : undefined)
+        || negotiateNodeProtocol(
+          entry.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE,
+          CURRENT_NODE_PROTOCOL_RANGE,
+          entry.legacyProtocol ?? entry.nodeProtocol === undefined,
+        )
+      const protocol = compatibility.status === 'compatible' ? ` protocol=v${compatibility.negotiated}` : ' ⚠️ upgrade required'
+      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}${protocol}\n`
     }
   }
 
@@ -289,21 +350,19 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
   reply += '- `/node` or `/node list` — list nodes and pending approvals\n'
   reply += '- `/node approve <pending-id> [node-id]` — approve a pending node\n'
   reply += '- `/node reject <pending-id>` — reject a pending node\n'
+  reply += '- `/node remove <node-id>` — remove an approved node and invalidate its credentials\n'
+  reply += '- `/node move <old-id> <new-id>` — rename an approved node id (node-side credentials must be updated)\n'
   reply += '- `/node pair-help` — show pairing/bootstrap help\n'
   reply += '- `/node <node-id>` — switch current node\n'
 
   return reply
 }
 
-export async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
+export async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
   if (!sessionId || !session) return
-  if (session.history.length === 0) {
-    ctx.reply('History is empty.')
-    return
-  }
 
   if (args[0] === 'tools') {
-    let keepPercent = COMPACT_PERCENT
+    let keepPercent = COMPACT_KEEP_PERCENT
     if (args.length >= 2) {
       const pct = parseFloat(args[1])
       if (!isNaN(pct) && pct > 0 && pct <= 100) {
@@ -311,15 +370,20 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
       }
     }
 
-    const result = await sessionManager.compactSessionToolMessages(sessionId, keepPercent)
+    const compact = await sessionRuntime.requestCompaction(sessionId, keepPercent, true)
+    if (compact.kind === 'empty') { ctx.reply('History is empty.'); return }
+    if (compact.kind === 'unsupported') { ctx.reply(`⚠️ ${compact.message}`); return }
+    if (compact.kind !== 'tool-noise') throw new Error('Unexpected historical tool-response pruning result.')
+    const result = compact.result
     ctx.reply(
-      `🧹 Tool-noise compaction finished. Replaced ${result.replacedFunctionCalls} tool call(s) and ${result.replacedFunctionResponses} tool response(s) across ${result.touchedMessages} message(s). `
-      + `Inspected ${result.inspectedMessages} older message(s); kept the most recent ${Math.max(0, session.history.length - result.keepStartIndex)} message(s) untouched.`
+      `🧹 Historical tool-response pruning finished. Pruned ${result.replacedFunctionResponses} oversized response(s) across ${result.touchedMessages} message(s); tool-call arguments were unchanged. `
+      + `Inspected ${result.inspectedMessages} older message(s), kept the most recent ${Math.max(0, commandSessionMessageCount(session) - result.keepStartIndex)} message(s) untouched, `
+      + `and estimated ${result.estimatedTokensSaved} token(s) saved (${result.estimatedTokensBefore} → ${result.estimatedTokensAfter}).`
     )
     return
   }
 
-  let keepPercent = COMPACT_PERCENT
+  let keepPercent = COMPACT_KEEP_PERCENT
   if (args.length >= 1) {
     const pct = parseFloat(args[0])
     if (!isNaN(pct) && pct > 0 && pct <= 100) {
@@ -327,17 +391,26 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     }
   }
 
-  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent, requestedBy: 'command' })
+  const result = await sessionRuntime.requestCompaction(sessionId, keepPercent)
+
+  if (result.kind === 'empty') { ctx.reply('History is empty.'); return }
+  if (result.kind === 'worker') {
+    ctx.reply(result.compacted ? '🗜️ Compaction completed.' : 'ℹ️ No compactable history was found.')
+    return
+  }
+  if (result.kind !== 'local') throw new Error('Unexpected compaction result.')
 
   if (result.alreadyQueued) {
-    ctx.reply('ℹ️ Compaction is already queued for this session.')
+    ctx.reply('ℹ️ Compaction is already pending for this session.')
     return
   }
 
   if (result.startedImmediately) {
-    ctx.reply('🗜️ Compaction requested. It runs in parallel, so this chat can continue normally.')
+    ctx.reply(result.runsInBackground
+      ? '🗜️ Compaction requested. It runs in parallel, so this chat can continue normally.'
+      : '🗜️ Compaction started. This session will remain busy until awaited compaction finishes.')
     return
   }
 
-  ctx.reply(`⏳ Background compaction queued. Once it starts, it will run without blocking this chat. Pending queue length: ${result.queueLength}`)
+  ctx.reply('⚠️ This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.')
 }

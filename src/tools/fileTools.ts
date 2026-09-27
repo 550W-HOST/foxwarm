@@ -5,23 +5,24 @@ import {
     readResolvedPath,
     writeResolvedPath,
     editResolvedPath,
-    deleteResolvedPath,
     applyPatchOperations,
     enforceIsolatedPathAccess,
     shouldEnforceIsolatedMasterPathAccess,
     deletePendingWriteRef,
+    formatWriteContentRefRetryHint,
     peekPendingWriteRefContent,
     registerPendingWriteRef,
     PENDING_WRITE_REF_TTL_MS,
 } from './helpers';
 import { checkPathAccess } from '../isolatedCheck';
+import { nativeFileOperations } from '../../packages/shared/dist/fileOperations';
 
 export async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const { filePath, startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    return readResolvedPath(fullPath, filePath, startLine, endLine);
+    return readResolvedPath(fullPath, filePath, startLine, endLine, ctx.fileOperations || nativeFileOperations);
 }
 
 export async function tool_write(args: ToolArgs, ctx: ToolContext) {
@@ -39,13 +40,13 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
         if (overwrite !== true) {
             throw new Error('write with contentRef requires overwrite=true.');
         }
-        const content = peekPendingWriteRefContent(ctx, agentName, contentRef, fullPath);
+        const content = peekPendingWriteRefContent(ctx, agentName, contentRef);
         await writeResolvedPath(fullPath, content, true, `File already exists: ${filePath}.`, {
             createDirs,
             parentIssueRetryHint: (parentIssue) => parentIssue.reason === 'missing'
-                ? ` Retry with filePath: ${JSON.stringify(filePath)}, overwrite: true, createDirs: true, contentRef: ${JSON.stringify(contentRef)} to reuse the cached content without resending it.`
+                ? formatWriteContentRefRetryHint(filePath, contentRef, true)
                 : undefined,
-        });
+        }, ctx.fileOperations || nativeFileOperations);
         deletePendingWriteRef(contentRef);
         return 'File written successfully';
     }
@@ -55,9 +56,9 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
     }
 
     const buildExistingFileError = () => {
-        const pending = registerPendingWriteRef(ctx, agentName, fullPath, String(filePath), args.content);
+        const pending = registerPendingWriteRef(ctx, agentName, args.content);
         const retryHint = pending
-            ? ` To overwrite using the same content without resending it, call write with filePath: ${JSON.stringify(filePath)}, overwrite: true, contentRef: ${JSON.stringify(pending.id)}. The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and only works in this session/agent for the same path.`
+            ? `${formatWriteContentRefRetryHint(filePath, pending.id)} The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and can be reused with another authorized filePath in this session/agent.`
             : ` The attempted content was too large to cache for contentRef retry; call write again with content and overwrite=true if you want to replace it.`;
         return `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.${retryHint}`;
     };
@@ -68,12 +69,12 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
             if (parentIssue.reason !== 'missing') {
                 return undefined;
             }
-            const pending = registerPendingWriteRef(ctx, agentName, fullPath, String(filePath), args.content);
+            const pending = registerPendingWriteRef(ctx, agentName, args.content);
             return pending
-                ? ` To retry using the same content without resending it, call write with filePath: ${JSON.stringify(filePath)}, overwrite: true, createDirs: true, contentRef: ${JSON.stringify(pending.id)}. The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and only works in this session/agent for the same path.`
+                ? `${formatWriteContentRefRetryHint(filePath, pending.id, true)} The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and can be reused with another authorized filePath in this session/agent.`
                 : ` The attempted content was too large to cache for contentRef retry; call write again with content and createDirs=true if you want to create missing parent directories.`;
         },
-    });
+    }, ctx.fileOperations || nativeFileOperations);
     return 'File written successfully';
 }
 
@@ -82,7 +83,7 @@ export async function tool_edit(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    await editResolvedPath(fullPath, oldText, newText);
+    await editResolvedPath(fullPath, oldText, newText, ctx.fileOperations || nativeFileOperations);
     return 'File edited successfully';
 }
 
@@ -103,18 +104,5 @@ export async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
             fullPath,
             displayPath: filePath,
         };
-    });
-}
-
-export async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
-    const { filePath } = args;
-    if (!filePath || typeof filePath !== 'string') {
-        throw new Error('filePath is required');
-    }
-
-    const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
-    enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    await deleteResolvedPath(fullPath, filePath);
-    return `Deleted file \`${filePath}\``;
+    }, ctx.fileOperations || nativeFileOperations);
 }

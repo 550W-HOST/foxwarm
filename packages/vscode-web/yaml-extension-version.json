@@ -1,0 +1,12 @@
+{
+  "extensionId": "redhat.vscode-yaml",
+  "publisher": "redhat",
+  "name": "vscode-yaml",
+  "version": "1.24.0",
+  "source": "https://github.com/redhat-developer/vscode-yaml.git",
+  "artifact": "https://open-vsx.org/api/redhat/vscode-yaml/1.24.0/file/redhat.vscode-yaml-1.24.0.vsix",
+  "sha256": "0668758312a7fa6beda259ca5a6849d90c5d519df6415edbe246c135e06d7168",
+  "license": "MIT",
+  "licenseFile": "third-party/redhat-vscode-yaml/LICENSE.txt",
+  "noticesFile": "third-party/redhat-vscode-yaml/thirdpartynotices.txt"
+}

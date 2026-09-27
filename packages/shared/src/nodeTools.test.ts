@@ -1,10 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { exec, read, write } from './nodeTools';
-import { getNodeAgentDir } from './nodeFileTransfer';
+import {
+  apply_patch,
+  buildBrowserScreenshotResult,
+  edit,
+  exec,
+  initializeNodeToolExecRecovery,
+  read,
+  setNodeToolSessionEventDispatcher,
+  write,
+} from './nodeTools';
+import { getNodeAgentDir, resolveNodeAgentDir } from './nodeFileTransfer';
+import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
+import { formatWriteContentRefRetryHint } from './fileToolCore';
+import { resolveExecTimeoutSeconds } from './persistentExec';
+import { nativeFileOperations, type FileOperations } from './fileOperations';
 
 function uniqueAgent(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -14,6 +28,136 @@ async function cleanupAgent(agentName: string) {
   await fs.remove(getNodeAgentDir(agentName)).catch(() => {});
 }
 
+test('shared CLI browser screenshots use the canonical structured image result', () => {
+  const buffer = Buffer.from('png-image-bytes');
+  const result = buildBrowserScreenshotResult({
+    id: 'tab_fixture',
+    url: 'https://example.test/',
+    title: 'Example',
+  }, buffer);
+
+  assert.deepEqual(result, {
+    id: 'tab_fixture',
+    url: 'https://example.test/',
+    title: 'Example',
+    output: '[Screenshot of tab_fixture]',
+    mimeType: 'image/png',
+    sizeBytes: buffer.length,
+    inlineData: {
+      data: buffer.toString('base64'),
+      mimeType: 'image/png',
+    },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'screenshot'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'image'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'encoding'), false);
+});
+
+test('node exec schema permits timeout values above the runtime clamp threshold', () => {
+  const definition = CLI_NODE_CAPABILITIES.tools.find(entry => entry.name === 'exec');
+  assert.ok(definition);
+  const timeout = (definition.parameters.properties as any).timeout;
+  assert.equal(timeout.type, 'number');
+  assert.equal(timeout.minimum, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
+});
+
+test('shared write contentRef retry hints are executable and JSON-escape actual arguments', () => {
+  const filePath = 'quoted "path"\\line\nnote.txt';
+  const contentRef = 'write_ref"\\line\nvalue';
+  assert.equal(
+    formatWriteContentRefRetryHint(filePath, contentRef),
+    ' The attempted content is already cached. Do not include or pass the `content` argument when using `contentRef`; it is unnecessary. To confirm overwriting, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true }). The cached payload may instead be written to another authorized `filePath` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit `contentRef` and call `write` with the new `content` plus the desired `filePath` and `overwrite: true`. Never pass `content` and `contentRef` together.',
+  );
+  assert.equal(
+    formatWriteContentRefRetryHint(filePath, contentRef, true),
+    ' The attempted content is already cached. Do not include or pass the `content` argument when using `contentRef`; it is unnecessary. To retry and create the missing parent directories, call write({ filePath: "quoted \\"path\\"\\\\line\\nnote.txt", contentRef: "write_ref\\"\\\\line\\nvalue", overwrite: true, createDirs: true }). The cached payload may instead be written to another authorized `filePath` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit `contentRef` and call `write` with the new `content` plus the desired `filePath` and `createDirs: true`. Never pass `content` and `contentRef` together.',
+  );
+});
+
+test('shared exec timeout resolution clamps only oversized finite values', () => {
+  assert.deepEqual(resolveExecTimeoutSeconds(undefined), { requestedSeconds: 15, effectiveSeconds: 15 });
+  assert.deepEqual(resolveExecTimeoutSeconds(60), { requestedSeconds: 60, effectiveSeconds: 60 });
+  assert.deepEqual(resolveExecTimeoutSeconds(1.5), { requestedSeconds: 1.5, effectiveSeconds: 1.5 });
+  assert.deepEqual(resolveExecTimeoutSeconds(61), {
+    requestedSeconds: 61,
+    effectiveSeconds: 60,
+    warning: 'WARNING: Requested timeout 61s exceeds the 60s maximum; using 60s.',
+  });
+  assert.equal(resolveExecTimeoutSeconds(Number.MAX_VALUE).effectiveSeconds, 60);
+  for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '120']) {
+    assert.throws(() => resolveExecTimeoutSeconds(invalid));
+  }
+});
+
+test('node agent directories resolve relative configuration against an immutable runtime root', () => {
+  const runtimeRoot = path.resolve('node-runtime-root');
+  assert.equal(resolveNodeAgentDir('alpha', {}, runtimeRoot), path.join(runtimeRoot, 'agents', 'alpha'));
+  assert.equal(
+    resolveNodeAgentDir('alpha', { FOXWARM_AGENTS_DIR: 'custom-agents' }, runtimeRoot),
+    path.join(runtimeRoot, 'custom-agents', 'alpha'),
+  );
+  assert.equal(
+    resolveNodeAgentDir('alpha', { FOXWARM_AGENT_DIR: 'single-agent' }, runtimeRoot),
+    path.join(runtimeRoot, 'single-agent'),
+  );
+});
+
+test('node exec capture stays under the startup agent root after cwd changes', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-exec-root-'));
+  const runtimeRoot = path.join(root, 'runtime');
+  const sessionCwd = path.join(root, 'session-project');
+  const agentName = 'capture-agent';
+  await Promise.all([fs.ensureDir(runtimeRoot), fs.ensureDir(sessionCwd)]);
+  t.after(() => fs.remove(root));
+
+  const nodeToolsPath = require.resolve('./nodeTools');
+  const childScript = [
+    `const tools = require(${JSON.stringify(nodeToolsPath)});`,
+    `process.chdir(${JSON.stringify(sessionCwd)});`,
+    `(async () => {`,
+    `  const output = await tools.exec({ command: 'echo anchored', timeout: 15 }, {`,
+    `    sessionId: 'capture-session',`,
+    `    session: { agent: ${JSON.stringify(agentName)}, cwd: ${JSON.stringify(sessionCwd)}, currentNode: 'test-node' },`,
+    `    runtimeNodeId: 'test-node',`,
+    `  });`,
+    `  if (!String(output).includes('anchored')) throw new Error('exec output missing');`,
+    `})().catch(error => { console.error(error); process.exitCode = 1; });`,
+  ].join('\n');
+  const env = { ...process.env };
+  delete env.FOXWARM_AGENT_DIR;
+  delete env.FOXWARM_AGENTS_DIR;
+  const child = spawnSync(process.execPath, ['-e', childScript], {
+    cwd: runtimeRoot,
+    env,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+
+  const execRoot = path.join(runtimeRoot, 'agents', agentName, '.temp', 'exec');
+  assert.equal(await fs.pathExists(path.join(execRoot, 'running-exec.json')), true);
+  assert.equal(await fs.pathExists(path.join(sessionCwd, 'agents')), false);
+  const dateDirs = (await fs.readdir(execRoot, { withFileTypes: true })).filter(entry => entry.isDirectory());
+  assert.equal(dateDirs.length, 1);
+  const datedEntries = await fs.readdir(path.join(execRoot, dateDirs[0].name));
+  assert.ok(datedEntries.some(name => name.endsWith(process.platform === 'win32' ? '.command.ps1' : '.command.sh')));
+  assert.ok(datedEntries.some(name => name.endsWith('.log.exit.json')));
+});
+
+test('node exec clamps oversized timeout and puts the warning in the foreground footer', async () => {
+  const agentName = uniqueAgent('node_exec_timeout_clamp');
+  try {
+    const result = String(await exec(
+      { command: 'printf remote-clamp-ok', timeout: 120 },
+      { sessionId: 'shared-node-test-timeout-clamp', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
+    ));
+    assert.match(result, /^remote-clamp-ok\n---\nExit code: 0\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\.\nOriginal command output had no trailing newline\.$/);
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
 test('node read treats startLine/endLine 0 as omitted', async () => {
   const agentName = uniqueAgent('node_read_zero');
   const baseDir = getNodeAgentDir(agentName);
@@ -21,8 +165,18 @@ test('node read treats startLine/endLine 0 as omitted', async () => {
   try {
     await fs.ensureDir(baseDir);
     await fs.writeFile(filePath, 'one\ntwo\nthree');
-    assert.equal(await read({ filePath: 'note.txt', startLine: 0, endLine: 0 }, { session: { agent: agentName } }), 'one\ntwo\nthree');
-    assert.equal(await read({ filePath: 'note.txt', startLine: 2, endLine: 0 }, { session: { agent: agentName } }), 'two\nthree');
+    assert.equal(
+      await read({ filePath: 'note.txt', startLine: 0, endLine: 0 }, { session: { agent: agentName } }),
+      'one\ntwo\nthree\n---\nFile has 3 lines.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath: 'note.txt', startLine: 2, endLine: 0 }, { session: { agent: agentName } }),
+      'two\nthree\n---\nSelected lines 2-3 of 3.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath: 'note.txt', startLine: 9, endLine: 12 }, { session: { agent: agentName } }),
+      '(no content in requested line range 9-12)\n---\nFile has 3 lines.\nFile size: 13 bytes.',
+    );
   } finally {
     await cleanupAgent(agentName);
   }
@@ -65,14 +219,114 @@ test('node write accepts symlinked parent dirs without createDirs', async () => 
   }
 });
 
+test('node apply_patch reports added and updated line counts', async () => {
+  const agentName = uniqueAgent('node_apply_patch_counts');
+  const baseDir = getNodeAgentDir(agentName);
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(path.join(baseDir, 'note.txt'), 'old\nkeep');
+    const result = await apply_patch({
+      input: [
+        '*** Begin Patch',
+        '*** Update File: note.txt',
+        '@@',
+        '-old',
+        '+new',
+        '+extra',
+        ' keep',
+        '*** Add File: added.txt',
+        '+first',
+        '+second',
+        '*** End Patch',
+      ].join('\n'),
+    }, { session: { agent: agentName } });
+
+    assert.equal(result, [
+      'Patch applied successfully.',
+      '- Updated note.txt (+2 -1)',
+      '- Added added.txt (+2)',
+    ].join('\n'));
+    assert.equal(await fs.readFile(path.join(baseDir, 'note.txt'), 'utf8'), 'new\nextra\nkeep');
+    assert.equal(await fs.readFile(path.join(baseDir, 'added.txt'), 'utf8'), 'first\nsecond');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node write edit and patch compose the injected file primitives without changing write flags', async () => {
+  const agentName = uniqueAgent('node_file_operations');
+  const baseDir = getNodeAgentDir(agentName);
+  const writes: Array<{ filePath: string; flag: 'w' | 'wx' }> = [];
+  const removed: string[] = [];
+  const madeDirs: string[] = [];
+  const operations: FileOperations = {
+    ...nativeFileOperations,
+    async write(filePath, content, flag) {
+      writes.push({ filePath, flag });
+      await nativeFileOperations.write(filePath, content, flag);
+    },
+    async mkdir(dirPath) {
+      madeDirs.push(dirPath);
+      await nativeFileOperations.mkdir(dirPath);
+    },
+    async remove(filePath) {
+      removed.push(filePath);
+      await nativeFileOperations.remove(filePath);
+    },
+  };
+  const ctx = { session: { agent: agentName }, fileOperations: operations };
+  try {
+    await fs.ensureDir(baseDir);
+    await write({ filePath: 'note.txt', content: 'old' }, ctx);
+    await write({ filePath: 'note.txt', content: 'old-2', overwrite: true }, ctx);
+    await write({ filePath: 'nested/new.txt', content: 'new', createDirs: true }, ctx);
+    await edit({ filePath: 'note.txt', oldText: 'old-2', newText: 'edited' }, ctx);
+    await fs.writeFile(path.join(baseDir, 'delete-me.txt'), 'delete');
+    const result = await apply_patch({
+      input: [
+        '*** Begin Patch',
+        '*** Update File: note.txt',
+        '@@',
+        '-edited',
+        '+patched',
+        '*** Add File: added/child.txt',
+        '+added',
+        '*** Delete File: delete-me.txt',
+        '*** End Patch',
+      ].join('\n'),
+    }, ctx);
+
+    assert.deepEqual(writes.map(entry => entry.flag), ['wx', 'w', 'wx', 'w', 'w', 'w']);
+    assert.ok(madeDirs.includes(path.join(baseDir, 'nested')));
+    assert.ok(madeDirs.includes(path.join(baseDir, 'added')));
+    assert.deepEqual(removed, [path.join(baseDir, 'delete-me.txt')]);
+    assert.equal(await fs.readFile(path.join(baseDir, 'note.txt'), 'utf8'), 'patched');
+    assert.equal(await fs.readFile(path.join(baseDir, 'added', 'child.txt'), 'utf8'), 'added');
+    assert.match(result, /Updated note\.txt \(\+1 -1\)/);
+    assert.match(result, /Added added\/child\.txt \(\+1\)/);
+    assert.match(result, /Deleted delete-me\.txt/);
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
 test('node exec expands cwd ~ on the executing node', async () => {
   const agentName = uniqueAgent('node_exec_home');
+  const registrations: any[] = [];
+  let started = 0;
   try {
     const result = await exec(
       { command: 'pwd', cwd: '~', timeout: 5 },
-      { sessionId: 'shared-node-test-home', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
+      {
+        sessionId: 'shared-node-test-home', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node',
+        backgroundExecId: 'foreground-otter', completionCapability: 'foreground-capability',
+        onExecStarted: () => { started += 1; },
+        registerBackgroundExec: async metadata => { registrations.push(metadata); },
+      },
     );
-    assert.equal(String(result).trim(), os.homedir());
+    assert.match(String(result), new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
+    assert.deepEqual(registrations, []);
+    assert.equal(started, 1);
   } finally {
     await cleanupAgent(agentName);
   }
@@ -88,10 +342,13 @@ test('node exec rejects missing cwd with a friendly cwd-focused error', async ()
         { sessionId: 'shared-node-test-bad-cwd', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
       ),
       (err: any) => {
-        assert.match(String(err?.message || err), /working directory is invalid/i);
-        assert.match(String(err?.message || err), /Raw cwd/i);
-        assert.match(String(err?.message || err), /Resolved cwd/i);
-        assert.match(String(err?.message || err), /not a missing `\/bin\/bash`/i);
+        const message = String(err?.message || err);
+        assert.equal(
+          message,
+          `Cannot start exec on node \`test-node\`: working directory is invalid (path does not exist). Source: explicit. Raw cwd: \`${missing}\`. Resolved cwd: \`${missing}\`.`,
+        );
+        assert.doesNotMatch(message, /\/bin\/bash/i);
+        assert.doesNotMatch(message, /spawn .*ENOENT/i);
         return true;
       },
     );
@@ -100,7 +357,7 @@ test('node exec rejects missing cwd with a friendly cwd-focused error', async ()
   }
 });
 
-test('node exec background timeout and completion point to a log path, not an opaque execId only', async () => {
+test('node exec background timeout and completion expose one execId plus PID and log path', async () => {
   const agentName = uniqueAgent('node_exec_bg');
   const outputToken = `remote-done-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const events: string[] = [];
@@ -116,11 +373,15 @@ test('node exec background timeout and completion point to a log path, not an op
       },
     );
 
-    assert.match(String(result), /Process running longer than 1s/i);
-    assert.match(String(result), /Node: `test-node`/);
-    assert.match(String(result), /PID: \d+/);
-    assert.match(String(result), /Log file: /);
-    assert.doesNotMatch(String(result), /execId:/);
+    const resultText = String(result);
+    assert.match(resultText, /\n---\n\[Process running longer than 1s\]/i);
+    assert.match(resultText, /Node: `test-node`/);
+    const managedPid = resultText.match(/PID: (\d+)/)?.[1];
+    assert.ok(managedPid);
+    assert.match(resultText, new RegExp(`managed shell-script root PID ${managedPid}\\):\\nPID ${managedPid}: `));
+    assert.match(resultText, /\n  PID \d+: sleep 2/);
+    assert.match(resultText, /Log file: /);
+    assert.match(resultText, /execId: [a-z]+-[a-z]+/);
 
     const deadline = Date.now() + 9000;
     while (Date.now() < deadline && events.length === 0) {
@@ -130,10 +391,126 @@ test('node exec background timeout and completion point to a log path, not an op
     assert.equal(events.length, 1);
     assert.match(events[0], /Background Process Finished/);
     assert.match(events[0], /Node: `test-node`/);
-    assert.match(events[0], /Full output in /);
+    assert.match(events[0], /Command output in /);
     assert.doesNotMatch(events[0], new RegExp(outputToken));
   } finally {
     delete process.env.FOXWARM_TEST_REMOTE_DONE;
     await cleanupAgent(agentName);
+  }
+});
+
+test('node exec uses the process-wide acknowledged dispatcher with durable completion metadata', async () => {
+  const agentName = uniqueAgent('node_exec_global_dispatch');
+  const execId = `quiet-otter`;
+  const completionCapability = 'test-completion-capability';
+  const events: any[] = [];
+  const registrations: any[] = [];
+  let started = 0;
+  const { setNodeToolSessionEventDispatcher } = await import('./nodeTools');
+  setNodeToolSessionEventDispatcher(async (sessionId, message, type, metadata) => {
+    events.push({ sessionId, message, type, metadata });
+  });
+  try {
+    await exec(
+      { command: 'sleep 2; exit 3', timeout: 1 },
+      {
+        sessionId: 'shared-node-global-dispatch',
+        session: { agent: agentName, currentNode: 'test-node' },
+        runtimeNodeId: 'test-node',
+        backgroundExecId: execId,
+        completionCapability,
+        onExecStarted: () => { started += 1; },
+        registerBackgroundExec: async metadata => { registrations.push(metadata); },
+      },
+    );
+
+    assert.deepEqual(registrations, [{ execId, completionCapability }]);
+    assert.equal(started, 1);
+
+    const deadline = Date.now() + 9000;
+    while (Date.now() < deadline && events.length === 0) await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].sessionId, 'shared-node-global-dispatch');
+    assert.equal(events[0].type, 'background');
+    assert.deepEqual(events[0].metadata, {
+      eventId: `remote-exec-completion:${execId}`,
+      execId,
+      completionCapability,
+      eventTimestamp: events[0].metadata.eventTimestamp,
+    });
+    assert.equal(typeof events[0].metadata.eventTimestamp, 'number');
+  } finally {
+    setNodeToolSessionEventDispatcher(undefined);
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node startup recovery delivers a current completion and prunes an expired tracking record', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-exec-startup-recovery-'));
+  const previousAgentDir = process.env.FOXWARM_AGENT_DIR;
+  const agentName = uniqueAgent('node_exec_startup_recovery');
+  const execId = `calm-heron`;
+  const currentExecId = `brisk-otter`;
+  const execDir = path.join(root, '.temp', 'exec');
+  const logPath = path.join(execDir, `${execId}.log`);
+  const statusPath = `${logPath}.exit.json`;
+  const cwdPath = `${logPath}.cwd.txt`;
+  const currentLogPath = path.join(execDir, `${currentExecId}.log`);
+  const currentStatusPath = `${currentLogPath}.exit.json`;
+  const currentCwdPath = `${currentLogPath}.cwd.txt`;
+  const events: any[] = [];
+  process.env.FOXWARM_AGENT_DIR = root;
+  setNodeToolSessionEventDispatcher(async (sessionId, message, type, metadata) => {
+    events.push({ sessionId, message, type, metadata });
+  });
+  try {
+    await fs.ensureDir(execDir);
+    await fs.writeFile(logPath, 'finished output\n');
+    await fs.writeJson(statusPath, { exitCode: 0, finishedAt: new Date(1_700_000_000_000).toISOString() });
+    const currentFinishedAt = Date.now();
+    await fs.writeFile(currentLogPath, 'current output\n');
+    await fs.writeJson(currentStatusPath, { exitCode: 0, finishedAt: new Date(currentFinishedAt).toISOString() });
+    await fs.writeJson(path.join(execDir, 'running-exec.json'), { execs: [{
+      id: execId,
+      pid: 99_999_997,
+      command: 'echo finished output',
+      sessionId: 'startup-recovery-session',
+      agentName,
+      nodeId: 'startup-recovery-node',
+      logPath,
+      statusPath,
+      cwdPath,
+      startedAt: 1_699_999_999_000,
+      notifyOnCompletion: true,
+      completionCapability: 'startup-recovery-capability',
+    }, {
+      id: currentExecId,
+      pid: 99_999_996,
+      command: 'echo current output',
+      sessionId: 'startup-recovery-current-session',
+      agentName,
+      nodeId: 'startup-recovery-node',
+      logPath: currentLogPath,
+      statusPath: currentStatusPath,
+      cwdPath: currentCwdPath,
+      startedAt: currentFinishedAt - 1_000,
+      notifyOnCompletion: true,
+      completionCapability: 'startup-recovery-current-capability',
+    }] });
+
+    await initializeNodeToolExecRecovery();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].sessionId, 'startup-recovery-current-session');
+    assert.match(events[0].message, /Background Process Finished/);
+    assert.equal(events[0].metadata.eventId, `remote-exec-completion:${currentExecId}`);
+    assert.equal(events[0].metadata.execId, currentExecId);
+    assert.equal(events[0].metadata.completionCapability, 'startup-recovery-current-capability');
+    assert.equal(events[0].metadata.eventTimestamp, currentFinishedAt);
+    assert.deepEqual((await fs.readJson(path.join(execDir, 'running-exec.json'))).execs, []);
+  } finally {
+    setNodeToolSessionEventDispatcher(undefined);
+    if (previousAgentDir === undefined) delete process.env.FOXWARM_AGENT_DIR;
+    else process.env.FOXWARM_AGENT_DIR = previousAgentDir;
+    await fs.remove(root);
   }
 });

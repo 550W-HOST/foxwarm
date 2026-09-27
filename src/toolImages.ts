@@ -1,9 +1,10 @@
-import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
 import sharp from 'sharp';
 import * as sessionManager from './sessionManager';
-import { ImageMeta, InlineData, Message, MessagePart } from './types';
+import { readArchiveMessages } from './session/archive';
+import { ImageMeta, InlineData, InlineDataRef, Message, MessagePart, Session } from './types';
+import { getSafeRasterMimeType, readImageRef } from './imageBlobs';
 
 export interface NormalizedToolResultImage {
   inlineData: InlineData;
@@ -23,22 +24,12 @@ function isImageMimeType(mimeType: unknown): mimeType is string {
   return typeof mimeType === 'string' && mimeType.startsWith('image/');
 }
 
-function normalizeMimeTypeFromFormat(format: unknown): string | undefined {
-  if (typeof format !== 'string') return undefined;
-  const normalized = format.trim().toLowerCase();
-  if (!normalized) return undefined;
-  if (normalized.includes('/')) {
-    return normalized;
-  }
-  if (normalized === 'jpg') return 'image/jpeg';
-  return `image/${normalized}`;
-}
-
 function normalizeInlineData(item: any): InlineData | null {
   if (!item || typeof item !== 'object') return null;
-  const mimeType = item.mimeType || item.mime_type;
+  const mimeType = item.mimeType;
   if (typeof item.data === 'string' && isImageMimeType(mimeType)) {
     return {
+      ...item,
       data: item.data,
       mimeType,
     };
@@ -46,41 +37,42 @@ function normalizeInlineData(item: any): InlineData | null {
   return null;
 }
 
-function normalizeLegacyImagePayload(result: Record<string, any>): { inlineData: InlineData; consumedKeys: string[] } | null {
-  if (typeof result.image === 'string' && typeof result.encoding === 'string' && result.encoding.toLowerCase() === 'base64') {
-    const mimeType = typeof result.mimeType === 'string'
-      ? result.mimeType
-      : normalizeMimeTypeFromFormat(result.format) || 'image/png';
-    return {
-      inlineData: {
-        data: result.image,
-        mimeType,
-      },
-      consumedKeys: ['image', 'encoding', 'format'],
-    };
-  }
+/**
+ * Accepts a canonical image part reference only when every identity field is
+ * present and the Blob id names a safe raster type, so arbitrary JSON cannot be
+ * mistaken for an image.
+ */
+function normalizeToolResultImageRef(value: any): InlineDataRef | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const ref = value.inlineDataRef;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
+  // Only references to the content-addressed image Blob store are accepted, so a
+  // hand-written tool result cannot point the materializer at an arbitrary file.
+  if (typeof ref.blobId !== 'string' || !getSafeRasterMimeType(ref.blobId)) return null;
+  if (!isImageMimeType(ref.mimeType)) return null;
+  if (typeof ref.byteLength !== 'number' || !Number.isInteger(ref.byteLength) || ref.byteLength < 0) return null;
+  if (typeof ref.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(ref.sha256)) return null;
 
-  return null;
+  const normalized: InlineDataRef = {
+    imageId: typeof ref.imageId === 'string' && ref.imageId.trim() ? ref.imageId : ref.blobId,
+    blobId: ref.blobId,
+    mimeType: ref.mimeType,
+    byteLength: ref.byteLength,
+    sha256: ref.sha256,
+  };
+  if (typeof ref.format === 'string' && ref.format) normalized.format = ref.format;
+  if (typeof ref.width === 'number' && Number.isInteger(ref.width) && ref.width > 0) normalized.width = ref.width;
+  if (typeof ref.height === 'number' && Number.isInteger(ref.height) && ref.height > 0) normalized.height = ref.height;
+  return normalized;
 }
 
-function parseLegacyOutputImage(output: string): InlineData | null {
-  if (output.startsWith('__IMAGE__:')) {
-    const [, mimeType, base64] = output.split(':', 3);
-    if (!mimeType || !base64) return null;
-    return {
-      data: base64,
-      mimeType,
-    };
-  }
-
-  if (output.startsWith('__SCREENSHOT__:')) {
-    return {
-      data: output.substring('__SCREENSHOT__:'.length),
-      mimeType: 'image/png',
-    };
-  }
-
-  return null;
+/**
+ * Whether a tool result entry is a canonical image part whose bytes already live
+ * in the image Blob store instead of travelling inline. Scripts hand these back
+ * after a low-level model request.
+ */
+export function isToolResultImageRefPart(value: unknown): boolean {
+  return normalizeToolResultImageRef(value) !== null;
 }
 
 export function buildToolImageId(toolUseId: string, imageIndex: number): string {
@@ -93,7 +85,7 @@ async function probeImageMetadata(inlineData: InlineData): Promise<Omit<ImageMet
   const metadata = await sharp(buffer, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
 
   return {
-    mimeType: inlineData.mimeType || inlineData.mime_type,
+    mimeType: inlineData.mimeType,
     width: typeof metadata.width === 'number' ? metadata.width : undefined,
     height: typeof metadata.height === 'number' ? metadata.height : undefined,
     sizeBytes: buffer.length,
@@ -108,6 +100,24 @@ async function buildNormalizedToolResultImage(toolUseId: string, imageIndex: num
     imageMeta: {
       imageId: buildToolImageId(toolUseId, imageIndex),
       ...imageMeta,
+    },
+  };
+}
+
+async function buildNormalizedRefToolResultImage(toolUseId: string, imageIndex: number, ref: InlineDataRef): Promise<MessagePart> {
+  // Verify that the referenced bytes exist and still match their recorded length
+  // and digest before the reference becomes a session-visible image.
+  const buffer = await readImageRef(ref);
+  return {
+    toolUseId,
+    inlineDataRef: ref,
+    imageMeta: {
+      imageId: buildToolImageId(toolUseId, imageIndex),
+      mimeType: ref.mimeType,
+      width: ref.width,
+      height: ref.height,
+      sizeBytes: buffer.length,
+      sha256: ref.sha256,
     },
   };
 }
@@ -132,19 +142,17 @@ export async function normalizeToolResultImages(result: any, toolUseId: string, 
     }
   }
 
-  const legacyPayload = normalizeLegacyImagePayload(result);
-  if (legacyPayload) {
-    normalizedInlineItems.push(legacyPayload.inlineData);
-  }
-
-  if (typeof result.output === 'string') {
-    const legacyOutputImage = parseLegacyOutputImage(result.output);
-    if (legacyOutputImage) {
-      normalizedInlineItems.push(legacyOutputImage);
+  const normalizedRefItems: InlineDataRef[] = [];
+  if (Array.isArray(result.imageParts)) {
+    for (const item of result.imageParts) {
+      const ref = normalizeToolResultImageRef(item);
+      if (ref) {
+        normalizedRefItems.push(ref);
+      }
     }
   }
 
-  if (normalizedInlineItems.length === 0) {
+  if (normalizedInlineItems.length === 0 && normalizedRefItems.length === 0) {
     return { result, imageParts: [] };
   }
 
@@ -157,22 +165,20 @@ export async function normalizeToolResultImages(result: any, toolUseId: string, 
       imageMeta: normalized.imageMeta,
     });
   }
+  for (let index = 0; index < normalizedRefItems.length; index += 1) {
+    imageParts.push(await buildNormalizedRefToolResultImage(
+      toolUseId,
+      normalizedInlineItems.length + index,
+      normalizedRefItems[index],
+    ));
+  }
 
   const {
     inlineData,
     inlineDataItems,
+    imageParts: _promotedImageParts,
     ...rest
   } = result;
-
-  if (legacyPayload) {
-    for (const key of legacyPayload.consumedKeys) {
-      delete rest[key];
-    }
-  }
-
-  if (typeof rest.output === 'string' && parseLegacyOutputImage(rest.output)) {
-    delete rest.output;
-  }
 
   if (rest.output === undefined) {
     rest.output = fallbackLabel;
@@ -228,17 +234,34 @@ export function buildImageGuidanceLabel(meta: ImageMeta): string {
   return `[IMAGE: id=${imageId}, size=${formatImageSize(meta)}] you can use image_crop({ id: \"${imageId}\", x: 0, y: 0, width: 100, height: 100 }) and image_write_to_file({ id: \"${imageId}\", filePath: \"artifacts/${sampleFileName}\" })`;
 }
 
-export function buildImageGuidanceText(parts: MessagePart[]): string {
+export function buildImageGuidanceText(
+  parts: MessagePart[],
+  isDeduplicated: (part: MessagePart) => boolean = () => false,
+): string {
   const labels = parts
-    .map(getImageMetaFromPart)
-    .filter((meta): meta is ImageMeta => !!meta?.imageId)
-    .map(buildImageGuidanceLabel);
+    .map(part => {
+      const meta = getImageMetaFromPart(part);
+      if (!meta?.imageId) {
+        return isDeduplicated(part)
+          ? '[IMAGE: deduplicated=true; identical image bytes were present earlier in this request and have already been read]'
+          : null;
+      }
+      const label = buildImageGuidanceLabel(meta);
+      return isDeduplicated(part)
+        ? `${label} [deduplicated=true; identical image bytes were present earlier in this request and have already been read]`
+        : label;
+    })
+    .filter((label): label is string => !!label);
 
   return labels.join('\n');
 }
 
-export function appendImageGuidanceText(parts: MessagePart[], existingText: string): string {
-  const guidanceText = buildImageGuidanceText(parts);
+export function appendImageGuidanceText(
+  parts: MessagePart[],
+  existingText: string,
+  isDeduplicated?: (part: MessagePart) => boolean,
+): string {
+  const guidanceText = buildImageGuidanceText(parts, isDeduplicated);
   if (!guidanceText) {
     return existingText;
   }
@@ -272,8 +295,20 @@ async function buildResolvedImageFromPart(part: MessagePart): Promise<ResolvedIm
   }
 
   if (part.inlineDataRef?.path) {
-    const fullPath = resolveArchiveInlineDataPath(part.inlineDataRef.path);
-    const buffer = await fs.readFile(fullPath);
+    const buffer = await readImageRef(part.inlineDataRef);
+    return {
+      imageId: meta.imageId,
+      mimeType: meta.mimeType || part.inlineDataRef.mimeType || 'application/octet-stream',
+      buffer,
+      width: meta.width,
+      height: meta.height,
+      sizeBytes: meta.sizeBytes ?? part.inlineDataRef.byteLength ?? buffer.length,
+      sha256: meta.sha256,
+    };
+  }
+
+  if (part.inlineDataRef?.blobId) {
+    const buffer = await readImageRef(part.inlineDataRef);
     return {
       imageId: meta.imageId,
       mimeType: meta.mimeType || part.inlineDataRef.mimeType || 'application/octet-stream',
@@ -313,22 +348,22 @@ function findImagePartInMessage(message: Message | undefined, imageId: string): 
   return null;
 }
 
-export async function resolveImageById(sessionId: string, imageId: string): Promise<ResolvedImage> {
-  const session = await sessionManager.getExistingSession(sessionId);
-  if (session) {
-    for (let index = session.history.length - 1; index >= 0; index -= 1) {
-      const match = findImagePartInMessage(session.history[index], imageId);
-      if (!match) continue;
-      const resolved = await buildResolvedImageFromPart(match);
-      if (resolved) {
-        return resolved;
-      }
+async function resolveImageFromArchive(sessionId: string, imageId: string): Promise<ResolvedImage | null> {
+  const archivedMessages = await readArchiveMessages(sessionId);
+  for (let index = archivedMessages.length - 1; index >= 0; index -= 1) {
+    const match = findImagePartInMessage(archivedMessages[index].message, imageId);
+    if (!match) continue;
+    const resolved = await buildResolvedImageFromPart(match);
+    if (resolved) {
+      return resolved;
     }
   }
+  return null;
+}
 
-  const archivedMessages = await sessionManager.getArchivedMessages(sessionId, {});
-  for (let index = archivedMessages.records.length - 1; index >= 0; index -= 1) {
-    const match = findImagePartInMessage(archivedMessages.records[index].message, imageId);
+export async function resolveImageForSession(session: Session, imageId: string): Promise<ResolvedImage> {
+  for (let index = session.history.length - 1; index >= 0; index -= 1) {
+    const match = findImagePartInMessage(session.history[index], imageId);
     if (!match) continue;
     const resolved = await buildResolvedImageFromPart(match);
     if (resolved) {
@@ -336,11 +371,23 @@ export async function resolveImageById(sessionId: string, imageId: string): Prom
     }
   }
 
+  const archived = await resolveImageFromArchive(session.id, imageId);
+  if (archived) return archived;
+
+  throw new Error(`Image id \`${imageId}\` not found in session \`${session.id}\`.`);
+}
+
+export async function resolveImageById(sessionId: string, imageId: string): Promise<ResolvedImage> {
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (session) return resolveImageForSession(session, imageId);
+
+  const archived = await resolveImageFromArchive(sessionId, imageId);
+  if (archived) return archived;
+
   throw new Error(`Image id \`${imageId}\` not found in session \`${sessionId}\`.`);
 }
 
-export async function cropImageById(sessionId: string, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
-  const resolved = await resolveImageById(sessionId, imageId);
+async function cropResolvedImage(resolved: ResolvedImage, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
   const { x, y, width, height } = crop;
   if (![x, y, width, height].every(value => Number.isInteger(value))) {
     throw new Error('image_crop requires integer x, y, width, and height values.');
@@ -386,4 +433,12 @@ export async function cropImageById(sessionId: string, imageId: string, crop: { 
       sha256: crypto.createHash('sha256').update(extracted.data).digest('hex'),
     },
   };
+}
+
+export async function cropImageForSession(session: Session, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
+  return cropResolvedImage(await resolveImageForSession(session, imageId), imageId, crop);
+}
+
+export async function cropImageById(sessionId: string, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
+  return cropResolvedImage(await resolveImageById(sessionId, imageId), imageId, crop);
 }

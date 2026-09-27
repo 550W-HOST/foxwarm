@@ -1,4 +1,5 @@
 import fs from 'fs-extra';
+import { RpcError } from './rpc';
 import { getAgentDir } from './config';
 import {
     tool_run_script,
@@ -9,181 +10,114 @@ import {
     tool_cancel_toolscript_run,
 } from './toolscript';
 import {
-    tool_create_child_session,
-    tool_send_to_session,
     tool_wait,
     tool_submit_compact_plan,
-    tool_send_to_channel,
     tool_send_file,
-    tool_list_sessions,
-    tool_list_agents,
-    tool_list_skills,
-    tool_load_skill,
+    tool_session,
+    tool_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
     tool_get_archived_blocks,
     tool_recall,
     tool_delete_session,
-    tool_update_session_name,
     tool_set_goal,
     tool_set_session_child_model,
     tool_set_session_compact_threshold,
-    tool_update_session_snapshot,
+    tool_refresh_session_snapshot,
     tool_stop_session,
     tool_compact_session,
-    tool_create_timer,
-    tool_list_timers,
-    tool_delete_timer,
     tool_create_agent,
     tool_create_session,
     tool_set_agent_inherit,
     tool_set_agent_isolated,
     tool_move_session,
 } from './toolsSessionAgent';
+import {
+    tool_send_to_session,
+    tool_send_to_channel,
+    tool_create_child_session,
+    tool_list_agents,
+    tool_create_timer,
+    tool_list_timers,
+    tool_update_timer,
+    tool_delete_timer,
+    tool_set_tool_rules,
+} from './mainManagementTools';
 
 // Re-export types from helpers
 export type { ToolContext, ToolArgs, UnifiedToolSource } from './tools/helpers';
 
 // Import sub-modules
-import { tool_read, tool_write, tool_edit, tool_apply_patch, tool_delete_file } from './tools/fileTools';
+import { tool_read, tool_write, tool_edit, tool_apply_patch } from './tools/fileTools';
 import { tool_read_memory, tool_write_memory, tool_edit_memory, tool_delete_memory, tool_apply_patch_memory } from './tools/memoryTools';
 import { tool_exec } from './tools/execTools';
 import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
 import { tool_browse_open, tool_browse_list, tool_browse_get, tool_browse_close, tool_browse_interact } from './tools/browserTools';
-import { tool_mcp_config, tool_call_mcp, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
-import { tool_copy_between_nodes, tool_remote_node, tool_list_nodes, tool_change_current_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
-import { tool_get_memory_context, resolveMemorySearchOptions } from './tools/vectorTools';
-import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
+import { tool_mcp_config, tool_list_mcp_servers } from './tools/mcpTools';
+import { tool_copy_between_nodes, tool_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
+import { resolveMemorySearchOptions } from './tools/vectorTools';
+import { tool_search_tools, tool_call_tool } from './tools/unifiedSearch';
+import { executeResolvedTool, initializeResolvedToolRuntime, resolveDirectTool } from './tools/resolvedTools';
 import { definitions } from './tools/definitions';
+import { addToolCancellationSchema } from './toolCallControls';
+
+export {
+    BUILTIN_TOOL_PLACEMENTS,
+    NODE_ENVIRONMENT_BUILTIN_NAMES,
+    resolveBuiltinToolPlacement,
+} from './tools/placement';
+export type { RegisteredBuiltinToolName, ResolvedBuiltinToolPlacement, ToolPlacementMetadata, ToolPlacementOwner } from './tools/placement';
 
 // Ensure agent dir exists
 fs.ensureDirSync(getAgentDir('main'));
-
-// --- Master-only tool names ---
-export const MASTER_ONLY_TOOL_NAMES = [
-    'remote_node', 'list_nodes', 'node_tools',
-    'get_memory_context',
-    'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
-    'copy_between_nodes',
-    'image_crop', 'image_write_to_file',
-    'create_child_session', 'send_to_session', 'wait', 'submit_compact_plan', 'send_to_channel', 'send_file',
-    'list_sessions', 'list_agents', 'list_skills', 'load_skill',
-    'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall', 'delete_session',
-    'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
-    'compact_session',
-    'create_timer', 'list_timers', 'delete_timer',
-    'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
-    'search_tools', 'call_tool',
-    'run_script', 'start_toolscript_run', 'continue_script', 'list_toolscript_runs', 'get_toolscript_run', 'cancel_toolscript_run',
-    'change_current_node',
-    'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
-    'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
-];
-
-const MASTER_ONLY_TOOL_NAME_SET = new Set(MASTER_ONLY_TOOL_NAMES);
-
-const TARGET_NODE_PERMISSION_TOOL_NAMES = new Set([
-    'send_file',
-    'image_write_to_file',
-]);
 
 export function isToolDirectlyExposedToModel(toolName: string): boolean {
     return definitions.find(def => def.name === toolName)?.defaultInject === true;
 }
 
-export function isMasterOnlyToolName(toolName: string): boolean {
-    return MASTER_ONLY_TOOL_NAME_SET.has(toolName);
+const WORKER_UNSUPPORTED_TOOLS = new Set([
+    'set_agent_inherit', 'set_agent_isolated', 'move_session',
+]);
+
+function workerUnavailable(toolName: string): never {
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', `SESSION_WORKER_TOOL_UNAVAILABLE: Tool \`${toolName}\` is not available in Session-worker placement yet.`, true);
 }
 
-export function getToolPermissionNode(toolName: string, executionNode: string, targetNode: string): string {
-    return TARGET_NODE_PERMISSION_TOOL_NAMES.has(toolName)
-        ? targetNode
-        : executionNode;
+export function assertToolAvailableForPlacement(toolName: string, args: any, ctx: any): void {
+    if (ctx?.sessionPlacement !== 'session-worker') return;
+    if (WORKER_UNSUPPORTED_TOOLS.has(toolName)) workerUnavailable(toolName);
+    const owner = ctx.session;
+    if (!owner || owner.id !== ctx.sessionId || !ctx.persistCurrentSession) workerUnavailable(toolName);
+    const currentId = owner.id;
+    const isCurrent = (targetId: unknown): boolean => typeof targetId === 'string'
+        && (targetId === currentId || (Array.isArray(owner.aliases) && owner.aliases.includes(targetId)));
+    const fallbackTarget = args?.sessionId || currentId;
+    const literalTarget = args?.sessionId;
+    if (toolName === 'create_agent' && args?.convertSession === true) workerUnavailable(toolName);
+    if (toolName === 'create_agent' && args?.sourceSessionId && !isCurrent(args.sourceSessionId)) workerUnavailable(toolName);
+    if (toolName === 'session') {
+        const action = typeof args?.action === 'string' && args.action.trim() ? args.action.trim().toLowerCase() : 'status';
+        if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
+    }
+    if (toolName === 'stop_session' && !isCurrent(literalTarget)) workerUnavailable(toolName);
+    if (['set_session_child_model',
+        'set_session_compact_threshold', 'refresh_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
 }
-
-// Wire up the unified search module with definitions reference
-setDefinitionsRef(definitions, isToolDirectlyExposedToModel, isMasterOnlyToolName, getToolPermissionNode);
 
 // --- callTool dispatcher ---
-export async function callTool(toolName: string, args: any, context: any): Promise<any> {
-    const toolMap: Record<string, (args: any, ctx: any) => Promise<any>> = {
-        read: tool_read,
-        write: tool_write,
-        edit: tool_edit,
-        apply_patch: tool_apply_patch,
-        delete_file: tool_delete_file,
-        read_memory: tool_read_memory,
-        write_memory: tool_write_memory,
-        edit_memory: tool_edit_memory,
-        delete_memory: tool_delete_memory,
-        apply_patch_memory: tool_apply_patch_memory,
-        exec: tool_exec,
-        image_crop: tool_image_crop,
-        image_write_to_file: tool_image_write_to_file,
-        copy_between_nodes: tool_copy_between_nodes,
-        browse_open: tool_browse_open,
-        browse_list: tool_browse_list,
-        browse_get: tool_browse_get,
-        browse_close: tool_browse_close,
-        browse_interact: tool_browse_interact,
-        mcp_config: tool_mcp_config,
-        call_mcp: tool_call_mcp,
-        search_mcp_tools: tool_search_mcp_tools,
-        list_mcp_servers: tool_list_mcp_servers,
-        remote_node: tool_remote_node,
-        node_tools: tool_remote_node,
-        list_nodes: tool_list_nodes,
-        change_current_node: tool_change_current_node,
-        node_bootstrap_info: tool_node_bootstrap_info,
-        node_pair_approve: tool_node_pair_approve,
-        node_pair_list: tool_node_pair_list,
-        get_memory_context: tool_get_memory_context,
-        search_tools: tool_search_tools,
-        call_tool: tool_call_tool,
-        create_child_session: tool_create_child_session,
-        send_to_session: tool_send_to_session,
-        wait: tool_wait,
-        submit_compact_plan: tool_submit_compact_plan,
-        send_to_channel: tool_send_to_channel,
-        send_file: tool_send_file,
-        list_sessions: tool_list_sessions,
-        list_agents: tool_list_agents,
-        list_skills: tool_list_skills,
-        load_skill: tool_load_skill,
-        get_session_messages: tool_get_session_messages,
-        get_archived_messages: tool_get_archived_messages,
-        get_archived_blocks: tool_get_archived_blocks,
-        recall: tool_recall,
-        delete_session: tool_delete_session,
-        update_session_name: tool_update_session_name,
-        set_goal: tool_set_goal,
-        set_session_child_model: tool_set_session_child_model,
-        set_session_compact_threshold: tool_set_session_compact_threshold,
-        update_session_snapshot: tool_update_session_snapshot,
-        stop_session: tool_stop_session,
-        compact_session: tool_compact_session,
-        create_timer: tool_create_timer,
-        list_timers: tool_list_timers,
-        delete_timer: tool_delete_timer,
-        create_agent: tool_create_agent,
-        create_session: tool_create_session,
-        set_agent_inherit: tool_set_agent_inherit,
-        set_agent_isolated: tool_set_agent_isolated,
-        move_session: tool_move_session,
-        run_script: tool_run_script,
-        start_toolscript_run: tool_start_toolscript_run,
-        continue_script: tool_continue_script,
-        list_toolscript_runs: tool_list_toolscript_runs,
-        get_toolscript_run: tool_get_toolscript_run,
-        cancel_toolscript_run: tool_cancel_toolscript_run,
-    };
-
-    const handler = toolMap[toolName];
+async function dispatchBuiltinRaw(toolName: string, args: any, context: any): Promise<any> {
+    const handler = (exports as Record<string, any>)[toolName];
     if (!handler) {
         throw new Error(`Unknown tool: ${toolName}`);
     }
 
     return handler(args, context);
+}
+
+initializeResolvedToolRuntime({ definitions, dispatchBuiltin: dispatchBuiltinRaw, guardBuiltin: assertToolAvailableForPlacement });
+
+export async function callTool(toolName: string, args: any, context: any): Promise<any> {
+    return executeResolvedTool(await resolveDirectTool(toolName, args || {}, context), context);
 }
 
 // --- Named exports for direct access (preserves existing import patterns) ---
@@ -196,52 +130,49 @@ export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
 export const apply_patch_memory = tool_apply_patch_memory;
 export const apply_patch = tool_apply_patch;
-export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
 export const image_write_to_file = tool_image_write_to_file;
 export const exec = tool_exec;
-export const get_memory_context = tool_get_memory_context;
-export const create_child_session = tool_create_child_session;
+// Lazy wrappers: these facade functions live in mainManagementTools, whose
+// dependency chain can require this module before it finishes evaluating in
+// some process load orders (worker boot). Eagerly copying the binding would
+// capture undefined; deferring resolves the live export at call time.
+export const create_child_session: typeof tool_create_child_session = (args, ctx) => tool_create_child_session(args, ctx);
 export const create_agent = tool_create_agent;
 export const create_session = tool_create_session;
 export const set_agent_inherit = tool_set_agent_inherit;
 export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
-export const send_to_session = tool_send_to_session;
+export const send_to_session: typeof tool_send_to_session = (args, ctx) => tool_send_to_session(args, ctx);
 export const wait = tool_wait;
 export const submit_compact_plan = tool_submit_compact_plan;
-export const send_to_channel = tool_send_to_channel;
+export const send_to_channel: typeof tool_send_to_channel = (args, ctx) => tool_send_to_channel(args, ctx);
 export const send_file = tool_send_file;
-export const list_sessions = tool_list_sessions;
-export const list_agents = tool_list_agents;
-export const list_skills = tool_list_skills;
-export const load_skill = tool_load_skill;
+export const session = tool_session;
+export const list_agents: typeof tool_list_agents = (args, ctx) => tool_list_agents(args, ctx);
+export const skill = tool_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
 export const get_archived_blocks = tool_get_archived_blocks;
 export const recall = tool_recall;
 export const delete_session = tool_delete_session;
-export const update_session_name = tool_update_session_name;
 export const set_goal = tool_set_goal;
 export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
-export const update_session_snapshot = tool_update_session_snapshot;
+export const refresh_session_snapshot = tool_refresh_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
-export const create_timer = tool_create_timer;
-export const list_timers = tool_list_timers;
-export const delete_timer = tool_delete_timer;
+export const create_timer: typeof tool_create_timer = (args, ctx) => tool_create_timer(args, ctx);
+export const list_timers: typeof tool_list_timers = (args, ctx) => tool_list_timers(args, ctx);
+export const update_timer: typeof tool_update_timer = (args, ctx) => tool_update_timer(args, ctx);
+export const delete_timer: typeof tool_delete_timer = (args, ctx) => tool_delete_timer(args, ctx);
 export const browse_open = tool_browse_open;
 export const browse_list = tool_browse_list;
 export const browse_get = tool_browse_get;
 export const browse_close = tool_browse_close;
 export const browse_interact = tool_browse_interact;
-export const remote_node = tool_remote_node;
-export const node_tools = tool_remote_node;
 export const mcp_config = tool_mcp_config;
-export const call_mcp = tool_call_mcp;
-export const search_mcp_tools = tool_search_mcp_tools;
 export const list_mcp_servers = tool_list_mcp_servers;
 export const search_tools = tool_search_tools;
 export const call_tool = tool_call_tool;
@@ -251,15 +182,17 @@ export const continue_script = tool_continue_script;
 export const list_toolscript_runs = tool_list_toolscript_runs;
 export const get_toolscript_run = tool_get_toolscript_run;
 export const cancel_toolscript_run = tool_cancel_toolscript_run;
-export const list_nodes = tool_list_nodes;
-export const change_current_node = tool_change_current_node;
+export const node = tool_node;
 export const node_bootstrap_info = tool_node_bootstrap_info;
 export const node_pair_approve = tool_node_pair_approve;
 export const node_pair_list = tool_node_pair_list;
+export const set_tool_rules: typeof tool_set_tool_rules = (args, ctx) => tool_set_tool_rules(args, ctx);
 
 // Re-export definitions and model-facing subset
 export { definitions };
-export const modelFacingDefinitions = definitions.filter(def => isToolDirectlyExposedToModel(def.name));
+export const modelFacingDefinitions = definitions
+    .filter(def => isToolDirectlyExposedToModel(def.name))
+    .map(addToolCancellationSchema);
 
 // Re-export utilities used by other modules
 export { resolveMemorySearchOptions };

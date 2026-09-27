@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadModelsConfigFromObject } from './config';
+import { loadModelsConfigFromObject, MODEL_EFFORTS, normalizeOpenAIWebSearchConfig } from './config';
 
 test('legacy root models + entry model list schema still works', () => {
   const parsed = loadModelsConfigFromObject({
@@ -103,6 +103,234 @@ test('new providers root + models object list applies model overrides and merge 
   });
 });
 
+test('disallowEmptyResponse is provider-scoped and propagates to concrete model entries', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'strict/model-a',
+    providers: {
+      strict: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'key',
+        disallowEmptyResponse: true,
+        models: ['model-a'],
+      },
+      permissive: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'key',
+        models: ['model-b'],
+      },
+    },
+  });
+
+  assert.equal(parsed.models['strict/model-a']?.disallowEmptyResponse, true);
+  assert.equal(parsed.models['permissive/model-b']?.disallowEmptyResponse, undefined);
+});
+
+test('Chat Completions history reasoning field defaults, inherits, and overrides per model', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'chat/default-model',
+    providers: {
+      chat: {
+        providerType: 'openai-completions',
+        historyReasoningField: 'reasoning',
+        models: [
+          'default-model',
+          { id: 'standard-model', historyReasoningField: 'reasoning_content' },
+        ],
+      },
+      omitted: {
+        providerType: 'openai-completions',
+        models: ['model'],
+      },
+    },
+  });
+
+  assert.equal(parsed.models['chat/default-model'].historyReasoningField, 'reasoning');
+  assert.equal(parsed.models['chat/standard-model'].historyReasoningField, 'reasoning_content');
+  assert.equal(parsed.models.omitted.historyReasoningField, 'reasoning_content');
+});
+
+test('history reasoning field rejects invalid values and non-Chat concrete or virtual providers', () => {
+  const parse = (provider: any) => loadModelsConfigFromObject({ default: 'provider', providers: { provider } });
+  assert.throws(
+    () => parse({ providerType: 'openai-completions', historyReasoningField: 'other', models: ['model'] }),
+    /must be one of: reasoning_content, reasoning/,
+  );
+  assert.throws(
+    () => parse({ providerType: 'openai-responses', historyReasoningField: 'reasoning', models: ['model'] }),
+    /supported only for openai-completions/,
+  );
+  assert.throws(
+    () => parse({ providerType: 'anthropic', models: [{ id: 'model', historyReasoningField: 'reasoning' }] }),
+    /supported only for openai-completions/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({
+      default: 'route',
+      providers: {
+        leaf: { providerType: 'openai-completions', models: ['model'] },
+        route: { providerType: 'session-hash', targets: ['leaf/model'], historyReasoningField: 'reasoning' },
+      },
+    }),
+    /forbids field `historyReasoningField`/,
+  );
+});
+
+test('openai-ws is a concrete Responses provider with OpenAI defaults and rejects request compression', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'socket',
+    providers: {
+      socket: { providerType: 'openai-ws', models: ['gpt-test'] },
+    },
+  });
+  assert.equal(parsed.models.socket.providerType, 'openai-ws');
+  assert.equal(parsed.models.socket.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(parsed.models.socket.model, 'gpt-test');
+  assert.throws(
+    () => loadModelsConfigFromObject({
+      default: 'socket',
+      providers: {
+        socket: { providerType: 'openai-ws', requestCompression: 'gzip', models: ['gpt-test'] },
+      },
+    }),
+    /requestCompression is not supported for openai-ws/,
+  );
+});
+
+test('effort capabilities default, inherit, and replace at model level', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'openai/model-a',
+    providers: {
+      openai: {
+        providerType: 'openai-responses',
+        effort: { allowed: ['low', 'medium', 'high', 'xhigh'], default: 'high' },
+        models: [
+          'model-a',
+          { id: 'model-b', effort: { allowed: ['none', 'high'], default: 'none' } },
+        ],
+      },
+      defaults: {
+        providerType: 'anthropic',
+        models: ['model-c'],
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.models['openai/model-a'].effort, {
+    allowed: ['low', 'medium', 'high', 'xhigh'], default: 'high',
+  });
+  assert.deepEqual(parsed.models['openai/model-b'].effort, {
+    allowed: ['none', 'high'], default: 'none',
+  });
+  assert.deepEqual(parsed.models.defaults.effort, {
+    allowed: [...MODEL_EFFORTS], default: 'high',
+  });
+});
+
+test('effort validation rejects invalid, duplicate, empty, and disallowed inherited defaults', () => {
+  const parse = (effort: any, modelEffort?: any) => loadModelsConfigFromObject({
+    default: 'provider/model',
+    providers: {
+      provider: {
+        providerType: 'openai-completions',
+        effort,
+        models: [{ id: 'model', ...(modelEffort === undefined ? {} : { effort: modelEffort }) }],
+      },
+    },
+  });
+  assert.throws(() => parse({ allowed: [] }), /non-empty array/);
+  assert.throws(() => parse({ allowed: ['high', 'high'] }), /duplicate/);
+  assert.throws(() => parse({ allowed: ['middle'] }), /must be one of/);
+  assert.throws(() => parse({ allowed: ['low'], default: 'high' }), /must be included/);
+  assert.throws(
+    () => parse({ allowed: ['low', 'high'], default: 'high' }, { allowed: ['low'] }),
+    /Model `provider\/model` effort\.default `high` must be included/,
+  );
+});
+
+test('OpenAI web search boolean/object settings normalize and merge at model level', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'openai/model-a',
+    providers: {
+      openai: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        webSearch: {
+          enabled: false,
+          toolChoice: 'auto',
+          searchContextSize: 'high',
+          allowedDomains: ['base.example'],
+          userLocation: { country: 'CN', city: 'Shenzhen' },
+        },
+        models: [
+          {
+            id: 'model-a',
+            webSearch: {
+              enabled: true,
+              toolChoice: 'required',
+              allowedDomains: ['example.com'],
+            },
+          },
+          { id: 'model-b', webSearch: false },
+          { id: 'model-c', webSearch: { toolChoice: 'required' } },
+          { id: 'model-d', webSearch: { enabled: false, searchContextSize: 'low' } },
+        ],
+      },
+      providerTrue: {
+        providerType: 'openai-responses',
+        webSearch: true,
+        models: ['model-e'],
+      },
+      providerFalse: {
+        providerType: 'openai-responses',
+        webSearch: false,
+        models: ['model-f'],
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.models['openai/model-a'].webSearch, {
+    enabled: true,
+    toolChoice: 'required',
+    searchContextSize: 'high',
+    allowedDomains: ['example.com'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-b'].webSearch, {
+    enabled: false,
+    toolChoice: 'auto',
+    searchContextSize: 'high',
+    allowedDomains: ['base.example'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-c'].webSearch, {
+    enabled: true,
+    toolChoice: 'required',
+    searchContextSize: 'high',
+    allowedDomains: ['base.example'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-d'].webSearch, {
+    enabled: false,
+    toolChoice: 'auto',
+    searchContextSize: 'low',
+    allowedDomains: ['base.example'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['providerTrue/model-e'].webSearch, { enabled: true });
+  assert.deepEqual(parsed.models['providerFalse/model-f'].webSearch, { enabled: false });
+});
+
+test('OpenAI web search normalizer validates supported tuning fields', () => {
+  assert.deepEqual(normalizeOpenAIWebSearchConfig(true), { enabled: true });
+  assert.deepEqual(normalizeOpenAIWebSearchConfig(false), { enabled: false });
+  assert.deepEqual(normalizeOpenAIWebSearchConfig({}), { enabled: true });
+  assert.throws(() => normalizeOpenAIWebSearchConfig('enabled'), /boolean or object/);
+  assert.throws(() => normalizeOpenAIWebSearchConfig({ toolChoice: 'never' }), /toolChoice/);
+  assert.throws(() => normalizeOpenAIWebSearchConfig({ allowedDomains: [''] }), /allowedDomains/);
+});
+
 test('single-model provider entries still expose provider key alias and keep displayModels behavior', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'qwen',
@@ -181,4 +409,396 @@ test('map form for provider entry models is rejected with a clear error', () => 
     }),
     /map\/object form is not supported/i,
   );
+});
+
+test('virtual providers resolve strict concrete leaves with safe context and async compact values', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'sticky',
+    providers: {
+      sticky: {
+        providerType: 'session-hash',
+        targets: ['openai/a', 'anthropic/b'],
+      },
+      openai: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://openai.test/v1',
+        contextLimit: 200000,
+        models: ['a'],
+      },
+      anthropic: {
+        providerType: 'anthropic',
+        baseUrl: 'https://anthropic.test',
+        contextLimit: 100000,
+        asyncCompact: false,
+        models: ['b'],
+      },
+      fallback: {
+        providerType: 'failover',
+        targets: ['openai/a', 'anthropic/b'],
+        failureThreshold: 3,
+        cooldownMs: 1234,
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.displayModels, ['sticky', 'openai', 'anthropic', 'fallback']);
+  assert.equal(parsed.models.sticky.contextLimit, 100000);
+  assert.equal(parsed.models.sticky.asyncCompact, false);
+  assert.deepEqual(parsed.models.sticky.effort, { allowed: [...MODEL_EFFORTS] });
+  assert.deepEqual(parsed.models.sticky.virtualRouting?.targets, ['openai/a', 'anthropic/b']);
+  assert.equal(parsed.models.sticky.virtualRouting?.failureThreshold, 5);
+  assert.equal(parsed.models.sticky.virtualRouting?.cooldownMs, 600000);
+  assert.equal(parsed.models.fallback.virtualRouting?.failureThreshold, 3);
+  assert.equal(parsed.models.fallback.virtualRouting?.cooldownMs, 1234);
+  assert.match(parsed.models.fallback.virtualRouting?.fingerprint || '', /^[0-9a-f]{64}$/);
+});
+
+test('session-hash accepts one concrete target as an alias and canonicalizes single-model aliases', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'alias',
+    providers: {
+      concrete: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        models: ['model-a'],
+      },
+      alias: {
+        providerType: 'session-hash',
+        targets: ['concrete'],
+      },
+    },
+  });
+  assert.deepEqual(parsed.models.alias.virtualRouting?.targets, ['concrete/model-a']);
+  assert.equal(parsed.models.alias.asyncCompact, true);
+});
+
+test('provider string alias is exactly equivalent to a single-target session-hash entry', () => {
+  const providers = {
+    concrete: {
+      providerType: 'openai-responses',
+      baseUrl: 'https://example.test/v1',
+      contextLimit: 123456,
+      asyncCompact: false,
+      effort: { allowed: ['low', 'high'], default: 'low' },
+      models: ['org/model-a'],
+    },
+  };
+  const shorthand = loadModelsConfigFromObject({
+    default: 'fast',
+    providers: { ...providers, fast: '  concrete/org/model-a  ' },
+  });
+  const objectForm = loadModelsConfigFromObject({
+    default: 'fast',
+    providers: {
+      ...providers,
+      fast: { providerType: 'session-hash', targets: ['concrete/org/model-a'] },
+    },
+  });
+
+  assert.equal(shorthand.default, 'fast');
+  assert.deepEqual(shorthand.displayModels, ['concrete', 'fast']);
+  assert.deepEqual(shorthand.models.fast, objectForm.models.fast);
+  assert.deepEqual(shorthand.models.fast.virtualRouting?.targets, ['concrete/org/model-a']);
+  assert.equal(shorthand.models.fast.contextLimit, 123456);
+  assert.equal(shorthand.models.fast.asyncCompact, false);
+  assert.deepEqual(shorthand.models.fast.effort, { allowed: ['low', 'high'] });
+});
+
+test('provider string aliases reuse strict virtual leaf validation', () => {
+  const concrete = {
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: ['model-a'],
+  };
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, empty: '   ' } }),
+    /alias `empty` must target a non-empty concrete model key/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, missing: 'unknown/model' } }),
+    /unknown concrete target `unknown\/model`/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, self: 'self' } }),
+    /cannot target itself/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, first: 'concrete', second: 'first' } }),
+    /target `first` is virtual; nested virtual routing is not supported/,
+  );
+});
+
+test('virtual effort capabilities are the canonical union of concrete leaf sets', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      first: {
+        providerType: 'openai-responses',
+        effort: { allowed: ['none', 'low', 'high'], default: 'high' },
+        models: ['a'],
+      },
+      second: {
+        providerType: 'anthropic',
+        effort: { allowed: ['medium', 'high', 'max'], default: 'medium' },
+        models: ['b'],
+      },
+      route: { providerType: 'failover', targets: ['first/a', 'second/b'] },
+    },
+  });
+  assert.deepEqual(parsed.models.route.effort, {
+    allowed: ['none', 'low', 'medium', 'high', 'max'],
+  });
+});
+
+test('canonical targets preserve slash-containing and provider-prefixed model ids as actual expansion keys', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'alias',
+    providers: {
+      foo: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://example.test/v1',
+        models: ['foo/bar'],
+      },
+      alias: {
+        providerType: 'session-hash',
+        targets: ['foo'],
+      },
+    },
+  });
+  assert.ok(parsed.models['foo/foo/bar']);
+  assert.equal(parsed.models.foo.canonicalModelKey, 'foo/foo/bar');
+  assert.equal(parsed.models['foo/foo/bar'].canonicalModelKey, 'foo/foo/bar');
+  assert.deepEqual(parsed.models.alias.virtualRouting?.targets, ['foo/foo/bar']);
+  assert.equal(parsed.models[parsed.models.alias.virtualRouting!.targets[0]].model, 'foo/bar');
+  assert.throws(
+    () => loadModelsConfigFromObject({
+      default: 'duplicate',
+      providers: {
+        foo: {
+          providerType: 'openai-completions',
+          baseUrl: 'https://example.test/v1',
+          models: ['foo/bar'],
+        },
+        duplicate: {
+          providerType: 'failover',
+          targets: ['foo', 'foo/foo/bar'],
+        },
+      },
+    }),
+    /duplicate canonical target `foo\/foo\/bar`/,
+  );
+});
+
+test('route fingerprint deterministically covers resolved concrete request plans without storing secrets', () => {
+  const raw = {
+    default: 'route',
+    providers: {
+      leaf: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://leaf.test/v1',
+        apiKey: 'super-secret-value',
+        contextLimit: 1000,
+        asyncCompact: true,
+        extraFields: { z: 1, nested: { b: 2, a: 1 } },
+        extraHeaders: { 'x-z': 'z', Authorization: 'secret-header' },
+        models: ['model-a'],
+      },
+      backup: {
+        providerType: 'anthropic',
+        baseUrl: 'https://backup.test',
+        apiKey: 'backup-secret',
+        models: ['model-b'],
+      },
+      route: {
+        providerType: 'failover',
+        targets: ['leaf/model-a', 'backup/model-b'],
+      },
+    },
+  };
+  const fingerprint = (config: any) => loadModelsConfigFromObject(config).models.route.virtualRouting!.fingerprint;
+  const baseFingerprint = fingerprint(raw);
+  const changedFingerprints = [
+    (() => { const value = structuredClone(raw); value.providers.leaf.baseUrl = 'https://changed.test/v1'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.apiKey = 'changed-secret'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.providerType = 'anthropic'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.models = ['leaf/model-a']; value.providers.route.targets[0] = 'leaf/leaf/model-a'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf.extraHeaders as any)['x-new'] = 'yes'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).requestCompression = 'gzip'; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.extraFields.nested.a = 9; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).streamContentInactivityTimeoutMs = 300000; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).disallowEmptyResponse = true; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).effort = { allowed: ['low', 'high'], default: 'low' }; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).historyReasoningField = 'reasoning'; return fingerprint(value); })(),
+  ];
+  assert.ok(changedFingerprints.every(value => value !== baseFingerprint));
+
+  const reordered = structuredClone(raw);
+  reordered.providers.leaf.extraHeaders = { Authorization: 'secret-header', 'x-z': 'z' };
+  reordered.providers.leaf.extraFields = { nested: { a: 1, b: 2 }, z: 1 };
+  assert.equal(fingerprint(reordered), baseFingerprint);
+
+  const routingJson = JSON.stringify(loadModelsConfigFromObject(raw).models.route.virtualRouting);
+  assert.doesNotMatch(routingJson, /super-secret-value|secret-header|backup-secret/);
+  assert.match(baseFingerprint, /^[0-9a-f]{64}$/);
+});
+
+test('virtual schema rejects forbidden fields, invalid target counts, unknown/nested/self targets, and canonical duplicates', () => {
+  const concrete = {
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: ['model-a'],
+  };
+  const parseVirtual = (entry: any, extraProviders: any = {}) => loadModelsConfigFromObject({
+    default: 'virtual',
+    providers: { concrete, ...extraProviders, virtual: entry },
+  });
+
+  assert.throws(() => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], apiKey: 'forbidden' }), /forbids field `apiKey`/);
+  assert.throws(() => parseVirtual({ providerType: 'failover', targets: ['concrete'] }), /at least 2 targets/);
+  assert.throws(() => parseVirtual({ providerType: 'session-hash', targets: ['missing/model'] }), /unknown concrete target/);
+  assert.throws(() => parseVirtual({ providerType: 'session-hash', targets: ['virtual'] }), /cannot target itself/);
+  assert.throws(() => parseVirtual(
+    { providerType: 'session-hash', targets: ['other'] },
+    { other: { providerType: 'session-hash', targets: ['virtual'] } },
+  ), /is virtual; nested virtual routing is not supported/);
+  assert.throws(() => parseVirtual({ providerType: 'failover', targets: ['concrete', 'concrete/model-a'] }), /duplicate canonical target/);
+});
+
+test('provider entries and concrete/virtual routing fields are strictly separated', () => {
+  const invalidProviderValues: unknown[] = [null, 1, []];
+  for (const value of invalidProviderValues) {
+    assert.throws(
+      () => loadModelsConfigFromObject({ default: 'bad', providers: { bad: value } }),
+      /Provider `bad` must be a plain object or non-empty alias string/,
+    );
+  }
+
+  const concrete = {
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: ['model-a'],
+  };
+  for (const field of ['targets', 'failureThreshold', 'cooldownMs']) {
+    assert.throws(
+      () => loadModelsConfigFromObject({
+        default: 'concrete',
+        providers: { concrete: { ...concrete, [field]: field === 'targets' ? ['concrete'] : 1 } },
+      }),
+      new RegExp(`Concrete provider .* forbids routing field .*${field}`),
+    );
+  }
+
+  const parseVirtual = (entry: any) => loadModelsConfigFromObject({
+    default: 'virtual',
+    providers: { concrete, virtual: entry },
+  });
+  for (const field of ['contextLimit', 'asyncCompact', 'webSearch', 'disallowEmptyResponse']) {
+    assert.throws(
+      () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: field === 'contextLimit' ? 1000 : true }),
+      new RegExp(`forbids field .*${field}`),
+    );
+  }
+  for (const field of ['failureThreshold', 'cooldownMs']) {
+    assert.throws(
+      () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: 1 }),
+      new RegExp(`session-hash.*forbids failover field .*${field}`),
+    );
+  }
+  for (const [field, value] of [['failureThreshold', 1.5], ['failureThreshold', 0], ['cooldownMs', 1.5], ['cooldownMs', 0]] as const) {
+    assert.throws(
+      () => loadModelsConfigFromObject({
+        default: 'virtual',
+        providers: {
+          concrete,
+          second: { ...concrete, models: ['model-b'] },
+          virtual: {
+            providerType: 'failover',
+            targets: ['concrete/model-a', 'second/model-b'],
+            [field]: value,
+          },
+        },
+      }),
+      new RegExp(`${field} must be a positive integer`),
+    );
+  }
+});
+
+test('providerType continues to take precedence over the legacy provider reader', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'concrete',
+    providers: {
+      concrete: {
+        providerType: 'openai-completions',
+        provider: 'failover',
+        baseUrl: 'https://example.test/v1',
+        models: ['model-a'],
+      },
+    },
+  });
+  assert.equal(parsed.models.concrete.providerType, 'openai-completions');
+  assert.equal(parsed.models.concrete.virtualRouting, undefined);
+});
+
+test('legacy provider remains a fallback reader for virtual providerType values', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'legacy-route',
+    providers: {
+      concrete: {
+        providerType: 'anthropic',
+        baseUrl: 'https://example.test',
+        models: ['model-a'],
+      },
+      'legacy-route': {
+        provider: 'session-hash',
+        targets: ['concrete/model-a'],
+      },
+    },
+  });
+  assert.equal(parsed.models['legacy-route'].providerType, 'session-hash');
+  assert.deepEqual(parsed.models['legacy-route'].virtualRouting?.targets, ['concrete/model-a']);
+});
+
+test('stream inactivity inherits provider defaults, model overrides, and aliases', () => {
+  const parsed = loadModelsConfigFromObject({ default: 'slow/a', providers: {
+    slow: { streamContentInactivityTimeoutMs: 300_000, models: ['a', { id: 'b', streamContentInactivityTimeoutMs: 900_000 }] },
+    normal: { models: ['a'] }, alias: 'slow/b',
+  } });
+  assert.equal(parsed.models['slow/a'].streamContentInactivityTimeoutMs, 300_000);
+  assert.equal(parsed.models['slow/b'].streamContentInactivityTimeoutMs, 900_000);
+  assert.equal(parsed.models['normal/a'].streamContentInactivityTimeoutMs, 60_000);
+  assert.deepEqual(parsed.models.alias.virtualRouting.targets, ['slow/b']);
+});
+
+test('stream inactivity rejects invalid values at both scopes and on virtual providers', () => {
+  for (const value of [null, '300000', false, 0, -1, 1.5, NaN, Infinity, 2147483648]) {
+    for (const modelLevel of [false, true]) {
+      assert.throws(() => loadModelsConfigFromObject({ default: 'p/a', providers: { p: {
+        ...(modelLevel ? {} : { streamContentInactivityTimeoutMs: value }),
+        models: [{ id: 'a', ...(modelLevel ? { streamContentInactivityTimeoutMs: value } : {}) }],
+      } } }), /streamContentInactivityTimeoutMs must be an integer/);
+    }
+  }
+  for (const providerType of ['session-hash', 'failover']) {
+    assert.throws(() => loadModelsConfigFromObject({ default: 'v', providers: {
+      p: { models: ['a', 'b'] }, v: { providerType, targets: ['p/a', 'p/b'], streamContentInactivityTimeoutMs: 300000 },
+    } }), /forbids field `streamContentInactivityTimeoutMs`/);
+  }
+});
+
+test('editor schema exposes the same stream timeout bounds at provider and model scopes', async () => {
+  const { MODELS_CONFIG_SCHEMA } = await import('../packages/shared/dist/configSchemas');
+  const provider = (MODELS_CONFIG_SCHEMA as any).properties.providers.additionalProperties.oneOf.find((entry: any) => entry.type === 'object');
+  const field = provider.properties.streamContentInactivityTimeoutMs;
+  assert.equal(field.type, 'integer');
+  assert.equal(field.minimum, 1);
+  assert.equal(field.maximum, 2147483647);
+  assert.equal(field.default, 60000);
+  const model = provider.properties.models.items.anyOf.find((entry: any) => entry.type === 'object');
+  assert.deepEqual(model.properties.streamContentInactivityTimeoutMs, field);
+  for (const rule of provider.allOf.slice(0, 2)) {
+    assert.ok(rule.then.not.anyOf.some((entry: any) => entry.required.includes('streamContentInactivityTimeoutMs')));
+  }
 });

@@ -6,39 +6,127 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
+import { CompactionRequest, isQueueItem, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
+import { RpcError } from './rpc';
+import { clearRemoteExecStateForSession, rebindRemoteExecSessionAgent } from './nodes/remoteExecLiveness';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
+import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt, type AcceptedExternalEventReceiptPlan } from './session/externalEventReceipts';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir } from './config';
+import { VECTOR_ENABLED } from './config';
+import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_KEEP_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, getNextSessionMessageSeq } from './session/archive';
-import { appendMessagesToContextFrontier, loadSessionFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, saveSessionFrontier } from './session/layeredContext';
-import { ensureSessionBranch } from './session/archiveStore';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { normalizeAgentToolRules } from './permissions';
+import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
+import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
+import { readArchiveBlocksByIdRange } from './session/layeredContext';
+import { ensureSessionBranch, hasArchivedSessionId, initArchiveStore, rollbackUncommittedSessionArchive } from './session/archiveStore';
+import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
+import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
+import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, isSessionAuthorityPostCommitError, SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
+import { replaceAuthoritativeSessionState } from './session/stateHydration';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
+import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from './session/modelEffortSettings';
 import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
-import { maybeBuildGoalReminderMessage } from './session/goal';
-import { buildSystemMessageParts } from './utils/systemMessageParts';
+import { buildTimestampedSystemMessageParts, withInputTimePart } from './utils/systemMessageParts';
+import { formatLocalTimestamp } from './utils/localTime';
+import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, formatFoxwarmSystemOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag, parseFoxwarmTagLine, formatSystemPartForModel } from './utils/promptWrappers';
+import { runStartupMigrations } from './migrations';
+import {
+  buildSessionRuntimeState,
+  beginCompactionSessionRuntimeState,
+  clearSessionCatalogStub,
+  clearActiveSessionRuntimeState,
+  formatSessionRuntimeStateSummary,
+  getEffectiveSessionQueueLength,
+  isSessionCatalogStub,
+  markSessionCatalogStub,
+  setActiveSessionRuntimeState,
+  setSessionRuntimeStateUpdateCallback,
+  type ActiveSessionRuntimeStateInput,
+  type SessionRuntimeState,
+} from './sessionRuntimeState';
 
 function systemPart(system: string): MessagePart {
-  return { system };
+  return { system: formatSystemPartForModel(system) };
 }
 
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
+const SESSION_WORKER_PROCESS = !!process.env.FOXWARM_SESSION_WORKER_SESSION_ID;
+
+let sessionIdentityLockTail: Promise<void> = Promise.resolve();
+const channelSessionCreationTails = new Map<string, Promise<void>>();
+const pendingAuthoritativeStateUpgrades = new Set<string>();
+
+async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = sessionIdentityLockTail;
+  let release!: () => void;
+  sessionIdentityLockTail = new Promise<void>(resolve => {
+    release = resolve;
+  });
+
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Serializes one concrete Session-worker admission against destructive claim
+ * acquisition. The callback must end once the effect is durably admitted
+ * (owner ensured plus mailbox append, or activated call accepted); it must not
+ * await a provider/tool turn to finish.
+ */
+export async function withSessionDestructiveMutationAdmission<T>(
+  sessionIds: Array<string | undefined>,
+  operation: string,
+  admit: () => Promise<T>,
+): Promise<T> {
+  return withSessionIdentityLock(async () => {
+    assertSessionDestructiveMutationAllowed(sessionIds, operation);
+    return admit();
+  });
+}
+
+async function withChannelSessionCreationLock<T>(channelId: string, conversationId: string, operation: () => Promise<T>): Promise<T> {
+  const key = JSON.stringify([channelId, conversationId]);
+  const previous = channelSessionCreationTails.get(key) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  channelSessionCreationTails.set(key, current);
+
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (channelSessionCreationTails.get(key) === current) {
+      channelSessionCreationTails.delete(key);
+    }
+  }
+}
 
 export interface SessionWaitState {
   id: string;
   startedAt: number;
   reason?: string;
   timeoutSeconds?: number;
+  waitExecIds?: string[];
   waitAll?: SessionWaitAllState;
+  waitAnySessions?: string[];
+  waitForInput?: true;
+  /** Present only on waits written through the current declared-source API. */
+  declarationVersion?: 1;
 }
 
 export interface SessionWaitAllState {
@@ -47,7 +135,7 @@ export interface SessionWaitAllState {
   deferredQueue: QueueItem[];
 }
 
-type WaitQueueTransition =
+export type WaitQueueTransition =
   | { action: 'drop' }
   | { action: 'defer' }
   | { action: 'enqueue'; items: QueueItem[] };
@@ -71,10 +159,10 @@ function clearSessionWaitState(session: Session): boolean {
 }
 
 function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
-  // These items represent internal compaction maintenance, not external input.
-  // They may be processed while a session is waiting, but should not consume the
+  // This item represents internal compaction maintenance, not external input.
+  // It may be processed while a session is waiting, but should not consume the
   // wait token or make a later wait-timeout event stale.
-  return item.type === 'compact' || item.type === 'compact-commit';
+  return item.type === 'compact-commit';
 }
 
 function getWaitAllState(wait: SessionWaitState): SessionWaitAllState | undefined {
@@ -99,7 +187,11 @@ function getWaitAllPendingSessions(waitAll: SessionWaitAllState): string[] {
 }
 
 function buildWaitAllPendingReminder(pendingSessions: string[]): string {
-  return `[SYSTEM: waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.]`;
+  return formatFoxwarmSystem({
+    kind: 'event',
+    type: 'wait-all-pending',
+    pendingSessions: pendingSessions.join(','),
+  }, `waitAllSessions is still pending for: ${pendingSessions.map(sessionId => `\`${sessionId}\``).join(', ')}. This session was woken before every listed session sent a new message after the wait started.`);
 }
 
 function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem | undefined {
@@ -109,7 +201,7 @@ function buildWaitAllPendingReminderItem(pendingSessions: string[]): QueueItem |
 
   return {
     type: 'background',
-    parts: buildSystemMessageParts(buildWaitAllPendingReminder(pendingSessions)),
+    parts: buildTimestampedSystemMessageParts(buildWaitAllPendingReminder(pendingSessions)),
   };
 }
 
@@ -144,7 +236,14 @@ function markWaitAllSessionSatisfied(waitAll: SessionWaitAllState, sourceSession
   }
 }
 
-function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueueTransition {
+export function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueueTransition {
+  if (item.waitLivenessFingerprint) {
+    if (!item.waitLivenessWaitId || getSessionWaitState(session)?.id !== item.waitLivenessWaitId) return { action: 'drop' };
+    const current = Array.isArray(session.meta.waitLivenessFingerprints)
+      ? session.meta.waitLivenessFingerprints.filter((value): value is string => typeof value === 'string') : [];
+    if (current.includes(item.waitLivenessFingerprint)) return { action: 'drop' };
+    session.meta.waitLivenessFingerprints = [...current, item.waitLivenessFingerprint].slice(-16);
+  }
   const wait = getSessionWaitState(session);
   if (!wait) {
     if (typeof item.waitTimeoutId === 'string') {
@@ -224,8 +323,24 @@ export async function startSessionWait(sessionId: string, options: {
   reason?: string;
   timeoutSeconds?: number;
   waitAllSessions?: string[];
+  waitExecIds?: string[];
+  waitAnySessions?: string[];
+  waitForInput?: true;
+  declarationVersion?: 1;
 } = {}): Promise<SessionWaitState> {
   const session = await getSession(sessionId);
+  return startSessionWaitForSession(session, options, () => saveSession(session.id));
+}
+
+export async function startSessionWaitForSession(session: Session, options: {
+  reason?: string;
+  timeoutSeconds?: number;
+  waitAllSessions?: string[];
+  waitExecIds?: string[];
+  waitAnySessions?: string[];
+  waitForInput?: true;
+  declarationVersion?: 1;
+} = {}, persistSession: () => Promise<void>): Promise<SessionWaitState> {
   const existingWait = getSessionWaitState(session);
   const existingWaitAll = existingWait ? getWaitAllState(existingWait) : undefined;
   if (existingWaitAll?.deferredQueue.length) {
@@ -243,6 +358,12 @@ export async function startSessionWait(sessionId: string, options: {
   if (typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) && options.timeoutSeconds > 0) {
     state.timeoutSeconds = options.timeoutSeconds;
   }
+  if (Array.isArray(options.waitExecIds) && options.waitExecIds.length > 0) {
+    state.waitExecIds = [...options.waitExecIds];
+  }
+  if (Array.isArray(options.waitAnySessions) && options.waitAnySessions.length > 0) state.waitAnySessions = [...options.waitAnySessions];
+  if (options.waitForInput === true) state.waitForInput = true;
+  if (options.declarationVersion === 1) state.declarationVersion = 1;
   if (Array.isArray(options.waitAllSessions) && options.waitAllSessions.length > 0) {
     state.waitAll = {
       sessions: [...options.waitAllSessions],
@@ -252,30 +373,146 @@ export async function startSessionWait(sessionId: string, options: {
   }
 
   session.meta.wait = state;
-  await saveSession(session.id);
+  await persistSession();
   return state;
+}
+
+export async function clearSessionWaitById(sessionId: string | undefined, waitId: string): Promise<boolean> {
+  if (!sessionId) return false;
+  const session = await getExistingSession(sessionId);
+  const wait = getSessionWaitState(session);
+  if (!session || !wait || wait.id !== waitId) return false;
+  clearSessionWaitState(session);
+  await saveSession(session.id);
+  return true;
 }
 
 export async function queueSessionWaitTimeoutEvent(sessionId: string, waitId: string, message: string): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type: 'background',
-    parts: buildSystemMessageParts(message),
+    parts: buildTimestampedSystemMessageParts(message),
     waitTimeoutId: waitId,
   });
 }
 
-async function allocateForkSessionId(sourceSessionId: string, suffix?: string): Promise<string> {
-  const requestedSuffix = (suffix || 'fork').trim() || 'fork';
-  const baseId = `${sourceSessionId}_${requestedSuffix}`;
+export const ARCHIVED_SESSION_ID_ERROR_CODE = 'SESSION_ID_ARCHIVED';
 
-  if (!await getExistingSession(baseId)) {
+export class ArchivedSessionIdError extends Error {
+  readonly code = ARCHIVED_SESSION_ID_ERROR_CODE;
+
+  constructor(sessionId: string) {
+    super(`Session "${sessionId}" cannot be created because that internal session ID is reserved by retained archive history.`);
+    this.name = 'ArchivedSessionIdError';
+  }
+}
+
+type SessionIdReservation = 'live' | 'archived' | null;
+
+async function hasPersistedLiveSessionId(sessionId: string): Promise<boolean> {
+  if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
+    return true;
+  }
+
+  return SESSION_WORKER_PROCESS || !sessionCatalogStore.exists() ? false : !!sessionCatalogStore.get(sessionId);
+}
+
+async function getSessionIdReservation(sessionId: string): Promise<SessionIdReservation> {
+  await initArchiveStore();
+  const resolvedSessionId = await resolveSessionId(sessionId);
+  if (resolvedSessionId !== sessionId) {
+    if (await hasPersistedLiveSessionId(resolvedSessionId)) {
+      return 'live';
+    }
+    return await hasArchivedSessionId(sessionId) ? 'archived' : null;
+  }
+
+  if (await hasPersistedLiveSessionId(sessionId)) {
+    return 'live';
+  }
+
+  return await hasArchivedSessionId(sessionId) ? 'archived' : null;
+}
+
+export async function assertSessionIdAvailableForNewLifetime(sessionId: string): Promise<void> {
+  const reservation = await getSessionIdReservation(sessionId);
+  if (reservation === 'live') {
+    throw new Error(`Session "${sessionId}" already exists.`);
+  }
+  if (reservation === 'archived') {
+    throw new ArchivedSessionIdError(sessionId);
+  }
+}
+
+async function isSessionIdReserved(sessionId: string): Promise<boolean> {
+  return await getSessionIdReservation(sessionId) !== null;
+}
+
+async function allocateGeneratedSessionId(): Promise<string> {
+  while (true) {
+    const candidate = generateSessionId();
+    if (!await isSessionIdReserved(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+async function generateAvailableSessionName(agentName: string = 'main'): Promise<string> {
+  while (true) {
+    const sessionName = generateSessionId();
+    const sessionId = agentName === 'main' ? sessionName : `${agentName}/${sessionName}`;
+    if (!await isSessionIdReserved(sessionId)) {
+      return sessionName;
+    }
+  }
+}
+
+async function allocateForkSessionId(sourceSessionId: string, suffix?: string, replaceMainLeaf = false): Promise<string> {
+  const requestedSuffix = (suffix || 'fork').trim() || 'fork';
+  const baseId = replaceMainLeaf
+    ? buildChildSessionId(sourceSessionId, requestedSuffix)
+    : `${sourceSessionId}_${requestedSuffix}`;
+
+  if (!await isSessionIdReserved(baseId)) {
     return baseId;
   }
 
   let counter = 2;
   while (true) {
     const candidate = `${baseId}_${counter}`;
-    if (!await getExistingSession(candidate)) {
+    if (!await isSessionIdReserved(candidate)) {
+      return candidate;
+    }
+    counter += 1;
+  }
+}
+
+function isMainSessionId(sessionId: string): boolean {
+  const parts = sessionId.split('/');
+  return parts[parts.length - 1] === 'main';
+}
+
+export function buildAgentMainSessionId(agentName: string): string {
+  return agentName === 'main' ? 'main' : `${agentName}/main`;
+}
+
+export function buildChildSessionId(parentSessionId: string, suffix: string): string {
+  return isMainSessionId(parentSessionId)
+    ? [...parentSessionId.split('/').slice(0, -1), suffix].join('/') || suffix
+    : `${parentSessionId}_${suffix}`;
+}
+
+async function allocateChildSessionId(parentSessionId: string, suffix: string): Promise<string> {
+  const requestedSuffix = (suffix || 'child').trim() || 'child';
+  const baseId = buildChildSessionId(parentSessionId, requestedSuffix);
+
+  if (!await isSessionIdReserved(baseId)) {
+    return baseId;
+  }
+
+  let counter = 2;
+  while (true) {
+    const candidate = `${baseId}_${counter}`;
+    if (!await isSessionIdReserved(candidate)) {
       return candidate;
     }
     counter += 1;
@@ -288,6 +525,93 @@ const sessions = new Map<string, Session>();
 
 // Alias resolution cache: alias -> real sessionId
 const aliasCache = new Map<string, string>();
+
+const destructiveLifecycleClaims = new Map<string, string>();
+let destructiveLifecycleClaimSequence = 0;
+
+export class SessionDestructiveLifecycleClaimError extends Error {
+  readonly code = 'SESSION_DELETE_IN_PROGRESS';
+  readonly statusCode = 409;
+  readonly retryable = true;
+
+  constructor(sessionId: string, operation: string) {
+    super(`Session "${sessionId}" is being prepared for deletion and cannot ${operation}. Retry after the delete request finishes.`);
+    this.name = 'SessionDestructiveLifecycleClaimError';
+  }
+}
+
+export function resolveLoadedSessionId(sessionId: string): string {
+  if (sessions.has(sessionId)) return sessionId;
+  const cached = aliasCache.get(sessionId);
+  if (cached) {
+    const target = sessions.get(cached);
+    if (!target?.aliases?.includes(sessionId)) aliasCache.delete(sessionId);
+  }
+  if (SESSION_WORKER_PROCESS || !sessionCatalogStore.exists()) return sessionId;
+  const resolution = sessionCatalogStore.resolveId(sessionId);
+  if (resolution.kind !== 'alias' || !resolution.sessionId) return sessionId;
+  aliasCache.set(sessionId, resolution.sessionId);
+  return resolution.sessionId;
+}
+
+/**
+ * Return the already-loaded catalog/session stub without filesystem lookup or
+ * semantic hydration. Main-owned presentation and permission checks use this
+ * boundary when Session-worker placement owns the full state.
+ */
+export function getSessionCatalog(sessionId: string): Session | undefined {
+  return sessions.get(resolveLoadedSessionId(sessionId));
+}
+
+export function isSessionDestructiveLifecycleClaimed(sessionId: string): boolean {
+  return destructiveLifecycleClaims.has(resolveLoadedSessionId(sessionId));
+}
+
+export function assertSessionDestructiveMutationAllowed(
+  sessionIds: Array<string | undefined>,
+  operation: string,
+  owningClaimId?: string,
+): void {
+  for (const sessionId of sessionIds) {
+    if (!sessionId) continue;
+    const realId = resolveLoadedSessionId(sessionId);
+    const claimId = destructiveLifecycleClaims.get(realId);
+    if (claimId && claimId !== owningClaimId) {
+      throw new SessionDestructiveLifecycleClaimError(realId, operation);
+    }
+  }
+}
+
+export async function claimSessionsForDestructiveLifecycle(sessionIds: string[]): Promise<{ claimId: string; sessionIds: string[] }> {
+  return withSessionIdentityLock(async () => {
+    const canonicalIds = [...new Set(sessionIds.map(resolveLoadedSessionId))];
+    assertSessionDestructiveMutationAllowed(canonicalIds, 'start another destructive lifecycle action');
+    const claimId = `delete-${process.pid}-${Date.now()}-${++destructiveLifecycleClaimSequence}`;
+    for (const sessionId of canonicalIds) destructiveLifecycleClaims.set(sessionId, claimId);
+    return { claimId, sessionIds: canonicalIds };
+  });
+}
+
+export function releaseSessionsForDestructiveLifecycle(claimId: string): void {
+  const releasedSessionIds: string[] = [];
+  for (const [sessionId, ownerClaimId] of destructiveLifecycleClaims) {
+    if (ownerClaimId !== claimId) continue;
+    destructiveLifecycleClaims.delete(sessionId);
+    releasedSessionIds.push(sessionId);
+  }
+  for (const sessionId of releasedSessionIds) {
+    const session = sessions.get(sessionId);
+    if (session && !session.busy && session.queue.some(isQueueItem)) {
+      try {
+        void Promise.resolve(onSessionTriggered?.(sessionId)).catch(error => {
+          logger.error({ err: error, sessionId }, 'Failed to resume queued work after destructive lifecycle claim release');
+        });
+      } catch (error) {
+        logger.error({ err: error, sessionId }, 'Failed to resume queued work after destructive lifecycle claim release');
+      }
+    }
+  }
+}
 
 export function updateAliasCache(aliases: string[], realId: string) {
   for (const alias of aliases) {
@@ -310,26 +634,13 @@ async function resolveSessionId(sessionId: string): Promise<string> {
     return sessionId;
   }
 
-  // Search through all sessions for alias match
-  for (const [realId, session] of sessions.entries()) {
-    if (session.aliases?.includes(sessionId)) {
-      aliasCache.set(sessionId, realId);
-      return realId;
-    }
-  }
+  if (SESSION_WORKER_PROCESS) return sessionId;
+  if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
 
-  // Check metadata file for aliases
-  if (await fs.pathExists(SESSIONS_FILE)) {
-    const data = await fs.readJson(SESSIONS_FILE);
-    const sessionsData = data.sessions || data;
-    
-    for (const [realId, meta] of Object.entries(sessionsData)) {
-      const sessionMeta = meta as any;
-      if (sessionMeta.aliases?.includes(sessionId)) {
-        aliasCache.set(sessionId, realId);
-        return realId;
-      }
-    }
+  const resolution = sessionCatalogStore.resolveId(sessionId);
+  if (resolution.kind === 'alias' && resolution.sessionId) {
+    aliasCache.set(sessionId, resolution.sessionId);
+    return resolution.sessionId;
   }
 
   // Not an alias, return as-is
@@ -338,33 +649,30 @@ async function resolveSessionId(sessionId: string): Promise<string> {
 
 // Check if a session exists in memory or on disk (metadata)
 export async function getExistingSession(sessionId: string): Promise<Session | null> {
+  return withSessionIdentityLock(() => getExistingSessionUnlocked(sessionId));
+}
+
+async function getExistingSessionUnlocked(sessionId: string): Promise<Session | null> {
   // Resolve alias first
   const realId = await resolveSessionId(sessionId);
   
   const session = sessions.get(realId);
   if (session) {
-    // Sessions loaded from sessions.json start as metadata-only placeholders
+    // Sessions loaded from catalog.sqlite start as metadata-only placeholders
     // with an empty history array. Delegate to getSession() so callers that
     // later save or inspect the session do not accidentally operate on an
     // unloaded placeholder and overwrite the on-disk history.
-    return await getSession(realId);
+    return await getSessionUnlocked(realId);
   }
 
   // Check if session history file exists
   const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
   if (await fs.pathExists(historyFile)) {
     // Load metadata + history via getSession
-    return await getSession(realId);
+    return await getSessionUnlocked(realId);
   }
 
-  // Check metadata store
-  if (await fs.pathExists(SESSIONS_FILE)) {
-    const data = await fs.readJson(SESSIONS_FILE);
-    const sessionsData = data.sessions || data;
-    if (sessionsData[realId]) {
-      return await getSession(realId);
-    }
-  }
+  if (!SESSION_WORKER_PROCESS && sessionCatalogStore.get(realId)) return await getSessionUnlocked(realId);
 
   return null;
 }
@@ -373,21 +681,106 @@ export type ChannelMode = sessionChannels.ChannelMode;
 
 // Callback to trigger agent turn
 let onSessionTriggered: ((sessionId: string) => void | Promise<void>) | null = null;
+let onSessionRetryRequested: ((sessionId: string) => void | Promise<void>) | null = null;
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
+let onQueueHistoryAppended: ((session: Session, messages: Message[]) => void) | null = null;
 
 // Callback when transient session events are updated (for SSE broadcasting)
 let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => void) | null = null;
 
-// Callback when session list is updated (for SSE broadcasting)
+// Independent callbacks for global-list consumers and one-session consumers.
+// The WebUI sidebar/architecture owns the former; each Chat stream owns the
+// latter and never needs to refetch the full list for runtime state.
 let onSessionListUpdated: (() => void) | null = null;
+let onSessionStateUpdated: ((sessionId: string) => void) | null = null;
+const sessionTransitionListeners = new Set<(sessionId: string) => void>();
+let sessionPersistenceFaultInjector: ((phase: 'history' | 'metadata', sessionId?: string, session?: Session) => void | Promise<void>) | null = null;
+
+export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'history' | 'metadata', sessionId?: string, session?: Session) => void | Promise<void>) | null): void {
+  sessionPersistenceFaultInjector = injector;
+}
 
 // Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
 const sessionAbortControllers = new Map<string, AbortController>();
+const standaloneCompactSessions = new Set<string>();
+
+interface StandaloneCompactAdmission {
+  closing: boolean;
+  inFlight: number;
+  released: Promise<void>;
+  resolveReleased: () => void;
+  resolveDrained?: () => void;
+}
+
+const standaloneCompactAdmissions = new Map<string, StandaloneCompactAdmission>();
+const sessionAuthoritySaveTails = new Map<string, Promise<void>>();
+
+async function withSessionAuthoritySaveLane<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+  if (SESSION_WORKER_PROCESS) return operation();
+  const previous = sessionAuthoritySaveTails.get(sessionId) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  sessionAuthoritySaveTails.set(sessionId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (sessionAuthoritySaveTails.get(sessionId) === current) sessionAuthoritySaveTails.delete(sessionId);
+  }
+}
+
+function createStandaloneCompactAdmission(sessionId: string): void {
+  let resolveReleased!: () => void;
+  standaloneCompactAdmissions.set(sessionId, {
+    closing: false,
+    inFlight: 0,
+    released: new Promise<void>(resolve => { resolveReleased = resolve; }),
+    resolveReleased,
+  });
+}
+
+async function enterStandaloneCompactAdmission(sessionId: string): Promise<() => void> {
+  const admission = standaloneCompactAdmissions.get(sessionId);
+  if (!admission) return () => {};
+  if (admission.closing) {
+    await admission.released;
+    return () => {};
+  }
+  admission.inFlight += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    admission.inFlight = Math.max(0, admission.inFlight - 1);
+    if (admission.closing && admission.inFlight === 0) admission.resolveDrained?.();
+  };
+}
+
+async function beginStandaloneCompactRelease(sessionId: string): Promise<void> {
+  const admission = standaloneCompactAdmissions.get(sessionId);
+  if (!admission) return;
+  admission.closing = true;
+  if (admission.inFlight > 0) {
+    await new Promise<void>(resolve => { admission.resolveDrained = resolve; });
+  }
+}
+
+function completeStandaloneCompactRelease(sessionId: string): void {
+  const admission = standaloneCompactAdmissions.get(sessionId);
+  if (!admission) return;
+  standaloneCompactAdmissions.delete(sessionId);
+  admission.resolveReleased();
+}
 
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
+}
+
+export function setOnQueueHistoryAppended(callback: (session: Session, messages: Message[]) => void) {
+  onQueueHistoryAppended = callback;
 }
 
 export function setOnSessionEventUpdated(callback: (sessionId: string, event: SessionStreamEvent) => void) {
@@ -396,6 +789,10 @@ export function setOnSessionEventUpdated(callback: (sessionId: string, event: Se
 
 export function setOnSessionListUpdated(callback: () => void) {
   onSessionListUpdated = callback;
+}
+
+export function setOnSessionStateUpdated(callback: (sessionId: string) => void) {
+  onSessionStateUpdated = callback;
 }
 
 export function registerSessionAbortController(sessionId: string, controller: AbortController): void {
@@ -420,16 +817,57 @@ export function abortSessionInFlight(sessionId: string): boolean {
   return true;
 }
 
-export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean }> {
+export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean; stoppedCurrent: boolean }> {
+  const canonicalSessionId = resolveLoadedSessionId(sessionId);
+  if (standaloneCompactSessions.has(canonicalSessionId)) {
+    return { abortedInFlight: false, stoppedCurrent: false };
+  }
+
   const session = await getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
 
   session.stopping = true;
+  if (session.meta?.runQueuedAfterStop) {
+    delete session.meta.runQueuedAfterStop;
+  }
   const abortedInFlight = abortSessionInFlight(sessionId);
   await saveSession(sessionId);
-  return { abortedInFlight };
+  return { abortedInFlight, stoppedCurrent: true };
+}
+
+export async function cancelSessionCompaction(sessionId: string): Promise<sessionHistory.CompactCancellationResult> {
+  const session = await getExistingSession(sessionId);
+  if (!session) throw new Error(`Session \`${sessionId}\` not found.`);
+  return sessionHistory.cancelSessionCompaction(getSessionHistoryDeps(), sessionId);
+}
+
+export async function requestSessionDequeue(sessionId: string): Promise<{
+  queuedItems: number;
+  stoppedCurrent: boolean;
+  abortedInFlight: boolean;
+}> {
+  const session = await getExistingSession(sessionId);
+  if (!session) {
+    throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  const queuedItems = session.queue?.length || 0;
+  if (queuedItems === 0) {
+    return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
+  }
+
+  if (session.busy) {
+    session.stopping = true;
+    session.meta.runQueuedAfterStop = true;
+    const abortedInFlight = abortSessionInFlight(sessionId);
+    await saveSession(sessionId);
+    return { queuedItems, stoppedCurrent: true, abortedInFlight };
+  }
+
+  await triggerSessionProcessing(sessionId);
+  return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
 }
 
 export async function prepareSessionForDestructiveAction(sessionId: string): Promise<{
@@ -438,6 +876,7 @@ export async function prepareSessionForDestructiveAction(sessionId: string): Pro
   abortedInFlight: boolean;
   droppedQueueItems: number;
 }> {
+  if (workerDeleteHandler) await workerDeleteHandler(sessionId);
   const session = await getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
@@ -490,14 +929,27 @@ async function resumeIndexingIfNeeded(sessionId: string, session: Session): Prom
 }
 
 export async function getSession(sessionId: string): Promise<Session> {
+  return withSessionIdentityLock(() => getSessionUnlocked(sessionId));
+}
+
+async function getSessionUnlocked(sessionId: string, persistNew: boolean = true): Promise<Session> {
   // Resolve alias first
   const realId = await resolveSessionId(sessionId);
   
   let session = sessions.get(realId);
   let isNew = false;
+  let mustHydratePersistedLifetime = false;
+  let needsAuthoritativeStateUpgrade = pendingAuthoritativeStateUpgrades.has(realId);
   if (!session) {
-    // Create new session with minimal required fields
-    isNew = true;
+    const reservation = await getSessionIdReservation(realId);
+    if (reservation === 'archived') {
+      throw new ArchivedSessionIdError(realId);
+    }
+
+    // A persisted live record may be hydrated here even though it already has
+    // archive rows. Only the absence of live persistence starts a new lifetime.
+    isNew = reservation === null;
+    mustHydratePersistedLifetime = reservation === 'live';
     session = {
       id: realId,
       history: [],
@@ -508,33 +960,44 @@ export async function getSession(sessionId: string): Promise<Session> {
       queue: [],
       meta: { lastMessageTime: Date.now() }
     };
+    if (mustHydratePersistedLifetime) {
+      const catalog = !SESSION_WORKER_PROCESS && sessionCatalogStore.exists()
+        ? sessionCatalogStore.get(realId)
+        : null;
+      markSessionCatalogStub(session, typeof catalog?.queueLength === 'number' ? catalog.queueLength : 0);
+    }
     sessions.set(realId, session);
   }
 
-  // Session exists in memory, check if history needs to be loaded
-  if (!isNew && session.history.length === 0) {
+  // Only catalog placeholders, newly reconstructed persisted lifetimes, and
+  // interrupted legacy upgrades require authority hydration. Empty history is
+  // valid hydrated state and must not turn ordinary reads into semantic reloads.
+  if (!isNew && (isSessionCatalogStub(session) || mustHydratePersistedLifetime || needsAuthoritativeStateUpgrade)) {
     // Try to load history and persistentMemorySnapshot from file
     const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
-    if (await fs.pathExists(historyFile)) {
-      try {
-        const historyData = await readSessionHistorySnapshot(realId);
-        if (!historyData) {
-          throw new Error('Session history file disappeared during read');
-        }
-        session.history = historyData.history || [];
-        if (historyData.persistentMemorySnapshot) {
-          session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
-        }
-        applySessionHistoryState(session, historyData);
-        await loadSessionFrontier(session);
-        if (historyData.indexingState) {
-          // Check if indexing was interrupted
-          await resumeIndexingIfNeeded(sessionId, session);
-        }
-        logger.debug({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
-      } catch (e) {
-        logger.error({ err: e, sessionId }, 'Failed to load session history');
+    try {
+      if (!await fs.pathExists(historyFile)) {
+        throw new RpcError('SESSION_WORKER_STATE_MISSING', `Authoritative session state ${realId}.json is missing.`);
       }
+      const historyData = await readSessionHistorySnapshot(realId);
+      if (!historyData) {
+        throw new RpcError('SESSION_WORKER_STATE_MISSING', `Authoritative session state ${realId}.json disappeared during read.`);
+      }
+      const retryPendingUpgrade = needsAuthoritativeStateUpgrade;
+      // displayName is Main-owned presentation metadata: preserve the Main
+      // value (including an explicit clear) across authoritative rehydration.
+      needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData, { preserveCatalogFields: true }).upgradedLegacy || retryPendingUpgrade;
+      clearSessionCatalogStub(session);
+      delete (session as any).managedPendingCount;
+      if (needsAuthoritativeStateUpgrade) pendingAuthoritativeStateUpgrades.add(realId);
+      if (historyData.indexingState) {
+        // Check if indexing was interrupted
+        await resumeIndexingIfNeeded(sessionId, session);
+      }
+      logger.debug({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
+    } catch (e) {
+      logger.error({ err: e, sessionId }, 'Failed to load session history');
+      throw e;
     }
   }
 
@@ -550,11 +1013,9 @@ export async function getSession(sessionId: string): Promise<Session> {
     }
   }
   session.systemPromptFiles = llm.normalizeSystemPromptFiles(session.systemPromptFiles);
-  if (!session.persistentMemorySnapshot) session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
-    agentName: session.agent,
-    sessionId: realId,
-    systemPromptFiles: session.systemPromptFiles,
-  });
+  if (!session.persistentMemorySnapshot) {
+    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session) || '';
+  }
   if (!session.stats) session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   if (session.stats.totalCachedTokens === null) session.stats.totalCachedTokens = 0;
   if (!session.queue) session.queue = [];
@@ -566,8 +1027,16 @@ export async function getSession(sessionId: string): Promise<Session> {
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
   }
-  if (session.contextFrontier && session.contextFrontier.length > 0 && session.history.length !== session.contextFrontier.length) {
-    session.history = await renderHistoryFromFrontier(session);
+  try {
+    if (await externalizeAuthoritativeSessionImages(session) || needsAuthoritativeStateUpgrade) {
+      await saveSessionCritical(session.id);
+      pendingAuthoritativeStateUpgrades.delete(realId);
+    }
+  } catch (error) {
+    if (needsAuthoritativeStateUpgrade) throw error;
+    // Legacy bytes remain intact in memory/on disk when blob materialization
+    // fails. Transport/provider boundaries retain their own tolerant readers.
+    logger.warn({ err: error, sessionId: session.id }, 'Failed to externalize legacy session images during lazy hydration');
   }
 
   // Setup broadcast function
@@ -575,22 +1044,93 @@ export async function getSession(sessionId: string): Promise<Session> {
     setupSessionBroadcast(sessionId);
   }
 
+  if (isNew && persistNew) {
+    try {
+      await saveSessionCritical(realId);
+    } catch (error) {
+      await rollbackFailedSessionCreation(realId, session);
+      throw error;
+    }
+  }
+
   return session;
 }
 
 export async function createEmptySession(sessionId?: string): Promise<{ session: Session; created: boolean }> {
-  const targetSessionId = sessionId || generateSessionId();
-  const existingSession = await getExistingSession(targetSessionId);
+  return withSessionIdentityLock(() => createEmptySessionUnlocked(sessionId));
+}
+
+async function createEmptySessionUnlocked(sessionId?: string): Promise<{ session: Session; created: boolean }> {
+  const targetSessionId = sessionId || await allocateGeneratedSessionId();
+  const existingSession = await getExistingSessionUnlocked(targetSessionId);
   if (existingSession) {
     return { session: existingSession, created: false };
   }
 
-  const session = await getSession(targetSessionId);
-  await saveSession(session.id);
+  await assertSessionIdAvailableForNewLifetime(targetSessionId);
+
+  const session = await getSessionUnlocked(targetSessionId, false);
+  try {
+    await saveSessionCritical(session.id);
+  } catch (error) {
+    await rollbackFailedSessionCreation(session.id, session);
+    throw error;
+  }
   return { session, created: true };
 }
 
 export async function updateSessionBusyState(session: Session, busy: boolean): Promise<void> {
+  if (busy) assertSessionDestructiveMutationAllowed([session.id], 'start new work');
+  // Busy ownership is authoritative Session state. A catalog-only transition
+  // can be overwritten by the next current-format lazy hydration.
+  await updateSessionBusyStateForSession(
+    session,
+    busy,
+    () => saveSessionCritical(session.id),
+    clearActiveSessionRuntimeState,
+    undefined,
+    error => !isSessionAuthorityPostCommitError(error),
+  );
+}
+
+function stageStandaloneCompactIdleRelease(session: Session): Session {
+  const staged = { ...session } as Session;
+  restoreSessionSemanticState(staged, captureSessionSemanticState(session));
+  staged.busy = false;
+  delete staged.busyStartedAt;
+  staged.stopping = false;
+  return staged;
+}
+
+function applyStandaloneCompactIdleRelease(session: Session): void {
+  session.busy = false;
+  delete session.busyStartedAt;
+  session.stopping = false;
+}
+
+async function persistStandaloneCompactIdleRelease(staged: Session, live: Session): Promise<void> {
+  await saveSessionStateOnlyCritical(staged);
+  try {
+    await saveDetachedSessionCatalogProjectionCritical(staged, live);
+  } catch (error) {
+    throw new SessionAuthorityPostCommitError(
+      `Session ${staged.id} standalone compact idle authority committed, but its catalog projection failed.`,
+      error,
+    );
+  }
+}
+
+export async function updateSessionBusyStateForSession(
+  session: Session,
+  busy: boolean,
+  persistSession: () => Promise<void>,
+  clearRuntimeState: (sessionId: string) => void = clearActiveSessionRuntimeState,
+  notifySession?: (sessionId: string) => void,
+  shouldRollbackPersistFailure: (error: unknown) => boolean = () => true,
+): Promise<void> {
+  const previousBusy = session.busy;
+  const hadBusyStartedAt = Object.prototype.hasOwnProperty.call(session, 'busyStartedAt');
+  const previousBusyStartedAt = session.busyStartedAt;
   const changed = session.busy !== busy;
   const busyStartedChanged = busy
     ? typeof session.busyStartedAt !== 'number'
@@ -606,28 +1146,72 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
   }
 
   if (!changed && !busyStartedChanged) {
+    if (!busy) clearRuntimeState(session.id);
     return;
   }
 
-  await saveSessionsMetadata();
-  notifySessionListUpdated();
+  try {
+    await persistSession();
+  } catch (error) {
+    if (shouldRollbackPersistFailure(error)) {
+      session.busy = previousBusy;
+      if (hadBusyStartedAt) session.busyStartedAt = previousBusyStartedAt;
+      else delete session.busyStartedAt;
+    }
+    throw error;
+  }
+  if (!busy) clearRuntimeState(session.id);
+  notifySession?.(session.id);
+}
+
+export function notifySessionStateUpdated(sessionId: string): void {
+  notifySessionUpdated(sessionId);
 }
 
 /**
  * Create a new session with given data
  */
 export async function createSession(sessionId: string, sessionData: any): Promise<void> {
+  await withSessionIdentityLock(() => createSessionUnlocked(sessionId, sessionData));
+}
+
+async function createSessionUnlocked(sessionId: string, sessionData: any): Promise<void> {
+  await assertSessionIdAvailableForNewLifetime(sessionId);
+  assertSessionDestructiveMutationAllowed([sessionData?.parentSessionId], 'receive a new child session');
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
     llm.ensurePromptCacheKey(sessionData as Session);
   }
   sessions.set(sessionId, sessionData);
-  await saveSession(sessionId);
+  try {
+    await saveSessionCritical(sessionId);
+  } catch (error) {
+    await rollbackFailedSessionCreation(sessionId, sessionData);
+    throw error;
+  }
   logger.info({ sessionId }, 'Session created');
+}
+
+async function rollbackFailedSessionCreation(sessionId: string, expectedSession: Session): Promise<void> {
+  if (sessions.get(sessionId) === expectedSession) sessions.delete(sessionId);
+  await fs.remove(getSessionHistoryFilePath(sessionId)).catch(() => {});
+  await rollbackUncommittedSessionArchive(sessionId).catch(error => {
+    logger.error({ err: error, sessionId }, 'Failed to roll back uncommitted session archive');
+  });
+  await vector.resetSessionArchiveDerived(sessionId).catch(error => {
+    logger.warn({ code: (error as any)?.code || 'VECTOR_DERIVED_RESET_FAILED', sessionId }, 'Failed to reset derived Session index after creation rollback');
+  });
+  await saveSessionCatalogEntriesCritical([sessionId]).catch(error => {
+    logger.error({ err: error, sessionId }, 'Failed to persist session-creation rollback');
+  });
 }
 
 async function saveChannels(): Promise<void> {
   await sessionChannels.saveChannels();
+}
+
+async function saveChannelsCritical(): Promise<void> {
+  await sessionChannels.saveChannelsCritical();
 }
 
 async function loadChannels(): Promise<void> {
@@ -637,20 +1221,28 @@ async function loadChannels(): Promise<void> {
 export const validateAgentName = sessionAgentOps.validateAgentName;
 export const validateSessionName = sessionAgentOps.validateSessionName;
 
-function getSessionAgentOpsDeps() {
+export function validateChildSessionSuffix(suffix: string): void {
+  if (!suffix || typeof suffix !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(suffix)) {
+    throw new Error('Invalid child session suffix. Use only alphanumeric characters, hyphens, and underscores.');
+  }
+}
+
+function getSessionAgentOpsDeps(underIdentityLock: boolean = false) {
   return {
-    getSession,
-    getExistingSession,
-    createSession,
-    saveSession,
-    saveSessionsMetadata,
-    saveChannels,
+    getSession: underIdentityLock ? getSessionUnlocked : getSession,
+    getExistingSession: underIdentityLock ? getExistingSessionUnlocked : getExistingSession,
+    assertSessionIdAvailableForNewLifetime,
+    createSession: underIdentityLock ? createSessionUnlocked : createSession,
+    saveSession: underIdentityLock ? saveSessionCritical : saveSession,
+    saveSessionCatalogEntries: underIdentityLock ? saveSessionCatalogEntriesCritical : saveSessionCatalogEntries,
+    saveChannels: underIdentityLock ? saveChannelsCritical : saveChannels,
     updateAliasCache,
-    updateChildSessionParentIds,
+    updateChildSessionParentIds: underIdentityLock ? updateChildSessionParentIdsCritical : updateChildSessionParentIds,
     moveSessionArchiveIndex: vector.renameSessionArchiveIndex,
     getAgentMetadata,
     getSessionsMap: getAllSessions,
     getAttachmentsMap: getAllAttachments,
+    assertSessionMutationAllowed: assertSessionDestructiveMutationAllowed,
   };
 }
 
@@ -658,21 +1250,48 @@ function getSessionHistoryDeps() {
   return {
     getSessionById: (sessionId: string) => sessions.get(sessionId),
     getExistingSession,
-    saveSession,
+    saveSession: saveSessionCritical,
     enqueueSessionItem,
     notifyHistoryUpdate,
+    beginCompactionRuntimeState: beginCompactionSessionRuntimeState,
   };
 }
 
 function notifySessionListUpdated() {
-  onSessionListUpdated?.();
+  try {
+    onSessionListUpdated?.();
+  } catch (error) {
+    logger.error({ err: error }, 'Session list update callback failed');
+  }
 }
 
-function getAgentMetadataDeps() {
+function notifySessionUpdated(sessionId: string) {
+  notifySessionListUpdated();
+  try {
+    onSessionStateUpdated?.(sessionId);
+  } catch (error) {
+    logger.error({ err: error, sessionId }, 'Session state update callback failed');
+  }
+  for (const listener of sessionTransitionListeners) {
+    try { listener(sessionId); } catch (error) { logger.error({ err: error, sessionId }, 'Session transition listener failed'); }
+  }
+}
+
+export function addSessionTransitionListener(listener: (sessionId: string) => void): () => void {
+  sessionTransitionListeners.add(listener);
+  return () => sessionTransitionListeners.delete(listener);
+}
+
+setSessionRuntimeStateUpdateCallback((sessionId) => notifySessionUpdated(sessionId));
+
+export { buildSessionRuntimeState, clearActiveSessionRuntimeState, formatSessionRuntimeStateSummary, setActiveSessionRuntimeState };
+export type { ActiveSessionRuntimeStateInput, SessionRuntimeState };
+
+function getAgentMetadataDeps(underIdentityLock: boolean = false) {
   return {
-    getSession,
-    getExistingSession,
-    saveSession,
+    getSession: underIdentityLock ? getSessionUnlocked : getSession,
+    getExistingSession: underIdentityLock ? getExistingSessionUnlocked : getExistingSession,
+    saveSession: underIdentityLock ? saveSessionCritical : saveSession,
     getSessionsMap: getAllSessions,
     validateAgentName,
   };
@@ -706,26 +1325,105 @@ export function getAgentInheritanceChain(agentName: string): string[] {
   return sessionAgentMetadata.getAgentInheritanceChain(agentName);
 }
 
-export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
-  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
+export function getAgentToolRules(agentName: string) {
+  return sessionAgentMetadata.getAgentToolRules(agentName);
 }
 
-export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
-  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
+export async function setAgentInherit(agentName: string, inheritAgentName?: string, refreshSnapshots: boolean = false): Promise<{ affectedSessions: string[] }> {
+  assertAgentMetadataMutationAllowed('Agent inheritance changes');
+  return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName, refreshSnapshots);
+}
+
+export async function setAgentIsolation(agentName: string, isolatedNode?: string, toolRules?: unknown): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
+  const normalizedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
+  if (workerEnqueueSink && toolRules !== undefined && normalizedNode === sessionAgentMetadata.getAgentIsolationNode(agentName)) {
+    validateAgentName(agentName);
+    if (!await fs.pathExists(getAgentDir(agentName))) throw new Error(`Agent "${agentName}" does not exist.`);
+    const toolRuleCount = await sessionAgentMetadata.setAgentToolRules(agentName, toolRules);
+    return { affectedSessions: [], isolated: !!normalizedNode, node: normalizedNode, toolRuleCount };
+  }
+  assertAgentMetadataMutationAllowed('Agent isolation changes');
+  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, normalizedNode, toolRules);
+}
+
+export async function deleteAgent(
+  agentName: string,
+  deleteOwnedSession: (sessionId: string) => Promise<boolean>,
+): Promise<{ deletedSessions: string[] }> {
+  assertAgentMetadataMutationAllowed('Agent deletion');
+  validateAgentName(agentName);
+  if (agentName === 'main') throw new Error('The main agent cannot be deleted.');
+
+  const agentDir = getAgentDir(agentName);
+  if (!await fs.pathExists(agentDir)) throw new Error(`Agent "${agentName}" not found.`);
+
+  const inheritedBy = sessionAgentMetadata.listAgentMetadataEntries()
+    .filter(([otherAgent, metadata]) => otherAgent !== agentName && metadata.inherit === agentName)
+    .map(([otherAgent]) => otherAgent);
+  if (inheritedBy.length > 0) {
+    throw new Error(`Agent "${agentName}" is inherited by: ${inheritedBy.join(', ')}. Clear those inheritance links first.`);
+  }
+
+  const ownedSessionIds = [...sessions.values()]
+    .filter(session => (session.agent || 'main') === agentName)
+    .map(session => session.id);
+  const ownedSessionIdSet = new Set(ownedSessionIds);
+  // Restart-loaded Session objects are metadata-only stubs. Use the Main
+  // catalog to stabilize the complete Agent-owned set and preserve the busy
+  // guard without hydrating Session authority before delegated deletion.
+  const indexedOwnedSessions = ownedSessionIds.length > 0 ? sessionCatalogStore.listByAgent(agentName) : [];
+  if (indexedOwnedSessions.length !== ownedSessionIds.length
+    || indexedOwnedSessions.some(session => !ownedSessionIdSet.has(session.id))) {
+    throw new Error(`Agent deletion stopped because its owned Session set changed while preflighting.`);
+  }
+  const activeSessionIds = new Set(indexedOwnedSessions
+    .filter(session => session.busy === true)
+    .map(session => session.id));
+  const ownedSessions = ownedSessionIds
+    .map(sessionId => sessions.get(sessionId))
+    .filter((session): session is Session => !!session);
+  for (const session of ownedSessions) {
+    if (session.busy) activeSessionIds.add(session.id);
+  }
+  if (activeSessionIds.size > 0) {
+    throw new Error(`Agent "${agentName}" has active sessions: ${[...activeSessionIds].join(', ')}`);
+  }
+  const channelBlockedSessions = ownedSessions.filter(session => getChannelsBySession(session.id).some(channel => channel.channelId !== 'webui'));
+  if (channelBlockedSessions.length > 0) {
+    throw new Error(`Agent "${agentName}" has sessions attached to non-WebUI channels: ${channelBlockedSessions.map(session => session.id).join(', ')}`);
+  }
+
+  const deletedSessions: string[] = [];
+  for (const session of ownedSessions) {
+    if (!await deleteOwnedSession(session.id)) {
+      throw new Error(`Agent deletion stopped because session "${session.id}" could not be deleted.`);
+    }
+    deletedSessions.push(session.id);
+  }
+  const remainingSessions = [...sessions.values()].filter(session => (session.agent || 'main') === agentName);
+  if (remainingSessions.length > 0) {
+    throw new Error(`Agent deletion stopped because new owned sessions appeared: ${remainingSessions.map(session => session.id).join(', ')}`);
+  }
+  await fs.remove(agentDir);
+  await sessionAgentMetadata.deleteAgentMetadata(agentName);
+  return { deletedSessions };
 }
 
 export async function createAgentWithMainSession(options: {
   agentName: string;
   inheritMemory?: boolean;
   sourceSessionId?: string;
+  sourceSessionOverride?: Session;
   convertSessionId?: string;
   initialMemoryFiles?: Record<string, string>;
   displayName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
   createMainSession?: boolean;
   inherit?: string;
   isolatedNode?: string;
+  toolRules?: unknown;
 }): Promise<{
   agentDir: string;
   mainSessionId: string;
@@ -734,9 +1432,18 @@ export async function createAgentWithMainSession(options: {
   updatedChildren: string[];
   createdMainSession: boolean;
 }> {
-  const { inherit, isolatedNode, ...createOptions } = options;
+  if (options.sourceSessionOverride && options.sourceSessionId
+    && options.sourceSessionOverride.id !== options.sourceSessionId
+    && !options.sourceSessionOverride.aliases?.includes(options.sourceSessionId)) {
+    throw new RpcError('SESSION_WORKER_ADMIN_SOURCE_MISMATCH', 'Detached agent-creation source does not match sourceSessionId.');
+  }
+  if (workerEnqueueSink && (options.convertSessionId || (options.sourceSessionId && !options.sourceSessionOverride))) {
+    throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', 'Creating an agent from or by converting an existing session is unavailable while Session-worker placement is enabled.', true);
+  }
+  const { inherit, isolatedNode, toolRules, ...createOptions } = options;
   const normalizedInherit = inherit && String(inherit).trim() ? String(inherit).trim() : undefined;
   const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
+  const normalizedToolRules = toolRules === undefined ? undefined : normalizeAgentToolRules(toolRules);
 
   if (normalizedInherit !== undefined) {
     validateAgentName(normalizedInherit);
@@ -745,26 +1452,59 @@ export async function createAgentWithMainSession(options: {
     }
   }
 
-  const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps());
-  if (normalizedIsolatedNode !== undefined) {
-    await setAgentIsolation(options.agentName, normalizedIsolatedNode);
-  }
-  if (normalizedInherit !== undefined) {
-    await setAgentInherit(options.agentName, normalizedInherit);
-  }
-  return result;
+  return withSessionIdentityLock(async () => {
+    const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps(true));
+    if (normalizedIsolatedNode !== undefined) {
+      await sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(true), options.agentName, normalizedIsolatedNode, normalizedToolRules);
+    } else if (normalizedToolRules !== undefined) {
+      await sessionAgentMetadata.setAgentMetadata(options.agentName, {
+        ...sessionAgentMetadata.getAgentMetadata(options.agentName),
+        toolRules: normalizedToolRules,
+      });
+    }
+    if (normalizedInherit !== undefined) {
+      await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
+      if (result.createdMainSession) {
+        await sessionAgentMetadata.refreshSessionSnapshot(getAgentMetadataDeps(true), result.mainSessionId);
+      }
+    }
+    return result;
+  });
 }
 
 export async function createSessionInAgent(options: {
   agentName: string;
-  sessionName: string;
+  sessionName?: string;
   displayName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
+  modelsConfig?: ModelsConfig;
   parentSessionId?: string;
   systemPromptFiles?: string[];
 }): Promise<{ sessionId: string }> {
-  return sessionAgentOps.createSessionInAgent(options, getSessionAgentOpsDeps());
+  return withSessionIdentityLock(async () => {
+    const sessionName = options.sessionName === undefined
+      ? await generateAvailableSessionName(options.agentName)
+      : options.sessionName;
+    return sessionAgentOps.createSessionInAgent({ ...options, sessionName }, getSessionAgentOpsDeps(true));
+  });
+}
+
+export async function createSessionInAgentWithAutomaticName(
+  options: Omit<Parameters<typeof sessionAgentOps.createSessionInAgent>[0], 'sessionName'>,
+  generateName: () => string,
+): Promise<{ sessionId: string }> {
+  return withSessionIdentityLock(async () => {
+    while (true) {
+      const sessionName = generateName();
+      const sessionId = options.agentName === 'main' ? sessionName : `${options.agentName}/${sessionName}`;
+      if (await isSessionIdReserved(sessionId)) {
+        continue;
+      }
+      return sessionAgentOps.createSessionInAgent({ ...options, sessionName }, getSessionAgentOpsDeps(true));
+    }
+  });
 }
 
 export async function moveSessionToTarget(options: {
@@ -773,6 +1513,7 @@ export async function moveSessionToTarget(options: {
   createAgent?: boolean;
   newAgentName?: string;
   createAgentInheritMemory?: boolean;
+  parentSessionId?: string;
 }): Promise<{
   oldSessionId: string;
   targetSessionId: string;
@@ -780,23 +1521,118 @@ export async function moveSessionToTarget(options: {
   createdAgent: boolean;
   aliases: string[];
   updatedChildren: string[];
+  previousParentSessionId?: string;
+  parentSessionId?: string;
+  requestedParentSessionId?: string;
+  parentUpdateError?: string;
 }> {
-  return sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps());
+  if (workerEnqueueSink) {
+    throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', 'Session identity move/rename is unavailable while Session-worker placement is enabled.', true);
+  }
+  let previousParentSessionId: string | undefined;
+  let requestedParentSessionId: string | undefined;
+  const parentWasProvided = options.parentSessionId !== undefined;
+  const requestedParentInput = options.parentSessionId?.trim();
+  if (parentWasProvided && !requestedParentInput) {
+    throw new Error('parentSessionId must be a non-empty existing session ID when provided. Use the explicit unparent operation to detach.');
+  }
+  const result = await withSessionIdentityLock(async () => {
+    const sourceSession = await getExistingSessionUnlocked(options.sourceSessionId);
+    if (!sourceSession) throw new Error(`Session "${options.sourceSessionId}" not found.`);
+    previousParentSessionId = sourceSession.parentSessionId || undefined;
+    requestedParentSessionId = parentWasProvided
+      ? (await sessionRelations.resolveSessionParentId({ getExistingSession: getExistingSessionUnlocked }, sourceSession.id, requestedParentInput)).parentSessionId
+      : undefined;
+    assertSessionDestructiveMutationAllowed([sourceSession.id, requestedParentSessionId], 'move or rename');
+    return sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true));
+  });
+  rebindRemoteExecSessionAgent([result.oldSessionId, ...result.aliases], result.targetAgent);
+
+  let parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
+  let parentUpdateError: string | undefined;
+  if (parentWasProvided && parentSessionId !== requestedParentSessionId) {
+    try {
+      const parentResult = await setSessionParent(result.targetSessionId, requestedParentSessionId);
+      parentSessionId = parentResult.parentSessionId;
+    } catch (error: any) {
+      parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
+      parentUpdateError = error?.message || String(error);
+    }
+  }
+
+  return {
+    ...result,
+    previousParentSessionId,
+    parentSessionId,
+    ...(parentWasProvided ? { requestedParentSessionId } : {}),
+    ...(parentUpdateError ? { parentUpdateError } : {}),
+  };
 }
 
 /**
  * Attach a channel to a session
  * @param channelId Configured channel instance id (for legacy configs this is usually the same as the channel type)
  * @param conversationId Channel-side conversation/chat/room target id
- * @param sessionId Optional session ID. If not provided, creates a new session
+ * @param sessionId Existing session ID to attach
  * @returns The session ID
  */
-export function attachChannel(channelId: string, conversationId: string, sessionId?: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
-  if (!sessionId) {
-    sessionId = generateSessionId();
-  }
-
+export function attachChannel(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept a new channel attachment');
   return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
+}
+
+export async function attachChannelDurably(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): Promise<string> {
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept a new channel attachment');
+  return sessionChannels.attachChannelDurably(channelId, conversationId, sessionId, configUpdates);
+}
+
+export async function getOrCreateSessionForChannel(
+  channelId: string,
+  conversationId: string,
+  options?: {
+    createSession?: () => Promise<{ session: Session; created: boolean }>;
+    attachmentConfig?: Partial<sessionChannels.ChannelConfig>;
+    hydrateExisting?: boolean;
+  },
+): Promise<{ sessionId: string; session: Session }> {
+  return withChannelSessionCreationLock(channelId, conversationId, async () => {
+    const existingSessionId = getSessionByChannel(channelId, conversationId);
+    if (existingSessionId) {
+      const session = options?.hydrateExisting === false
+        ? getSessionCatalog(existingSessionId)
+        : await getSession(existingSessionId);
+      if (!session) throw new Error(`Session \`${existingSessionId}\` is not loaded.`);
+      return { sessionId: existingSessionId, session };
+    }
+
+    const created = options?.createSession
+      ? await options.createSession()
+      : await createEmptySession();
+    const createdSession = created.session;
+    const concurrentlyAttachedSessionId = getSessionByChannel(channelId, conversationId);
+    if (concurrentlyAttachedSessionId) {
+      if (created.created) await rollbackFailedSessionCreation(createdSession.id, createdSession);
+      await saveChannelsCritical();
+      return {
+        sessionId: concurrentlyAttachedSessionId,
+        session: options?.hydrateExisting === false
+          ? (() => {
+              const session = getSessionCatalog(concurrentlyAttachedSessionId);
+              if (!session) throw new Error(`Session \`${concurrentlyAttachedSessionId}\` is not loaded.`);
+              return session;
+            })()
+          : await getSession(concurrentlyAttachedSessionId),
+      };
+    }
+
+    try {
+      const sessionId = await attachChannelDurably(channelId, conversationId, createdSession.id, options?.attachmentConfig);
+      return { sessionId, session: createdSession };
+    } catch (error) {
+      if (created.created) await rollbackFailedSessionCreation(createdSession.id, createdSession);
+      throw error;
+    }
+  });
 }
 
 export function getSessionByChannel(channelId: string, conversationId: string): string | undefined {
@@ -834,7 +1670,7 @@ export async function sendFileToChannelTargetId(channelTargetId: string, file: C
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
-  return sessionChannels.sendFileToSession({ getExistingSession }, sessionId, file, options);
+  return sessionChannels.sendFileToSession({ getExistingSession: async id => getSessionCatalog(id) || null }, sessionId, file, options);
 }
 
 /**
@@ -859,6 +1695,14 @@ export function getChildSessionIds(parentSessionId: string): string[] {
   return sessionRelations.getChildSessionIds(sessions, parentSessionId);
 }
 
+export function collectSessionDescendants(sessionId: string): { descendantIds: string[]; directChildIds: string[]; postOrderIds: string[] } {
+  return sessionRelations.collectSessionDescendants(sessions, sessionId);
+}
+
+export function getCanonicalChildSessionIds(parentSessionId: string): string[] {
+  return sessionRelations.getCanonicalChildSessionIds(sessions, parentSessionId);
+}
+
 export function getChannelBySession(sessionId: string): { channelId: string; conversationId: string } | undefined {
   return sessionChannels.getChannelBySession(sessionId, sessions.get(sessionId));
 }
@@ -870,17 +1714,29 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
-  const sourceSession = await getSession(sourceSessionId);
-  const newSessionId = await allocateForkSessionId(sourceSessionId, suffix);
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+  return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
+}
+
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+  assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
+  // sourceOverride lets a trusted caller (e.g. the Main management facade)
+  // supply a detached read-only snapshot of a worker-owned authority instead
+  // of hydrating it into Main. Overrides are never persisted back.
+  const detachedSource = options?.sourceOverride || await workerForkSourceProvider?.(sourceSessionId);
+  const sourceSession = detachedSource || await getSessionUnlocked(sourceSessionId);
+  const realSourceSessionId = sourceSession.id || sourceSessionId;
+  const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
   const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
-  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey) {
+  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey && !detachedSource) {
     await saveSession(sourceSession.id);
   }
+  const spawnedSettings = resolveSpawnedSessionModelEffort(sourceSession, options?.model, options?.effort);
 
   const forkedSession: Session = {
     id: newSessionId,
+    ...(options?.displayName !== undefined ? { displayName: options.displayName } : {}),
     history: structuredClone(sourceSession.history),
     systemPromptFiles: sourceSession.systemPromptFiles ? [...sourceSession.systemPromptFiles] : undefined,
     persistentMemorySnapshot: sourceSession.persistentMemorySnapshot,
@@ -897,13 +1753,17 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
     nextMessageSeq: sourceSession.nextMessageSeq,
     nextBlockId: sourceSession.nextBlockId,
-    contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
-    parentSessionId: sourceSessionId,
+    parentSessionId: realSourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
-    model: resolveSpawnedSessionModel(sourceSession, options?.model),
-    childModelDefault: sourceSession.childModelDefault,
+    model: spawnedSettings.model,
+    effort: spawnedSettings.effort,
+    // spawnedSettings consumes the source's child policy once for this fork's
+    // current model/raw effort. Leave future-child defaults unset so the next
+    // spawn's model/effort resolvers fall back to this fork's current pair.
+    // Copying the policy would pin descendants after a current-pair change or
+    // a one-time creation override.
   };
 
   const appendedForkMessages: Message[] = [];
@@ -947,13 +1807,13 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
   // Add separator message
   appendedForkMessages.push({
     role: 'user',
-    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: sourceSessionId, sessionId: newSessionId, variant: 'inherited' }))],
+    parts: [systemPart(formatSessionIdentityHint({ parentSessionId: realSourceSessionId, sessionId: newSessionId, variant: 'inherited', timestamp: Date.now() }))],
     __meta: { timestamp: Date.now() }
   });
 
   const systemMessage = isChildSession
-    ? `You are a child session forked from parent session \`${sourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(sourceSessionId)}`
-    : `Session forked from ${sourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
+    ? `You are a child session forked from parent session \`${realSourceSessionId}\`. Your current session ID is \`${newSessionId}\`. ${buildChildCompletionInstruction(realSourceSessionId)}`
+    : `Session forked from ${realSourceSessionId} by user command. Your current session ID is \`${newSessionId}\`.`;
 
   appendedForkMessages.push({
     role: 'user',
@@ -970,16 +1830,24 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
     });
   }
 
+  assertSessionDestructiveMutationAllowed([realSourceSessionId], 'receive a new fork session');
   sessions.set(newSessionId, forkedSession);
+  try {
+    await ensureSessionBranch(newSessionId, {
+      parentSessionId: realSourceSessionId,
+      forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
+      forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+    });
+    await vector.copySessionArchiveIndexCheckpoint(realSourceSessionId, newSessionId).catch(error => {
+      logger.warn({ code: (error as any)?.code || 'VECTOR_FORK_BASELINE_FAILED', sessionId: newSessionId }, 'Failed to initialize derived fork baseline');
+    });
+    await appendSessionMessages(forkedSession, appendedForkMessages, { strictPersistence: true });
+  } catch (error) {
+    await rollbackFailedSessionCreation(newSessionId, forkedSession);
+    throw error;
+  }
 
-  await ensureSessionBranch(newSessionId, {
-    parentSessionId: sourceSessionId,
-    forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
-    forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
-  });
-  await appendSessionMessages(forkedSession, appendedForkMessages);
-
-  logger.info({ sourceSessionId, newSessionId, isChildSession }, 'Session forked');
+  logger.info({ sourceSessionId: realSourceSessionId, newSessionId, isChildSession }, 'Session forked');
 
   return newSessionId;
 }
@@ -1014,26 +1882,79 @@ export function resolveSpawnedSessionModel(
     : undefined;
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+export function resolveSpawnedSessionEffort(
+  session?: Pick<Session, 'effort' | 'childEffortDefault'>,
+  explicitEffort?: ModelEffort,
+): ModelEffort | undefined {
+  return explicitEffort ?? session?.childEffortDefault ?? session?.effort;
+}
+
+export function resolveSpawnedSessionModelEffort(
+  session?: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>,
+  explicitModel?: string,
+  explicitEffort?: ModelEffort,
+  modelsConfig?: ModelsConfig,
+): { model?: string; effort?: ModelEffort } {
+  const model = resolveSpawnedSessionModel(session, explicitModel);
+  const inheritedEffort = resolveSpawnedSessionEffort(session, explicitEffort);
+  const normalized = normalizeProspectiveSessionModelEffortSettings(
+    { model, effort: inheritedEffort },
+    explicitEffort === undefined ? {} : { effort: explicitEffort },
+    modelsConfig,
+  );
+  return { model: normalized.model, effort: normalized.effort };
+}
+
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+  return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
+}
+
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { agentName?: string; displayName?: string; node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+  validateChildSessionSuffix(suffix);
+  assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
+  const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
+  const realParentSessionId = parentSession.id || parentSessionId;
+  const parentAgentName = parentSession.agent || 'main';
+  const targetAgentName = options?.agentName ?? parentAgentName;
+  validateAgentName(targetAgentName);
+  const crossAgent = targetAgentName !== parentAgentName;
+  if (crossAgent && !await fs.pathExists(getAgentDir(targetAgentName))) {
+    throw new Error(`Agent "${targetAgentName}" does not exist.`);
+  }
   if (fork) {
+    if (crossAgent) {
+      throw new Error('create_child_session cannot fork across agents. Omit fork or target the parent session\'s agent.');
+    }
     // Fork from parent (inherit context)
-    return await forkSession(parentSessionId, suffix, true, options);
+    return await forkSessionUnlocked(parentSessionId, suffix, true, options);
   } else {
     // Create new empty session
-    const parentSession = await getSession(parentSessionId);
-    const childSessionId = `${parentSessionId}_${suffix}`;
+    const childSessionId = await allocateChildSessionId(
+      crossAgent ? buildAgentMainSessionId(targetAgentName) : realParentSessionId,
+      suffix,
+    );
+    const spawnedSettings = resolveSpawnedSessionModelEffort(parentSession, options?.model, options?.effort);
 
-    const agentName = parentSession.agent || 'main';
-    const snapshot = await llm.buildSessionSystemPromptSnapshot({
-      agentName,
-      sessionId: childSessionId,
-      systemPromptFiles: parentSession.systemPromptFiles,
-    });
+    const inheritedSystemPromptFiles = crossAgent ? undefined : parentSession.systemPromptFiles;
+    const snapshotModelId = llm.resolveConcreteModelIdForSnapshot(spawnedSettings.model);
+    const snapshot = snapshotModelId
+      ? await llm.buildSessionSystemPromptSnapshot({
+          agentName: targetAgentName,
+          sessionId: childSessionId,
+          systemPromptFiles: inheritedSystemPromptFiles,
+          modelId: snapshotModelId,
+        })
+      : '';
+    const targetAgentMeta = getAgentMetadata(targetAgentName);
+    const isolatedNode = targetAgentMeta.isolated && typeof targetAgentMeta.isolatedNode === 'string' && targetAgentMeta.isolatedNode.trim()
+      ? targetAgentMeta.isolatedNode.trim()
+      : undefined;
     const newSession: Session = {
       id: childSessionId,
-      agent: agentName,
+      ...(options?.displayName !== undefined ? { displayName: options.displayName } : {}),
+      agent: targetAgentName,
       history: [],
-      systemPromptFiles: parentSession.systemPromptFiles ? [...parentSession.systemPromptFiles] : undefined,
+      systemPromptFiles: inheritedSystemPromptFiles ? [...inheritedSystemPromptFiles] : undefined,
       persistentMemorySnapshot: snapshot,
       // Non-fork children start a fresh model-facing prefix, so they should not
       // share the parent's prompt-cache routing key. Forked children do share it
@@ -1050,89 +1971,200 @@ export async function createChildSession(parentSessionId: string, suffix: string
       meta: { lastMessageTime: Date.now() },
       vectorIndexPosition: 0,
       nextMessageSeq: 1,
-      parentSessionId: parentSessionId,
-      currentNode: options?.node || parentSession.currentNode || 'master',
-      model: resolveSpawnedSessionModel(parentSession, options?.model),
-      childModelDefault: parentSession.childModelDefault,
+      parentSessionId: realParentSessionId,
+      currentNode: isolatedNode || options?.node || parentSession.currentNode || 'master',
+      model: spawnedSettings.model,
+      effort: spawnedSettings.effort,
+      // spawnedSettings consumes the parent's child policy once for this
+      // child's current model/raw effort. Leave future-child defaults unset
+      // so the next spawn's model/effort resolvers fall back to this child's
+      // current pair. Copying the policy would pin descendants after a
+      // current-pair change or a one-time creation override.
     };
 
     const initialMessage: Message = {
       role: 'user',
-      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId, sessionId: childSessionId, variant: 'new-child' })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(parentSessionId)}`)],
+      parts: [systemPart(`${formatSessionIdentityHint({ parentSessionId: realParentSessionId, sessionId: childSessionId, variant: 'new-child', timestamp: Date.now() })}\nYou are a child session (new, empty context). ${buildChildCompletionInstruction(realParentSessionId)}`)],
       __meta: { timestamp: Date.now() }
     };
 
+    assertSessionDestructiveMutationAllowed([realParentSessionId], 'receive a new child session');
     sessions.set(childSessionId, newSession);
-    await appendSessionMessage(newSession, initialMessage);
+    try {
+      await appendSessionMessages(newSession, [initialMessage], { strictPersistence: true });
+    } catch (error) {
+      await rollbackFailedSessionCreation(childSessionId, newSession);
+      throw error;
+    }
 
-    logger.info({ parentSessionId, childSessionId, fork: false }, 'Child session created');
+    logger.info({ parentSessionId: realParentSessionId, childSessionId, fork: false }, 'Child session created');
     return childSessionId;
   }
 }
 
-export async function setSessionParent(childSessionId: string, parentSessionId?: string): Promise<{
+export async function setSessionParent(childSessionId: string, parentSessionId?: string, owningClaimId?: string): Promise<{
   childSessionId: string;
   parentSessionId?: string;
   previousParentSessionId?: string;
 }> {
+  // A worker-fenced child's authority is worker-owned: the parent link is
+  // Main-owned presentation metadata there, so update it catalog-only and
+  // never write the fenced authority (a stale stub write could corrupt it).
+  if (workerEnqueueSink || workerFenceChecker?.(childSessionId)) {
+    return withSessionIdentityLock(async () => {
+      const realChildId = resolveLoadedSessionId(childSessionId);
+      const child = sessions.get(realChildId);
+      if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
+      const realParentId = parentSessionId ? resolveLoadedSessionId(parentSessionId) : undefined;
+      if (realParentId && !sessions.has(realParentId)) throw new Error(`Session "${parentSessionId}" not found.`);
+      if (realParentId === realChildId) throw new Error('A session cannot be its own parent.');
+      const seen = new Set<string>([realChildId]);
+      let cursorParentId = realParentId;
+      while (cursorParentId) {
+        if (seen.has(cursorParentId)) {
+          throw new Error(`Session "${realChildId}" cannot be moved under descendant "${realParentId}" because that would create a parent cycle.`);
+        }
+        seen.add(cursorParentId);
+        cursorParentId = sessions.get(cursorParentId)?.parentSessionId;
+      }
+      const previousParentSessionId = child.parentSessionId;
+      assertSessionDestructiveMutationAllowed(
+        [realChildId, realParentId],
+        realParentId ? 'change parent relations' : 'detach from its parent',
+        owningClaimId,
+      );
+      child.parentSessionId = realParentId;
+      try {
+        await workerCatalogFieldsUpdater?.(realChildId, { parentSessionId: realParentId ?? null });
+        await saveSessionCatalogEntriesCritical([realChildId]);
+      } catch (error) {
+        child.parentSessionId = previousParentSessionId;
+        try { await workerCatalogFieldsUpdater?.(realChildId, { parentSessionId: previousParentSessionId ?? null }); }
+        catch (rollbackError) { (error as any).rollbackError = rollbackError; }
+        throw error;
+      }
+      notifySessionListUpdated();
+      return { childSessionId: realChildId, parentSessionId: realParentId, previousParentSessionId };
+    });
+  }
   return sessionRelations.setSessionParent({
     getExistingSession,
     saveSession,
-    saveSessionsMetadata,
+    saveSessionCatalogEntries,
     notifySessionListUpdated,
+    assertMutationAllowed: (sessionIds, operation) => assertSessionDestructiveMutationAllowed(sessionIds, operation, owningClaimId),
   }, childSessionId, parentSessionId);
 }
 
 export async function updateChildSessionParentIds(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
   return sessionRelations.updateChildSessionParentIds({
-    saveSession,
-    saveSessionsMetadata,
+    // Worker-fenced children keep their authority worker-owned: skip the
+    // per-child authority write; the catalog metadata update still lands.
+    saveSession: sessionId => (workerEnqueueSink || workerFenceChecker?.(sessionId)) ? Promise.resolve() : saveSession(sessionId),
+    saveSessionCatalogEntries,
     getSessionsMap: getAllSessions,
     notifySessionListUpdated,
   }, oldParentSessionId, newParentSessionId);
 }
 
-export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<void> {
-  await sessionRelations.sendToSession({
+async function updateChildSessionParentIdsCritical(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
+  const updated: string[] = [];
+  for (const [sessionId, session] of sessions) {
+    if (session.parentSessionId !== oldParentSessionId) continue;
+    session.parentSessionId = newParentSessionId;
+    await saveSessionCritical(sessionId);
+    updated.push(sessionId);
+  }
+  if (updated.length > 0) {
+    await saveSessionCatalogEntriesCritical(updated);
+    notifySessionListUpdated();
+  }
+  return updated;
+}
+
+export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
+  return await sessionRelations.sendToSession({
     getExistingSession,
+    getSessionCatalog,
     getAgentMetadata,
     enqueueSessionItem,
   }, targetSessionId, message, fromSessionId);
+}
+
+export async function validateSessionWaitTargets(sourceSessionId: string, targetSessionIds: string[]): Promise<string[]> {
+  const source = getSessionCatalog(sourceSessionId);
+  if (!source) throw new Error(`Session "${sourceSessionId}" not found.`);
+  const resolved: string[] = [];
+  for (const requested of targetSessionIds) {
+    let targetId = requested;
+    if (requested === '<main>') targetId = (source.agent || 'main') === 'main' ? 'main' : `${source.agent}/main`;
+    if (requested === '<parent>') {
+      if (!source.parentSessionId) throw new Error(`Cannot resolve \`<parent>\`: current session \`${source.id}\` has no parent session.`);
+      targetId = source.parentSessionId;
+    }
+    const target = getSessionCatalog(targetId);
+    if (!target) throw new Error(`Session "${targetId}" not found.`);
+    if (target.id === source.id) {
+      throw new Error(`Wait target \`${requested}\` resolves to the current Session \`${sourceSessionId}\`.`);
+    }
+    const sourceMeta = getAgentMetadata(source.agent || 'main');
+    const targetMeta = getAgentMetadata(target.agent || 'main');
+    const direct = source.parentSessionId === target.id || target.parentSessionId === source.id;
+    if ((sourceMeta.isolated || targetMeta.isolated) && !direct) {
+      throw new Error('Isolated sessions can declare only direct parent/child Session dependencies.');
+    }
+    if (!resolved.includes(target.id)) resolved.push(target.id);
+  }
+  return resolved;
 }
 
 
 /**
  * Save a single session's history to its file
  */
-export async function saveSession(sessionId: string): Promise<void> {
+export async function saveSession(sessionOrId: Session | string): Promise<void> {
+  const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.id;
   try {
-    const session = sessions.get(sessionId);
-    if (!session) {
-      logger.warn({ sessionId }, 'Session not found for saving');
-      return;
+    if (typeof sessionOrId === 'string') await saveSessionCritical(sessionId);
+    else await saveSessionForSessionCritical(sessionOrId);
+  } catch (e) {
+    logger.error({ err: e, sessionId }, 'Failed to save session');
+  }
+}
+
+async function saveSessionCritical(sessionId: string): Promise<void> {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    throw new Error(`Session "${sessionId}" not found for saving.`);
+  }
+
+  await saveSessionForSessionCritical(session);
+}
+
+export async function saveSessionForSessionCritical(session: Session): Promise<void> {
+  await withSessionAuthoritySaveLane(session.id, () => saveSessionForSessionCriticalUnlocked(session));
+}
+
+async function saveSessionForSessionCriticalUnlocked(session: Session): Promise<void> {
+  const sessionId = session.id;
+  await saveSessionStateOnlyCritical(session);
+
+  // Save metadata (lightweight operation)
+  try { await saveSessionCatalogEntriesCritical([session.id]); }
+  catch (error) {
+    try {
+      const authority = await readSessionHistorySnapshot(session.id);
+      if (authority) replaceAuthoritativeSessionState(session, authority, { preserveCatalogFields: true });
+    } catch (resyncError) {
+      const postcommit = new SessionAuthorityPostCommitError(`Session ${session.id} authority committed, its catalog projection failed, and local authority resync also failed.`, error);
+      (postcommit as any).resyncError = resyncError;
+      throw postcommit;
     }
+    throw new SessionAuthorityPostCommitError(`Session ${session.id} authority committed, but its catalog projection failed.`, error);
+  }
 
-    // Initialize historyVersion if not exists
-    if (session.historyVersion === undefined) {
-      session.historyVersion = 0;
-    }
-
-    // Update message count in metadata
-    session.meta.messageCount = session.history.length;
-
-    // Ensure sessions directory exists
-    await fs.ensureDir(SESSIONS_DIR);
-
-    // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
-    const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
-    await fs.ensureDir(path.dirname(historyFile));
-    await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
-    await saveSessionFrontier(session);
-    
-    // Save metadata (lightweight operation)
-    await saveSessionsMetadata();
-
-    // Schedule archive-based vector indexing (non-blocking)
+  // Schedule archive-based vector indexing (non-blocking)
+  if (VECTOR_ENABLED) {
     const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
     const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
     const lastMessage = session.history[session.history.length - 1];
@@ -1142,59 +2174,144 @@ export async function saveSession(sessionId: string): Promise<void> {
 
     vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
       .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
-    
-    // Notify session list update
-    if (onSessionListUpdated) {
-      onSessionListUpdated();
-    }
+  }
+
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
+}
+
+/** Local save composition half; the underlying state-file writer is worker-safe. */
+async function saveSessionStateOnlyCritical(session: Session): Promise<void> {
+  await sessionPersistenceFaultInjector?.('history', session.id, session);
+  await writeAuthoritativeSessionState(session);
+}
+
+/** Persist only the named catalog entries. Missing in-memory IDs are deleted. */
+export async function saveSessionCatalogEntries(sessionIds: Iterable<string>): Promise<void> {
+  try {
+    await saveSessionCatalogEntriesCritical(sessionIds);
   } catch (e) {
-    logger.error({ err: e, sessionId }, 'Failed to save session');
+    logger.error(e, 'Failed to save session catalog entries');
   }
 }
 
-/**
- * Save sessions metadata (sessions.json)
- */
-export async function saveSessionsMetadata(): Promise<void> {
-  try {
-    const { data: snapshot, source } = await loadSessionsMetadataSnapshot();
-    const data: any = { sessions: {} };
-    const existingSessions = snapshot?.sessions && typeof snapshot.sessions === 'object'
-      ? snapshot.sessions
-      : {};
+async function saveSessionCatalogEntriesCritical(sessionIds: Iterable<string>): Promise<void> {
+  // The catalog is an always-Main-owned database. A Session worker persists
+  // only its authoritative per-session JSON and publishes a bounded projection
+  // for Main to commit during handback.
+  if (SESSION_WORKER_PROCESS) return;
+  const ids = [...new Set(sessionIds)];
+  return withSessionsMetadataWriteLock(async () => {
+    if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
+    await saveSessionCatalogEntriesCriticalUnlocked(ids);
+  });
+}
 
-    for (const [sessionId, metadata] of Object.entries(existingSessions)) {
-      if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
-        const { promptCacheKey: _legacyPromptCacheKey, ...metadataWithoutPromptCacheKey } = (metadata || {}) as Record<string, any>;
-        data.sessions[sessionId] = metadataWithoutPromptCacheKey;
+async function saveSessionCatalogEntriesCriticalUnlocked(sessionIds: string[]): Promise<void> {
+  await sessionPersistenceFaultInjector?.('metadata');
+  const upserts: Record<string, any>[] = [];
+  const deletes: string[] = [];
+  for (const sessionId of sessionIds) {
+    const session = sessions.get(sessionId);
+    if (!session) { deletes.push(sessionId); continue; }
+    await externalizeAuthoritativeSessionQueueImages(session);
+    const metadata = buildSessionCatalogProjection(session);
+    if (workerFenceChecker?.(sessionId)) {
+      const current = sessionCatalogStore.get(sessionId);
+      if (current) {
+        const catalogOnlyFields = ['id', 'agent', 'aliases', 'parentSessionId', 'displayName', 'archived', 'pinned', 'sidebarOrder'] as const;
+        const merged = { ...current };
+        for (const field of catalogOnlyFields) {
+          if (metadata[field] === undefined) delete merged[field];
+          else merged[field] = metadata[field];
+        }
+        const lastChannel = metadata.meta?.lastChannel;
+        if (lastChannel !== undefined) merged.meta = { ...(current.meta || {}), lastChannel };
+        upserts.push(merged);
+        continue;
       }
     }
-
-    for (const [sessionId, session] of sessions.entries()) {
-      data.sessions[sessionId] = stripSessionMetadataForSave(session);
-    }
-
-    if (source !== SESSIONS_FILE) {
-      logger.warn({ source, inMemorySessionCount: sessions.size, savedSessionCount: Object.keys(data.sessions).length }, 'Saving sessions metadata using recovered baseline');
-    }
-
-    await writeSessionsMetadataAtomically(data);
-  } catch (e) {
-    logger.error(e, 'Failed to save metadata');
+    upserts.push(metadata);
   }
+  sessionCatalogStore.upsertMany(upserts, deletes);
+}
+
+async function saveDetachedSessionCatalogProjectionCritical(
+  authority: Session,
+  catalogFields: Session,
+): Promise<void> {
+  if (SESSION_WORKER_PROCESS) throw new Error('Session workers cannot write catalog.sqlite.');
+  await withSessionsMetadataWriteLock(async () => {
+    if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
+    await sessionPersistenceFaultInjector?.('metadata', authority.id, authority);
+    const projection = { ...catalogFields } as Session;
+    restoreSessionSemanticState(projection, captureSessionSemanticState(authority));
+    await externalizeAuthoritativeSessionQueueImages(projection);
+    sessionCatalogStore.upsertMany([buildSessionCatalogProjection(projection)]);
+  });
+}
+
+/** Commit the complete bounded projection after an exact Worker handback. */
+export async function saveSessionCatalogProjectionStrict(sessionId: string): Promise<void> {
+  if (SESSION_WORKER_PROCESS) throw new Error('Session workers cannot write catalog.sqlite.');
+  await withSessionsMetadataWriteLock(async () => {
+    if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
+    const session = sessions.get(sessionId);
+    if (!session) { sessionCatalogStore.deleteMany([sessionId]); return; }
+    await externalizeAuthoritativeSessionQueueImages(session);
+    sessionCatalogStore.upsertMany([buildSessionCatalogProjection(session)]);
+  });
 }
 
 export async function loadSessions(): Promise<void> {
+  // A pending identity move is authoritative data-integrity state. Recovery
+  // must finish before ordinary loading and its failure is intentionally fatal.
+  const catalogExisted = sessionCatalogStore.exists();
+  const identityMoveRecovery = !catalogExisted
+    ? await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex)
+    : 'none';
+  if (identityMoveRecovery !== 'none') {
+    logger.warn({ identityMoveRecovery }, 'Recovered pending session identity move');
+  }
+  let catalogMigration;
+  let sqliteIdentityMoveRecovery: 'none' | 'finished' | 'rolled-back' = 'none';
+  if (catalogExisted) {
+    catalogMigration = await sessionCatalogStore.initialize();
+    sqliteIdentityMoveRecovery = await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex, {
+        load: async () => ({ sessions: Object.fromEntries(sessionCatalogStore.list().map(metadata => [metadata.id, metadata])) }),
+        replace: async data => sessionCatalogStore.replaceAll(Object.values(data.sessions || data)),
+      });
+  }
+  if (sqliteIdentityMoveRecovery !== 'none') logger.warn({ identityMoveRecovery: sqliteIdentityMoveRecovery }, 'Recovered pending SQLite session identity move');
+  // Legacy archive migration still reads sessions.json for the live-ID set.
+  // Complete it before the first catalog migration retires that file.
+  const migrationResults = await runStartupMigrations();
+  for (const migrationResult of migrationResults) {
+    if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
+      const { failures: _failures, ...migrationSummary } = migrationResult;
+      logger.info({ migrationSummary }, 'Startup migration finished');
+    }
+  }
+  // Startup is not ready until the independent session-ID reservation ledger
+  // and its SQLite mirror have been validated/repaired. Ordinary archive reads
+  // remain pure and therefore cannot serve as a deferred initialization path.
+  await initArchiveStore();
+  if (!catalogExisted) catalogMigration = await sessionCatalogStore.initialize();
+  logger.info({ ...catalogMigration!, databasePath: CATALOG_DB_PATH }, 'Session catalog initialized');
+  // Agent metadata is authorization authority. Invalid persisted rules must
+  // prevent readiness rather than being swallowed by the broader session-data
+  // recovery boundary below.
+  await sessionAgentMetadata.loadAgentMetadata();
   try {
-    // Load agent metadata first
-    await sessionAgentMetadata.loadAgentMetadata();
+    const channelsFileExisted = await fs.pathExists(CHANNELS_FILE);
     await loadChannels();
 
-    const { data, source } = await loadSessionsMetadataSnapshot();
-    if (source !== SESSIONS_FILE) {
-      logger.warn({ source }, 'Recovering sessions metadata from fallback source');
-      await writeSessionsMetadataAtomically(data);
+    const legacyChannelAttachments = await readLegacyChannelAttachmentsFromCatalogMigrationEvidence();
+    if (!channelsFileExisted && sessionChannels.getAllAttachments().size === 0 && legacyChannelAttachments) {
+      await sessionChannels.importLegacyChannelAttachments(legacyChannelAttachments as any);
     }
+
+    const { data } = await loadSessionsMetadataSnapshot();
 
     // Load sessions metadata only (history will be loaded on-demand)
     const sessionsData = data.sessions || data;
@@ -1215,19 +2332,21 @@ export async function loadSessions(): Promise<void> {
         stats: metadataWithoutPromptCacheKey.stats || { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
         systemPromptFiles: llm.normalizeSystemPromptFiles(metadataWithoutPromptCacheKey.systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
-        queue: metadataWithoutPromptCacheKey.queue || [],
+        queue: Array.isArray(metadataWithoutPromptCacheKey.queue)
+          ? metadataWithoutPromptCacheKey.queue.filter(isQueueItem)
+          : [],
       };
 
       delete (session as any).isolated;
+      markSessionCatalogStub(session, typeof metadataWithoutPromptCacheKey.queueLength === 'number'
+        ? metadataWithoutPromptCacheKey.queueLength
+        : session.queue.length);
+      delete (session as any).queueLength;
 
       sessions.set(sessionId, session);
     }
 
     // Load channel attachments (migrated to channels.json)
-    if (data.channelAttachments) {
-      await sessionChannels.importLegacyChannelAttachments(data.channelAttachments);
-    }
-
     logger.info({ sessionCount: sessions.size, attachmentCount: sessionChannels.getAllAttachments().size }, 'Session metadata loaded');
   } catch (e) {
     logger.error(e, 'Failed to load sessions');
@@ -1238,11 +2357,11 @@ export async function forceIndexSession(sessionId: string): Promise<void> {
   await sessionHistory.forceIndexSession(getSessionHistoryDeps(), sessionId);
 }
 
-export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
+export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
   await sessionHistory.compactHistory(getSessionHistoryDeps(), sessionId, keepPercent, completionMarker);
 }
 
-export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
+export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
   await sessionHistory.compactHistoryWithSummary(getSessionHistoryDeps(), sessionId, summary, keepPercent, completionMarker);
 }
 
@@ -1281,33 +2400,40 @@ export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void
   onSessionTriggered = onTrigger;
 }
 
+export function setSessionRetryCallback(onRetry: (sessionId: string) => void | Promise<void>): void {
+  onSessionRetryRequested = onRetry;
+}
+
 export async function triggerSessionProcessing(sessionId: string): Promise<void> {
+  assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
   await Promise.resolve(onSessionTriggered?.(sessionId));
 }
 
-function isQueuedSystemEventItem(
-  item: QueueItem | undefined,
-  message: string,
-  type: 'background' | 'trigger' | 'onboot',
-): boolean {
+function getTrailingQueuedSystemWrapper(item: QueueItem | undefined, type: 'background' | 'trigger' | 'onboot'): string | undefined {
   if (!item || item.type !== type || item.source || item.message || !item.parts || item.parts.length !== 1) {
-    return false;
+    return undefined;
   }
-
   const [part] = item.parts;
-  return typeof part?.system === 'string' && part.system === message;
+  return typeof part?.system === 'string' ? part.system : undefined;
 }
 
-export function hasTrailingQueuedSystemEvent(
-  queue: QueueItem[] | undefined,
-  message: string,
-  type: 'background' | 'trigger' | 'onboot',
-): boolean {
-  if (!queue?.length) {
-    return false;
-  }
+export function hasTrailingQueuedResumeEvent(queue: QueueItem[] | undefined): boolean {
+  const wrapper = queue?.length ? getTrailingQueuedSystemWrapper(queue[queue.length - 1], 'background') : undefined;
+  const tag = parseFoxwarmTagLine(wrapper);
+  return tag?.tagName === 'foxwarm-system'
+    && !tag.closing
+    && tag.attrs.kind === 'event'
+    && tag.attrs.type === 'session-resumed';
+}
 
-  return isQueuedSystemEventItem(queue[queue.length - 1], message, type);
+export function hasTrailingQueuedManagedInboxWakeup(queue: QueueItem[] | undefined, managedSessionId: string, pendingCount: number): boolean {
+  const wrapper = queue?.length ? getTrailingQueuedSystemWrapper(queue[queue.length - 1], 'background') : undefined;
+  const tag = parseFoxwarmOpeningTag(wrapper);
+  return tag?.tagName === 'foxwarm-system'
+    && tag.attrs.kind === 'managed-session'
+    && tag.attrs.event === 'pending-inbox'
+    && tag.attrs.managedSessionId === managedSessionId
+    && tag.attrs.pendingCount === String(pendingCount);
 }
 
 function buildManagedInboxWakeupMessage(managedSessionId: string, pendingCount: number): string {
@@ -1328,6 +2454,7 @@ async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> 
     return false;
   }
 
+  assertSessionDestructiveMutationAllowed([session.id], 'accept queued work');
   const restoredPending = managed.pendingInbox.map(cloneQueueItem);
   setManagedSessionState(session, null);
   session.queue = [...restoredPending, ...(session.queue || [])];
@@ -1350,8 +2477,10 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
     return;
   }
 
-  const wakeupMessage = buildManagedInboxWakeupMessage(session.id, managed.pendingInbox.length);
-  if (hasTrailingQueuedSystemEvent(ownerSession.queue, wakeupMessage, 'background')) {
+  const pendingCount = managed.pendingInbox.length;
+  const wakeupMessage = buildManagedInboxWakeupMessage(session.id, pendingCount);
+  if (hasTrailingQueuedManagedInboxWakeup(ownerSession.queue, session.id, pendingCount)) {
+    assertSessionDestructiveMutationAllowed([session.id], 'accept queued work');
     managed.lastOwnerWakeupAt = now;
     managed.leaseTouchedAt = now;
     setManagedSessionState(session, managed);
@@ -1359,6 +2488,7 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
     return;
   }
 
+  assertSessionDestructiveMutationAllowed([session.id], 'accept queued work');
   managed.lastOwnerWakeupAt = now;
   managed.leaseTouchedAt = now;
   setManagedSessionState(session, managed);
@@ -1396,77 +2526,235 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
   }
 }
 
-export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
-  const session = await getSession(sessionId);
+async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem,
+  assertAdmissionActive?: () => void): Promise<void> {
+  const sessionId = session.id;
+  item = (await externalizeQueueItemImages(item)).item;
+  let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
+  if (item.externalEventId) {
+    receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
+    if (receiptPlan.duplicate && !receiptPlan.changed) return;
+    if (receiptPlan.duplicate) {
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      const metaBeforeNormalization = structuredClone(session.meta);
+      applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+      try { await saveSession(sessionId); }
+      catch (error) { session.meta = metaBeforeNormalization; throw error; }
+      return;
+    }
+  }
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   await reclaimManagedSessionIfStale(session);
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+  if (item.externalEventId) {
+    receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
+    if (receiptPlan.duplicate && !receiptPlan.changed) return;
+    if (receiptPlan.duplicate) {
+      const metaBeforeNormalization = structuredClone(session.meta);
+      applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+      try { await saveSession(sessionId); }
+      catch (error) { session.meta = metaBeforeNormalization; throw error; }
+      return;
+    }
+  }
   const managedBeforeEnqueue = !!getManagedSessionState(session);
+  const rollbackSnapshot = item.externalEventId
+    ? { meta: structuredClone(session.meta), queue: structuredClone(session.queue) }
+    : undefined;
+  let persistedAfterExternalReceipt = false;
+  const persistSession = async (): Promise<void> => {
+    // External inbound send promises awaited durable admission. The ordinary
+    // compatibility save logs/swallow failures, so this producer uses the
+    // existing strict authority writer without changing internal producers.
+    if (assertAdmissionActive) await saveSessionForSessionCritical(session);
+    else await saveSession(sessionId);
+    if (item.externalEventId) persistedAfterExternalReceipt = true;
+  };
 
-  const waitTransition = applyQueuedItemToWaitState(session, item);
-  if (waitTransition.action === 'drop') {
+  try {
+    // External callers may lose their HTTP context while image preparation,
+    // session hydration or managed-owner reclamation awaits. Nothing below
+    // awaits again before mutating the wait/queue admission state.
+    assertAdmissionActive?.();
+    if (receiptPlan) applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+    const waitTransition = applyQueuedItemToWaitState(session, item);
+    if (waitTransition.action === 'drop') { await persistSession(); return; }
+    if (waitTransition.action === 'defer') {
+      await persistSession();
+      return;
+    }
+
+    const itemsToEnqueue = waitTransition.items;
+    if (itemsToEnqueue.length === 0) {
+      await persistSession();
+      return;
+    }
+
+    const managedInboxItems: QueueItem[] = [];
+    const directQueueItems: QueueItem[] = [];
+    for (const queuedItem of itemsToEnqueue) {
+      if (shouldRouteQueueItemToManagedInbox(session, queuedItem)) {
+        managedInboxItems.push(queuedItem);
+      } else {
+        directQueueItems.push(queuedItem);
+      }
+    }
+
+    if (managedInboxItems.length > 0) {
+      const managed = getManagedSessionState(session);
+      if (!managed) {
+        throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
+      }
+
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
+      managed.lastInboxAt = Date.now();
+      managed.leaseTouchedAt = managed.lastInboxAt;
+      managed.revision += 1;
+      setManagedSessionState(session, managed);
+      await persistSession();
+      const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+      if (!resumedControllerRun) {
+        await maybeWakeManagedSessionOwner(session, managed);
+      }
+    }
+
+    if (directQueueItems.length > 0) {
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      session.queue.push(...directQueueItems);
+      await persistSession();
+
+      if (!managedBeforeEnqueue && !session.busy) {
+        assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
+        void onSessionTriggered?.(sessionId);
+      }
+    }
+  } catch (error) {
+    if (rollbackSnapshot && !persistedAfterExternalReceipt) {
+      session.meta = rollbackSnapshot.meta;
+      session.queue = rollbackSnapshot.queue;
+    }
+    throw error;
+  }
+}
+
+let workerEnqueueSink: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined;
+let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
+let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
+let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
+let workerCatalogFieldsUpdater: ((sessionId: string, patch: { parentSessionId?: string | null; displayName?: string | null }) => Promise<void>) | undefined;
+
+export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem, assertAdmissionActive?: () => void) => Promise<void>) | undefined): void {
+  workerEnqueueSink = handler;
+}
+
+/**
+ * Registers the Session-worker destructive-lifecycle hook. When set, delete
+ * entry points first let the hook tear down any worker fence (interrupt,
+ * graceful stop with handback, durable fence/mailbox removal); a hook failure
+ * fails the delete closed without touching the authority. Ordinary local
+ * delete semantics always run afterwards on the then-inactive session.
+ */
+export function setSessionWorkerDeleteHandler(handler: ((sessionId: string) => Promise<boolean>) | undefined): void {
+  workerDeleteHandler = handler;
+}
+
+/**
+ * Registers the Session-worker fork source resolver. When set, forkSession
+ * derives a worker-fenced source from this read-only detached snapshot instead
+ * of hydrating the fenced authority into Main; unfenced sessions resolve to
+ * undefined and keep ordinary local semantics.
+ */
+export function setSessionWorkerForkSourceProvider(provider: ((sessionId: string) => Promise<Session | undefined>) | undefined): void {
+  workerForkSourceProvider = provider;
+}
+
+/**
+ * Registers the Session-worker fence lookup used to keep Main-owned
+ * presentation operations (parent moves, relation updates) catalog-only for
+ * fenced sessions: their authority is worker-owned and must never be written
+ * from Main.
+ */
+export function setSessionWorkerFenceChecker(checker: ((sessionId: string) => boolean) | undefined): void {
+  workerFenceChecker = checker;
+}
+
+export function setSessionWorkerCatalogFieldsUpdater(updater: typeof workerCatalogFieldsUpdater): void {
+  workerCatalogFieldsUpdater = updater;
+}
+
+export async function setSessionDisplayName(sessionId: string, displayName?: string): Promise<{ previous?: string; current?: string }> {
+  return withSessionIdentityLock(async () => {
+    const session = sessions.get(resolveLoadedSessionId(sessionId));
+    if (!session) throw new Error(`Session \`${sessionId}\` not found.`);
+    assertSessionDestructiveMutationAllowed([session.id], 'change Session display name');
+    const previous = session.displayName;
+    if (displayName === undefined) delete session.displayName;
+    else session.displayName = displayName;
+    try {
+      await workerCatalogFieldsUpdater?.(session.id, { displayName: displayName ?? null });
+      await saveSessionCatalogEntriesCritical([session.id]);
+    } catch (error) {
+      if (previous === undefined) delete session.displayName;
+      else session.displayName = previous;
+      try { await workerCatalogFieldsUpdater?.(session.id, { displayName: previous ?? null }); }
+      catch (rollbackError) { (error as any).rollbackError = rollbackError; }
+      throw error;
+    }
+    notifySessionStateUpdated(session.id);
+    return { previous, current: session.displayName };
+  });
+}
+
+/** True when the session currently has an active (non-inactive) Session-worker fence. */
+export function isSessionWorkerFenced(sessionId: string): boolean {
+  return workerFenceChecker?.(sessionId) === true;
+}
+
+/**
+ * Agent metadata changes refresh prompt snapshots for affected sessions. That
+ * refresh is a Session-semantic mutation, so Main must not run it against a
+ * worker-owned authority through the catalog stubs.
+ */
+export function assertAgentMetadataMutationAllowed(operation: string): void {
+  if (!workerEnqueueSink) return;
+  throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', `${operation} is unavailable while Session-worker placement is enabled.`, true);
+}
+
+export async function enqueueSessionItem(sessionId: string, item: QueueItem,
+  assertAdmissionActive?: () => void): Promise<void> {
+  assertAdmissionActive?.();
+  if (workerEnqueueSink) {
+    // Session-worker placement: all Main-side producers share one durable
+    // ingress boundary. Managed sessions remain explicitly unsupported there;
+    // fail closed instead of spawning a worker that must reject them.
+    const canonicalSessionId = resolveLoadedSessionId(sessionId);
+    assertSessionDestructiveMutationAllowed([canonicalSessionId], 'accept queued work');
+    const stub = sessions.get(canonicalSessionId);
+    if (stub && getManagedSessionState(stub as Session)) {
+      throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
+    }
+    await workerEnqueueSink(canonicalSessionId, item, assertAdmissionActive);
     return;
   }
-  if (waitTransition.action === 'defer') {
-    await saveSession(sessionId);
-    return;
-  }
-
-  const itemsToEnqueue = waitTransition.items;
-  if (itemsToEnqueue.length === 0) {
-    await saveSession(sessionId);
-    return;
-  }
-
-  const managedInboxItems: QueueItem[] = [];
-  const directQueueItems: QueueItem[] = [];
-  for (const queuedItem of itemsToEnqueue) {
-    if (shouldRouteQueueItemToManagedInbox(session, queuedItem)) {
-      managedInboxItems.push(queuedItem);
-    } else {
-      directQueueItems.push(queuedItem);
-    }
-  }
-
-  if (managedInboxItems.length > 0) {
-    const managed = getManagedSessionState(session);
-    if (!managed) {
-      throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
-    }
-
-    managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
-    managed.lastInboxAt = Date.now();
-    managed.leaseTouchedAt = managed.lastInboxAt;
-    managed.revision += 1;
-    setManagedSessionState(session, managed);
-    await saveSession(sessionId);
-    const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
-    if (!resumedControllerRun) {
-      await maybeWakeManagedSessionOwner(session, managed);
-    }
-  }
-
-  if (directQueueItems.length > 0) {
-    session.queue.push(...directQueueItems);
-    await saveSession(sessionId);
-
-    if (!managedBeforeEnqueue && !session.busy) {
-      void onSessionTriggered?.(sessionId);
-    }
+  const canonicalSessionId = resolveLoadedSessionId(sessionId);
+  const releaseAdmission = await enterStandaloneCompactAdmission(canonicalSessionId);
+  try {
+    const session = await getSession(canonicalSessionId);
+    await enqueueSessionItemForLoadedSession(session, item, assertAdmissionActive);
+  } finally {
+    releaseAdmission();
   }
 }
 
 export async function requestSessionCompaction(
   sessionId: string,
-  options: {
-    compactGuidance?: string;
-    keepPercent?: number;
-    completionMarker?: string;
-    stopAfterCurrentTurn?: boolean;
-    requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
-  } = {}
-): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; queueLength: number }> {
+  options: CompactionRequest = {}
+): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; runsInBackground?: boolean; backgroundUnavailable?: boolean; queueLength: number }> {
   const session = await getSession(sessionId);
+  assertSessionDestructiveMutationAllowed([session.id], 'start compaction work');
 
-  if (session.queue.some(item => item.type === 'compact' || item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
+  if (session.queue.some(item => item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
     return {
       alreadyQueued: true,
       startedImmediately: false,
@@ -1474,12 +2762,25 @@ export async function requestSessionCompaction(
     };
   }
 
-  const startedImmediately = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
-  if (startedImmediately) {
-    // Idle sessions do not need a synthetic queue item just to enter the compact
-    // runner. Keep the `compact` item only for busy/managed sessions where it is
-    // still the ordering marker for "compact after the current turn/step".
+  if (sessionHistory.isAsyncCompactEnabled(session)) {
+    await processSessionCompactionRequest(sessionId, {
+      keepPercent: options.keepPercent,
+      compactGuidance: options.compactGuidance,
+      completionMarker: options.completionMarker,
+    }, 'background');
+    return {
+      alreadyQueued: false,
+      startedImmediately: true,
+      runsInBackground: true,
+      queueLength: session.queue.length,
+    };
+  }
+
+  const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
+  if (canRunAwaitedNow) {
     await updateSessionBusyState(session, true);
+    createStandaloneCompactAdmission(sessionId);
+    standaloneCompactSessions.add(sessionId);
 
     void (async () => {
       try {
@@ -1487,49 +2788,79 @@ export async function requestSessionCompaction(
           keepPercent: options.keepPercent,
           compactGuidance: options.compactGuidance,
           completionMarker: options.completionMarker,
-        }, 'auto');
+        }, 'await', 'standalone');
       } catch (error: any) {
         logger.error({ err: error, sessionId }, 'Immediate session compaction failed');
         if (session.broadcast) {
           session.broadcast(`Error: ${error?.message || 'Compaction failed'}`);
         }
       } finally {
-        await updateSessionBusyState(session, false);
-        if (session.queue.length > 0) {
-          void onSessionTriggered?.(sessionId);
+        await beginStandaloneCompactRelease(sessionId);
+        try {
+          await withSessionAuthoritySaveLane(sessionId, async () => {
+            const stagedRelease = stageStandaloneCompactIdleRelease(session);
+            try {
+              await persistStandaloneCompactIdleRelease(stagedRelease, session);
+              applyStandaloneCompactIdleRelease(session);
+              clearActiveSessionRuntimeState(sessionId);
+              notifySessionUpdated(sessionId);
+            } catch (error) {
+              logger.error({ err: error, sessionId }, 'Failed to release standalone session compaction busy state');
+              if (isSessionAuthorityPostCommitError(error)) {
+                applyStandaloneCompactIdleRelease(session);
+                clearActiveSessionRuntimeState(sessionId);
+                try {
+                  await saveDetachedSessionCatalogProjectionCritical(stagedRelease, session);
+                  notifySessionUpdated(sessionId);
+                } catch (retryError) {
+                  logger.error({ err: retryError, sessionId }, 'Failed to retry standalone compaction catalog projection after authoritative release');
+                }
+              }
+            }
+          });
+
+          const triggerQueuedSession = onSessionTriggered;
+          if (!session.busy && session.queue.length > 0 && triggerQueuedSession) {
+            try {
+              void Promise.resolve(triggerQueuedSession(sessionId)).catch(error => {
+                logger.error({ err: error, sessionId }, 'Failed to trigger queued work after standalone session compaction');
+              });
+            } catch (error) {
+              logger.error({ err: error, sessionId }, 'Failed to trigger queued work after standalone session compaction');
+            }
+          }
+        } finally {
+          standaloneCompactSessions.delete(sessionId);
+          completeStandaloneCompactRelease(sessionId);
         }
       }
-    })();
+    })().catch(error => {
+      logger.error({ err: error, sessionId }, 'Standalone session compaction wrapper failed unexpectedly');
+    });
 
     return {
       alreadyQueued: false,
       startedImmediately: true,
+      runsInBackground: false,
       queueLength: session.queue.length,
     };
   }
 
-  await enqueueSessionItem(sessionId, {
-    type: 'compact',
-    keepPercent: options.keepPercent,
-    compactGuidance: options.compactGuidance,
-    completionMarker: options.completionMarker,
-    stopAfterCurrentTurn: options.stopAfterCurrentTurn,
-    requestedBy: options.requestedBy,
-  });
-
   return {
     alreadyQueued: false,
-    startedImmediately,
+    startedImmediately: false,
+    backgroundUnavailable: true,
     queueLength: session.queue.length,
   };
 }
 
 export async function processSessionCompactionRequest(
   sessionId: string,
-  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>,
-  executionMode: 'auto' | 'await' | 'background' = 'auto'
+  item: CompactionRequest,
+  executionMode: 'auto' | 'await' | 'background' = 'auto',
+  owner: sessionHistory.CompactOperationOwner = 'turn',
 ): Promise<void> {
-  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode);
+  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode, owner);
 }
 
 export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {
@@ -1543,28 +2874,77 @@ export async function applyCompletedCompactJob(sessionId: string): Promise<boole
  * @param type Event type (background, trigger, onboot, etc.)
  */
 export async function queueSessionEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  const now = new Date();
   await enqueueSessionItem(sessionId, {
     type,
-    parts: [{ text: message }]
+    parts: [{
+      system: formatFoxwarmMessage({
+        type,
+        eventType: type,
+        time: formatLocalTimestamp(now),
+        hint: `${type} session event`,
+      }, message),
+    }],
   });
 }
 
 export async function queueSessionStructuredEvent(sessionId: string, parts: MessagePart[], type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
   await enqueueSessionItem(sessionId, {
     type,
-    parts: parts.map(part => ({ ...part }))
+    parts: withInputTimePart(parts)
   });
 }
 
 export async function queueSessionMessageEvent(sessionId: string, message: Message, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  const queuedMessage = structuredClone(message);
+  if (queuedMessage.role === 'user' && queuedMessage.modelVisible !== false) {
+    queuedMessage.parts = withInputTimePart(queuedMessage.parts);
+  }
   await enqueueSessionItem(sessionId, {
     type,
-    message: structuredClone(message),
+    message: queuedMessage,
   });
 }
 
-export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
-  await queueSessionStructuredEvent(sessionId, buildSystemMessageParts(message), type);
+const externalEventAdmissionChains = new Map<string, Promise<void>>();
+
+export async function queueSessionSystemEvent(
+  sessionId: string,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot' = 'background',
+  externalEventId?: string,
+  externalEventTimestamp?: number,
+  execId?: string,
+  waitLiveness?: { fingerprint: string; waitId: string },
+): Promise<void> {
+  const enqueue = async () => {
+    await enqueueSessionItem(sessionId, {
+      type,
+      parts: buildTimestampedSystemMessageParts(message, externalEventTimestamp),
+      ...(externalEventId ? { externalEventId } : {}),
+      ...(execId ? { execId } : {}),
+      ...(waitLiveness ? { waitLivenessFingerprint: waitLiveness.fingerprint, waitLivenessWaitId: waitLiveness.waitId } : {}),
+    });
+  };
+  if (!externalEventId) {
+    await enqueue();
+    return;
+  }
+  const previous = externalEventAdmissionChains.get(sessionId) || Promise.resolve();
+  const current = previous.catch(() => {}).then(enqueue);
+  externalEventAdmissionChains.set(sessionId, current);
+  try {
+    await current;
+  } finally {
+    if (externalEventAdmissionChains.get(sessionId) === current) externalEventAdmissionChains.delete(sessionId);
+  }
+}
+
+async function queueSessionSystemEventForLoadedSession(session: Session, message: string, type: 'background' | 'trigger' | 'onboot'): Promise<void> {
+  await enqueueSessionItemForLoadedSession(session, {
+    type,
+    parts: buildTimestampedSystemMessageParts(message),
+  });
 }
 
 /**
@@ -1576,51 +2956,136 @@ export function notifyHistoryUpdate(sessionId: string, message: Message) {
   }
 }
 
+export function notifyQueueHistoryAppend(session: Session, messages: Message[]): void {
+  onQueueHistoryAppended?.(session, messages);
+}
+
 export function notifySessionEvent(sessionId: string, event: SessionStreamEvent) {
   if (onSessionEventUpdated) {
     onSessionEventUpdated(sessionId, event);
   }
 }
 
-export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
+export async function appendSessionMessages(sessionOrId: Session | string, messages: Message[], options: { strictPersistence?: boolean } = {}): Promise<void> {
   const session = typeof sessionOrId === 'string'
     ? await getSession(sessionOrId)
     : sessionOrId;
 
+  // Canonical message append is an archive+authority commit boundary. Never
+  // use the best-effort public save wrapper here: a failed authority write
+  // must abort the owning Session turn rather than continue from memory-only
+  // history. Keep the option shape temporarily for current callers.
+  void options;
+  await appendSessionMessagesForSession(session, messages, () => saveSessionForSessionCritical(session));
+}
+
+export async function appendSessionMessagesForSession(
+  session: Session,
+  messages: Message[],
+  persistSession: () => Promise<void>,
+  notifyMessage: (sessionId: string, message: Message) => void = notifyHistoryUpdate,
+): Promise<Message[]> {
+
   if (messages.length === 0) {
-    return;
+    return [];
   }
 
-  await appendMessagesToArchive(session, messages);
-
-  for (const message of messages) {
-    session.history.push(message);
+  const before = captureSessionSemanticState(session);
+  let canonicalMessages: Message[];
+  let insertedArchiveMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [];
+  try {
+    for (const message of messages) ensureMessageSeq(session, message);
+    canonicalMessages = (await externalizeMessages(messages)).messages;
+    insertedArchiveMessages = await appendMessagesToArchive(session, canonicalMessages);
+    session.history.push(...canonicalMessages);
+    await persistSession();
+  } catch (error) {
+    if (!isSessionAuthorityPostCommitError(error)) restoreSessionSemanticState(session, before);
+    if (insertedArchiveMessages.length > 0) {
+      if (isSessionAuthorityPostCommitError(error)) throw error;
+      try { await rollbackUncommittedMessages(insertedArchiveMessages); }
+      catch (rollbackError) {
+        const combined = new Error(`Session ${session.id} append failed and its uncommitted archive rows could not be rolled back.`);
+        (combined as any).errors = [error, rollbackError];
+        throw combined;
+      }
+    }
+    throw error;
   }
-  appendMessagesToContextFrontier(session, messages);
-
-  const messagesToNotify = [...messages];
-  const goalReminderMessage = maybeBuildGoalReminderMessage(session);
-
-  await saveSession(session.id);
+  const messagesToNotify = [...canonicalMessages];
 
   for (const message of messagesToNotify) {
-    notifyHistoryUpdate(session.id, message);
+    notifyMessage(session.id, message);
   }
+  return messagesToNotify;
+}
 
-  if (goalReminderMessage) {
-    await queueSessionMessageEvent(session.id, goalReminderMessage, 'background');
+export async function appendQueuedSessionMessagesForSession(
+  session: Session,
+  messages: Message[],
+  persistSession: () => Promise<void>,
+  notifyBatch: (session: Session, messages: Message[]) => void = notifyQueueHistoryAppend,
+): Promise<void> {
+  const canonical = await appendSessionMessagesForSession(session, messages, persistSession, () => {});
+  try {
+    notifyBatch(session, canonical);
+  } catch (error) {
+    logger.warn({ err: error, sessionId: session.id }, 'Queue history presentation notification failed after commit');
   }
+}
+
+export async function appendQueuedSessionMessages(sessionOrId: Session | string, messages: Message[]): Promise<void> {
+  const session = typeof sessionOrId === 'string' ? await getSession(sessionOrId) : sessionOrId;
+  await appendQueuedSessionMessagesForSession(session, messages, () => saveSessionForSessionCritical(session));
 }
 
 export async function appendSessionMessage(sessionOrId: Session | string, message: Message): Promise<void> {
   await appendSessionMessages(sessionOrId, [message]);
 }
 
+export function buildManualForkNotificationMessage(parentSessionId: string, childSessionId: string, initialMessage?: string): Message {
+  const inputTime = formatLocalTimestamp(Date.now());
+  const messageText = initialMessage === undefined
+    ? formatFoxwarmSystem({
+      kind: 'session-event',
+      event: 'manual-fork-created',
+      currentSessionId: parentSessionId,
+      childSessionId,
+      time: inputTime,
+      initialMessage: '(none)',
+    }, `User manually created fork child session \`${childSessionId}\` from the current session \`${parentSessionId}\`.\nInitial message: (none)`)
+    : `${formatFoxwarmSystemOpen({
+      kind: 'session-event',
+      event: 'manual-fork-created',
+      currentSessionId: parentSessionId,
+      childSessionId,
+      time: inputTime,
+    })}\nUser manually created fork child session \`${childSessionId}\` from the current session \`${parentSessionId}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
+  return {
+    role: 'user',
+    parts: [systemPart(messageText)],
+    __meta: { timestamp: Date.now() },
+  };
+}
+
+export async function notifyManualForkCreated(parentSessionId: string, childSessionId: string, initialMessage?: string): Promise<'appended' | 'queued'> {
+  const parent = await getSession(parentSessionId);
+  const notification = buildManualForkNotificationMessage(parent.id, childSessionId, initialMessage);
+
+  if (parent.busy) {
+    await queueSessionMessageEvent(parent.id, notification, 'background');
+    return 'queued';
+  }
+
+  await appendSessionMessages(parent, [notification]);
+  return 'appended';
+}
+
 
 /**
  * Get list of all session IDs with basic info
  */
-export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number }> {
+export function listSessions(): Array<{ id: string; messageCount: number; lastMessageTime: number | null; hasChannel: boolean; displayName?: string; currentNode?: string; cwd?: string; isolated?: boolean; busy?: boolean; queueLength?: number; parentSessionId?: string; runtimeState: SessionRuntimeState }> {
   const result = [];
   
   // Iterate through all sessions in memory (metadata is always loaded)
@@ -1641,11 +3106,23 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       cwd: session.cwd,
       isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
-      queueLength: session.queue?.length || 0
+      queueLength: getEffectiveSessionQueueLength(session),
+      parentSessionId: session.parentSessionId,
+      runtimeState: buildSessionRuntimeState(session)
     });
   }
   
   return result.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
+}
+
+export function listSessionCatalogPage(limit: number, offset: number = 0): { sessions: Session[]; total: number } {
+  const boundedLimit = Math.max(0, Math.floor(limit));
+  const boundedOffset = Math.max(0, Math.floor(offset));
+  const metadata = sessionCatalogStore.list({ limit: boundedLimit, offset: boundedOffset });
+  return {
+    sessions: metadata.map(row => sessions.get(row.id)).filter((session): session is Session => !!session),
+    total: sessionCatalogStore.count(),
+  };
 }
 
 export async function setSessionCwd(sessionId: string, cwd?: string): Promise<{ changed: boolean; previous?: string; current?: string }> {
@@ -1707,7 +3184,7 @@ export async function getArchivedBlocks(sessionId: string, options: {
   };
 }
 
-export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_PERCENT, thresholdTokens?: number) {
+export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_KEEP_PERCENT, thresholdTokens?: number) {
   return sessionHistory.compactToolMessages(getSessionHistoryDeps(), sessionId, keepPercent, thresholdTokens);
 }
 
@@ -1734,11 +3211,10 @@ export async function setSessionChildModelDefault(sessionId: string, childModelD
     ? childModelDefault.trim()
     : undefined;
 
-  if (normalized !== undefined) {
-    session.childModelDefault = normalized;
-  } else {
-    delete session.childModelDefault;
-  }
+  const prospective = normalizeProspectiveSessionModelEffortSettings(session, {
+    childModelDefault: normalized ?? null,
+  });
+  applyNormalizedSessionModelEffortSettings(session, prospective);
 
   await saveSession(session.id);
 
@@ -1783,10 +3259,17 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
 /**
  * Delete a session
  */
-export async function deleteSession(sessionId: string): Promise<boolean> {
+export async function deleteSession(sessionId: string, owningClaimId?: string): Promise<boolean> {
+  assertSessionDestructiveMutationAllowed([sessionId], 'be deleted', owningClaimId);
+  if (workerDeleteHandler) await workerDeleteHandler(sessionId);
+  clearActiveSessionRuntimeState(sessionId);
+
   if (!sessions.has(sessionId)) {
     return false;
   }
+
+  const deletingSession = sessions.get(sessionId)!;
+  clearRemoteExecStateForSession([deletingSession.id, ...(deletingSession.aliases || [])]);
 
   sessionHistory.discardPendingCompactWork(sessionId);
   
@@ -1801,15 +3284,18 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   if (await fs.pathExists(sessionFile)) {
     await fs.remove(sessionFile);
   }
+
+  const legacyFrontierFile = getLegacySessionFrontierPath(sessionId);
+  if (await fs.pathExists(legacyFrontierFile)) {
+    await fs.remove(legacyFrontierFile);
+  }
   
   // Save metadata
-  await saveSessionsMetadata();
+  await saveSessionCatalogEntries([sessionId]);
   await saveChannels();
   
-  // Notify session list update
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
   
   return true;
 }
@@ -1825,14 +3311,36 @@ export async function archiveSession(sessionId: string, archived: boolean = true
 
   session.archived = archived;
   // Archive is metadata-only; avoid touching session history file
-  await saveSessionsMetadata();
+  await saveSessionCatalogEntries([sessionId]);
   
-  // Notify session list update
-  if (onSessionListUpdated) {
-    onSessionListUpdated();
-  }
+  // Notify global-list and per-session state consumers.
+  notifySessionUpdated(sessionId);
   
   return true;
+}
+
+export async function archiveSessions(sessionIds: string[], archived: boolean = true): Promise<{
+  matchedSessionIds: string[];
+  changedSessionIds: string[];
+}> {
+  const matchedSessionIds: string[] = [];
+  const changedSessionIds: string[] = [];
+
+  for (const sessionId of sessionIds) {
+    const session = sessions.get(sessionId);
+    if (!session) continue;
+    matchedSessionIds.push(sessionId);
+    if (!!session.archived === archived) continue;
+    session.archived = archived;
+    changedSessionIds.push(sessionId);
+  }
+
+  if (changedSessionIds.length > 0) {
+    await saveSessionCatalogEntries(changedSessionIds);
+    for (const sessionId of changedSessionIds) notifySessionUpdated(sessionId);
+  }
+
+  return { matchedSessionIds, changedSessionIds };
 }
 
 /**
@@ -1849,9 +3357,15 @@ export async function retrySession(sessionId: string): Promise<void> {
     throw new Error('Session is already busy');
   }
 
-  // Trigger session processing by adding a retry marker to queue
+  assertSessionDestructiveMutationAllowed([session.id], 'start retry work');
+
+  if (!onSessionRetryRequested) {
+    throw new Error('Session retry processing is unavailable');
+  }
+
+  // Retry is an immediate execution request, not persisted queue work.
   logger.info({ sessionId }, 'Retrying session');
-  await queueSessionSystemEvent(sessionId, 'retrying last request', 'trigger');
+  await Promise.resolve(onSessionRetryRequested(sessionId));
 }
 
 /**
@@ -1863,21 +3377,43 @@ export async function resumeBusySessions(): Promise<void> {
   const queuedSessionIds: string[] = [];
   const managedPendingSessionIds: string[] = [];
 
-  // Check metadata for busy or queued sessions (no need to load history files)
-  for (const [sessionId, session] of sessions.entries()) {
-    if (session.busy === true) {
+  // The restart candidate set is indexed in catalog.sqlite; only matching
+  // lightweight stubs are inspected here.
+  for (const metadata of sessionCatalogStore.listRecoveryCandidates()) {
+    const sessionId = metadata.id as string;
+    const workerPlacement = !!workerEnqueueSink;
+    const session = workerPlacement ? sessions.get(sessionId) : await getSession(sessionId).catch((error): Session | undefined => {
+      logger.error({ err: error, sessionId }, 'Failed to hydrate restart-recovery candidate');
+      return undefined;
+    });
+    if (!session) continue;
+    if (workerPlacement ? metadata.busy === true : session.busy === true) {
       busySessionIds.push(sessionId);
       continue;
     }
-
-    if ((session.queue?.length || 0) > 0) {
+    if (workerPlacement ? (metadata.queueLength || 0) > 0 : (session.queue?.length || 0) > 0) {
       queuedSessionIds.push(sessionId);
     }
 
     const managed = getManagedSessionState(session as Session);
-    if (managed?.pendingInbox?.length) {
+    if (workerPlacement ? (metadata.managedPendingCount || 0) > 0 : !!managed?.pendingInbox?.length) {
       managedPendingSessionIds.push(sessionId);
     }
+  }
+
+  if (workerEnqueueSink && (busySessionIds.length > 0 || queuedSessionIds.length > 0 || managedPendingSessionIds.length > 0)) {
+    // Session-worker placement owns execution. Residual Main-local busy/queue
+    // state (for example left behind when switching from local placement) must
+    // never run through the local runner: the local resume path both bypasses
+    // the durable ingress boundary and risks double-writing the per-session
+    // authority a worker may own. Log loudly and leave execution to the next
+    // durable ingress or the pending mailbox resume.
+    logger.warn({
+      busySessions: busySessionIds,
+      queuedSessions: queuedSessionIds,
+      managedPendingSessions: managedPendingSessionIds,
+    }, 'Session-worker placement is enabled; skipping Main-local restart recovery for residual busy/queued/managed sessions. Their execution is left to the next durable Worker ingress.');
+    return;
   }
 
   if (busySessionIds.length === 0 && queuedSessionIds.length === 0 && managedPendingSessionIds.length === 0) {
@@ -1894,13 +3430,16 @@ export async function resumeBusySessions(): Promise<void> {
       // Reset busy flag and trigger
       session.busy = false;
       session.busyStartedAt = undefined;
-      const resumeMessage = 'session resumed after process restart';
-      if (hasTrailingQueuedSystemEvent(session.queue, resumeMessage, 'background')) {
+      const resumeMessage = formatFoxwarmSystemTag({
+        kind: 'event',
+        type: 'session-resumed',
+        hint: 'The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.',
+      });
+      if (hasTrailingQueuedResumeEvent(session.queue)) {
         await saveSession(sessionId);
         onSessionTriggered?.(sessionId);
       } else {
-        // Will save session inside, no need to call saveSession() here.
-        await queueSessionSystemEvent(sessionId, resumeMessage, 'background');
+        await queueSessionSystemEventForLoadedSession(session, resumeMessage, 'background');
       }
       logger.info({ sessionId }, 'Busy session resumed');
     } catch (e) {

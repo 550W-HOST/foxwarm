@@ -1,0 +1,215 @@
+# Unit: src-tools
+
+Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
+Secondary files: src/tools/toolAuthorizationTools.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
+
+## Purpose
+
+Implements the core tool registry and execution layer for the agent system. Defines all built-in tool definitions (parameters, descriptions, permissions), dispatches tool calls to their implementations, and manages file I/O, command execution, memory operations, MCP integration, node management, and session/agent orchestration.
+
+## Key Exports (from src/tools.ts facade)
+
+- `definitions` — Array of all tool definition objects (from `tools/definitions.ts`)
+- `modelFacingDefinitions` — Subset of definitions directly exposed to the model
+- `callTool(toolName, args, context)` — Main dispatcher that routes tool calls to implementations
+- `assertToolAvailableForPlacement(toolName, args, context)` — trusted-placement pre-handler fence; Worker-unsupported operations fail retryably before raw singleton/lifecycle code.
+- The closed Main Management wrappers cover messaging/timers/catalog operations plus Worker cross-session recall/archive reads, Main-owned agent/session creation, other-target session deletion, node bootstrap/pairing, and atomic generic policy replacement.
+- `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
+- `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
+- `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
+- `builtinNodeArgumentSelectsPlacement(name)` — Reports the explicit root-`node` placement classification used only by file source/target builtins.
+- `isToolDirectlyExposedToModel(toolName)` — Check if a tool has `defaultInject: true`
+- `getToolPermissionNode(toolName, executionNode, targetNode)` — Determine which node governs permission for a tool call
+- `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution; an exact trusted current owner supplies source identity/aliases directly.
+
+## Function Index
+
+### tools/helpers.ts — Shared types and utilities
+| Function | Description |
+|----------|-------------|
+| `getPendingWriteScopeKey` | Builds scope key for pending write ref isolation |
+| `prunePendingWriteRefs` | Evicts expired/oversized entries from pending write cache |
+| `registerPendingWriteRef` | Stores content for deferred file writes with TTL |
+| `peekPendingWriteRefContent` | Retrieves pending write content after validating its session/agent scope without consuming it |
+| `expandHomePath` | Expands `~` prefix to OS home directory |
+| `resolveAgentPath` | Re-export from `src/utils/pathResolve.ts`; resolves relative/absolute/home paths against session cwd or the agent directory |
+| `canonicalPotentialPathSync` | Canonicalizes an existing path or the nearest existing ancestor of a prospective path for authorization-time containment checks |
+| `resolveAgentMemoryPath` | Resolves paths within agent memory directory |
+| `readResolvedPath` | Master wrapper around shared `readFileToolPath`; reads file/directory/image and treats start/end line 0 as omitted |
+| `writeResolvedPath` | Master wrapper around shared `writeFileToolPath`; writes content with overwrite and parent-directory checks |
+| `editResolvedPath` | Applies exact text replacement in a file |
+| `deleteResolvedPath` | Deletes a file (refuses directories) |
+| `applyPatchOperations` | Applies structured patch (add/update/delete) operations |
+| `applyExactReplacement` | Single-match regex replacement with validation |
+
+### tools/fileTools.ts — File read/write/edit/patch/delete
+| Function | Description |
+|----------|-------------|
+| `tool_read` | Reads a file with optional line range |
+| `tool_write` | Writes content, supports contentRef for large writes, and can explicitly create parent dirs with `createDirs=true` |
+| `tool_edit` | Exact text replacement in a file |
+| `tool_apply_patch` | Applies structured patch edits to files |
+
+### tools/memoryTools.ts — Agent memory operations
+| Function | Description |
+|----------|-------------|
+| `tool_read_memory` | Reads a memory file |
+| `tool_write_memory` | Creates a new memory file |
+| `tool_edit_memory` | Edits a memory file in place |
+| `tool_delete_memory` | Deletes a memory file |
+| `tool_apply_patch_memory` | Applies patch edits to memory files |
+
+### tools/execTools.ts — Shell command execution
+| Function | Description |
+|----------|-------------|
+| `tool_exec` | Executes shell commands with timeout and background support |
+
+### tools/imageTools.ts — Image operations
+| Function | Description |
+|----------|-------------|
+| `tool_image_crop` | Crops a region from a referenced image |
+| `tool_image_write_to_file` | Writes a referenced image to disk |
+
+### tools/browserTools.ts — Headless browser
+| Function | Description |
+|----------|-------------|
+| `tool_browse_open` | Opens a URL in headless browser |
+| `tool_browse_list` | Lists open browser tabs |
+| `tool_browse_get` | Gets content or screenshot from a tab |
+| `tool_browse_close` | Closes a browser tab |
+| `tool_browse_interact` | Interacts with a browser tab (click, type, etc.) |
+
+### tools/mcpTools.ts — MCP server integration
+| Function | Description |
+|----------|-------------|
+| `tool_mcp_config` | Configures MCP server connections and an optional bounded per-server tool-call timeout (`0` clears to SDK default) |
+| `tool_list_mcp_servers` | Lists configured MCP servers |
+
+### tools/nodeTools.ts — Generic Node management
+| Function | Description |
+|----------|-------------|
+| `tool_node` | Dispatches model-facing Node list/select/create/ensure/inspect/destroy actions |
+| `tool_list_nodes` | Lists generic available Nodes, marks the current Node, and shows lifecycle-capable provider IDs/actions |
+| `tool_change_current_node` | Changes the session's current execution node |
+| `tool_copy_between_nodes` | Copies files between nodes |
+| `tool_node_bootstrap_info` | Generates bootstrap info for node pairing |
+| `tool_node_pair_approve` | Approves a pending node pairing request; an external Main-local caller can provide a final context/policy fence before registry mutation (see [inbound pairing](./src-mcp-inbound-pairing-service.md)) |
+| `tool_node_pair_list` | Lists pending node pairing requests |
+
+### tools/vectorTools.ts — Vector recall scope utilities
+| Function | Description |
+|----------|-------------|
+| `resolveMemorySearchOptions` | Resolves scope/session/agent for vector search from a trusted current owner or Main-local detached read source, using catalog-only lookup for explicit other targets |
+
+### tools/unifiedSearch.ts — Unified tool search/call
+| Function | Description |
+|----------|-------------|
+| `tool_search_tools` | Unified search across builtin, MCP, and node tool sources |
+| `formatSearchToolsOutput` | Renders bounded copyable TypeScript-like declarations, selected/total counts, schema omission markers, and discovery warnings |
+| `scoreUnifiedToolQuery`, `compareUnifiedSearchResults` | Shared pure ranking and deterministic tie-break for internal search and inbound MCP discovery |
+| `tool_call_tool` | Parses the unified call surface and delegates to the canonical resolved-tool executor |
+
+### tools/resolvedTools.ts — Canonical invocation resolution
+| Function | Description |
+|----------|-------------|
+| `resolveDirectTool` | Resolves direct provider invocations into one builtin or Node operation |
+| `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
+| `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
+| `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
+| `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
+
+### tools/definitions.ts — Tool definition array
+| Export | Description |
+|--------|-------------|
+| `definitions` | Array of all tool definition objects (schemas, descriptions, permissions) |
+
+### tools/placement.ts — Process-placement ownership
+| Export | Description |
+|--------|-------------|
+| `BUILTIN_TOOL_PLACEMENTS` | Typed exhaustive map across node-environment, session-owner, main-management, external-service, and dispatcher/container owners |
+| `resolveBuiltinToolPlacement` | Resolves mixed action metadata and routes only node-environment builtins to `currentNode` |
+| `NODE_ENVIRONMENT_BUILTIN_NAMES` | Stable derived list used by parity tests against applicable CLI-node capabilities |
+| `builtinNodeArgumentSelectsPlacement` | Distinguishes file source/target selectors from semantic root `node` arguments |
+
+## Dependencies
+
+- `./vector` — Vector/semantic search operations used internally by `recall({ vector_query })`
+- `./sessionManager` — Session lifecycle management
+- `./session/archiveStore` — `getVectorSearchLineage` for archive retrieval
+- `./tokenCount` — `estimateTokenCount` for budget enforcement
+- `./config` — `WORKSPACE_DIR`, `getAgentDir`, `getAgentMemoryDir`
+- `./isolatedCheck` — `checkPathAccess`, `checkToolPermission` for sandboxing
+- `./mcpClient` — MCP server communication
+- `./browser` — `browserManager` for headless browser tools
+- `./nodes/manager` — `nodesManager` for remote node orchestration
+- `./nodes/bootstrapInfo` — Node pairing/bootstrap utilities
+- `./execManager` — Persistent command execution lifecycle
+- `./applyPatch` — Structured file patch application
+- `../../packages/shared/dist/fileToolCore` — shared read/write file tool core reused by master and node wrappers
+- `../../packages/shared/dist/fileOperations` — native low-level file backend and injectable `FileOperations` contract
+- `./session/compactPlan` — `COMPACT_PLAN_TOOL_DEFINITION`
+- `./toolImages` — Image reference resolution and cropping
+- `./jsonObjectArgs` — Argument parsing helpers
+- `./toolscript` — Toolscript run/continue/list/cancel tools
+- `./toolsSessionAgent` — Session, agent, timer, and channel management tools
+- `./mainManagementTools` — local versioned RPC caller for the first closed main-owned tool set
+- `./nodeExecution` — local versioned RPC caller used by direct/unified Node placement and dynamic Node calls; explicit master Node calls remain local and canonical-set-only
+
+## Behavior
+
+- **File access control**: File wrappers resolve targets with `resolveAgentPath`, then enforce `checkPathAccess` before I/O.
+- **Shared read/write core**: After master-specific path resolution, isolation checks, and `contentRef` handling, `readResolvedPath` / `writeResolvedPath` delegate file/directory/image read and write-parent semantics to `packages/shared/src/fileToolCore.ts`. Main explicitly selects the native low-level backend unless an internal exact ToolContext supplies another backend; public tool names, schemas, path policy, and output/error contracts are unchanged.
+- **Read range placeholders**: `startLine` / `endLine` values of `0` are treated as omitted for file and directory reads, so provider-emitted optional numeric placeholders do not produce empty reads.
+- **Exact line reads and metadata footer**: Master `read` inherits the shared LF/CRLF/bare-CR physical-line scanner and exact selected-terminator contract from `fileToolCore`. Empty files have zero lines and trailing terminators do not create virtual EOF lines. Ordinary whole/range text reads always append exact line count plus `File size: N bytes.`; selected final nonterminated lines add one tool LF before `---` and state `File has no trailing newline.`. Large reads retain bounded safeguards and expose exact total lines only when the necessary scan reaches EOF. Canonical decision: [D-file-read-exact-lines-and-footer](./shared-node-tools.md#d-file-read-exact-lines-and-footer).
+- **Bounded file reads**: Master and remote non-image reads share `fileToolCore` bounded display behavior. Large source files retain only bounded samples before model output handling, while finite line ranges stream only to their endpoint; use ranges for targeted content. Canonical contract: [D-bounded-file-read-excerpts](./shared-node-tools.md#d-bounded-file-read-excerpts).
+- **Write parent dirs**: `write` requires parent directories to already exist by default. Passing `createDirs=true` explicitly creates missing parent directories. The shared core first attempts the actual write, then diagnoses parent-path failures so symlinked parent directories work normally. Missing-parent failures report the first missing parent path and, when possible, return a `contentRef` retry hint so large content can be reused.
+- **Pending write refs**: Large file writes that fail validation produce a `contentRef` token cached in memory (TTL 15 min, max 2 MB per entry, 8 MB total). A ref remains limited to its exact session and agent but may write the cached payload to the original target or any different target that independently passes ordinary path resolution, isolation checks, overwrite/createDirs policy, and target-local file operations. Failed retries retain the ref; a successful write consumes it. Failure guidance provides an executable `write({ ... })` retry call with the actual escaped failing path, reference, and required flags, explicitly tells the model not to include the mutually exclusive `content` argument because the attempted content is already cached, explains authorized alternate-path reuse, and directs intentional content corrections to omit `contentRef` and submit only the new content plus the desired path and required flags.
+- **Command execution**: `tool_exec` delegates to `execManager` for persistent processes with configurable timeouts, foreground/background modes, and working-directory tracking. Its schema has no hard maximum so finite requests above 60 seconds reach the shared resolver, clamp to 60, and produce a warning in the immediate result footer; minimum/finite validation remains strict. Inline display is already bounded, so model guidance tells agents not to add `head`/`tail` merely for context control: a filtering pipeline changes the captured command output. The master description also reminds agents that a timed-out process remains outstanding while they continue other work; this stays aligned with node guidance under [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree). Canonical capture/excerpt semantics: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
+- **Exec cwd sync notice**: When a command changes the session cwd, the `exec` tool appends a `SESSION CWD CHANGED` notice at the end of the tool output and states that the new cwd becomes the default for later `exec/read/edit/write/apply_patch` calls. Parallel segments defer this mutation/notice until every segment member settles, then replay it in model order before the next barrier under [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
+- **Placement versus permissions**: Process-placement ownership is exhaustive metadata in `tools/placement.ts`; generic ordered authorization and the current isolation compatibility layer remain independently enforced by `checkToolPermission` plus tool-local guards.
+- **Canonical resolved dispatch**: Direct provider calls, unified `call_tool`, and ToolScript nested calls resolve through `resolvedTools.ts`. Capability source, exact execution Node ID, and process/service ownership stay separate; there is no `ExecutionTarget` implementation-kind union. Root schema shape does not imply placement ownership: explicit metadata consumes `send_file.node` and `image_write_to_file.node` as file source/target selectors, while `create_child_session.node` stays in authorization/effect args and the management operation remains on Main. `call_tool` is a permission-neutral dispatcher/container and only the independently resolved concrete identity is authorized; MCP then retains its authoritative Main service recheck. Recursive `builtin:call_tool` target selection is rejected, while the top-level provider-facing interface remains registered. Local calls retain the exact outer ToolContext and current Session owner. Direct node-environment names and `source=node` use the same current-Node routing; `source=builtin` rejects those names. Static Node capabilities retain the existing tool permission check. Custom advertised capabilities rely on the shared Main Node service's exact source/bound-target/advertised-tool guard and provider resolution in both Main-local and Worker reverse placement. Canonical contract: [D-dispatch-resolved-target](../threads/tool-dispatch.md#d-dispatch-resolved-target).
+- **Worker placement fences**: Current-session effects carry a trusted internal local/Session-worker marker into direct and nested ToolContexts. Exact current status/archive/settings and current-session/current-agent recall remain in the Worker owner. Cross-session recall/archive reads, agent/session creation, other-target `delete_session`, and node bootstrap/pairing route through the fixed Main-management facade; delete rejects canonical source/alias self-targets before effect. Source conversion, identity move/rename, and agent-wide snapshot-affecting inheritance/isolation changes remain retryable pre-handler failures. Exact tool-rule replacement on an unchanged isolation binding is the narrow metadata-only exception; Workers refresh the current agent before authorization/discovery. The detached Main recall path preserves isolation/agent scope, total preview bounds, exact archive source reload, and the selected vector facade. Cross-session control/settings, `stop_session` beyond the current session, and managed ToolScript paths remain fenced. Worker selection never falls back to Main hydration or performs a stale catch-time rollback after the authoritative persistence hook may have resynced/poisoned the hot owner.
+- **Context retrieval**: `recall` is the single model-facing entry point for exact archive drill-down (`target`) and semantic vector retrieval (`vector_query`). `search_vector` / `search_memory` are removed rather than compatibility-wrapped. Semantic recall reloads one item per ranked canonical source family, enriches modern fact families from their authoritative creating block, applies staged `contentFilter`/`includeRegex`/`excludeRegex`, and only then enforces the requested unique-source limit. Exact Session resolution also returns the canonical Session ID used by bounded lag diagnostics, including historical-alias requests. `recall` and `get_session_messages` share a context preview renderer with total-budget `previewLength` and tool folding. `get_session_messages` additionally reports the target session's canonical execution-state summary on every successful response. Their old literal `query` field is absent from model-facing schemas and explicitly rejected at runtime.
+- **Consolidated resource tools**: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select plus provider-neutral create/ensure/inspect/destroy. No parallel `sandbox` or `node_resource` tool exists. Create/ensure select a configured provider and may carry a separate optional exact requested Node ID; provider parameters remain opaque. Inspect/destroy select an existing Node. Removed internal names and superseded action aliases are absent from definitions/runtime exports; the canonical consolidation decision is [D-tools-resource-action-consolidation](../modules/tools-and-permissions.md#d-tools-resource-action-consolidation), while lifecycle authority is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch.md#d-dispatch-generic-node-providers).
+- **Wait guidance and runtime metadata**: `wait` pauses an otherwise-finished turn but requires an explicit progress source/fallback. `waitAllSessions` is the existing all-report barrier; `waitAnySessions` is non-filtering expected-source metadata; `waitExecIds` is enforced against exact owned persistent exec identities or queued completions; `waitForInput:true` declares an external source; and `wakeIfNoActivityAfterSeconds` is the positive one-shot fallback wrapper over the internal timeout timer. `timeoutSeconds`, `wait({})`, and reason-only waits are rejected for new calls.
+- **Atomic send completion**: `send_to_session` and `create_child_session` expose one `afterSend` enum: continue, finish idle without wait state, or wait for later activity expected from the resolved target. Successful finish and wait handoffs retain their terminal post-batch behavior even when a sibling tool fails; all tool results are still appended. Completed child reports use `finish`; only genuine reply dependencies use `wait`. Hidden legacy booleans remain runtime-readable but are absent from the model schema. Canonical contract: [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
+- **Model cancellation and handoff review**: Normal provider-facing definitions always append optional true-only `__cancelTool` and `__cancelAllToolsThisTurn` after ordinary properties; compact-plan submission is excluded. Execution consumes these only at the outer model batch, so unified target arguments and ToolScript calls retain their normal meaning. The separate default-false startup `handoffConfirmation` flag conditionally adds a required structured review immediately before those cancellation properties and enables exact prefix/suffix, non-empty/non-placeholder middle, and final-property enforcement for direct, unified, Main-management, and ToolScript calls. Newlines around the review are optional; only the extracted middle is trimmed for content checks. Its model-facing description requires an honest review and directs a blocked handoff to cancel the outer model call rather than append approval merely to pass validation; ToolScript and concrete-handler cancellation semantics remain unchanged. Disabled schemas and child guidance omit it, and disabled handlers accept calls without it. Canonical contract: [D-dispatch-model-tool-cancellation-and-handoff-confirmation](../threads/tool-dispatch.md#d-dispatch-model-tool-cancellation-and-handoff-confirmation).
+- **Compact plan submission**: `submit_compact_plan` remains model-facing across normal and compact phases. Its required `replaceAsBlocks` accepts the preferred direct block array or a JSON string encoding the same array, with optional block-associated `memoryFacts`; compact-only `preserveMessages` / `removePreservedMessages` remain direct arrays for exact raw-message preservation/removal in active history.
+- **MCP result pass-through**: MCP result cleanup is owned by `src/mcpClient.callTool`; unified `call_tool` passes the normalized value onward, so ToolScript and unified calls receive parsed object/array values for single-text JSON responses without MCP-specific branches. MCP discovery and invocation are available only through `search_tools` and `call_tool` (`toolId: "mcp:<server>/<tool>"` or `source:"mcp"`).
+- **Unified discovery output**: `search_tools` returns only `{ output }`. Its default limit is 5; finite runtime values are truncated and clamped to 1-200, omitted/non-finite values use 5, and the model schema accepts only integers from 1 through 200. Safe canonical IDs use compact TypeScript-like declarations. Unsafe identities use explicit source plus exact builtin name, MCP server/name, or Node ID/name descriptors with JSON quoting, avoiding ambiguous canonical delimiter parsing; an unsafe result lacking structured identity is omitted with a warning. The header reports actual emitted declarations against total matches. Schema-free summaries state when detail was omitted, and only the first 10 selected tools may render schemas. Concrete builtin schemas reflect startup-mode handoff confirmation but deliberately omit outer-only model cancellation controls; canceling a unified invocation uses the provider-facing `call_tool` wrapper's own top-level control fields. A bounded ordinary object whose declared required set is complete renders properties in schema insertion order and marks optional names with `?`, preserving copyable final-property contracts; over-cap or undeclared-required objects retain the required-visible fallback ordering. Recognized unsupported structural object constraints widen to `unknown`/`Record<string, unknown>`; typed additional keys are comments when named properties exist, avoiding invalid TypeScript index-signature claims. Required names absent from `properties` use the applicable other-key schema, widen to required `unknown` under open objects, or make a closed object `never`. A required list beyond the bounded scan widens the whole object to `Record<string, unknown> /* required constraints omitted */`, avoiding contradictory optional classification; smaller display overflow is marked explicitly. Unknown future schema keywords are not claimed as supported. Comments, warnings, and quoted metadata escape control/direction characters and comment terminators. One 32,000-character budget covers the header, declarations, omission notices, and warnings below the outer 40,000-character guard.
+- **MCP configuration disclosure**: `mcp_config` and `list_mcp_servers` remain registered hidden builtins invoked through `call_tool`; the bundled `mcp-management` skill provides setup guidance without injecting their schemas into ordinary provider requests. Managed live-snapshot semantics are canonical in [D-dispatch-mcp-live-configuration](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration).
+- **Model-facing schema validity**: Default-injected tool definitions are the single schema source passed to providers. Every top-level property in a model-facing tool must have a concrete schema shape (`type`, `enum`, or composition keywords), because OpenAI Responses rejects description-only properties.
+- **Channel delivery guidance**: `send_to_channel` directs callers to reply normally for attached normal-mode channels, where assistant text is delivered automatically. Explicit tool delivery is for send-only channels or tasks requiring a different destination; this guidance does not change routing or authorization.
+- **First-party schema copy**: Builtin definitions and generated cancellation/handoff fields use concise caller-oriented descriptions that explain purpose, supported inputs, defaults, path placement, and observable results without changing tool identity or schema constraints. Editorial wording is not unit-locked; tests retain schema shape, bounds, ordering, protocol constants, search behavior through synthetic fixtures, and runtime effects instead of snapshotting first-party prose. Third-party MCP and custom Node descriptions remain provider-owned.
+- **Intentional creation overrides**: `create_child_session` and `create_session` expose only optional strict `forceModel: { modelId?, effort? }`; removed top-level `model`/`effort` keys fail across direct, unified, ToolScript, and Worker/Main-management dispatch. Omission or an empty object keeps inheritance/default behavior. The parameter description reserves overrides for an explicit user request for the current task or Session; this is caller guidance, not an additional runtime validation or permission gate. The existing `set_session_child_model` schema continues to own future-child model/effort inspection and mutation. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
+- **Memory operations**: Read/write/edit/delete/patch operations target per-agent memory directories. These file CRUD operations do not automatically update the session-archive vector index.
+- **Patch result summaries**: Master file and memory patch wrappers use the shared per-operation formatter for per-file add/update counts, including operations listed after a partial failure; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
+
+## Integration
+
+- Consumed by the session runtime (via `callTool`) as the execution backend for all model-requested actions.
+- Tool definitions are surfaced to the model through `modelFacingDefinitions` for function-calling schemas.
+- Interacts with `sessionManager` and `toolsSessionAgent` for multi-session orchestration (child sessions, channels, timers).
+- Connects non-master Node capabilities through the Main-owned Node provider registry; authenticated remote execution is adapted to `nodesManager` behind that boundary.
+- Integrates with MCP servers for extensible external tool access.
+- Uses `execManager` for long-running shell processes with lifecycle tracking.
+- Browser tools delegate to `browserManager` for web automation capabilities.
+
+## Design Decisions
+
+- [2026-09-05] Master, CLI remote, and provider-composed file reads share one byte-level LF/CRLF/bare-CR physical-line scanner and footer formatter in `fileToolCore`; wrapper-specific split/join or warning behavior is prohibited. Retained ordinary text keeps existing UTF-8 decoding, while bounded excerpts keep existing invalid-byte conversion and binary-preview safeguards.
+
+### D-tools-write-contentref-target-reuse
+
+[2026-08-19] A pending `contentRef` is a short-lived cached payload capability scoped to one exact session and agent, not to the path whose failed write created it. A retry may choose any `filePath` that independently passes ordinary resolution, isolation/path authorization, overwrite/createDirs policy, structural service placement, and the selected target-local file backend before any filesystem effect. A failed retry retains the ref for another attempt; only a successful write consumes it. Do not extend refs across sessions, agents, processes, or content replacement.
+
+### D-tools-write-contentref-retry-guidance
+
+[2026-07-24, updated 2026-08-19] Pending-write retry guidance must show a directly executable cached retry `write({ ... })` call containing the actual JSON-escaped failing `filePath`, `contentRef`, `overwrite: true`, and `createDirs: true` when required. State directly that the attempted content is already cached, that the same-session/same-agent ref may instead target another independently authorized `filePath`, and that the model must not include or pass the mutually exclusive `content` argument when using `contentRef`. If the model intentionally corrects or replaces the attempted content, instruct it to omit `contentRef` and call `write` with only the newly generated content plus the desired path and required flags. Never permit both content sources in one call, and do not rely only on indirect wording about generating or sending content again.
+
+- [2026-07-22] Model-facing archive retrieval schemas must distinguish `target`, `vector_query`, and `contentFilter`; do not retain the old ambiguous `query` field for `recall` or `get_session_messages`.
+
+- [2026-07-11] Keep the exec schema's minimum of 1 second but remove its hard maximum. Document 60 seconds as the maximum effective timeout, clamp larger finite requests at runtime, and keep the warning outside truncatable command output.
+- [2026-06-05] Ordinary fixed-schema tools no longer expose generic `node` arguments. Session current-node routing and explicit target-bearing tools determine the execution node; special multi-node tools keep explicit source/target node arguments.
+- [2026-07-02] `list_sessions` remains removed rather than compatibility-wrapped; current resource-action ownership is canonical in [D-tools-resource-action-consolidation](../modules/tools-and-permissions.md#d-tools-resource-action-consolidation).
+- [2026-08-26] Keep the tool name `wait`, remove the model-facing `timeoutSeconds` argument without an alias, and require every new call to declare at least one valid progress source or fallback. Preserve read compatibility for legacy persisted wait state only.

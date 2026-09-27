@@ -41,7 +41,7 @@ export class TelegramChannel implements Channel {
   private readonly channelId: string;
   private bot: Telegraf;
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
-  private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
+  private commandHandler?: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>;
 
   constructor(config: TelegramConfig, name: string = 'telegram') {
     this.name = name;
@@ -71,12 +71,13 @@ export class TelegramChannel implements Channel {
 
       // Check if it's a command
       if (text.startsWith('/') && this.commandHandler) {
-        const parts = text.split(' ');
-        const command = parts[0];
-        const args = parts.slice(1);
+        const match = text.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+        const command = match?.[1] || text;
+        const rawArgs = match?.[2];
+        const args = rawArgs ? rawArgs.trim().split(/\s+/) : [];
 
         const channelCtx = this.makeChannelContext(ctx);
-        const handled = await this.commandHandler(channelCtx, command, args);
+        const handled = await this.commandHandler(channelCtx, command, args, rawArgs);
 
         if (handled) return; // Command was handled, don't process as message
       }
@@ -309,7 +310,7 @@ export class TelegramChannel implements Channel {
     this.messageHandler = handler;
   }
 
-  onCommand(handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void {
+  onCommand(handler: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>): void {
     this.commandHandler = handler;
   }
 

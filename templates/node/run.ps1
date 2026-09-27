@@ -84,6 +84,7 @@ if (-not $SourceDir) { $SourceDir = Join-Path $ScriptDir "foxwarm-node" }
 $StateDir = [System.IO.Path]::GetFullPath($StateDir)
 $SourceDir = [System.IO.Path]::GetFullPath($SourceDir)
 $CredentialsFile = Join-Path $StateDir "state\node_credentials.json"
+$NodeAgentsDir = Join-Path $StateDir "agents"
 
 # ─── Create directories ───
 foreach ($dir in @(
@@ -163,6 +164,22 @@ if (-not (Test-Path $entryPoint)) {
     }
 }
 
+# Install only the target-platform PTY runtime. macOS/Windows use official
+# prebuilds; Linux requires node-gyp build prerequisites.
+$runtimeDir = Join-Path $SourceDir "packages\cli-node-runtime"
+$runtimeLock = Join-Path $runtimeDir "package-lock.json"
+if (Test-Path $runtimeLock) {
+    if (Get-Command "npm" -ErrorAction SilentlyContinue) {
+        Write-Host "Installing the target-platform PTY runtime (node-pty only) ..."
+        & npm --prefix $runtimeDir ci --omit=dev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "node-pty installation failed; the node will continue without remote terminal capability."
+        }
+    } else {
+        Write-Warning "npm is unavailable; the node will continue without remote terminal capability."
+    }
+}
+
 # ─── Build arguments ───
 $nodeArgs = @($entryPoint, "--host", $HostUrl, "--id", $NodeId, "--credentials-file", $CredentialsFile)
 
@@ -178,12 +195,18 @@ if ($Interactive -and $Timeout -gt 0) {
     $nodeArgs += @("--timeout", $Timeout)
 }
 
+# Node-owned agent state belongs to StateDir, never to an inherited caller cwd
+# or a higher-precedence single-agent environment override.
+Remove-Item Env:FOXWARM_AGENT_DIR -ErrorAction SilentlyContinue
+$env:FOXWARM_AGENTS_DIR = $NodeAgentsDir
+
 # ─── Print info ───
 Write-Host ""
 Write-Host "Starting node client ..."
 Write-Host "  Mode:        $(if ($Interactive) { 'Interactive' } else { 'Foreground' })"
 Write-Host "  Source:       $SourceDir"
 Write-Host "  State:        $StateDir"
+Write-Host "  Agents:       $NodeAgentsDir"
 Write-Host "  Credentials:  $CredentialsFile"
 Write-Host ""
 
@@ -198,5 +221,12 @@ if (-not $Pairing -or (Test-Path $CredentialsFile)) {
 Write-Host ""
 
 # ─── Run synchronously ───
-& node @nodeArgs
-exit $LASTEXITCODE
+$nodeExitCode = 1
+Push-Location $ScriptDir
+try {
+    & node @nodeArgs
+    $nodeExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+exit $nodeExitCode

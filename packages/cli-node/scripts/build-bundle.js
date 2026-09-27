@@ -15,6 +15,10 @@ const common = {
   sourcesContent: false,
   legalComments: 'none',
   logLevel: 'info',
+  // The Code helper wrapper executes the shared module by its real filename.
+  // Keep this one module outside the bundle so __filename points to
+  // packages/shared/dist/codeHelperIpc.js rather than client.bundle.js.
+  external: ['../../shared/dist/codeHelperIpc'],
 };
 
 async function build() {

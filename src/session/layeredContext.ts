@@ -1,22 +1,17 @@
-import fs from 'fs-extra';
-import path from 'path';
-import { Message, Session, ContextFrontierItem } from '../types';
-import {
-  getSessionBlockArchiveLogPath,
-  getSessionFrontierPath,
-} from '../config';
-import { logger } from '../common';
-import { DiskJsonData } from '../utils/diskJsonData';
-import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
+import { Message, Session, ContextBlockMessageMeta } from '../types';
+import { SessionArchiveCommitError } from './archive';
 import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
-  refreshSessionArchiveImportState,
   readEffectiveArchiveBlocks,
   readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
+  rollbackUncommittedArchiveBlocks,
   writeArchiveBlocks,
 } from './archiveStore';
 import { isModelVisibleMessage } from './messageVisibility';
+import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
+import { isSystemPayloadTextPart } from '../utils/systemMessageParts';
+import type { ExtractedMemoryFact } from './compactPlan';
 
 const COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES = [
   'This session has been compacted.',
@@ -42,6 +37,7 @@ export interface ArchiveBlockRecord {
   rawStartTimestamp?: number;
   rawEndTimestamp?: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
   createdAt: number;
   sourceSessionId?: string;
   inherited?: boolean;
@@ -55,11 +51,63 @@ export interface CreateArchiveBlockInput {
   sourceBlockIds?: number[];
   rawStartSeq: number;
   rawEndSeq: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
   summary: string;
+  memoryFacts?: ExtractedMemoryFact[];
 }
 
 export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
+  const tag = parseFoxwarmOpeningTag(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    const hint = tag.attrs.hint || '';
+    return tag.attrs.event === 'compact'
+      || tag.attrs.kind === 'session-boundary'
+      || COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => hint.startsWith(prefix));
+  }
   return COMPACT_CANDIDATE_IGNORED_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
+}
+
+/**
+ * Returns true only for a prior compaction-completion notification. Unlike
+ * other session-boundary messages, these are transient continuation notices:
+ * the next successful compact commit replaces them with one current notice.
+ */
+export function isCompactCompletionSystemText(text: string): boolean {
+  const tag = parseFoxwarmOpeningTag(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'compact-completed';
+  }
+  return text.startsWith('Compaction completed.')
+    || text.startsWith('**COMPACTION COMPLETED.')
+    || text.startsWith('Manual compaction completed.');
+}
+
+/**
+ * A compact-completion message may carry a goal/lifecycle system part, but
+ * must not be removed when it also carries real conversation/tool content.
+ */
+export function shouldRemoveOldCompactCompletionMessage(message: Message): boolean {
+  if (!isModelVisibleMessage(message)) {
+    return false;
+  }
+
+  const parts = message.parts || [];
+  const hasCompletionMarker = parts.some(part => (
+    typeof part.system === 'string' && isCompactCompletionSystemText(part.system.trim())
+  ));
+  if (!hasCompletionMarker) {
+    return false;
+  }
+
+  return !parts.some(part => (
+    (typeof part.text === 'string' && part.text.trim().length > 0 && !isSystemPayloadTextPart(part))
+    || (typeof part.thinking === 'string' && part.thinking.trim().length > 0)
+    || !!part.functionCall
+    || !!part.functionResponse
+    || !!part.inlineData
+    || !!(part as any).inlineDataRef
+  ));
 }
 
 export function shouldIgnoreMessageInCompactCandidates(message: Message): boolean {
@@ -77,7 +125,7 @@ export function shouldIgnoreMessageInCompactCandidates(message: Message): boolea
   }
 
   const hasNonSystemContent = parts.some(part => (
-    (typeof part.text === 'string' && part.text.trim().length > 0)
+    (typeof part.text === 'string' && part.text.trim().length > 0 && !isSystemPayloadTextPart(part))
     || (typeof part.thinking === 'string' && part.thinking.trim().length > 0)
     || !!part.functionCall
     || !!part.functionResponse
@@ -92,135 +140,26 @@ export function shouldIgnoreMessageInCompactCandidates(message: Message): boolea
   return systemTexts.every(isIgnoredCompactLifecycleSystemText);
 }
 
-function cloneFrontier(frontier: ContextFrontierItem[] | undefined): ContextFrontierItem[] | undefined {
-  return frontier ? structuredClone(frontier) : undefined;
-}
-
-function normalizeFrontierPayload(raw: any, filePath: string): { v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] } {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`Invalid layered context frontier payload in ${filePath}`);
-  }
-
-  return {
-    ...raw,
-    v: typeof raw.v === 'number' ? raw.v : 1,
-    frontier: Array.isArray(raw.frontier) ? raw.frontier : [],
-  };
-}
-
-export function createSessionFrontierStore(filePath: string): DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }> {
-  return new DiskJsonData(filePath, {
-    backup: false,
-    normalizeLoadedData: normalizeFrontierPayload,
-    onReadError: (err: unknown, candidatePath: string) => {
-      logger.warn({ err, candidatePath }, 'Failed to read layered context frontier');
-    },
-  });
-}
-
-const frontierStores = new Map<string, DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }>>();
-
-export function getSessionFrontierStore(sessionId: string): DiskJsonData<{ v: number; sessionId?: string; nextBlockId?: number; frontier: ContextFrontierItem[] }> {
-  const frontierPath = getSessionFrontierPath(sessionId);
-  let store = frontierStores.get(frontierPath);
-  if (!store) {
-    store = createSessionFrontierStore(frontierPath);
-    frontierStores.set(frontierPath, store);
-  }
-  return store;
-}
-
 function getNextSessionBlockId(session: Session): number {
   if (typeof session.nextBlockId === 'number' && session.nextBlockId > 0) {
     return session.nextBlockId;
   }
 
   let maxId = 0;
-  for (const item of session.contextFrontier || []) {
-    if (item.kind === 'block' && item.id > maxId) {
-      maxId = item.id;
-    }
+  for (const message of session.history) {
+    const id = message.__meta?.contextBlock?.id;
+    if (typeof id === 'number' && id > maxId) maxId = id;
   }
 
   session.nextBlockId = maxId + 1 || 1;
   return session.nextBlockId;
 }
 
-export function ensureContextFrontier(session: Session): ContextFrontierItem[] {
-  if (Array.isArray(session.contextFrontier) && session.contextFrontier.length > 0) {
-    return session.contextFrontier;
-  }
-
-  const frontier: ContextFrontierItem[] = [];
-  for (const message of session.history) {
-    const seq = message.__meta?.seq;
-    if (typeof seq === 'number' && seq > 0) {
-      frontier.push({ kind: 'message', seq });
-    }
-  }
-
-  session.contextFrontier = frontier;
-  return frontier;
-}
-
-export function appendMessagesToContextFrontier(session: Session, messages: Message[]): void {
-  if (!Array.isArray(session.contextFrontier)) {
-    return;
-  }
-
-  for (const message of messages) {
-    const seq = message.__meta?.seq;
-    if (typeof seq === 'number' && seq > 0) {
-      session.contextFrontier.push({ kind: 'message', seq });
-    }
-  }
-}
-
-export async function saveSessionFrontier(session: Session): Promise<void> {
-  const frontierPath = getSessionFrontierPath(session.id);
-  if (!session.contextFrontier || session.contextFrontier.length === 0) {
-    if (await fs.pathExists(frontierPath)) {
-      await fs.remove(frontierPath);
-    }
-    return;
-  }
-
-  await getSessionFrontierStore(session.id).write({
-    v: 1,
-    sessionId: session.id,
-    nextBlockId: getNextSessionBlockId(session),
-    frontier: session.contextFrontier,
-  });
-}
-
-export async function loadSessionFrontier(session: Session): Promise<void> {
-  const frontierPath = getSessionFrontierPath(session.id);
-  if (!await fs.pathExists(frontierPath)) {
-    return;
-  }
-
-  try {
-    const data = await getSessionFrontierStore(session.id).readFromPath(frontierPath);
-    if (Array.isArray(data?.frontier)) {
-      session.contextFrontier = data.frontier;
-      if (typeof data.nextBlockId === 'number' && data.nextBlockId > 0) {
-        session.nextBlockId = data.nextBlockId;
-      }
-    }
-  } catch (e) {
-    logger.warn({ err: e, sessionId: session.id }, 'Failed to load layered context frontier');
-  }
-}
-
 async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
   const createdAt = Date.now();
-  return Promise.all(blocks.map(async (block) => {
+  return blocks.map((block) => {
     const id = getNextSessionBlockId(session);
     session.nextBlockId = id + 1;
-    const [startRecord, endRecord] = await Promise.all([
-      readArchiveMessagesBySeqRange(session.id, block.rawStartSeq, block.rawStartSeq),
-      readArchiveMessagesBySeqRange(session.id, block.rawEndSeq, block.rawEndSeq),
-    ]);
     return {
       v: 1,
       kind: 'block',
@@ -236,27 +175,37 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
         : {}),
       rawStartSeq: block.rawStartSeq,
       rawEndSeq: block.rawEndSeq,
-      rawStartTimestamp: startRecord[0]?.timestamp,
-      rawEndTimestamp: endRecord[0]?.timestamp,
-      summary: block.summary,
+      ...(typeof block.rawStartTimestamp === 'number' && Number.isFinite(block.rawStartTimestamp) ? { rawStartTimestamp: block.rawStartTimestamp } : {}),
+      ...(typeof block.rawEndTimestamp === 'number' && Number.isFinite(block.rawEndTimestamp) ? { rawEndTimestamp: block.rawEndTimestamp } : {}),
+      summary: formatArchiveBlockSummary(block.summary, block.memoryFacts),
+      ...(block.memoryFacts?.length ? { memoryFacts: block.memoryFacts } : {}),
       createdAt,
     };
-  }));
+  });
+}
+
+export async function appendBlocksToArchiveWithCommitInfo(
+  session: Session,
+  blocks: CreateArchiveBlockInput[],
+): Promise<{ records: ArchiveBlockRecord[]; insertedRecords: ArchiveBlockRecord[] }> {
+  if (blocks.length === 0) {
+    return { records: [], insertedRecords: [] };
+  }
+
+  await ensureSessionBranch(session.id);
+  const records = await buildArchiveBlockRecords(session, blocks);
+  let insertedRecords: ArchiveBlockRecord[];
+  try { insertedRecords = await writeArchiveBlocks(records); }
+  catch (error) { throw new SessionArchiveCommitError(`Required archive block commit failed for Session ${session.id}: ${(error as any)?.message || error}`, error); }
+  return { records, insertedRecords };
 }
 
 export async function appendBlocksToArchive(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
-  if (blocks.length === 0) {
-    return [];
-  }
+  return (await appendBlocksToArchiveWithCommitInfo(session, blocks)).records;
+}
 
-  const archivePath = getSessionBlockArchiveLogPath(session.id);
-  await fs.ensureDir(path.dirname(archivePath));
-  await ensureSessionBranch(session.id);
-  const records = await buildArchiveBlockRecords(session, blocks);
-  await fs.appendFile(archivePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
-  await writeArchiveBlocks(records);
-  await refreshSessionArchiveImportState(session.id, 'blocks');
-  return records;
+export async function rollbackUncommittedBlocks(records: ArchiveBlockRecord[]): Promise<void> {
+  await rollbackUncommittedArchiveBlocks(records);
 }
 
 export async function readArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
@@ -303,6 +252,23 @@ export function formatArchiveBlockTimeRange(record: ArchiveBlockTimeRangeInput):
   return range ? ` time ${range}` : '';
 }
 
+export function formatArchiveBlockMemoryFactsSection(memoryFacts: ExtractedMemoryFact[] | undefined): string {
+  if (!memoryFacts?.length) return '';
+  const items = memoryFacts.map((fact) => {
+    const optional = [
+      fact.context?.trim() ? `context: ${fact.context.trim()}` : '',
+      fact.attributedTo ? `attributed to: ${fact.attributedTo}` : '',
+    ].filter(Boolean);
+    return `- **${fact.kind}:** ${fact.text.trim()}${optional.length ? ` _(${optional.join('; ')})_` : ''}`;
+  });
+  return `### Memory facts\n${items.join('\n')}`;
+}
+
+export function formatArchiveBlockSummary(summary: string, memoryFacts?: ExtractedMemoryFact[]): string {
+  const section = formatArchiveBlockMemoryFactsSection(memoryFacts);
+  return section ? `${summary.trim()}\n\n${section}` : summary;
+}
+
 export type ArchiveBlockContextTextInput = Pick<ArchiveBlockRecord, 'id' | 'level' | 'rawStartSeq' | 'rawEndSeq' | 'summary'> & ArchiveBlockTimeRangeInput;
 
 function formatArchiveBlockRawRange(record: Pick<ArchiveBlockRecord, 'rawStartSeq' | 'rawEndSeq'>): string {
@@ -317,58 +283,33 @@ export function formatArchiveBlockContextText(record: ArchiveBlockContextTextInp
   return `${formatArchiveBlockContextPrefix(record)} ${record.summary}`;
 }
 
+export function buildContextBlockMessageMeta(record: ArchiveBlockRecord): ContextBlockMessageMeta {
+  return {
+    id: record.id,
+    level: record.level,
+    rawStartSeq: record.rawStartSeq,
+    rawEndSeq: record.rawEndSeq,
+    sourceKind: record.sourceKind,
+    sourceStart: record.sourceStart,
+    sourceEnd: record.sourceEnd,
+    ...(Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? { sourceBlockIds: [...record.sourceBlockIds] } : {}),
+    ...(typeof record.rawStartTimestamp === 'number' ? { rawStartTimestamp: record.rawStartTimestamp } : {}),
+    ...(typeof record.rawEndTimestamp === 'number' ? { rawEndTimestamp: record.rawEndTimestamp } : {}),
+    ...(typeof record.createdAt === 'number' ? { createdAt: record.createdAt } : {}),
+    ...(typeof record.sourceSessionId === 'string' ? { sourceSessionId: record.sourceSessionId } : {}),
+    ...(record.inherited !== undefined ? { inherited: record.inherited } : {}),
+  };
+}
+
 export function renderBlockMessage(record: ArchiveBlockRecord): Message {
   return {
     role: 'model',
     parts: [{
       text: formatArchiveBlockContextText(record),
     }],
-    __meta: { timestamp: record.createdAt },
+    __meta: {
+      timestamp: record.createdAt,
+      contextBlock: buildContextBlockMessageMeta(record),
+    },
   };
-}
-
-export async function renderHistoryFromFrontier(session: Session, frontier?: ContextFrontierItem[]): Promise<Message[]> {
-  const targetFrontier = frontier || session.contextFrontier || [];
-  if (targetFrontier.length === 0) {
-    return [];
-  }
-
-  const messageSeqs = targetFrontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
-    .map(item => item.seq);
-  const blockIds = targetFrontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'block' }> => item.kind === 'block')
-    .map(item => item.id);
-
-  const messageRecords = messageSeqs.length
-    ? await readArchiveMessagesBySeqRange(session.id, Math.min(...messageSeqs), Math.max(...messageSeqs))
-    : [];
-  const blockRecords = blockIds.length
-    ? await readArchiveBlocksByIdRange(session.id, Math.min(...blockIds), Math.max(...blockIds))
-    : [];
-
-  const messageMap = new Map<number, ArchiveMessageRecord>(messageRecords.map(record => [record.seq, record]));
-  const blockMap = new Map<number, ArchiveBlockRecord>(blockRecords.map(record => [record.id, record]));
-
-  const rendered: Message[] = [];
-  for (const item of targetFrontier) {
-    if (item.kind === 'message') {
-      const record = messageMap.get(item.seq);
-      if (record?.message) {
-        rendered.push(structuredClone(record.message));
-      }
-      continue;
-    }
-
-    const record = blockMap.get(item.id);
-    if (record) {
-      rendered.push(renderBlockMessage(record));
-    }
-  }
-
-  return rendered;
-}
-
-export function cloneSessionFrontier(session: Session): ContextFrontierItem[] {
-  return cloneFrontier(ensureContextFrontier(session)) || [];
 }

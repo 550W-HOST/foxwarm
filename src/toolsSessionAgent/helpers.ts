@@ -2,7 +2,7 @@ import path from 'path';
 import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
 import type { ChannelFile } from '../channel';
-import { getAgentDir, resolveModelConfig } from '../config';
+import { getAgentDir, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { nodesManager } from '../nodes/manager';
 import { checkPathAccess } from '../isolatedCheck';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
@@ -14,6 +14,13 @@ export interface ToolContext {
   session?: any;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
+  /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
+  persistCurrentSession?: () => Promise<void>;
+  sessionPlacement?: 'local' | 'session-worker';
+  /** Process-local persistent exec owner used to validate exact waitExecIds. */
+  execRuntime?: import('../execManager').ExecRuntime;
+  /** Internal tool-result metadata request used by the canonical turn runner. */
+  captureSuccessfulSendToSessionTarget?: boolean;
 }
 
 export type ToolArgs = Record<string, any>;
@@ -33,23 +40,55 @@ export function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
-export function normalizeWaitTimeoutSeconds(value: unknown): number | undefined {
+export type AfterSendBehavior = 'continue' | 'finish' | 'wait';
+
+export function normalizeAfterSendBehavior(
+  args: ToolArgs,
+  toolName: 'send_to_session' | 'create_child_session',
+): AfterSendBehavior {
+  for (const key of ['waitAfterHandoff', 'noFurtherAssistantReply'] as const) {
+    if (args[key] !== undefined && typeof args[key] !== 'boolean') {
+      throw new Error(`${toolName} ${key} must be a boolean when provided.`);
+    }
+  }
+  const afterSend = args.afterSend;
+  if (afterSend !== undefined) {
+    if (afterSend !== 'continue' && afterSend !== 'finish' && afterSend !== 'wait') {
+      throw new Error(`${toolName} afterSend must be one of: continue, finish, wait.`);
+    }
+    if (args.waitAfterHandoff !== undefined || args.noFurtherAssistantReply !== undefined) {
+      throw new Error(`${toolName} afterSend cannot be combined with legacy waitAfterHandoff or noFurtherAssistantReply.`);
+    }
+    return afterSend;
+  }
+  // Hidden compatibility fields remain readable for direct callers and old
+  // persisted tool calls, but are intentionally absent from the model schema.
+  if (args.waitAfterHandoff === true) return 'wait';
+  if (args.noFurtherAssistantReply === true) return 'finish';
+  return 'continue';
+}
+
+export function normalizeWaitFallbackSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
   }
 
   const timeoutSeconds = Number(value);
   if (!Number.isFinite(timeoutSeconds)) {
-    throw new Error('timeoutSeconds must be a non-negative number.');
+    throw new Error('wakeIfNoActivityAfterSeconds must be a positive finite number.');
   }
   if (timeoutSeconds < 0) {
-    throw new Error('timeoutSeconds must be a non-negative number.');
+    throw new Error('wakeIfNoActivityAfterSeconds must be a positive finite number.');
   }
-  if (timeoutSeconds === 0) {
-    return undefined;
-  }
+  if (timeoutSeconds === 0) throw new Error('wakeIfNoActivityAfterSeconds must be greater than zero when provided.');
 
   return timeoutSeconds;
+}
+
+export function normalizeWaitForInput(value: unknown): true | undefined {
+  if (value === undefined) return undefined;
+  if (value !== true) throw new Error('waitForInput must be exactly true when provided.');
+  return true;
 }
 
 export function normalizeWaitAllSessions(value: unknown): string[] | undefined {
@@ -79,10 +118,57 @@ export function normalizeWaitAllSessions(value: unknown): string[] | undefined {
     }
   }
 
-  if (normalized.length === 0) {
+  if (normalized.length === 0) throw new Error('waitAllSessions must contain at least two Session IDs when explicitly provided.');
+
+  if (normalized.length < 2) {
+    throw new Error('waitAllSessions must contain at least two distinct session IDs after trimming.');
+  }
+
+  return normalized;
+}
+
+export function normalizeWaitAnySessions(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('waitAnySessions must be an array of session IDs.');
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('waitAnySessions entries must be non-empty strings.');
+    const sessionId = entry.trim();
+    if (!seen.has(sessionId)) { seen.add(sessionId); normalized.push(sessionId); }
+  }
+  if (normalized.length === 0) throw new Error('waitAnySessions must contain at least one session ID.');
+  return normalized;
+}
+
+export function normalizeWaitExecIds(value: unknown): string[] | undefined {
+  if (value === undefined) {
     return undefined;
   }
 
+  if (!Array.isArray(value)) {
+    throw new Error('waitExecIds must be an array of exact execId values. Never use a PID or log path.');
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      throw new Error('waitExecIds entries must be non-empty exact execId strings. Never use a PID or log path.');
+    }
+
+    const execId = entry.trim();
+    if (!execId) {
+      throw new Error('waitExecIds entries must be non-empty exact execId strings. Never use a PID or log path.');
+    }
+
+    if (!seen.has(execId)) {
+      seen.add(execId);
+      normalized.push(execId);
+    }
+  }
+
+  if (normalized.length === 0) throw new Error('waitExecIds must contain at least one exact execId when explicitly provided.');
   return normalized;
 }
 
@@ -166,6 +252,17 @@ export function formatTimerSummary(timer: timers.TimerView): string {
   return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
 }
 
+export function formatTimerUpdateSummary(timer: timers.TimerView): string {
+  const mode = timer.mode === 'cron'
+    ? `cron: ${timer.cron}`
+    : `at: ${formatTimerTimestamp(timer.at)}`;
+  const target = timer.newSession
+    ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
+    : `session ${timer.sessionId}`;
+
+  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}\nMessage: ${timer.message}`;
+}
+
 export function detectMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   return MIME_TYPE_BY_EXT[ext] || 'application/octet-stream';
@@ -187,6 +284,130 @@ export function normalizeToolModelKey(value: unknown): string | undefined {
   }
 
   return normalized;
+}
+
+export type ForcedSessionModelEffort = {
+  model?: string;
+  effort?: ModelEffort;
+};
+
+const CREATE_CHILD_SESSION_KEYS = new Set([
+  'agentName', 'suffix', 'displayName', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation',
+]);
+const CREATE_SESSION_KEYS = new Set([
+  'agentName', 'sessionName', 'displayName', 'parentSessionId', 'node', 'forceModel', 'systemPromptFiles',
+]);
+
+function cloneCreationArgs(args: ToolArgs): ToolArgs {
+  return { ...args, ...(args.forceModel && { forceModel: { ...args.forceModel } }) };
+}
+
+export function normalizeForceModel(
+  args: ToolArgs,
+  toolName: 'create_child_session' | 'create_session',
+  makeError: (message: string) => Error = message => new Error(message),
+): ForcedSessionModelEffort {
+  if (Object.prototype.hasOwnProperty.call(args, 'model') || Object.prototype.hasOwnProperty.call(args, 'effort')) {
+    throw makeError(`${toolName} no longer accepts top-level model or effort. Use forceModel: { modelId, effort }.`);
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(args, 'forceModel') || args.forceModel === undefined) {
+    return {};
+  }
+
+  const value = args.forceModel;
+  const prototype = value && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || (prototype !== Object.prototype && prototype !== null)) {
+    throw makeError(`${toolName} forceModel must be an object when provided.`);
+  }
+
+  const keys = Object.keys(value);
+  const unknownKey = keys.find(key => key !== 'modelId' && key !== 'effort');
+  if (unknownKey) {
+    throw makeError(`${toolName} forceModel accepts only modelId and effort; unknown key: ${unknownKey}.`);
+  }
+
+  let model: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, 'modelId')) {
+    if (typeof value.modelId !== 'string' || !value.modelId.trim()
+      || Buffer.byteLength(value.modelId, 'utf8') > 4096) {
+      throw makeError(`${toolName} forceModel.modelId must be a bounded non-empty string when provided.`);
+    }
+    try {
+      model = normalizeToolModelKey(value.modelId);
+    } catch (error) {
+      throw makeError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  let effort: ModelEffort | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, 'effort')) {
+    if (typeof value.effort !== 'string' || !MODEL_EFFORTS.includes(value.effort as ModelEffort)) {
+      throw makeError(`${toolName} forceModel.effort must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+    }
+    effort = value.effort as ModelEffort;
+  }
+
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+  };
+}
+
+export function normalizeCreateChildSessionArgs(
+  args: ToolArgs,
+  makeError: (message: string) => Error = message => new Error(message),
+): ToolArgs {
+  normalizeForceModel(args, 'create_child_session', makeError);
+  const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
+  if (unknownKey) {
+    throw makeError(`create_child_session accepts only agentName, suffix, displayName, fork, message, node, forceModel, afterSend, and confirmation; unknown key: ${unknownKey}.`);
+  }
+  if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
+    throw makeError('create_child_session requires a non-empty suffix.');
+  }
+  if (args.displayName !== undefined && typeof args.displayName !== 'string') {
+    throw makeError('create_child_session displayName must be a string when provided.');
+  }
+  for (const key of ['fork', 'noFurtherAssistantReply', 'waitAfterHandoff'] as const) {
+    if (args[key] !== undefined && typeof args[key] !== 'boolean') {
+      throw makeError(`create_child_session ${key} must be a boolean when provided.`);
+    }
+  }
+  try {
+    normalizeAfterSendBehavior(args, 'create_child_session');
+  } catch (error) {
+    throw makeError(error instanceof Error ? error.message : String(error));
+  }
+  if (args.message !== undefined && typeof args.message !== 'string') {
+    throw makeError('create_child_session message must be a string when provided.');
+  }
+  if (args.node !== undefined
+    && (typeof args.node !== 'string' || !args.node.trim() || Buffer.byteLength(args.node, 'utf8') > 4096)) {
+    throw makeError('create_child_session node must be a bounded non-empty string when provided.');
+  }
+  if (args.agentName !== undefined
+    && (typeof args.agentName !== 'string' || !args.agentName.trim() || Buffer.byteLength(args.agentName, 'utf8') > 256)) {
+    throw makeError('create_child_session agentName must be a bounded non-empty string when provided.');
+  }
+  return cloneCreationArgs(args);
+}
+
+export function normalizeCreateSessionArgs(
+  args: ToolArgs,
+  makeError: (message: string) => Error = message => new Error(message),
+): ToolArgs {
+  normalizeForceModel(args, 'create_session', makeError);
+  const unknownKey = Object.keys(args).find(key => !CREATE_SESSION_KEYS.has(key));
+  if (unknownKey) {
+    throw makeError(`create_session accepts only agentName, sessionName, displayName, parentSessionId, node, forceModel, and systemPromptFiles; unknown key: ${unknownKey}.`);
+  }
+  if (args.node !== undefined
+    && (typeof args.node !== 'string' || !args.node.trim() || Buffer.byteLength(args.node, 'utf8') > 4096)) {
+    throw makeError('create_session node must be a bounded non-empty string when provided.');
+  }
+  return cloneCreationArgs(args);
 }
 
 export function formatMessageLogRange(startSeq?: number, endSeq?: number): string {

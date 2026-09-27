@@ -1,85 +1,77 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Eye, Code, FileJson, Copy, Check, Cloud } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
-  formatToolLabel,
+  clampContentStyle,
   formatStructuredSystemText,
+  getSystemMessagePreviewDescriptor,
   isCollapsibleSystemText,
-  isHeavySystemTextLine,
-  isLightweightStructuredSystem,
+  isLightweightSystemTextLine,
   isSystemLikeText,
-  renderMarkdown,
+  parseFoxwarmMetadataLine,
+  renderAssistantMarkdownSegments,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
+  SessionHashLink,
+  THREAD_CARD_HEADER_PREVIEW_CLASS,
+  THREAD_CARD_HEADER_ROW_CLASS,
+  ToolTag,
   type Message,
-  type ToolTagItem,
+  type OpenAIResponsesAnnotation,
   type ViewMode,
 } from './chatShared'
-import ImageParts from './ImageParts'
+import ImageParts, { ImageItem } from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import MarkdownHtmlSegment from './MarkdownHtmlSegment'
+import WebSearchCard from './WebSearchCard'
+import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
+import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
+import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
+import { splitCommitMarkers } from '../commitMarker'
 import {
   InterleavedToolGroup,
   ToolCallsBlock,
   ToolGroupSummaryCard,
   ToolResponsesBlock,
-  getToolResponseStatus,
+  type OpenCodeFileHandler,
 } from './ToolTimelineItems'
-
-const getMessageStableKey = (msg: Message, idx: number): string => {
-  const meta = msg.__meta || {}
-  if (meta.synthetic) return `synthetic-${String(meta.synthetic)}`
-  if (meta.id) return `id-${String(meta.id)}`
-  if (meta.timestamp !== undefined) return `ts-${String(meta.timestamp)}`
-  return `idx-${idx}`
-}
+import ThreadLineButton from './ThreadLineButton'
+import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
+import PastedTextBlock from './PastedTextBlock'
+import { PASTED_TEXT_CLOSE, PASTED_TEXT_OPEN, parsePastedTextSegments, type PastedTextSegment } from '../pastedText'
+import { formatTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
+import { splitGeneratedAttachmentName } from '../attachmentRefs'
+import {
+  formatCompactDuration,
+  formatDetailedDuration,
+  summarizeDurationSamples,
+  type DurationSample,
+} from '../usageTiming'
+import {
+  buildTimelineRows,
+  getGroupContentPartIndex,
+  type NormalizedTokenUsage,
+  type TimelineRowView,
+  type TimelineGroupView,
+  type TimelineRowsCache,
+  type UsageAttribution,
+} from './timelineRows'
 
 interface ChatTimelineProps {
+  sessionId: string
   messages: Message[]
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  showTimeDividers?: boolean
+  showUserMessageMetadata?: boolean
+  onOpenCodeFile?: OpenCodeFileHandler
+  onOpenCodeCommit?: OpenCodeCommitHandler
+  nestedDepth?: number
 }
-
-const EMPTY_TOOL_TAG_ITEMS: ToolTagItem[] = []
-
-interface TokenUsage {
-  cachedTokens?: number | null
-  inputTokens?: number | null
-  outputTokens?: number | null
-  cachedContentTokenCount?: number | null
-  promptTokenCount?: number | null
-  candidatesTokenCount?: number | null
-}
-
-type NormalizedTokenUsage = {
-  cachedTokens: number
-  inputTokens: number
-  outputTokens: number
-}
-
-const toTokenCount = (value: unknown): number | null => {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-const normalizeMessageUsage = (value: unknown): NormalizedTokenUsage | null => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-
-  const raw = value as TokenUsage
-  const cached = toTokenCount(raw.cachedTokens) ?? toTokenCount(raw.cachedContentTokenCount)
-  const input = toTokenCount(raw.inputTokens) ?? toTokenCount(raw.promptTokenCount)
-  const output = toTokenCount(raw.outputTokens) ?? toTokenCount(raw.candidatesTokenCount)
-
-  if (cached === null && input === null && output === null) return null
-
-  return {
-    cachedTokens: cached ?? 0,
-    inputTokens: input ?? 0,
-    outputTokens: output ?? 0,
-  }
-}
-
-const getModelMessageUsage = (msg: Message) => msg.role === 'model' ? normalizeMessageUsage(msg.__meta?.usage) : null
 
 const getUsageTotalTokens = (usage: NormalizedTokenUsage) => (
   usage.cachedTokens + usage.inputTokens + usage.outputTokens
@@ -91,17 +83,62 @@ const formatTokenCount = (count: number): string => {
   return String(count)
 }
 
-const formatUsageTitle = (usage: NormalizedTokenUsage, callCount?: number) => {
+const formatUsageTitle = (usage: NormalizedTokenUsage, attribution: UsageAttribution, callCount?: number) => {
   const total = getUsageTotalTokens(usage)
-  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}`
+  const api = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
+  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}${api === null ? '' : ` • API ${formatDetailedDuration(api)}`}`
 }
 
-const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
+const formatUsageTime = (timestamp: number): string => new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+}).format(new Date(timestamp))
+
+const formatUsageModels = (models: string[]): string => [...new Set(models)].join(' • ')
+
+const formatUsageTimes = (timestamps: UsageAttribution['timestamps']): string => {
+  const valid = [...new Set(timestamps.filter((timestamp): timestamp is number => typeof timestamp === 'number'))].sort((a, b) => a - b)
+  const labels = valid.length > 1
+    ? [`${formatUsageTime(valid[0])} – ${formatUsageTime(valid[valid.length - 1])}`]
+    : valid.map(formatUsageTime)
+  if (timestamps.includes(null)) labels.push('unavailable')
+  if (timestamps.includes('invalid')) labels.push('invalid timestamp')
+  return labels.join(' • ') || 'unavailable'
+}
+
+const formatUsageMessageSeq = (seqs: UsageAttribution['messageSeqs']): { label: string; target: string } | null => {
+  if (seqs.length === 0) return null
+  let first = Infinity
+  let last = 0
+  for (const seq of seqs) {
+    // An incomplete aggregate cannot be attributed to just the known messages.
+    if (seq === null) return null
+    first = Math.min(first, seq)
+    last = Math.max(last, seq)
+  }
+  return first === last
+    ? { label: String(first), target: String(first) }
+    : { label: `${first} ~ ${last}`, target: `${first}-${last}` }
+}
+
+const formatDurationSummary = (samples: DurationSample[]): string => {
+  const summary = summarizeDurationSamples(samples)
+  const labels: string[] = []
+  if (summary.totalMs !== null) labels.push(formatDetailedDuration(summary.totalMs))
+  if (summary.unavailableCount > 0) labels.push('unavailable')
+  if (summary.invalidCount > 0) labels.push('invalid timing')
+  return labels.join(' • ') || 'unavailable'
+}
+
+const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
-    ? 'text-orange-600 dark:text-orange-400'
-    : tone === 'muted'
-      ? 'text-slate-400 dark:text-slate-500'
-      : 'text-slate-500 dark:text-slate-400'
+    ? 'text-fw-warning dark:text-fw-warning'
+    : 'text-fw-text-muted dark:text-fw-text-muted'
 
   return (
     <span className={`flex items-baseline justify-between gap-1 ${colorClass}`}>
@@ -111,83 +148,458 @@ const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; t
   )
 }
 
-const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+const ModelUsageTextRow = ({ label, value }: { label: string; value: string }) => (
+  <span className="flex min-w-0 items-baseline justify-between gap-2 text-fw-text-muted">
+    <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">{label}</span>
+    <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{value}</span>
+  </span>
+)
+
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, sessionId, expanded, onToggle }: {
+  usage: NormalizedTokenUsage
+  isMobile: boolean
+  callCount?: number
+  attribution: UsageAttribution
+  sessionId: string
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const copyResetTimeoutRef = useRef<number | null>(null)
+  const messageSeq = formatUsageMessageSeq(attribution.messageSeqs)
+  const reference = messageSeq ? `sessionId=${sessionId} msg#${messageSeq.target}` : null
+  const currentReferenceRef = useRef(reference)
+  currentReferenceRef.current = reference
+
+  useEffect(() => {
+    setCopied(false)
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+        copyResetTimeoutRef.current = null
+      }
+    }
+  }, [reference])
+
+  const copyReference = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!reference) return
+    try {
+      await copyTextToClipboard(reference)
+      if (currentReferenceRef.current !== reference) return
+      setCopied(true)
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copyResetTimeoutRef.current = null
+      }, 1500)
+    } catch (error) {
+      setCopied(false)
+      console.error('Failed to copy message reference:', error)
+    }
+  }
+
+  const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
+  const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
+
   return (
-    <span
-      className={`${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85`}
-      title={formatUsageTitle(usage, callCount)}
+    <div
+      data-usage-badge
+      role="group"
+      aria-label="Request usage"
+      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left w-fit' : 'inline-flex flex-row items-center'} pointer-events-auto rounded-md border border-fw-border bg-fw-surface/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-fw-border dark:bg-fw-canvas/85`}
+      onPointerDown={stopUsageBadgeEvent}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onToggle()
+      }}
     >
-      {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
-      <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
-      <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
-      <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-    </span>
+      <button
+        type="button"
+        data-usage-badge-toggle
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
+        className={`${expanded ? 'flex w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} min-w-0 cursor-pointer appearance-none font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring`}
+        title={formatUsageTitle(usage, attribution, callCount)}
+      >
+        {expanded ? <>
+          {callCount ? <ModelUsageRow label="Calls" value={callCount} tone="normal" /> : null}
+          <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="normal" />
+          <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+          <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+          <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
+          <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
+          <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
+        </> : <>
+          {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
+          <ModelUsageRow label="C" value={usage.cachedTokens} tone="normal" />
+          <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
+          <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+          {apiDurationMs !== null ? (
+            <span
+              data-usage-timing-summary
+              className="inline-flex items-center gap-2 border-l border-fw-border pl-2"
+            >
+              <span
+                data-usage-timing-kind="api"
+                className="inline-flex items-center gap-1 text-fw-text"
+                title={`API response: ${formatDetailedDuration(apiDurationMs)}`}
+              >
+                <Cloud aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
+                <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(apiDurationMs)}</span>
+              </span>
+            </span>
+          ) : null}
+        </>}
+      </button>
+      {expanded && (
+        <div data-usage-seq-row className="flex min-w-0 items-center justify-between gap-2 text-fw-text-muted">
+          <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Seq</span>
+          <span data-usage-seq-value className="ml-auto min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{messageSeq?.label || 'unavailable'}</span>
+          {reference && (
+            <button
+              type="button"
+              data-usage-seq-copy
+              aria-label={copied ? 'Copied message reference' : 'Copy message reference'}
+              title={copied ? 'Copied message reference' : 'Copy message reference'}
+              className="shrink-0 rounded p-0.5 text-fw-text-muted hover:bg-fw-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring"
+              onPointerDown={stopUsageBadgeEvent}
+              onClick={copyReference}
+            >
+              {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   )
 })
 
-const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount }: { usage: NormalizedTokenUsage; isMobile: boolean; callCount?: number }) {
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount, attribution, sessionId }: {
+  usage: NormalizedTokenUsage
+  isMobile: boolean
+  callCount?: number
+  attribution: UsageAttribution
+  sessionId: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [expandedClampOffset, setExpandedClampOffset] = useState(0)
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const toggleExpanded = useCallback(() => setExpanded(current => !current), [])
+
+  useLayoutEffect(() => {
+    if (!expanded || isMobile) {
+      setExpandedClampOffset(0)
+      return
+    }
+
+    const anchor = anchorRef.current
+    const timeline = anchor?.closest<HTMLElement>('.foxwarm-chat-timeline')
+    if (!anchor || !timeline) return
+
+    const clampToTimeline = () => {
+      const anchorRect = anchor.getBoundingClientRect()
+      const timelineRight = timeline.getBoundingClientRect().right
+      // The inline offset has already moved this rect left; restore the preferred
+      // external position before calculating the minimum required clamp.
+      const preferredRight = anchorRect.right + expandedClampOffset
+      const nextOffset = Math.max(0, preferredRight - timelineRight)
+      setExpandedClampOffset(current => Math.abs(current - nextOffset) < 0.5 ? current : nextOffset)
+    }
+
+    clampToTimeline()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(clampToTimeline)
+    observer?.observe(anchor)
+    observer?.observe(timeline)
+    window.addEventListener('resize', clampToTimeline)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', clampToTimeline)
+    }
+  }, [expanded, expandedClampOffset, isMobile])
+
   if (isMobile) {
     return (
-      <div className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
-        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+      <div data-usage-badge-anchor className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
+        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} sessionId={sessionId} expanded={expanded} onToggle={toggleExpanded} />
       </div>
     )
   }
 
   return (
-    <div className="pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)]">
-      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} />
+    <div
+      ref={anchorRef}
+      data-usage-badge-anchor
+      className={`pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)] ${expanded ? 'max-w-full' : ''}`}
+      style={expanded ? { transform: `translateX(calc(100% + 0.5rem - ${expandedClampOffset}px))` } : undefined}
+    >
+      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} sessionId={sessionId} expanded={expanded} onToggle={toggleExpanded} />
     </div>
   )
 })
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text])
-  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
+  const segments = useMemo(() => renderAssistantMarkdownSegments(text), [text])
+  return (
+    <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
+      {segments.map((segment) => {
+        if (segment.kind === 'html') {
+          return <MarkdownHtmlSegment key={`markdown-token-${segment.tokenIndex}`} html={segment.html} />
+        }
+        if (segment.kind === 'latex') {
+          return (
+            <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="latex" label="LaTeX" raw={segment.raw}>
+              <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
+            </SpecialBlock>
+          )
+        }
+        return (
+          <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
+            <MermaidDiagram source={segment.source} />
+          </SpecialBlock>
+        )
+      })}
+    </div>
+  )
 })
 
-const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
+const isUserAttachmentMetadataLine = (line: string): boolean => {
+  const tag = parseFoxwarmMetadataLine(line)
+  return tag?.tagName === 'foxwarm-image' || tag?.tagName === 'foxwarm-file'
+}
+
+const shouldRenderUserLine = (line: string, showUserMessageMetadata: boolean): boolean => (
+  showUserMessageMetadata || !isLightweightSystemTextLine(line) || isUserAttachmentMetadataLine(line)
+)
+
+const renderUserPreLines = (text: string, showUserMessageMetadata: boolean, metadataLineHeight: string, renderLine: (line: string, lineIndex: number) => ReactNode): ReactNode => {
+  const visibleLines = text.split('\n')
+    .map((line, lineIndex) => ({ line, lineIndex }))
+    .filter(({ line }) => shouldRenderUserLine(line, showUserMessageMetadata))
+  return visibleLines.map(({ line, lineIndex }, visibleIndex) => (
+    <span key={lineIndex} className="foxwarm-user-rendered-line">
+      {renderLine(line, lineIndex)}
+      {visibleIndex < visibleLines.length - 1 && (
+        <span
+          className="foxwarm-user-rendered-line-break"
+          style={isSystemLikeText(line)
+            ? { fontSize: '70%', lineHeight: metadataLineHeight, opacity: 0.7 }
+            : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+          }
+        >
+          {'\n'}
+        </span>
+      )}
+    </span>
+  ))
+}
+
+const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUserMessageMetadata = true }: { systemText: string; isUser: boolean; showUserMessageMetadata?: boolean }) {
   return (
     <pre
-      className={`whitespace-pre-wrap font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
-      style={{ fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }}
+      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'foxwarm-user-line-layout text-fw-user-text' : 'text-fw-text-muted'}`}
+      style={{ lineHeight: isUser ? 0 : '1.3em' }}
     >
-      {systemText.split('\n').map((line, lineIdx) => (
-        <span key={lineIdx} style={{ display: 'block' }}>{renderSystemTextWithSessionLinks(line)}</span>
-      ))}
+      {isUser
+        ? renderUserPreLines(systemText, showUserMessageMetadata, '1.1em', (line) => {
+            const isMetaLine = isSystemLikeText(line)
+            return (
+              <span
+                className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
+                style={isMetaLine
+                  ? { fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                  : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                }
+              >
+                {renderSystemTextWithSessionLinks(line)}
+              </span>
+            )
+          })
+        : systemText.split('\n').map((line, lineIdx) => {
+            const isMetaLine = isSystemLikeText(line)
+            return (
+              <span
+                key={lineIdx}
+                className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
+                style={isMetaLine
+                  ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
+                  : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                }
+              >
+                {renderSystemTextWithSessionLinks(line)}
+              </span>
+            )
+          })}
     </pre>
   )
 })
 
-const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: string }) {
-  const isSystemMessage = isCollapsibleSystemText(text)
+type AttachmentCorrelation = {
+  ref: string
+  kind: 'image' | 'file'
+  name: string
+  mimeType: string
+  descriptorText: string
+  imagePart?: Message['parts'][number]
+}
+
+function getPartDisplayText(part: Message['parts'][number]): string {
+  return part.text || (part.system ? formatStructuredSystemText(part.system) : '')
+}
+
+function isWrappedDirectChannelText(system: string): boolean {
+  const opening = parseFoxwarmMetadataLine(system)
+  return opening?.tagName === 'foxwarm-message'
+    && !opening.closing
+    && opening.attrs.type === 'channel'
+    && system.endsWith('\n</foxwarm-message>')
+}
+
+function getStandaloneUserChannelWrapperBoundary(part: Message['parts'][number]): 'open' | 'close' | null {
+  if (typeof part.system !== 'string' || part.system.includes('\n') || part.system.trim() !== part.system) return null
+  const tag = parseFoxwarmMetadataLine(part.system)
+  if (tag?.tagName !== 'foxwarm-message') return null
+  if (tag.closing) return 'close'
+  return tag.attrs.type === 'channel' ? 'open' : null
+}
+
+function getInlineUserWrapperBoundaries(parts: Message['parts']): { open: number; close: number } | null {
+  const open = parts.findIndex(part => getStandaloneUserChannelWrapperBoundary(part) === 'open')
+  if (open < 0) return null
+  const closeOffset = parts.slice(open + 1).findIndex(part => getStandaloneUserChannelWrapperBoundary(part) === 'close')
+  return closeOffset < 0 ? null : { open, close: open + closeOffset + 1 }
+}
+
+function UserWrapperBoundaryBreak({ afterMetadata }: { afterMetadata: boolean }) {
+  return (
+    <span
+      data-user-wrapper-boundary={afterMetadata ? 'after-open' : 'before-close'}
+      className="foxwarm-user-rendered-line-break"
+      style={afterMetadata
+        ? { whiteSpace: 'pre-wrap', fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
+        : { whiteSpace: 'pre-wrap', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+      }
+    >
+      {'\n'}
+    </span>
+  )
+}
+
+function findAttachmentCorrelations(parts: Message['parts']): Map<string, AttachmentCorrelation> {
+  const correlations = new Map<string, AttachmentCorrelation>()
+  const activeRefs = new Set<string>()
+  for (const part of parts) {
+    for (const segment of parsePastedTextSegments(getPartDisplayText(part))) {
+      if (segment.kind !== 'text') continue
+      for (const match of segment.text.matchAll(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g)) activeRefs.add(match[1])
+    }
+  }
+  parts.forEach((part, partIndex) => {
+    for (const segment of parsePastedTextSegments(getPartDisplayText(part))) {
+      if (segment.kind !== 'text') continue
+      for (const line of segment.text.split('\n')) {
+        const descriptorText = line.trim()
+        const parsed = parseFoxwarmMetadataLine(descriptorText)
+        if (!parsed || parsed.closing || (parsed.tagName !== 'foxwarm-image' && parsed.tagName !== 'foxwarm-file')) continue
+        const generated = splitGeneratedAttachmentName(parsed.attrs.name || '')
+        if (!generated || !activeRefs.has(generated.ref) || correlations.has(generated.ref)) continue
+        const imagePart = parsed.tagName === 'foxwarm-image' ? parts[partIndex + 1] : undefined
+        correlations.set(generated.ref, {
+          ref: generated.ref,
+          kind: parsed.tagName === 'foxwarm-image' ? 'image' : 'file',
+          name: generated.originalName,
+          mimeType: parsed.attrs.mime || imagePart?.inlineDataRef?.mimeType || imagePart?.inlineData?.mimeType || '',
+          descriptorText,
+          ...(imagePart && (imagePart.inlineData || imagePart.inlineDataRef || imagePart.inlineDataUnavailable) ? { imagePart } : {}),
+        })
+      }
+    }
+  })
+  return correlations
+}
+
+function stripGeneratedDescriptorLines(text: string, correlations: Map<string, AttachmentCorrelation>): string {
+  const descriptors = new Set([...correlations.values()].map(item => item.descriptorText))
+  return parsePastedTextSegments(text).map(segment => segment.kind === 'pasted-text'
+    ? `${PASTED_TEXT_OPEN}${segment.text}${PASTED_TEXT_CLOSE}`
+    : segment.text.split('\n').filter(line => !descriptors.has(line.trim())).join('\n')).join('')
+}
+
+function AttachmentHistoryBlock({ correlation }: { correlation: AttachmentCorrelation }) {
+  const { ref, kind, name, mimeType: mime, imagePart } = correlation
+  return (
+    <span className="foxwarm-inline-history-attachment my-1 inline-flex max-w-full items-center gap-2 rounded-md border border-fw-border bg-fw-surface-raised px-2 py-1.5 align-middle text-sm shadow-sm" data-attachment-ref={ref}>
+      {kind === 'image' && imagePart
+        ? <ImageItem part={imagePart} label={name} imageClassName="h-12 w-12 shrink-0 object-cover" />
+        : <span aria-hidden="true">{kind === 'image' ? '🖼' : '📎'}</span>}
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{name}</span>
+        {mime && <span className="block truncate text-xs text-fw-text-muted">{mime}</span>}
+      </span>
+    </span>
+  )
+}
+
+const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMessageMetadata, correlations, inlineFlow = false }: { part: Message['parts'][number]; showUserMessageMetadata: boolean; correlations: Map<string, AttachmentCorrelation>; inlineFlow?: boolean }) {
+  const text = stripGeneratedDescriptorLines(getPartDisplayText(part), correlations)
+  const segments = useMemo<Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }>>(() => {
+    const output: Array<PastedTextSegment | { kind: 'attachment'; tagText: string; ref: string }> = []
+    for (const segment of parsePastedTextSegments(text)) {
+      if (segment.kind === 'pasted-text') { output.push(segment); continue }
+      let cursor = 0
+      for (const match of segment.text.matchAll(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g)) {
+        const index = match.index || 0
+        if (index > cursor) output.push({ kind: 'text', text: segment.text.slice(cursor, index) })
+        if (correlations.has(match[1])) output.push({ kind: 'attachment', tagText: match[0], ref: match[1] })
+        else output.push({ kind: 'text', text: match[0] })
+        cursor = index + match[0].length
+      }
+      if (cursor < segment.text.length) output.push({ kind: 'text', text: segment.text.slice(cursor) })
+    }
+    return output
+  }, [correlations, text])
+  const visibleClassificationText = useMemo(
+    () => segments.filter((segment): segment is Extract<typeof segments[number], { kind: 'text' }> => segment.kind === 'text').map(segment => segment.text).join(''),
+    [segments],
+  )
+  const isSystemMessage = isCollapsibleSystemText(visibleClassificationText)
   const [expanded, setExpanded] = useState(false)
   const shouldCollapse = isSystemMessage && !expanded
 
   return (
-    <div>
-      <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
-        <pre className="whitespace-pre-wrap font-sans" style={{ lineHeight: '1.5em' }}>
-          {text.split('\n').map((line, lineIdx) => {
-            const isPrefix = /^\[(SYSTEM|FROM):/.test(line)
-            return (
-              <span
-                key={lineIdx}
-                style={isPrefix
-                  ? { display: 'block', fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
-                  : { display: 'block' }
-                }
-              >
-                {line}
+    <div className={inlineFlow ? 'contents' : undefined}>
+      <div className={`${shouldCollapse ? 'overflow-hidden' : ''} ${inlineFlow ? 'contents' : ''}`} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : {}}>
+        <pre className={`foxwarm-user-message-text foxwarm-user-line-layout max-w-full whitespace-pre-wrap break-words font-sans ${inlineFlow ? 'inline' : ''}`} style={{ lineHeight: 0 }}>
+          {segments.map((segment, segmentIndex) => segment.kind === 'attachment'
+            ? <AttachmentHistoryBlock key={`attachment-${segmentIndex}`} correlation={correlations.get(segment.ref)!} />
+            : segment.kind === 'pasted-text'
+            ? <PastedTextBlock key={`pasted-${segmentIndex}`} text={segment.text} />
+            : (
+              <span key={`text-${segmentIndex}`}>
+                {renderUserPreLines(segment.text, showUserMessageMetadata, '1em', (line) => {
+                  const isPrefix = isSystemLikeText(line)
+                  return (
+                    <span
+                      className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
+                      style={isPrefix
+                        ? { fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
+                        : { fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
+                      }
+                    >
+                      {line}
+                    </span>
+                  )
+                })}
               </span>
-            )
-          })}
+            ))}
         </pre>
       </div>
       {isSystemMessage && (
         <button
           onClick={() => setExpanded(current => !current)}
-          className="text-xs text-blue-200 hover:text-white mt-1 text-left"
+          className="text-xs text-fw-accent hover:text-fw-text-inverse mt-1 text-left"
         >
           {expanded ? '▲ Show less' : '▼ Show more'}
         </button>
@@ -198,6 +610,10 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
 
 const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, messageKey }: { msg: Message; messageKey: string }) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
+  const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
+  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
   const allLines = useMemo(() => msg.parts.flatMap((part) => {
     if (part.system) {
       return formatStructuredSystemText(part.system).split('\n')
@@ -209,48 +625,132 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   }), [msg.parts])
 
   const renderedText = allLines.join('\n')
-  const shouldCollapse = !expanded
+  const messageKind = useMemo(() => getSystemMessagePreviewDescriptor(msg), [msg])
+  const interAgentPreview = useMemo(() => (
+    messageKind.kind === 'inter-agent' && messageKind.previewSessionId
+      ? allLines.filter((line) => !isSystemLikeText(line)).join('\n').trim()
+      : ''
+  ), [allLines, messageKind.kind, messageKind.previewSessionId])
+  const preview = useMemo(() => {
+    const bodyLine = allLines.find((line) => line.trim() && !isSystemLikeText(line))
+    const body = bodyLine?.trim() || renderedText.trim() || messageKind.kind
+    return `${messageKind.previewPrefix}${body}`
+  }, [allLines, messageKind.kind, messageKind.previewPrefix, renderedText])
+  const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
+  const threadLineClass = 'text-fw-system-accent hover:text-fw-system-accent focus-visible:text-fw-system-accent'
+  const headerClass = 'bg-fw-system-surface-strong/80 dark:bg-fw-system-surface-strong/20'
+  const headerHoverClass = 'hover:text-fw-system-accent'
 
   return (
-    <div className="w-full overflow-x-hidden">
-      <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 text-slate-700 dark:text-slate-300">
-        <div className={shouldCollapse ? 'overflow-hidden' : ''} style={shouldCollapse ? { maxHeight: 'calc(1.5em * 4)' } : undefined}>
-          <pre className="whitespace-pre-wrap font-sans text-sm" style={{ lineHeight: '1.5em' }}>
-            {renderedText.split('\n').map((line, lineIdx) => {
+    <div className="w-full min-w-0">
+      <div
+        ref={heightRef}
+        data-system-message-card
+        data-system-message-kind={messageKind.kind}
+        data-system-message-tone="system"
+        className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded || interAgentPreview ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
+        onClick={!expanded ? toggle : undefined}
+      >
+        <ThreadLineButton
+          expanded={expanded}
+          onToggle={toggle}
+          label={expanded ? `Collapse ${messageKind.kind} message` : `Expand ${messageKind.kind} message`}
+          className={`foxwarm-system-message-thread-line ${threadLineClass}`}
+        />
+        <div
+          className={`foxwarm-system-message-header -ml-2 -mr-2 ${THREAD_CARD_HEADER_ROW_CLASS} px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
+          onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
+        >
+          <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
+          {!expanded && (
+            <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
+              {messageKind.previewSessionId ? (
+                <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>:{messageKind.kind !== 'inter-agent' ? ` ${preview.slice(messageKind.previewPrefix.length)}` : null}</>
+              ) : preview}
+            </span>
+          )}
+        </div>
+        {!expanded && interAgentPreview && (
+          <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-fw-system-text" style={{ ...clampContentStyle(3), opacity: 0.92, ...resultFade.overflowFadeProps.style }}>
+            {interAgentPreview}
+          </div>
+        )}
+        {expanded && (
+          <pre className="foxwarm-system-message-body max-w-full whitespace-pre-wrap break-words font-sans text-sm" style={{ lineHeight: '1.5em' }}>
+            {renderedText.split('\n').map((line, lineIdx, lines) => {
               const isPrefix = isSystemLikeText(line)
+              const nextIsPrefix = lineIdx < lines.length - 1 && isSystemLikeText(lines[lineIdx + 1])
               return (
                 <span
                   key={`${messageKey}-${lineIdx}`}
                   style={isPrefix
                     ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
-                    : { display: 'block', opacity: 0.92 }
+                    : { opacity: 0.92 }
                   }
                 >
-                  {renderSystemTextWithSessionLinks(line)}
+                  {renderSystemTextWithSessionLinks(line)}{!isPrefix && !nextIsPrefix ? '\n' : null}
                 </span>
               )
             })}
           </pre>
-        </div>
-        {allLines.length > 4 && (
-          <button
-            onClick={() => setExpanded(current => !current)}
-            className="text-xs mt-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 text-left"
-          >
-            {expanded ? '▲ Show less' : '▼ Show more'}
-          </button>
         )}
       </div>
-      <ImageParts imageParts={msg.parts.filter(p => p.inlineData)} keyPrefix={messageKey} />
+      <ImageParts imageParts={msg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable)} keyPrefix={messageKey} />
     </div>
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { text: string; message: Message }) {
+type WebSearchCitation = {
+  url: string
+  title: string
+}
+
+const normalizeWebSearchCitation = (annotation: OpenAIResponsesAnnotation): WebSearchCitation | null => {
+  if (!annotation || typeof annotation !== 'object') return null
+  const nested = annotation.url_citation && typeof annotation.url_citation === 'object' ? annotation.url_citation : annotation
+  const url = typeof nested.url === 'string' ? nested.url.trim() : ''
+  if (!/^https?:\/\//i.test(url)) return null
+  const title = typeof nested.title === 'string' && nested.title.trim() ? nested.title.trim() : url
+  return { url, title }
+}
+
+const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotations }: { annotations?: OpenAIResponsesAnnotation[] }) {
+  const citations = useMemo(() => {
+    const unique = new Map<string, WebSearchCitation>()
+    for (const annotation of annotations || []) {
+      const citation = normalizeWebSearchCitation(annotation)
+      if (citation && !unique.has(citation.url)) unique.set(citation.url, citation)
+    }
+    return [...unique.values()]
+  }, [annotations])
+
+  if (citations.length === 0) return null
+  return (
+    <div className="my-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fw-text-muted" onClick={handleMarkdownLinkClick}>
+      <span className="font-semibold">Sources:</span>
+      {citations.map((citation, index) => (
+        <a
+          key={citation.url}
+          data-web-search-citation
+          href={citation.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={citation.title}
+          className="max-w-full truncate text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent"
+        >
+          [{index + 1}] {citation.title}
+        </a>
+      ))}
+    </div>
+  )
+})
+
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit }: { text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
   const jsonText = useMemo(() => viewMode === 'json' ? JSON.stringify(message, null, 2) : '', [message, viewMode])
+  const renderedSegments = useMemo(() => splitCommitMarkers(text), [text])
 
   useEffect(() => {
     return () => {
@@ -278,11 +778,9 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
     }
   }, [text])
 
-  const paddingClass = viewMode === 'rendered' ? 'px-2' : 'px-2 py-2'
-
   return (
-    <div className={`bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
-      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+    <div className="foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group">
+      <div className="foxwarm-assistant-action-buttons absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
         </IconToggleButton>
@@ -298,348 +796,319 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message }: { t
       </div>
 
       {viewMode === 'rendered' ? (
-        <MarkdownContent
-          text={text}
-          className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
-        />
+        <div className="foxwarm-assistant-message-markdown">
+          {renderedSegments.map((segment, index) => segment.kind === 'markdown' ? (
+            <MarkdownContent
+              key={`markdown-${index}`}
+              text={segment.text}
+              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+            />
+          ) : segment.kind === 'commit' ? (
+            <CommitMarkerCard key={`commit-${index}-${segment.target.commitId}`} target={segment.target} onOpen={onOpenCodeCommit} />
+          ) : (
+            <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
+              {segment.raw}
+            </pre>
+          ))}
+          <WebSearchCitationLinks annotations={annotations} />
+        </div>
       ) : viewMode === 'raw' ? (
-        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       ) : (
-        <pre className="whitespace-pre-wrap font-mono text-sm text-gray-900 dark:text-gray-100 overflow-x-auto">{jsonText}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{jsonText}</pre>
       )}
     </div>
   )
 })
 
 interface MessageRowProps {
-  messageKey: string
-  msg: Message
-  prevMsg: Message | null
-  nextMsg: Message | null
+  row: TimelineRowView
   isMobile: boolean
-  groupTools: boolean
-  showUsageBadge: boolean
-  groupKey: string
-  summaryTagItems: ToolTagItem[]
-  groupUsage: NormalizedTokenUsage | null
-  groupUsageCallCount: number
-  keepToolGroupExpanded: boolean
-  showToolGroupSummary: boolean
-  groupExpanded: boolean
-  onExpandGroup: (groupKey: string) => void
+  showUserMessageMetadata: boolean
+  sessionId: string
+  nestedDepth: number
+  onOpenCodeFile?: OpenCodeFileHandler
+  onOpenCodeCommit?: OpenCodeCommitHandler
+  renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
+  groupFirst?: boolean
+  surface?: 'all' | 'ordinary' | 'grouped'
 }
 
 const MessageRow = memo(function MessageRow({
-  messageKey,
-  msg,
-  prevMsg,
-  nextMsg,
+  row,
   isMobile,
-  groupTools,
-  showUsageBadge,
-  groupKey,
-  summaryTagItems,
-  groupUsage,
-  groupUsageCallCount,
-  keepToolGroupExpanded,
-  showToolGroupSummary,
-  groupExpanded,
-  onExpandGroup,
+  showUserMessageMetadata,
+  sessionId,
+  nestedDepth,
+  onOpenCodeFile,
+  onOpenCodeCommit,
+  renderNestedMessages,
+  groupFirst = false,
+  surface = 'all',
 }: MessageRowProps) {
-  const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
-  const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData), [msg.parts])
-  const usage = useMemo(() => getModelMessageUsage(msg), [msg])
-  const isInToolGroup = summaryTagItems.length > 0
-  const hasToolParts = useMemo(() => msg.parts.some(p => p.functionCall || p.functionResponse || p.thinking), [msg.parts])
+  const {
+    key: messageKey,
+    msg,
+    pairedToolResponse,
+    collapsedGroup,
+    hideFoldedThinking,
+    suppressWebSearchCards,
+    usageBadge,
+    usageAnchorRelative,
+    systemLikeMessage,
+    interleavedToolGroup,
+    marginClass,
+    widthClass,
+    anchorKey,
+    scrollbarAnchorKey,
+  } = row
+  const visibleModelParts = useMemo<Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }>>(() => {
+    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }> = []
+    for (const [partIndex, part] of msg.parts.entries()) {
+      if (part.text || part.system || part.thinking) {
+        visible.push({ part, webSearchAction: null, partIndex })
+        continue
+      }
+      const webSearchAction = msg.role === 'model'
+        ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
+        : null
+      if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
+    }
+    return visible
+  }, [msg.parts])
+  const textLikeParts = useMemo(() => visibleModelParts.map(item => item.part), [visibleModelParts])
+  const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
+  const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
+  const hasInlineAttachmentFlow = msg.role === 'user' && attachmentCorrelations.size > 0
+  const inlineUserWrapperBoundaries = useMemo(
+    () => hasInlineAttachmentFlow ? getInlineUserWrapperBoundaries(textLikeParts) : null,
+    [hasInlineAttachmentFlow, textLikeParts],
+  )
+  const imageParts = useMemo(() => msg.parts.filter(p => (
+    p.inlineData || p.inlineDataRef || p.inlineDataUnavailable
+  ) && !associatedImageParts.has(p)), [associatedImageParts, msg.parts])
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
-  const systemLikeMessage = useMemo(() => {
-    if (msg.role === 'model') return false
-    return (
-      msg.parts.some(part => !!part.system && !isLightweightStructuredSystem(part.system)) ||
-      msg.parts.some(part => !!part.text && part.text.split('\n').some(isHeavySystemTextLine))
-    )
-  }, [msg])
-  const shouldSkipMargin = !systemLikeMessage && (msg.role === 'model' || msg.role === 'tool') && (prevMsg?.role === 'model' || prevMsg?.role === 'tool')
-  const isCollapsedToolGroup = groupTools && isInToolGroup && !groupExpanded && !keepToolGroupExpanded
-  const hasInterleavedToolGroup = !!(nextMsg && nextMsg.role === 'tool' && nextMsg.parts.some(p => p.functionResponse) && msg.parts.some(p => p.functionCall))
-  const displayUsage = showUsageBadge
-    ? (isCollapsedToolGroup ? (showToolGroupSummary ? groupUsage : null) : usage)
-    : null
-  const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
-  const allowOverflow = (displayUsage && !isMobile) || hasToolParts || isInToolGroup
+  const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
+  const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
+  const firstGroupContentPartIndex = useMemo(() => getGroupContentPartIndex(msg), [msg])
+  // A row may contain both ordinary model content and a call in one persisted message.
+  // Grouping the row does not make its text/images (or thinking owned by the previous
+  // group) content of this group's card. The existing row flags still own visibility.
+  const belongsToOrdinarySurface = (item: typeof visibleModelParts[number]) => {
+    if (msg.role !== 'model') return false // Tool/result and event rows remain group content.
+    if (item.webSearchAction) return hasVisibleTextContent // Preserve the text-bearing hosted-search exception.
+    if (item.part.thinking) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
+    return true
+  }
+  const ordinaryParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(belongsToOrdinarySurface)
+  const groupedParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(item => !belongsToOrdinarySurface(item))
+  const displayedParts = surface === 'ordinary' ? ordinaryParts : groupedParts
+  const ordinaryContent = msg.role === 'model' && (ordinaryParts.length > 0 || imageParts.length > 0)
+  if (surface === 'ordinary' && !ordinaryContent) return null
+  if (surface === 'grouped' && msg.role === 'model' && groupedParts.length === 0 && !msg.parts.some(part => part.functionCall || part.functionResponse)) return null
+  const suppressAnchor = groupFirst || (surface === 'grouped' && ordinaryContent)
 
   return (
-    <div className={`flex ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${shouldSkipMargin ? '' : 'mt-4'}`}>
+    <div
+      className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${groupFirst ? '' : marginClass}`}
+      data-chat-message-anchor-key={suppressAnchor ? undefined : anchorKey}
+      data-context-scrollbar-anchor-key={suppressAnchor ? undefined : scrollbarAnchorKey}
+    >
       <div
-        className={`${
-          systemLikeMessage
-            ? 'w-full max-w-[80%]'
-            : msg.role === 'user'
-              ? 'max-w-[80%]'
-              : isMobile
-                ? 'w-full'
-                : 'w-full max-w-[80%]'
-        } ${
+        className={`min-w-0 ${surface !== 'all' ? 'w-full' : widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? 'bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
+            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
             : ''
-        } ${allowOverflow ? 'overflow-visible' : 'overflow-x-hidden'}`}
+        }`}
       >
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
         ) : msg.role === 'user' ? (
-          <div className="flex flex-col">
+          <div className={hasInlineAttachmentFlow ? 'min-w-0' : 'flex min-w-0 flex-col'}>
             {textLikeParts.map((part, partIdx) => (
-              <div key={`user-part-${partIdx}`}>
+              <div key={`user-part-${partIdx}`} className={hasInlineAttachmentFlow ? 'contents' : undefined}>
+                {showUserMessageMetadata && inlineUserWrapperBoundaries?.close === partIdx && <UserWrapperBoundaryBreak afterMetadata={false} />}
                 {part.system
-                  ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} />
-                  : <CollapsibleUserText text={part.text || ''} />}
+                  && !hasInlineAttachmentFlow
+                  && !isWrappedDirectChannelText(part.system)
+                  ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
+                  : <CollapsibleUserText part={part} showUserMessageMetadata={showUserMessageMetadata} correlations={attachmentCorrelations} inlineFlow={hasInlineAttachmentFlow} />}
+                {showUserMessageMetadata && inlineUserWrapperBoundaries?.open === partIdx && <UserWrapperBoundaryBreak afterMetadata />}
               </div>
             ))}
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
           </div>
         ) : (
-          <div className={`flex flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
-            {textLikeParts.map((part, partIdx) => {
+          <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
+            {displayedParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
+              if (webSearchAction) {
+                if (suppressWebSearchCards && !hasVisibleTextContent) {
+                  return null
+                }
+                return <WebSearchCard key={`web-search-${partIdx}`} action={webSearchAction} />
+              }
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
+                // Ordinary model output splits a group: thinking before that content belongs
+                // to the group that ends there; later thinking belongs to this row's group.
+                const foldedIntoGroupAbove = firstGroupContentPartIndex !== -1 && partIndex < firstGroupContentPartIndex
+                const folded = foldedIntoGroupAbove ? hideFoldedThinking : collapsedGroup
+                if (folded) {
                   return null
                 }
                 return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} />
+              // Compare source part indices: `partIndex` indexes `msg.parts` like the folded-thinking
+              // check above, while `partIdx` skips parts that are not rendered as model content.
+              if (contextBlock && partIndex === firstTextPartIndex && part.text) {
+                return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
+              }
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
             })}
-            <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
-            {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
-              <ToolGroupSummaryCard items={summaryTagItems} onExpand={() => onExpandGroup(groupKey)} />
-            )}
-            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} /> : <ToolCallsBlock msg={msg} />)}
-            {isCollapsedToolGroup ? null : (hasInterleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
-            {displayUsage && <ModelUsageAnchor usage={displayUsage} isMobile={isMobile} callCount={displayUsageCallCount} />}
+            {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
+            {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} sessionId={sessionId} />}
           </div>
         )}
       </div>
     </div>
   )
 }, (prev, next) => (
-  prev.msg === next.msg &&
-  prev.messageKey === next.messageKey &&
-  prev.prevMsg === next.prevMsg &&
-  prev.nextMsg === next.nextMsg &&
+  prev.row === next.row &&
   prev.isMobile === next.isMobile &&
-  prev.groupTools === next.groupTools &&
-  prev.showUsageBadge === next.showUsageBadge &&
-  prev.groupKey === next.groupKey &&
-  prev.summaryTagItems === next.summaryTagItems &&
-  prev.groupUsage === next.groupUsage &&
-  prev.groupUsageCallCount === next.groupUsageCallCount &&
-  prev.keepToolGroupExpanded === next.keepToolGroupExpanded &&
-  prev.showToolGroupSummary === next.showToolGroupSummary &&
-  prev.groupExpanded === next.groupExpanded
+  (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
+  prev.groupFirst === next.groupFirst &&
+  prev.surface === next.surface &&
+  prev.sessionId === next.sessionId &&
+  prev.nestedDepth === next.nestedDepth &&
+  prev.onOpenCodeFile === next.onOpenCodeFile &&
+  prev.onOpenCodeCommit === next.onOpenCodeCommit &&
+  (!getContextBlockMetaFromMessage(prev.row.msg) || prev.renderNestedMessages === next.renderNestedMessages)
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ messages, isMobile, groupTools, showUsageBadge }: ChatTimelineProps) {
+type TimelineGroupRows = { key: string; group: TimelineGroupView | null; rows: TimelineRowView[] }
+
+interface TimelineGroupProps {
+  group: TimelineGroupView
+  rows: TimelineRowView[]
+  rowProps: Omit<MessageRowProps, 'row'>
+  onToggle: (key: string, expanded: boolean) => void
+}
+
+const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onToggle }: TimelineGroupProps) {
+  const expanded = group.keepExpanded || !rows[0].collapsedGroup
+  const { ref, prepare } = useThreadCardHeightTransition(expanded)
+  const expand = useCallback(() => { prepare(); onToggle(group.key, true) }, [group.key, onToggle, prepare])
+  const collapse = useCallback(() => { prepare(); onToggle(group.key, false) }, [group.key, onToggle, prepare])
+  const first = rows[0]
+  return (
+    <div className="foxwarm-tool-group-slot min-w-0 max-w-full">
+      <div
+        ref={ref}
+        className={`foxwarm-tool-group relative min-w-0 ${group.keepExpanded ? 'max-w-full' : first.widthClass} ${first.marginClass}`}
+        data-tool-group={group.key}
+        data-tool-group-expanded={expanded}
+        data-chat-message-anchor-key={first.anchorKey}
+        data-context-scrollbar-anchor-key={first.scrollbarAnchorKey}
+      >
+        {group.keepExpanded ? rows.map((row, index) => (
+          <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} />
+        )) : (
+          <>
+            {rows.map((row, index) => <MessageRow key={`${row.key}-ordinary`} row={row} {...rowProps} groupFirst={index === 0} surface="ordinary" />)}
+            <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
+              <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
+                {rows.map((row, index) => (
+                  <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} surface="grouped" />
+                ))}
+              </ToolGroupSummaryCard>
+              {!expanded && first.usageBadge && (
+                <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} sessionId={rowProps.sessionId} />
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+})
+
+const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { marker: TimelineTimeMarker }) {
+  const { text, title } = formatTimelineTimeMarker(marker)
+  return (
+    <div data-timeline-time-separator className="my-3 w-full text-center text-[11px] text-fw-text-subtle">
+      <time dateTime={new Date(marker.timestamp).toISOString()} title={title} className="tabular-nums">{text}</time>
+    </div>
+  )
+})
+
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
+  const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
 
-  const toolGroupMeta = useMemo(() => {
-    const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
-    const hasTextContent = (msg: Message) => msg.parts.some((p) => (p.text && p.text.trim()) || (p.system && String(p.system).trim()))
-    const hasToolCalls = (msg: Message) => msg.parts.some((p) => p.functionCall)
-    const hasToolResponses = (msg: Message) => msg.parts.some((p) => p.functionResponse)
+  const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
+    <ChatTimeline
+      key={keyPrefix}
+      sessionId={sessionId}
+      messages={nestedMessages}
+      isMobile={isMobile}
+      groupTools={groupTools}
+      showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
+      showTimeDividers={false}
+      showUserMessageMetadata={showUserMessageMetadata}
+      onOpenCodeFile={onOpenCodeFile}
+      onOpenCodeCommit={onOpenCodeCommit}
+      nestedDepth={nextNestedDepth}
+    />
+  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
-    const lastIdx = messages.length - 1
-    const finalStandaloneStartIdx = (() => {
-      if (lastIdx < 0) return -1
-
-      const lastMsg = messages[lastIdx]
-      if (!lastMsg) return -1
-
-      if (lastMsg.role === 'tool' && hasToolResponses(lastMsg)) {
-        if (lastIdx > 0) {
-          const prevMsg = messages[lastIdx - 1]
-          if (prevMsg?.role === 'model' && hasToolCalls(prevMsg)) {
-            return lastIdx - 1
-          }
-        }
-        return lastIdx
-      }
-
-      if (lastMsg.role === 'model' && hasToolCalls(lastMsg)) {
-        return lastIdx
-      }
-
-      return -1
-    })()
-
-    const shouldStopAtIdx = (startIdx: number, idx: number) => (
-      finalStandaloneStartIdx !== -1 && startIdx < finalStandaloneStartIdx && idx >= finalStandaloneStartIdx
+  const rows = useMemo(() => {
+    const result = buildTimelineRows(
+      { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups },
+      rowsCacheRef.current,
     )
+    rowsCacheRef.current = result.cache
+    return result.rows
+  }, [expandedToolGroups, groupTools, isMobile, messages, nestedDepth, showUsageBadge, showTimeDividers])
 
-    const getToolGroupStartIdx = (idx: number) => {
-      if (finalStandaloneStartIdx !== -1 && idx >= finalStandaloneStartIdx) {
-        return finalStandaloneStartIdx
-      }
 
-      const currentMsg = messages[idx]
-      if (currentMsg.role === 'model' && hasTextContent(currentMsg)) {
-        return idx
+  const groupedRows = useMemo(() => {
+    const result: TimelineGroupRows[] = []
+    for (const row of rows) {
+      const group = groupTools && row.group && row.group.summaryItems.length > 0 ? row.group : null
+      const previous = result[result.length - 1]
+      if (group && previous?.group?.key === group.key) {
+        previous.rows.push(row)
+      } else {
+        result.push({ key: group?.key || row.key, group, rows: [row] })
       }
-
-      let start = idx
-      for (let i = idx - 1; i >= 0; i--) {
-        const m = messages[i]
-        if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m)) {
-          return hasToolCalls(m) ? i : start
-        }
-        start = i
-      }
-      return start
     }
+    return result
+  }, [groupTools, rows])
 
-    const getToolGroupSummaryItems = (startIdx: number): ToolTagItem[] => {
-      const items: ToolTagItem[] = []
-      const toolStatusById = new Map<string, 'success' | 'error'>()
-
-      for (let i = startIdx; i < messages.length; i++) {
-        if (shouldStopAtIdx(startIdx, i)) break
-        const m = messages[i]
-        if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
-
-        m.parts.forEach((p) => {
-          if (p.functionResponse?.tool_use_id) {
-            const nextStatus = getToolResponseStatus(p.functionResponse)
-            const prevStatus = toolStatusById.get(p.functionResponse.tool_use_id)
-            toolStatusById.set(
-              p.functionResponse.tool_use_id,
-              prevStatus === 'error' || nextStatus === 'error' ? 'error' : 'success'
-            )
-          }
-        })
-      }
-
-      for (let i = startIdx; i < messages.length; i++) {
-        if (shouldStopAtIdx(startIdx, i)) break
-        const m = messages[i]
-        if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
-
-        m.parts.forEach((p) => {
-          if (p.thinking && p.thinking.trim() && !hasTextContent(m)) {
-            items.push({ name: 'reasoning', tone: 'neutral' })
-          }
-          if (p.functionCall) {
-            const status = p.functionCall.id ? toolStatusById.get(p.functionCall.id) : undefined
-            items.push({
-              name: p.functionCall.name,
-              label: formatToolLabel(p.functionCall.name, p.functionCall.args),
-              tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',
-            })
-          }
-        })
-      }
-      return items
-    }
-
-    const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number } => {
-      const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-      let callCount = 0
-
-      for (let i = startIdx; i < messages.length; i++) {
-        if (shouldStopAtIdx(startIdx, i)) break
-        const m = messages[i]
-        if (m.role !== 'model' && m.role !== 'tool') break
-        if (m.role === 'model' && hasTextContent(m) && i !== startIdx) break
-
-        if (m.role === 'model') {
-          const usage = getModelMessageUsage(m)
-          if (usage) {
-            total.cachedTokens += usage.cachedTokens
-            total.inputTokens += usage.inputTokens
-            total.outputTokens += usage.outputTokens
-            callCount++
-          }
-        }
-      }
-
-      return { usage: callCount > 0 ? total : null, callCount }
-    }
-
-    const startIdxByIndex = messages.map((_, idx) => getToolGroupStartIdx(idx))
-    const summaryTagItemsByStart = new Map<number, ToolTagItem[]>()
-    const groupUsageByStart = new Map<number, NormalizedTokenUsage | null>()
-    const groupUsageCallCountByStart = new Map<number, number>()
-    const keepExpandedByStart = new Map<number, boolean>()
-    startIdxByIndex.forEach((startIdx) => {
-      if (!summaryTagItemsByStart.has(startIdx)) {
-        const items = getToolGroupSummaryItems(startIdx)
-        const groupUsage = getToolGroupUsage(startIdx)
-        summaryTagItemsByStart.set(startIdx, items)
-        groupUsageByStart.set(startIdx, groupUsage.usage)
-        groupUsageCallCountByStart.set(startIdx, groupUsage.callCount)
-        keepExpandedByStart.set(startIdx, startIdx === finalStandaloneStartIdx)
-      }
-    })
-
-    return {
-      handledByPreviousGroup: messages.map((msg, idx) => {
-        if (msg.role !== 'tool' || idx === 0) return false
-        const prevMsg = messages[idx - 1]
-        return prevMsg?.role === 'model' && prevMsg.parts.some(p => p.functionCall)
-      }),
-      messageKeyByIndex: messageKeys,
-      groupKeyByIndex: startIdxByIndex.map((startIdx) => `${messageKeys[startIdx] || `idx-${startIdx}`}-toolgroup`),
-      summaryTagItemsByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsByStart.get(startIdx) || EMPTY_TOOL_TAG_ITEMS),
-      groupUsageByIndex: startIdxByIndex.map((startIdx) => groupUsageByStart.get(startIdx) || null),
-      groupUsageCallCountByIndex: startIdxByIndex.map((startIdx) => groupUsageCallCountByStart.get(startIdx) || 0),
-      keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
-      shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
-    }
-  }, [messages])
-
-  const handleExpandGroup = useCallback((groupKey: string) => {
+  const handleGroupToggle = useCallback((groupKey: string, expanded: boolean) => {
     setExpandedToolGroups(prev => {
       const next = new Set(prev)
-      next.add(groupKey)
+      if (expanded) next.add(groupKey)
+      else next.delete(groupKey)
       return next
     })
   }, [])
 
-  return (
-    <>
-      {messages.map((msg, idx) => {
-        if (toolGroupMeta.handledByPreviousGroup[idx]) {
-          return null
-        }
+  const rowProps = { isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages }
 
-        const groupKey = toolGroupMeta.groupKeyByIndex[idx]
-        const messageKey = toolGroupMeta.messageKeyByIndex[idx]
-        return (
-          <MessageRow
-            key={messageKey}
-            messageKey={messageKey}
-            msg={msg}
-            prevMsg={idx > 0 ? messages[idx - 1] : null}
-            nextMsg={idx < messages.length - 1 ? messages[idx + 1] : null}
-            isMobile={isMobile}
-            groupTools={groupTools}
-            showUsageBadge={showUsageBadge}
-            groupKey={groupKey}
-            summaryTagItems={toolGroupMeta.summaryTagItemsByIndex[idx]}
-            groupUsage={toolGroupMeta.groupUsageByIndex[idx]}
-            groupUsageCallCount={toolGroupMeta.groupUsageCallCountByIndex[idx]}
-            keepToolGroupExpanded={toolGroupMeta.keepExpandedByIndex[idx]}
-            showToolGroupSummary={toolGroupMeta.shouldRenderSummary[idx]}
-            groupExpanded={expandedToolGroups.has(groupKey)}
-            onExpandGroup={handleExpandGroup}
-          />
-        )
-      })}
-    </>
+  return (
+    <div className="foxwarm-chat-timeline min-w-0 max-w-full">
+      {groupedRows.flatMap(item => [
+        ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
+        item.group
+          ? <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
+          : <MessageRow key={item.key} row={item.rows[0]} {...rowProps} />,
+      ])}
+    </div>
   )
 })
 

@@ -1,102 +1,97 @@
-import { PanelLeftClose, PanelLeftOpen, Plus, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
-import type { Session } from './SessionListCore'
+import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
+import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
+import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import AgentCreationMenu from './AgentCreationMenu'
+import type { AgentSummary } from '../agentCreation'
+import type { WebUiNodeTarget } from '../nodeTargets'
 
 interface SidebarProps {
   sessions: Session[]
+  agents: AgentSummary[]
   currentSession: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
-  themeMode: 'auto' | 'light' | 'dark'
-  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
-  sendKeyMode: 'modEnter' | 'enter'
-  onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
-  groupTools: boolean
-  onGroupToolsChange: (enabled: boolean) => void
-  showUsageBadge: boolean
-  onShowUsageBadgeChange: (enabled: boolean) => void
-  instanceName: string
-  onInstanceNameChange: (name: string) => Promise<void> | void
-  tabIcon: string
-  onTabIconChange: (tabIcon: string) => Promise<void> | void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
-  onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
+  codePath: string
+  codeNodeId: string
+  codeOpenInNewWindow: boolean
+  codeActive: boolean
+  nodeTargets: readonly WebUiNodeTarget[]
+  nodeTargetsError?: string
+  onRefreshNodeTargets: () => void
+  onOpenCode: (nodeId: string, path: string) => void
+  onCodeNodeChange: (nodeId: string) => void
+  onCodePathChange: (path: string) => void
+  onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateSession: () => void
+  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
   isPeek?: boolean
+  idleNotificationModes: Record<string, SessionIdleNotificationMode>
+  unreadSessionIds?: ReadonlySet<string>
+  onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
+  bounded?: BoundedSessionListPresentationProps
 }
 
 export default function Sidebar({
   sessions,
+  agents,
   currentSession,
   currentView,
   currentSessionRecord,
-  themeMode,
-  onThemeChange,
-  sendKeyMode,
-  onSendKeyModeChange,
-  groupTools,
-  onGroupToolsChange,
-  showUsageBadge,
-  onShowUsageBadgeChange,
-  instanceName,
-  onInstanceNameChange,
-  tabIcon,
-  onTabIconChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
-  onCreateWorkspaceTab,
+  codePath,
+  codeNodeId,
+  codeOpenInNewWindow,
+  codeActive,
+  nodeTargets,
+  nodeTargetsError,
+  onRefreshNodeTargets,
+  onOpenCode,
+  onCodeNodeChange,
+  onCodePathChange,
+  onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  onCreateAgent,
   onCreateSession,
   onToggleCollapsed,
   isPeek = false,
+  idleNotificationModes,
+  unreadSessionIds,
+  onToggleIdleNotificationMode,
+  bounded,
 }: SidebarProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
-  const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
   const agentsBtnClass = currentView === 'agents'
-    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+    ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
+    : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   return (
-    <div className="h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
+    <div className="h-full bg-fw-surface border-r border-fw-border flex flex-col">
+      <div className="shrink-0 p-4 border-b border-fw-border space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
+          <h1 className="text-xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
           <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={onToggleCollapsed}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border bg-fw-surface-sunken text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:bg-fw-surface dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
               title={isPeek ? 'Pin sidebar open' : 'Collapse sidebar'}
             >
               {isPeek ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
-            <GlobalUiSettingsMenu
-              themeMode={themeMode}
-              onThemeChange={onThemeChange}
-              sendKeyMode={sendKeyMode}
-              onSendKeyModeChange={onSendKeyModeChange}
-              groupTools={groupTools}
-              onGroupToolsChange={onGroupToolsChange}
-              showUsageBadge={showUsageBadge}
-              onShowUsageBadgeChange={onShowUsageBadgeChange}
-              instanceName={instanceName}
-              onInstanceNameChange={onInstanceNameChange}
-              tabIcon={tabIcon}
-              onTabIconChange={onTabIconChange}
-              menuAlign="start"
-              onOpenSetup={onSelectSetup}
-              setupActive={currentView === 'setup'}
-            />
           </div>
         </div>
 
@@ -110,40 +105,59 @@ export default function Sidebar({
               <Workflow className="w-4 h-4" />
               <span>Agents</span>
             </button>
-            <button
-              onClick={onCreateSession}
-              className="inline-flex items-center justify-center rounded-lg px-2 transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Create new session"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+            <AgentCreationMenu
+              agents={agents}
+              currentAgent={currentSessionRecord?.agent}
+              compact
+              onCreateAgent={onCreateAgent}
+              onCreateSession={onCreateSession}
+            />
           </div>
-          <CreateTabButton
-            kind="workspace"
-            defaultNodeId={defaultNodeId}
-            defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
-            onCreate={(options) => onCreateWorkspaceTab(options)}
+          <CodeLaunchButton
+            path={codePath}
+            nodeId={codeNodeId}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
+            openInNewWindow={codeOpenInNewWindow}
+            active={codeActive}
+            onOpen={onOpenCode}
+            onNodeChange={onCodeNodeChange}
+            onPathChange={onCodePathChange}
+            onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+            onRefreshNodeTargets={onRefreshNodeTargets}
           />
           <CreateTabButton
-            kind="terminal"
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
-            sessionLabel={sessionLabel}
             onCreate={(options) => onCreateTerminalTab(options)}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
+            onRefreshNodeTargets={onRefreshNodeTargets}
           />
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
-        <div className="border-t border-gray-200 dark:border-gray-700 p-2">
-          <SessionListCore
-            sessions={sessions}
-            currentSession={currentSession}
-            onSelectSession={onSelectSession}
-            onKeepSession={onKeepSession}
-          />
-        </div>
+      <div className="flex-1 min-h-0 border-t border-fw-border">
+        <SessionListCore
+          sessions={sessions}
+          currentSession={currentSession}
+          onSelectSession={onSelectSession}
+          onKeepSession={onKeepSession}
+          idleNotificationModes={idleNotificationModes}
+          unreadSessionIds={unreadSessionIds}
+          onToggleIdleNotificationMode={onToggleIdleNotificationMode}
+          bounded={bounded}
+          toolbarContainerClassName="p-2 pb-1"
+          listContainerClassName="p-2 pt-1"
+        />
+      </div>
+      <div data-sidebar-footer className="flex shrink-0 justify-end border-t border-fw-border bg-fw-surface p-2">
+        <GlobalUiSettingsMenu
+          menuAlign="end"
+          menuSide="top"
+          onOpenSetup={onSelectSetup}
+          setupActive={currentView === 'setup'}
+        />
       </div>
     </div>
   )

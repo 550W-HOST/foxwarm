@@ -31,7 +31,8 @@ State + Memory
   ├─ agents/<agent>/memory/
   ├─ state/token
   ├─ state/node_token
-  ├─ state/sessions*.json
+  ├─ state/catalog.sqlite
+  ├─ state/sessions/          # Per-session semantic authority
   ├─ state/db/
   └─ state/models.yaml
 ```
@@ -63,7 +64,7 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 
 1. inherited agent memory（按继承链从根到当前 agent）
 2. 当前 agent 自身 memory
-3. visible skills catalog（技能名 + 描述；完整文档按需通过 `load_skill` 加载）
+3. visible skills catalog（技能名 + 描述；完整文档按需通过 `skill({ action: "load", ... })` 加载）
 
 生成后的 snapshot 会缓存到 session，并在相关变更时刷新。
 
@@ -140,8 +141,7 @@ agents/
 skills/
   <skill>/
     SKILL.md
-    skill.json  # optional fallback metadata
-    memory/
+    references/  # optional, linked explicitly from SKILL.md
 
 state/
   token
@@ -149,7 +149,7 @@ state/
   agents.json
   channels.json
   models.yaml
-  sessions.json
+  catalog.sqlite
   sessions/<id>.json
   logs/
   db/

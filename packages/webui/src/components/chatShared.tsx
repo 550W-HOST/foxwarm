@@ -1,19 +1,40 @@
 import * as Diff from 'diff'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
 import {
   Brain,
   BookOpen,
+  Bell,
+  BellRing,
+  Bot,
+  Camera,
+  GitFork,
+  Info,
+  Inbox,
+  MessagesSquare,
   Pencil,
+  Power,
+  SeparatorHorizontal,
+  ScrollText,
+  Search,
+  Target,
+  Timer,
   Wrench,
+  Workflow,
   Terminal,
+  Zap,
 } from 'lucide-react'
 import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
-import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
-
-export const formatObject = formatCompactObjectPreview
+import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
+export {
+  renderAssistantMarkdownSegments,
+  renderAssistantMarkdownSegmentsWithSanitizer,
+  renderMarkdown,
+  renderMarkdownSegments,
+  renderMarkdownSegmentsWithSanitizer,
+  renderMarkdownWithSanitizer,
+  type MarkdownRenderSegment,
+} from './markdownRenderer'
 
 export interface SlashCommandOption {
   name: string
@@ -69,6 +90,8 @@ export interface FunctionCall {
   id?: string
   name: string
   args: any
+  rawArgsText?: string
+  argsParseError?: string
 }
 
 const normalizeToolLabelValue = (value: unknown): string | null => {
@@ -81,22 +104,6 @@ const normalizeToolLabelValue = (value: unknown): string | null => {
 }
 
 export const formatToolLabel = (name: string, args?: any): string => {
-  if (name === 'remote_node') {
-    const nodeId = normalizeToolLabelValue(args?.nodeId)
-    const tool = normalizeToolLabelValue(args?.tool)
-    if (nodeId && tool) {
-      return `node:${nodeId}:${tool}`
-    }
-  }
-
-  if (name === 'call_mcp') {
-    const tool = normalizeToolLabelValue(args?.tool)
-    if (tool) {
-      const server = normalizeToolLabelValue(args?.server) || 'default'
-      return `mcp:${server}:${tool}`
-    }
-  }
-
   if (name === 'call_tool') {
     const toolId = normalizeToolLabelValue(args?.toolId)
     if (toolId) {
@@ -123,20 +130,69 @@ export const formatToolLabel = (name: string, args?: any): string => {
 
 export interface FunctionResponse {
   tool_use_id?: string
+  executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
   name: string
   response: any
+}
+
+/** Shared semantic status for tool cards and non-card timeline summaries. */
+export const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'error' => {
+  if (resp.response?.error !== undefined && resp.response?.error !== null) {
+    return 'error'
+  }
+  if (resp.name === 'edit') {
+    return resp.response?.output === 'File edited successfully' ? 'success' : 'error'
+  }
+  return 'success'
+}
+
+export interface OpenAIResponsesAnnotation {
+  type?: string
+  start_index?: number
+  end_index?: number
+  url?: string
+  title?: string
+  url_citation?: {
+    url?: string
+    title?: string
+    start_index?: number
+    end_index?: number
+  }
+}
+
+export interface MessagePartProviderMeta {
+  openaiResponses?: {
+    annotations?: OpenAIResponsesAnnotation[]
+    outputItem?: Record<string, unknown>
+    sourceModelId?: string
+  }
 }
 
 export interface MessagePart {
   text?: string
   system?: string
   thinking?: string
+  providerMeta?: MessagePartProviderMeta
   functionCall?: FunctionCall
   functionResponse?: FunctionResponse
   toolUseId?: string
   inlineData?: {
     data: string
     mimeType: string
+  }
+  inlineDataUnavailable?: {
+    mimeType?: string
+    mime_type?: string
+    unavailable: true
+  }
+  inlineDataRef?: {
+    mimeType?: string
+    imageId?: string
+    blobId?: string
+    apiPath?: string
+    byteLength?: number
+    width?: number
+    height?: number
   }
 }
 
@@ -155,12 +211,49 @@ export interface ModelStreamToolCall {
   index: number
   id?: string
   name?: string
+  arguments?: string
+}
+
+export interface ModelStreamTextDelta {
+  offset: number
+  text: string
+}
+
+export interface ModelStreamToolCallDelta {
+  index: number
+  id?: string
+  name?: string
+  argumentsDelta?: ModelStreamTextDelta
+}
+
+export interface ContextBlockMessageMeta {
+  id: number
+  level: number
+  rawStartSeq: number
+  rawEndSeq: number
+  sourceKind?: 'message' | 'block'
+  sourceStart?: number
+  sourceEnd?: number
+  sourceBlockIds?: number[]
+  rawStartTimestamp?: number
+  rawEndTimestamp?: number
+  createdAt?: number
+  sourceSessionId?: string
+  inherited?: boolean
 }
 
 export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
   streamId?: string
   iteration?: number
+  streamVersion?: 2
+  sequenceStart?: number
+  sequence?: number
+  startedAt?: number
+  llmRequestId?: string
+  reasoningDelta?: ModelStreamTextDelta
+  textDelta?: ModelStreamTextDelta
+  toolCallDeltas?: ModelStreamToolCallDelta[]
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]
@@ -181,34 +274,32 @@ export type PatchPreviewOperation =
 
 export interface Message {
   role: 'user' | 'model' | 'tool'
+  modelVisible?: boolean
   parts: MessagePart[]
   __meta?: {
     timestamp?: number
+    llmRequestTiming?: {
+      startedAt: number
+      completedAt: number
+      durationMs: number
+    }
+    contextBlock?: ContextBlockMessageMeta
+    preservedFromBlockId?: number
     [key: string]: any
   }
 }
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-})
-
-const sanitizeHtml = (html: string): string => {
-  return DOMPurify.sanitize(html, {
-    FORBID_TAGS: ['img', 'video', 'audio', 'iframe', 'embed', 'object', 'script', 'style'],
-    FORBID_ATTR: ['src', 'xlink:href', 'action', 'formaction'],
-    ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
-    ALLOWED_ATTR: ['class', 'href', 'target', 'rel'],
-    ALLOW_UNKNOWN_PROTOCOLS: false,
-    ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
-  })
+export interface SystemMessageKind {
+  /** Stable lower-case metadata value used as the visual thread-card tag. */
+  kind: string
+  source: 'foxwarm-system' | 'foxwarm-message' | 'legacy'
 }
 
-export const renderMarkdown = (text: string): string => {
-  const html = marked(text) as string
-  const sanitized = sanitizeHtml(html)
-  // Add target="_blank" and rel="noopener noreferrer" to all <a> tags
-  return sanitized.replace(/<a\s/g, '<a target="_blank" rel="noopener noreferrer" ')
+export interface SystemMessagePreviewDescriptor extends SystemMessageKind {
+  /** Optional metadata prefix for the collapsed card preview only. */
+  previewPrefix: string
+  /** Session identity represented by the inter-agent collapsed-preview prefix. */
+  previewSessionId?: string
 }
 
 /** Click handler for markdown containers: intercepts link clicks with a confirmation dialog */
@@ -232,7 +323,8 @@ export const IconToggleButton = ({ active, title, onClick, children }: { active:
   <button
     onClick={onClick}
     title={title}
-    className={`p-0.5 rounded ${active ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+    data-active={active}
+    className={`p-0.5 rounded ${active ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
   >
     {children}
   </button>
@@ -242,7 +334,8 @@ export const MiniToggleButton = ({ active, title, onClick, children }: { active:
   <button
     onClick={onClick}
     title={title}
-    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+    data-active={active}
+    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
   >
     {children}
   </button>
@@ -272,15 +365,61 @@ export const copyTextToClipboard = async (text: string) => {
   }
 }
 
+export const FOXWARM_METADATA_LINE_RE = /^\s*<\/?foxwarm-(system|metadata|message|image|file)\b/i
+const FOXWARM_TAG_LINE_RE = /^\s*<\/?foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)\/?\s*>\s*$/i
+
+export const isFoxwarmMetadataLine = (text: string): boolean => FOXWARM_METADATA_LINE_RE.test(text)
+
+export const parseFoxwarmMetadataLine = (text: string): { tagName: string; closing: boolean; attrs: Record<string, string> } | null => {
+  const firstLine = text.split('\n')[0] || text
+  const match = firstLine.match(FOXWARM_TAG_LINE_RE)
+  if (!match) return null
+
+  const attrs: Record<string, string> = {}
+  const attrRe = /([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*=\s*"([^"]*)"/g
+  let attrMatch: RegExpExecArray | null
+  while ((attrMatch = attrRe.exec(match[2] || '')) !== null) {
+    attrs[attrMatch[1]] = attrMatch[2]
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+  }
+
+  return {
+    tagName: `foxwarm-${match[1].toLowerCase()}`,
+    closing: /^\s*<\//.test(firstLine),
+    attrs,
+  }
+}
+
+export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
+  const tag = parseFoxwarmMetadataLine(text)
+  if (!tag) return false
+  if (tag.closing) return true
+  if (tag.tagName === 'foxwarm-image' || tag.tagName === 'foxwarm-file') return true
+  if (tag.tagName === 'foxwarm-message') return tag.attrs.type === 'channel'
+  if (tag.tagName === 'foxwarm-metadata') return true
+  if (tag.tagName !== 'foxwarm-system') return false
+
+  const kind = tag.attrs.kind || ''
+  return kind === 'time'
+    || kind === 'session'
+    || kind === 'channel-mode'
+    || kind === 'external-input'
+}
+
 export const formatStructuredSystemText = (system: string): string => (
-  system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`
+  isFoxwarmMetadataLine(system) ? system : (system.startsWith('FROM:') ? `[${system}]` : `[SYSTEM: ${system}]`)
 )
 
 export const isSystemLikeText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:')
+  text.startsWith('[SYSTEM:') || text.startsWith('[FROM:') || isFoxwarmMetadataLine(text)
 )
 
 export const isLightweightStructuredSystem = (system: string): boolean => (
+  (isFoxwarmMetadataLine(system) && isLightweightFoxwarmMetadataLine(system)) ||
   system.startsWith('FROM:') ||
   system.startsWith('The following message is a direct user message via channel;') ||
   system.startsWith('current time =') ||
@@ -288,6 +427,7 @@ export const isLightweightStructuredSystem = (system: string): boolean => (
 )
 
 export const isLightweightSystemTextLine = (text: string): boolean => (
+  (isFoxwarmMetadataLine(text) && isLightweightFoxwarmMetadataLine(text)) ||
   text.startsWith('[FROM:') ||
   text.startsWith('[SYSTEM: The following message is a direct user message via channel;') ||
   text.startsWith('[SYSTEM: current time') ||
@@ -295,12 +435,74 @@ export const isLightweightSystemTextLine = (text: string): boolean => (
 )
 
 export const isHeavySystemTextLine = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
+  (text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(text)) && !isLightweightSystemTextLine(text)
 )
 
-export const isCollapsibleSystemText = (text: string): boolean => (
-  text.startsWith('[SYSTEM:') && !isLightweightSystemTextLine(text)
+/** Same predicate as `isHeavySystemTextLine`, named for the user-text collapse caller. */
+export const isCollapsibleSystemText = isHeavySystemTextLine
+
+const normalizeSystemMessageKind = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  return normalized && normalized.length <= 80 ? normalized : null
+}
+
+const getSystemMessagePreviewAttribute = (value: unknown): string => (
+  typeof value === 'string' ? value.trim() : ''
 )
+
+/**
+ * Finds a heavy system card's stable kind plus its collapsed-preview metadata.
+ * A real foxwarm-system kind wins over a direct channel wrapper or a
+ * non-channel foxwarm-message type, keeping corrupted mixed history readable
+ * as the actual event it contains.
+ */
+export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessagePreviewDescriptor => {
+  let messageType: { kind: string; attrs: Record<string, string> } | null = null
+
+  for (const part of message.parts) {
+    const text = part.system || part.text || ''
+    for (const line of text.split('\n')) {
+      const tag = parseFoxwarmMetadataLine(line)
+      if (!tag || tag.closing) continue
+
+      if (tag.tagName === 'foxwarm-system' && !isLightweightFoxwarmMetadataLine(line)) {
+        const kind = normalizeSystemMessageKind(tag.attrs.kind)
+        if (kind) {
+          const previewValue = kind === 'session-boundary'
+            ? getSystemMessagePreviewAttribute(tag.attrs.event)
+            : kind === 'event'
+              ? getSystemMessagePreviewAttribute(tag.attrs.type)
+              : ''
+          return { kind, source: 'foxwarm-system', previewPrefix: previewValue ? `${previewValue}: ` : '' }
+        }
+      }
+
+      if (tag.tagName === 'foxwarm-message' && tag.attrs.type !== 'channel') {
+        const kind = normalizeSystemMessageKind(tag.attrs.type)
+        if (kind && !messageType) messageType = { kind, attrs: tag.attrs }
+      }
+    }
+  }
+
+  if (messageType) {
+    const previewValue = messageType.kind === 'inter-agent'
+      ? getSystemMessagePreviewAttribute(messageType.attrs.sourceSessionId)
+      : ''
+    return {
+      kind: messageType.kind,
+      source: 'foxwarm-message',
+      previewPrefix: previewValue ? `From ${previewValue}: ` : '',
+      ...(previewValue ? { previewSessionId: previewValue } : {}),
+    }
+  }
+  return { kind: 'system', source: 'legacy', previewPrefix: '' }
+}
+
+export const getSystemMessageKind = (message: Message): SystemMessageKind => {
+  const { kind, source } = getSystemMessagePreviewDescriptor(message)
+  return { kind, source }
+}
 
 export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSProperties => ({
   lineHeight: '1.3em',
@@ -309,6 +511,10 @@ export const clampContentStyle = (lines: number, extraHeightRem = 0): CSSPropert
     : `calc(1.3em * ${lines})`,
   overflow: 'hidden',
 })
+
+/** Shared collapsed-header geometry for tool-like cards in the chat timeline. */
+export const THREAD_CARD_HEADER_ROW_CLASS = 'flex min-w-0 items-center gap-2 leading-[18px]'
+export const THREAD_CARD_HEADER_PREVIEW_CLASS = 'min-w-0 flex-1 truncate text-[13px] leading-[18px]'
 
 const isSlashCommandValue = (value: string): boolean => {
   if (!value || value.includes('\n') || /^\s/.test(value)) {
@@ -435,12 +641,6 @@ export const applySlashCommandSuggestion = (completion: SlashCommandCompletion, 
   return `${nextTokens.join(' ')} `
 }
 
-export const resizeTextarea = (textarea: HTMLTextAreaElement | null) => {
-  if (!textarea) return
-  textarea.style.height = 'auto'
-  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
-}
-
 export const getCollapsedReasoningPreview = (thinking: string): string => {
   const lines = thinking
     .split('\n')
@@ -535,17 +735,36 @@ export const parseAnsi = (text: string): ReactNode[] => {
 
 const toolIcons: Record<string, LucideIcon> = {
   reasoning: Brain,
+  'web-search': Search,
+  'ctx-block': BookOpen,
   read: BookOpen,
   write: Pencil,
   edit: Pencil,
   apply_patch: Wrench,
   apply_patch_memory: Wrench,
   exec: Terminal,
+  send_to_session: MessagesSquare,
+  'system-event': Bell,
+  'system-inter-agent': MessagesSquare,
+  'system-timer': Timer,
+  'system-trigger': Zap,
+  'system-background': Bot,
+  'system-onboot': Power,
+  'system-snapshot': Camera,
+  'system-session-boundary': SeparatorHorizontal,
+  'system-goal-reminder': Target,
+  'system-child-reminder': BellRing,
+  'system-system-prompt': ScrollText,
+  'system-managed-session': Workflow,
+  'system-session-event': GitFork,
+  'system-btw': MessagesSquare,
+  'system-system-delivered': Inbox,
+  'system-system': Info,
 }
 
-const getToolIcon = (name: string) => toolIcons[name] || Wrench
+const getToolIcon = (name: string, fallback: LucideIcon = Wrench) => toolIcons[name] || fallback
 
-export type ToolTagTone = 'neutral' | 'success' | 'error'
+export type ToolTagTone = 'neutral' | 'success' | 'error' | 'system'
 
 export interface ToolTagItem {
   name: string
@@ -554,23 +773,23 @@ export interface ToolTagItem {
 }
 
 const toolTagToneClasses: Record<ToolTagTone, string> = {
-  neutral: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-gray-600 dark:bg-gray-900/60 dark:text-gray-300',
-  success: 'border-green-300 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300',
-  error: 'border-red-300 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300',
+  neutral: 'border-fw-border-strong bg-fw-neutral-surface text-fw-text dark:border-fw-border-strong dark:bg-fw-canvas/60 dark:text-fw-text',
+  success: 'border-fw-tool-border bg-fw-tool-surface text-fw-tool dark:border-fw-tool-border dark:bg-fw-tool-surface-strong/20 dark:text-fw-tool',
+  error: 'border-fw-danger-border bg-fw-danger-surface text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/20 dark:text-fw-danger',
+  system: 'border-fw-system-border bg-fw-system-surface-strong text-fw-system-accent dark:bg-fw-system-surface/20',
 }
 
-export const ToolTag = ({ name, label = name, tone = 'neutral', className = '' }: { name: string; label?: string; tone?: ToolTagTone; className?: string }) => {
-  const Icon = getToolIcon(name)
+export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string }) => {
+  const resolvedIconName = iconName || name
+  const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+    <span data-tool-tag-tone={tone} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
       <span>{label}</span>
     </span>
   )
 }
-
-export const ToolLabel = ({ name, label }: { name: string; label?: string }) => <ToolTag name={name} label={label} />
 
 export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -580,10 +799,42 @@ export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
   </div>
 )
 
+/** Collapses repeated tags of the same kind into `name ×N`, most frequent first. Errored calls count separately from successful ones. */
+export const summarizeToolTagCounts = (items: ToolTagItem[]): ToolTagItem[] => {
+  const order: string[] = []
+  const byKey = new Map<string, { name: string; label: string; count: number; tone: ToolTagTone }>()
+
+  items.forEach((item) => {
+    const label = item.label || item.name
+    const isError = item.tone === 'error'
+    const key = `${isError ? 'error' : 'ok'}:${label}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      order.push(key)
+      byKey.set(key, { name: item.name, label, count: 1, tone: isError ? 'error' : item.tone || 'neutral' })
+      return
+    }
+
+    existing.count += 1
+    if (!isError && item.tone === 'success' && existing.tone === 'neutral') {
+      existing.tone = 'success'
+    }
+  })
+
+  return order
+    .map((key, idx) => ({ idx, entry: byKey.get(key)! }))
+    .sort((a, b) => b.entry.count - a.entry.count || a.idx - b.idx)
+    .map(({ entry }) => ({
+      name: entry.name,
+      label: `${entry.label} ×${entry.count}`,
+      tone: entry.tone,
+    }))
+}
+
 export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
   <a
     href={`#session/${encodeURIComponent(sessionId)}`}
-    className={`font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
+    className={`foxwarm-session-hash-link font-mono underline decoration-dotted underline-offset-2 hover:text-fw-accent dark:hover:text-fw-accent ${className}`.trim()}
     title={`Open session ${sessionId}`}
   >
     {sessionId}
@@ -591,40 +842,16 @@ export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: stri
 )
 
 export const renderSystemTextWithSessionLinks = (text: string) => {
-  const result: ReactNode[] = []
-  const pattern = /(sessionId:\s*`([^`]+)`|session\s*`([^`]+)`)/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(text)) !== null) {
-    const fullMatch = match[0]
-    const sessionId = match[2] || match[3]
-    const prefix = text.slice(lastIndex, match.index)
-
-    if (prefix) result.push(prefix)
-
-    if (fullMatch.startsWith('sessionId:')) {
-      result.push(
-        <span key={`session-link-${match.index}`}>
-          sessionId: <SessionHashLink sessionId={sessionId} />
-        </span>
-      )
-    } else {
-      result.push(
-        <span key={`session-link-${match.index}`}>
-          session <SessionHashLink sessionId={sessionId} />
-        </span>
-      )
+  return parseSessionLinkText(text).map((segment, index) => {
+    if (segment.type === 'text') {
+      return segment.text
     }
-
-    lastIndex = match.index + fullMatch.length
-  }
-
-  if (lastIndex < text.length) {
-    result.push(text.slice(lastIndex))
-  }
-
-  return result.length > 0 ? result : [text]
+    return (
+      <span key={`session-link-${index}`}>
+        {segment.text}<SessionHashLink sessionId={segment.sessionId} />
+      </span>
+    )
+  })
 }
 
 const normalizePatchNewlines = (text: string) => text.replace(/\r\n/g, '\n')

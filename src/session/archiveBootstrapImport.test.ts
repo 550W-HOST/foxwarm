@@ -48,6 +48,7 @@ test('archive store bootstraps/imports legacy jsonl archives and infers fork lin
   const sessionHistory = await import('./history');
   const layeredContext = await import('./layeredContext');
   const toolsSessionAgent = await import('../toolsSessionAgent');
+  const migrations = await import('../migrations/sqliteOnlyArchives');
 
   const parentMessages = [
     makeMessageRecord('parent', 1, 'user', 'alpha parent one', 1000),
@@ -79,9 +80,12 @@ test('archive store bootstraps/imports legacy jsonl archives and infers fork lin
 
   assert.equal(await fs.pathExists(config.ARCHIVE_DB_PATH), false, 'bootstrap test must start without archive DB');
 
+  const migration = await migrations.runSqliteOnlyArchivesMigration();
+  assert.equal(migration.failedFiles, 0);
   await archiveStore.initArchiveStore();
 
   assert.equal(await fs.pathExists(config.ARCHIVE_DB_PATH), true, 'archive DB should be created during bootstrap import');
+  assert.equal(await fs.pathExists(config.getSessionArchiveLogPath('parent')), false, 'verified JSONL should leave the active tree');
 
   const branch = await archiveStore.getSessionBranch('child');
   assert.equal(branch?.parentSessionId, 'parent');

@@ -9,6 +9,7 @@ import fs from 'fs-extra';
 import WebSocket from 'ws';
 import xml2js from 'xml2js';
 import crypto from 'crypto';
+import { open } from 'node:fs/promises';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { buildSavedFileText, saveInboundChannelFile } from '../channelFiles';
 import { logger } from '../common';
@@ -45,6 +46,10 @@ type PendingWebSocketRequest = {
 
 const DEFAULT_WEWORK_DEDUP_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_WEWORK_WEBSOCKET_ACK_TIMEOUT_MS = 10000;
+const MAX_WEWORK_RESPONSE_CONTEXTS = 1024;
+const WEWORK_AIBOT_UPLOAD_CHUNK_BYTES = 512 * 1024;
+const WEWORK_AIBOT_UPLOAD_MAX_CHUNKS = 100;
+const WEWORK_AIBOT_UPLOAD_MAX_BYTES = WEWORK_AIBOT_UPLOAD_CHUNK_BYTES * WEWORK_AIBOT_UPLOAD_MAX_CHUNKS;
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -85,12 +90,10 @@ function decryptWeWorkAesBuffer(buffer: Buffer, aesKey: string): Buffer {
 
 class WeWorkCrypto {
   private token: string;
-  private encodingAESKey: string;
   private aesKey: Buffer;
 
   constructor(token: string, encodingAESKey: string) {
     this.token = token;
-    this.encodingAESKey = encodingAESKey;
     this.aesKey = normalizeWeWorkAesKey(encodingAESKey);
   }
 
@@ -185,6 +188,7 @@ export class WeWorkWebhookChannel implements Channel {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly processedMsgIds = new Map<string, { processedAt: number; result: WeWorkInboundProcessResult }>();
+  private readonly latestResponseUrls = new Map<string, string>();
   private readonly dedupTtlMs = DEFAULT_WEWORK_DEDUP_TTL_MS;
   private stopped = false;
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
@@ -317,6 +321,7 @@ export class WeWorkWebhookChannel implements Channel {
       this.ws = undefined;
     }
     this.rejectAllPendingWebSocketRequests(new Error('WeWork AIBot WebSocket stopped'));
+    this.latestResponseUrls.clear();
     if (this.server) {
       this.server.close();
     }
@@ -646,6 +651,21 @@ export class WeWorkWebhookChannel implements Channel {
     return this.streamAggregator.begin(conversationId, { mode: 'webhook', responseUrl: delivery.responseUrl });
   }
 
+  private rememberLatestResponseUrl(conversationId: string, responseUrl: string): void {
+    this.latestResponseUrls.delete(conversationId);
+    if (this.latestResponseUrls.size >= MAX_WEWORK_RESPONSE_CONTEXTS) {
+      const oldestConversationId = this.latestResponseUrls.keys().next().value;
+      if (oldestConversationId) this.latestResponseUrls.delete(oldestConversationId);
+    }
+    this.latestResponseUrls.set(conversationId, responseUrl);
+  }
+
+  private takeLatestResponseUrl(conversationId: string): string | undefined {
+    const responseUrl = this.latestResponseUrls.get(conversationId);
+    if (responseUrl) this.latestResponseUrls.delete(conversationId);
+    return responseUrl;
+  }
+
   private handleAIBotStreamRefresh(body: any): WeWorkInboundProcessResult {
     const streamId = body?.stream?.id;
     const snapshot = typeof streamId === 'string' ? this.streamAggregator.getByStreamId(streamId) : undefined;
@@ -767,9 +787,24 @@ export class WeWorkWebhookChannel implements Channel {
       // 使用 chatId 作为 channelUserId，这样每个会话（群聊/私聊）都有独立的 channel
       // 如果没有 chatId，fallback 到 userId
       const channelUserId = chatId || userId;
-      const streamSnapshot = this.shouldUseAIBotStream(messageIsAIBot, delivery)
+      const useAIBotStream = this.shouldUseAIBotStream(messageIsAIBot, delivery);
+      const supersededStream = useAIBotStream
+        ? this.streamAggregator.supersedeActive(channelUserId)
+        : undefined;
+      const streamSnapshot = useAIBotStream
         ? this.beginAIBotStream(channelUserId, delivery.mode === 'webhook' ? { mode: 'webhook', responseUrl } : delivery)
         : undefined;
+      if (streamSnapshot) {
+        this.latestResponseUrls.delete(channelUserId);
+      } else if (responseUrl) {
+        this.rememberLatestResponseUrl(channelUserId, responseUrl);
+      }
+
+      if (supersededStream?.delivery.mode === 'websocket') {
+        void this.pushWebSocketStream(supersededStream).catch(err => {
+          logger.error({ err, channelUserId, streamId: supersededStream.streamId }, 'Failed to finalize superseded WeWork WebSocket stream response');
+        });
+      }
 
       if (streamSnapshot?.delivery.mode === 'websocket') {
         void this.pushWebSocketStream(streamSnapshot).catch(err => {
@@ -786,9 +821,7 @@ export class WeWorkWebhookChannel implements Channel {
           username: userName,
           platform: 'wework',
           senderId: userId, // 发送者用户ID，用于权限检查
-          weworkStreamId: streamSnapshot?.streamId,
           selfName: isNonEmptyString(this.config.selfName) ? this.config.selfName.trim() : undefined,
-          preferDirectReply: !!responseUrl || !!streamSnapshot,
           reply: async (text: string, options?: any) => {
             logger.debug({ channelUserId, text: text.substring(0, 100), chatType, chatId }, 'Sending reply via WeWork');
             if (streamSnapshot) {
@@ -1153,12 +1186,16 @@ export class WeWorkWebhookChannel implements Channel {
       return false;
     }
 
-    const streamId = typeof options?.weworkStreamId === 'string' ? options.weworkStreamId : undefined;
+    const explicitStreamId = typeof options?.weworkStreamId === 'string' ? options.weworkStreamId : undefined;
+    const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
+    const latestStream = !explicitWebhookUrl ? this.streamAggregator.getByConversation(userId) : undefined;
+    const streamId = explicitStreamId || (latestStream?.finish ? undefined : latestStream?.streamId);
     if (!streamId) {
       return false;
     }
 
-    const existing = this.streamAggregator.getByStreamId(streamId);
+    const existing = this.streamAggregator.getByConversation(userId)
+      || this.streamAggregator.getByStreamId(streamId);
     if (!existing) {
       logger.warn({ streamId, userId }, 'Skipping WeWork stream-bound message because stream id is unknown or expired');
       return true;
@@ -1170,8 +1207,8 @@ export class WeWorkWebhookChannel implements Channel {
 
     const progress = this.normalizeChannelTurnProgress(options?.channelTurnProgress);
     const snapshot = progress
-      ? this.streamAggregator.applyProgressByStreamId(streamId, progress)
-      : this.streamAggregator.appendByStreamId(streamId, text, { finish: !!options?.turnFinal });
+      ? this.streamAggregator.applyProgressByStreamId(existing.streamId, progress)
+      : this.streamAggregator.appendByStreamId(existing.streamId, text, { finish: !!options?.turnFinal });
     if (!snapshot) {
       return false;
     }
@@ -1185,6 +1222,20 @@ export class WeWorkWebhookChannel implements Channel {
     // Webhook mode is pull-based: WeWork fetches the latest snapshot through
     // subsequent msgtype=stream callbacks, so updating local state is enough.
     return true;
+  }
+
+  async handleTurnLifecycle(userId: string, options: any): Promise<void> {
+    const active = this.streamAggregator.getByConversation(userId);
+    if (!active || active.finish) return;
+    await this.maybeAggregateStreamMessage(userId, '', {
+      ...options,
+      weworkStreamId: active.streamId,
+    });
+  }
+
+  isTurnLifecycleActive(userId: string): boolean {
+    const active = this.streamAggregator.getByConversation(userId);
+    return !!active && !active.finish;
   }
 
   private normalizeChannelTurnProgress(value: unknown): ChannelTurnProgress | undefined {
@@ -1259,6 +1310,75 @@ export class WeWorkWebhookChannel implements Channel {
     return response.data.media_id;
   }
 
+  private getRequiredWebSocketAckString(ack: any, field: 'upload_id' | 'media_id', command: string): string {
+    const value = ack?.body?.[field];
+    if (!isNonEmptyString(value)) {
+      throw new Error(`WeWork AIBot command ${command} returned a malformed ack without ${field}`);
+    }
+    return value;
+  }
+
+  private async uploadWebSocketMedia(file: ChannelFile): Promise<string> {
+    const handle = await open(file.path, 'r');
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile()) {
+        throw new Error('WeWork AIBot media upload requires a regular file');
+      }
+      if (stats.size > WEWORK_AIBOT_UPLOAD_MAX_BYTES) {
+        throw new Error(`WeWork AIBot media exceeds the ${WEWORK_AIBOT_UPLOAD_MAX_BYTES}-byte protocol limit`);
+      }
+
+      const totalChunks = Math.max(1, Math.ceil(stats.size / WEWORK_AIBOT_UPLOAD_CHUNK_BYTES));
+      const md5 = crypto.createHash('md5');
+      let position = 0;
+      while (position < stats.size) {
+        const length = Math.min(WEWORK_AIBOT_UPLOAD_CHUNK_BYTES, stats.size - position);
+        const buffer = Buffer.allocUnsafe(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, position);
+        if (bytesRead !== length) {
+          throw new Error(`WeWork AIBot media changed or ended while hashing at byte ${position}`);
+        }
+        md5.update(buffer);
+        position += bytesRead;
+      }
+
+      const type = file.isImage ? 'image' : 'file';
+      const initAck = await this.sendWebSocketCommand('aibot_upload_media_init', {
+        type,
+        filename: file.name,
+        total_size: stats.size,
+        total_chunks: totalChunks,
+        md5: md5.digest('hex'),
+      });
+      const uploadId = this.getRequiredWebSocketAckString(initAck, 'upload_id', 'aibot_upload_media_init');
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const chunkStart = chunkIndex * WEWORK_AIBOT_UPLOAD_CHUNK_BYTES;
+        const length = Math.min(WEWORK_AIBOT_UPLOAD_CHUNK_BYTES, stats.size - chunkStart);
+        const buffer = Buffer.allocUnsafe(Math.max(0, length));
+        if (length > 0) {
+          const { bytesRead } = await handle.read(buffer, 0, length, chunkStart);
+          if (bytesRead !== length) {
+            throw new Error(`WeWork AIBot media changed or ended while reading chunk ${chunkIndex}`);
+          }
+        }
+        await this.sendWebSocketCommand('aibot_upload_media_chunk', {
+          upload_id: uploadId,
+          // The official SDK's executable client starts at zero despite a
+          // contradictory type comment claiming chunk indices start at one.
+          chunk_index: chunkIndex,
+          base64_data: buffer.toString('base64'),
+        });
+      }
+
+      const finishAck = await this.sendWebSocketCommand('aibot_upload_media_finish', { upload_id: uploadId });
+      return this.getRequiredWebSocketAckString(finishAck, 'media_id', 'aibot_upload_media_finish');
+    } finally {
+      await handle.close();
+    }
+  }
+
   async sendMessage(userId: string, text: string, options?: any): Promise<void> {
     try {
       const hasStreamBinding = typeof options?.weworkStreamId === 'string';
@@ -1276,12 +1396,17 @@ export class WeWorkWebhookChannel implements Channel {
         return;
       }
 
-      // 企业微信群机器人支持多种消息类型，默认使用 markdown
-      const messageType = options?.messageType || 'markdown';
-      
-      // Use provided webhookUrl or fall back to configured one
-      const webhookUrl = options?.webhookUrl || this.webhookUrl;
-      if (!webhookUrl && this.websocketConfig?.enabled) {
+      const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
+      if (!explicitWebhookUrl && options?.turnFinal === true) {
+        // Take-before-await prevents a newer inbound response_url for the same
+        // conversation from being deleted after this terminal attempt settles.
+        const responseUrl = this.takeLatestResponseUrl(userId);
+        if (responseUrl) {
+          await this.sendAIBotResponse(responseUrl, text);
+          return;
+        }
+      }
+      if (!explicitWebhookUrl && this.websocketConfig?.enabled) {
         const websocketPayload = {
           msgtype: 'markdown',
           markdown: { content: text },
@@ -1290,6 +1415,9 @@ export class WeWorkWebhookChannel implements Channel {
         return;
       }
 
+      // 企业微信群机器人支持多种消息类型，默认使用 markdown
+      const messageType = options?.messageType || 'markdown';
+      const webhookUrl = explicitWebhookUrl || this.webhookUrl;
       if (!webhookUrl) {
         throw new Error('WeWork webhookUrl is not configured for proactive sendMessage');
       }
@@ -1356,7 +1484,27 @@ export class WeWorkWebhookChannel implements Channel {
   }
 
   async sendFile(userId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
-    const webhookUrl = options?.webhookUrl || this.webhookUrl;
+    const explicitWebhookUrl = isNonEmptyString(options?.webhookUrl) ? options.webhookUrl : undefined;
+    if (!explicitWebhookUrl && this.websocketConfig?.enabled) {
+      const mediaId = await this.uploadWebSocketMedia(file);
+      const targetOptions = {
+        ...options,
+        chatId: options?.chatId || userId,
+      };
+      if (options?.caption) {
+        await this.sendWebSocketProactiveMessage(userId, {
+          msgtype: 'markdown',
+          markdown: { content: options.caption },
+        }, targetOptions);
+      }
+      await this.sendWebSocketProactiveMessage(userId, {
+        msgtype: file.isImage ? 'image' : 'file',
+        [file.isImage ? 'image' : 'file']: { media_id: mediaId },
+      }, targetOptions);
+      return;
+    }
+
+    const webhookUrl = explicitWebhookUrl || this.webhookUrl;
     if (!webhookUrl) {
       throw new Error('WeWork webhookUrl is not configured for proactive sendFile');
     }
@@ -1412,7 +1560,7 @@ export class WeWorkWebhookChannel implements Channel {
     });
   }
 
-  async sendTyping(userId: string): Promise<void> {
+  async sendTyping(_userId: string): Promise<void> {
     // WeWork webhook doesn't support typing indicator
   }
 

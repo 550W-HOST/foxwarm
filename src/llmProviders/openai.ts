@@ -4,6 +4,15 @@ import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { appendImageGuidanceText } from '../toolImages';
+import { deduplicateProviderRequestImages } from '../providerImageDedup';
+import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
+import { formatSystemPartForModel } from '../utils/promptWrappers';
+import {
+    buildImageGenerationReplayItem,
+    formatGeneratedImageModelPlaceholder,
+    GeneratedImageReplayError,
+    OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE,
+} from './openaiImages';
 
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -60,6 +69,7 @@ export type OpenAIStreamToolCallSnapshot = {
     index: number;
     id?: string;
     name?: string;
+    arguments?: string;
 };
 
 export type OpenAIStreamProgressSnapshot = {
@@ -70,6 +80,12 @@ export type OpenAIStreamProgressSnapshot = {
 
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    onMeaningfulProgress?: () => void;
+    onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
+    /** Hosted image generation lifecycle; used for watchdog state only. */
+    onImageGenerationActivity?: () => void;
+    onRawChunk?: (text: string) => void;
+    onRawSseBlock?: (block: string) => void;
 };
 
 function cleanSnapshotString(value: unknown): string | undefined {
@@ -78,6 +94,18 @@ function cleanSnapshotString(value: unknown): string | undefined {
     }
     const trimmed = value.trim();
     return trimmed ? trimmed : undefined;
+}
+
+function formatPreviousLlmRequestPrefix(part: MessagePart): string | undefined {
+    const timing = part.functionResponse?.previousLlmRequest;
+    if (!timing || typeof timing.time !== 'string' || !Number.isFinite(timing.durationMs)) {
+        return undefined;
+    }
+    return formatFoxwarmSystemTag({
+        kind: 'time',
+        time: timing.time,
+        prevLLMReqTime: `${(Math.max(0, timing.durationMs) / 1000).toFixed(1)}s`,
+    });
 }
 
 function mergeResponseContentPart(existing: any, incoming: any): any {
@@ -89,23 +117,31 @@ function mergeResponseContentPart(existing: any, incoming: any): any {
         return existing;
     }
 
-    return {
+    const merged = {
         ...existing,
         ...incoming,
-        text: incoming.text ?? existing.text,
-        refusal: incoming.refusal ?? existing.refusal,
     };
+    if (incoming.text !== undefined || existing.text !== undefined) {
+        merged.text = incoming.text ?? existing.text;
+    }
+    if (incoming.refusal !== undefined || existing.refusal !== undefined) {
+        merged.refusal = incoming.refusal ?? existing.refusal;
+    }
+    if (incoming.annotations !== undefined || existing.annotations !== undefined) {
+        merged.annotations = Array.isArray(incoming.annotations) && incoming.annotations.length > 0
+            ? incoming.annotations
+            : existing.annotations ?? incoming.annotations;
+    }
+    return merged;
 }
 
 function mergeResponseOutputItem(existing: any, incoming: any): any {
     if (!existing) {
-        return incoming
-            ? {
-                  ...incoming,
-                  content: Array.isArray(incoming.content) ? [...incoming.content] : incoming.content,
-                  summary: Array.isArray(incoming.summary) ? [...incoming.summary] : incoming.summary,
-              }
-            : incoming;
+        if (!incoming) return incoming;
+        const initial = { ...incoming };
+        if (Array.isArray(incoming.content)) initial.content = [...incoming.content];
+        if (Array.isArray(incoming.summary)) initial.summary = [...incoming.summary];
+        return initial;
     }
 
     if (!incoming) {
@@ -144,8 +180,80 @@ function mergeResponseOutputItem(existing: any, incoming: any): any {
     return merged;
 }
 
-export function convertToOpenAIFormat(contents: Message[]): any[] {
+function hasUsableReasoningSummary(summary: unknown): summary is any[] {
+    return Array.isArray(summary) && summary.some((entry: any) =>
+        typeof (entry?.text ?? entry?.summary) === 'string'
+        && (entry.text ?? entry.summary).length > 0,
+    );
+}
+
+function isProviderSpecificFields(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+interface ToolImageAssociations {
+    byResponsePartIndex: Map<number, MessagePart[]>;
+    orphanImagePartIndexes: Set<number>;
+}
+
+function associateToolImagesByOccurrence(
+    parts: MessagePart[],
+    isDeduplicated: (part: MessagePart) => boolean,
+): ToolImageAssociations {
+    const responseIndexesByToolId = new Map<string, number[]>();
+    for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        const toolId = part.functionResponse?.tool_use_id || (part.functionResponse ? part.toolUseId : undefined);
+        if (!toolId) continue;
+        const indexes = responseIndexesByToolId.get(toolId) || [];
+        indexes.push(index);
+        responseIndexesByToolId.set(toolId, indexes);
+    }
+
+    const byResponsePartIndex = new Map<number, MessagePart[]>();
+    const orphanImagePartIndexes = new Set<number>();
+    for (let imageIndex = 0; imageIndex < parts.length; imageIndex += 1) {
+        const image = parts[imageIndex];
+        if (!image.toolUseId || (!image.inlineData && !isDeduplicated(image))) continue;
+        const responseIndexes = responseIndexesByToolId.get(image.toolUseId) || [];
+        if (responseIndexes.length === 0) {
+            orphanImagePartIndexes.add(imageIndex);
+            continue;
+        }
+
+        let selected = responseIndexes[0];
+        let selectedDistance = Math.abs(selected - imageIndex);
+        for (const responseIndex of responseIndexes.slice(1)) {
+            const distance = Math.abs(responseIndex - imageIndex);
+            const selectedIsFollowing = selected > imageIndex;
+            const candidateIsPreceding = responseIndex < imageIndex;
+            if (distance < selectedDistance
+                || (distance === selectedDistance && selectedIsFollowing && candidateIsPreceding)) {
+                selected = responseIndex;
+                selectedDistance = distance;
+            }
+        }
+        const associated = byResponsePartIndex.get(selected) || [];
+        associated.push(image);
+        byResponsePartIndex.set(selected, associated);
+    }
+    return { byResponsePartIndex, orphanImagePartIndexes };
+}
+
+export function convertToOpenAIFormat(
+    contents: Message[],
+    concreteModelId?: string,
+    historyReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content',
+): any[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'openai-chat-completions');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
     const openaiMessages = [];
+    const pendingToolImages: any[] = [];
+    const flushToolImages = () => {
+        if (pendingToolImages.length === 0) return;
+        openaiMessages.push({ role: 'user', content: pendingToolImages.splice(0) });
+    };
 
     for (const msg of contents) {
         let role = msg.role as any;
@@ -153,9 +261,10 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
         if (role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
-            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
+            const pendingDeduplicatedWithoutId: MessagePart[] = [];
+            const associations = associateToolImagesByOccurrence(msg.parts || [], isDeduplicated);
 
             const ensureGroup = (toolId: string) => {
                 if (!groupedByToolId.has(toolId)) {
@@ -168,9 +277,24 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                 ensureGroup(toolId);
                 groupedByToolId.get(toolId)!.push(part);
             };
+            const prependGroupPart = (toolId: string, part: any) => {
+                ensureGroup(toolId);
+                groupedByToolId.get(toolId)!.unshift(part);
+            };
 
-            for (const part of msg.parts || []) {
-                if (part.inlineData) {
+            for (let partIndex = 0; partIndex < (msg.parts || []).length; partIndex += 1) {
+                const part = msg.parts[partIndex];
+                if (part.inlineData || isDeduplicated(part)) {
+                    const toolId = part.toolUseId;
+                    if (!part.inlineData) {
+                        if (!toolId) {
+                            pendingDeduplicatedWithoutId.push(part);
+                        } else if (associations.orphanImagePartIndexes.has(partIndex)) {
+                            const marker = appendImageGuidanceText([part], '', isDeduplicated);
+                            if (marker) pushGroupPart(toolId, { type: 'text', text: marker });
+                        }
+                        continue;
+                    }
                     const imagePart = {
                         type: 'image_url',
                         image_url: {
@@ -178,11 +302,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
                         }
                     };
 
-                    const toolId = part.toolUseId;
                     if (toolId) {
-                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
-                        groupedImageParts.push(part);
-                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -200,14 +320,27 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
                     ensureGroup(toolId);
 
+                    const timingPrefix = formatPreviousLlmRequestPrefix(part);
+                    if (timingPrefix) {
+                        prependGroupPart(toolId, { type: 'text', text: timingPrefix });
+                    }
+
                     if (pendingInlineWithoutId.length > 0) {
                         for (const imagePart of pendingInlineWithoutId) {
                             pushGroupPart(toolId, imagePart);
                         }
                         pendingInlineWithoutId.length = 0;
                     }
-
-                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
+                    const responseImageParts = [
+                        ...(associations.byResponsePartIndex.get(partIndex) || []),
+                        ...pendingDeduplicatedWithoutId,
+                    ];
+                    pendingDeduplicatedWithoutId.length = 0;
+                    const outputText = appendImageGuidanceText(
+                        responseImageParts,
+                        formatToolResponsePayload(resp),
+                        isDeduplicated,
+                    );
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'text', text: outputText });
                     }
@@ -220,12 +353,22 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
 
             for (const toolId of toolIdOrder) {
                 const groupedParts = groupedByToolId.get(toolId) || [];
-                const hasNonTextPart = groupedParts.some((x: any) => x.type !== 'text');
-                const content = groupedParts.length === 0
+                // Chat Completions tool content accepts text, not image_url parts.
+                // Delay the companion user message until every adjacent tool result
+                // has been emitted, including batches split across internal messages.
+                const imageParts = groupedParts.filter((part: any) => part.type === 'image_url');
+                if (imageParts.length > 0) {
+                    pendingToolImages.push(
+                        { type: 'text', text: `Images returned by tool_call_id=${toolId}:` },
+                        ...imageParts,
+                    );
+                }
+                const textParts = groupedParts.filter((part: any) => part.type === 'text');
+                const content = textParts.length === 0
                     ? ''
-                    : !hasNonTextPart && groupedParts.length === 1
-                    ? groupedParts[0].text
-                    : groupedParts;
+                    : textParts.length === 1
+                    ? textParts[0].text
+                    : textParts;
 
                 openaiMessages.push({
                     role: 'tool',
@@ -237,6 +380,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             continue;
         }
 
+        flushToolImages();
         let content = [];
         let toolCalls = [];
         let reasoningContent = null;
@@ -246,7 +390,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             const allTextOnly = parts.every(p => (p.text !== undefined || p.system !== undefined) && !p.thinking && !p.functionCall && !p.functionResponse && !p.inlineData);
             if (allTextOnly) {
                 const mergedText = parts
-                    .map(p => p.system !== undefined ? `[SYSTEM: ${p.system}]` : p.text)
+                    .map(p => p.system !== undefined ? formatSystemPartForModel(p.system) : p.text)
                     .filter(Boolean)
                     .join('\n');
                 parts = [{ text: mergedText }];
@@ -259,7 +403,7 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             }
 
             if (part.system) {
-                content.push({ type: 'text', text: `[SYSTEM: ${part.system}]` });
+                content.push({ type: 'text', text: formatSystemPartForModel(part.system) });
             }
 
             if (part.text) {
@@ -278,19 +422,26 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             }
 
             if (part.inlineData) {
-                content.push({
-                    type: 'image_url',
-                    image_url: {
-                        url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/jpeg'};base64,${part.inlineData.data}`
-                    }
-                });
+                if (role === 'assistant' && part.imageMeta?.origin === 'generated') {
+                    // Hosted image generation is Responses-only; describe a
+                    // generated image honestly instead of replaying it as an
+                    // assistant image_url on Chat Completions.
+                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                } else {
+                    content.push({
+                        type: 'image_url',
+                        image_url: {
+                            url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/jpeg'};base64,${part.inlineData.data}`
+                        }
+                    });
+                }
             }
         }
 
         const message: any = { role };
 
         if (reasoningContent) {
-            message.reasoning_content = reasoningContent;
+            message[historyReasoningField] = reasoningContent;
         }
 
         if (content.length === 1 && content[0].type === 'text') {
@@ -305,14 +456,38 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             message.tool_calls = toolCalls;
         }
 
+        if (
+            role === 'assistant'
+            && concreteModelId
+            && msg.providerMeta?.sourceModelId === concreteModelId
+            && isProviderSpecificFields(msg.providerMeta.providerSpecificFields)
+        ) {
+            message.provider_specific_fields = msg.providerMeta.providerSpecificFields;
+        }
+
         openaiMessages.push(message);
     }
 
+    flushToolImages();
     return openaiMessages;
 }
 
-export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
+export function convertToOpenAIResponsesFormat(contents: Message[], concreteModelId?: string): any[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'openai-responses');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
     const responseInput = [];
+    let messagePhase: MessagePart['phase'];
+
+    const getMessagePhase = (value: unknown): MessagePart['phase'] =>
+        value === 'commentary' || value === 'final_answer' ? value : undefined;
+
+    const getCompatibleResponsesMeta = (part: MessagePart) => {
+        const metadata = part.providerMeta?.openaiResponses;
+        return concreteModelId && metadata?.sourceModelId === concreteModelId
+            ? metadata
+            : undefined;
+    };
 
     const flushMessageContent = (
         role: 'user' | 'assistant',
@@ -326,20 +501,38 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
             content: [...content]
         };
 
-        if (role === 'assistant') {
-            message.phase = 'final_answer';
+        if (role === 'assistant' && messagePhase) {
+            message.phase = messagePhase;
         }
 
         responseInput.push(message);
         content.length = 0;
+        messagePhase = undefined;
+    };
+
+    const prepareMessageContent = (
+        role: 'user' | 'assistant',
+        content: Array<OpenAIResponsesContent>,
+        part: MessagePart,
+        fallbackPhase: MessagePart['phase'],
+    ) => {
+        if (role !== 'assistant') return;
+        const nextPhase = Object.prototype.hasOwnProperty.call(part, 'phase')
+            ? getMessagePhase(part.phase)
+            : fallbackPhase;
+        if (content.length > 0 && nextPhase !== messagePhase) {
+            flushMessageContent(role, content);
+        }
+        messagePhase = nextPhase;
     };
 
     for (const msg of contents) {
         if (msg.role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
-            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
+            const pendingDeduplicatedWithoutId: MessagePart[] = [];
+            const associations = associateToolImagesByOccurrence(msg.parts || [], isDeduplicated);
 
             const ensureGroup = (toolId: string) => {
                 if (!groupedByToolId.has(toolId)) {
@@ -352,19 +545,30 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
                 ensureGroup(toolId);
                 groupedByToolId.get(toolId)!.push(part);
             };
+            const prependGroupPart = (toolId: string, part: any) => {
+                ensureGroup(toolId);
+                groupedByToolId.get(toolId)!.unshift(part);
+            };
 
-            for (const part of msg.parts || []) {
-                if (part.inlineData) {
+            for (let partIndex = 0; partIndex < (msg.parts || []).length; partIndex += 1) {
+                const part = msg.parts[partIndex];
+                if (part.inlineData || isDeduplicated(part)) {
+                    const toolId = part.toolUseId;
+                    if (!part.inlineData) {
+                        if (!toolId) {
+                            pendingDeduplicatedWithoutId.push(part);
+                        } else if (associations.orphanImagePartIndexes.has(partIndex)) {
+                            const marker = appendImageGuidanceText([part], '', isDeduplicated);
+                            if (marker) pushGroupPart(toolId, { type: 'input_text', text: marker });
+                        }
+                        continue;
+                    }
                     const imagePart = {
                         type: 'input_image',
                         image_url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/png'};base64,${part.inlineData.data}`
                     };
 
-                    const toolId = part.toolUseId;
                     if (toolId) {
-                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
-                        groupedImageParts.push(part);
-                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -383,14 +587,27 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
                     ensureGroup(toolId);
 
+                    const timingPrefix = formatPreviousLlmRequestPrefix(part);
+                    if (timingPrefix) {
+                        prependGroupPart(toolId, { type: 'input_text', text: timingPrefix });
+                    }
+
                     if (pendingInlineWithoutId.length > 0) {
                         for (const imagePart of pendingInlineWithoutId) {
                             pushGroupPart(toolId, imagePart);
                         }
                         pendingInlineWithoutId.length = 0;
                     }
-
-                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
+                    const responseImageParts = [
+                        ...(associations.byResponsePartIndex.get(partIndex) || []),
+                        ...pendingDeduplicatedWithoutId,
+                    ];
+                    pendingDeduplicatedWithoutId.length = 0;
+                    const outputText = appendImageGuidanceText(
+                        responseImageParts,
+                        formatToolResponsePayload(resp),
+                        isDeduplicated,
+                    );
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }
@@ -421,33 +638,70 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
 
         const role = msg.role === 'model' ? 'assistant' : 'user';
         const content: Array<OpenAIResponsesContent> = [];
+        const fallbackPhase: MessagePart['phase'] = role === 'assistant'
+            ? msg.parts?.some(part => !!part.functionCall) ? 'commentary' : 'final_answer'
+            : undefined;
 
         for (const part of msg.parts || []) {
+            const responsesMeta = getCompatibleResponsesMeta(part);
+            let inlineConsumed = false;
+
+            if (responsesMeta?.outputItem) {
+                flushMessageContent(role, content);
+                if (responsesMeta.outputItem.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                    // Same-concrete-model native replay. The hydrated image
+                    // bytes must be filled back into the call so `store:false`
+                    // replay never depends on provider-side history.
+                    if (role === 'assistant' && typeof part.inlineData?.data === 'string' && part.inlineData.data.length > 0) {
+                        responseInput.push(buildImageGenerationReplayItem(responsesMeta.outputItem, part.inlineData.data));
+                        inlineConsumed = true;
+                    } else {
+                        throw new GeneratedImageReplayError('Cannot replay a generated image call: the local image bytes are missing or unreadable.');
+                    }
+                } else {
+                    responseInput.push(structuredClone(responsesMeta.outputItem));
+                }
+            }
+
             if (part.system) {
+                prepareMessageContent(role, content, part, fallbackPhase);
                 content.push({
                     type: role === 'assistant' ? 'output_text' : 'input_text',
-                    text: `[SYSTEM: ${part.system}]`
+                    text: formatSystemPartForModel(part.system)
                 });
             }
 
             if (part.providerMeta?.thinkingSummaries || part.providerMeta?.encryptedThinking) {
+                flushMessageContent(role, content);
                 responseInput.push({
                     type: 'reasoning',
-                    summary: part.providerMeta.thinkingSummaries.map(text => ({ text, type: 'summary_text' })),
+                    summary: (part.providerMeta.thinkingSummaries || []).map(text => ({ text, type: 'summary_text' })),
                     encrypted_content: part.providerMeta.encryptedThinking,
                 });
             }
 
-            if (part.text) {
-                content.push({
+            if (typeof part.text === 'string' && (role === 'assistant' || part.text.length > 0)) {
+                prepareMessageContent(role, content, part, fallbackPhase);
+                const outputTextPart: any = {
                     type: role === 'assistant' ? 'output_text' : 'input_text',
                     text: part.text
-                });
+                };
+                if (role === 'assistant' && responsesMeta?.annotations) {
+                    outputTextPart.annotations = structuredClone(responsesMeta.annotations);
+                }
+                content.push(outputTextPart);
             }
 
-            if (part.inlineData) {
+            if (part.inlineData && !inlineConsumed) {
                 if (role === 'assistant') {
-                    logger.warn('Dropping assistant inlineData for Responses API history');
+                    if (part.imageMeta?.origin === 'generated') {
+                        // Incompatible concrete model: keep honest text context
+                        // without leaking provider metadata or faking vision.
+                        prepareMessageContent(role, content, part, fallbackPhase);
+                        content.push({ type: 'output_text', text: formatGeneratedImageModelPlaceholder() });
+                    } else {
+                        logger.warn('Dropping assistant inlineData for Responses API history');
+                    }
                 } else {
                     content.push({
                         type: 'input_image',
@@ -560,6 +814,7 @@ export async function collectOpenAIResponsesStream(
                     index: outputIndex,
                     ...(cleanSnapshotString(item.call_id || item.id) ? { id: cleanSnapshotString(item.call_id || item.id) } : {}),
                     ...(cleanSnapshotString(item.name) ? { name: cleanSnapshotString(item.name) } : {}),
+                    ...(typeof item.arguments === 'string' ? { arguments: item.arguments } : {}),
                 }));
 
         const buildProgressSnapshot = (): OpenAIStreamProgressSnapshot => ({
@@ -582,7 +837,7 @@ export async function collectOpenAIResponsesStream(
             emitProgressUpdate();
         };
 
-        const buildOutputItems = () =>
+        const buildOutputEntries = () =>
             Array.from(outputItems.entries())
                 .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
                 .map(([outputIndex, item]) => {
@@ -612,9 +867,64 @@ export async function collectOpenAIResponsesStream(
                         mergedItem.summary = reasoningSummary;
                     }
 
-                    return mergedItem;
+                    return { outputIndex, item: mergedItem };
                 })
                 .filter(Boolean);
+
+        const mergeCompletedOutputItems = (completedOutput: unknown) => {
+            const streamedEntries = buildOutputEntries();
+            if (streamedEntries.length === 0) {
+                return Array.isArray(completedOutput) ? completedOutput : [];
+            }
+
+            const completedItems = Array.isArray(completedOutput) ? completedOutput : [];
+            const isPositionallyAligned = streamedEntries.length === completedItems.length
+                && streamedEntries.every((entry, index) => {
+                    if (entry.outputIndex !== index) {
+                        return false;
+                    }
+                    const streamedItem = entry.item;
+                    const completedItem = completedItems[index];
+                    if (!streamedItem || !completedItem || typeof streamedItem.type !== 'string' || streamedItem.type !== completedItem.type) {
+                        return false;
+                    }
+                    const streamedId = streamedItem.id || streamedItem.call_id;
+                    const completedId = completedItem.id || completedItem.call_id;
+                    return !streamedId || !completedId || streamedId === completedId;
+                });
+
+            if (!isPositionallyAligned) {
+                // Hosted Responses tools may be present in the streamed
+                // output-item sequence but omitted from response.completed's
+                // compact output array. In that case ordinal merging would
+                // attach the final message to an earlier search call and
+                // duplicate the text. The stream's indexed order is the
+                // authoritative sequence whenever alignment is unproven.
+                return streamedEntries.map(entry => entry.item);
+            }
+
+            return streamedEntries.map((entry, index) => {
+                // The completed payload is authoritative when the complete
+                // arrays are proven aligned; the streamed item fills fields
+                // omitted by compatible gateways and preserves annotations.
+                const mergedItem = mergeResponseOutputItem(entry.item, completedItems[index]);
+                if (entry.item?.type === 'reasoning' && hasUsableReasoningSummary(entry.item.summary)) {
+                    // Indexed streamed summary parts preserve boundaries that
+                    // response.completed may condense into one string.
+                    mergedItem.summary = [...entry.item.summary];
+                }
+                return mergedItem;
+            });
+        };
+
+        const buildTerminalError = (label: string, source: any) => {
+            const detail = source?.error && typeof source.error === 'object' ? source.error : source;
+            const message = detail?.message || source?.message || label;
+            const status = detail?.status || source?.status;
+            const code = detail?.code || source?.code;
+            const suffix = [status ? `status=${status}` : '', code ? `code=${code}` : ''].filter(Boolean).join(', ');
+            return new Error(suffix ? `${message} (${suffix})` : message);
+        };
 
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
@@ -622,10 +932,26 @@ export async function collectOpenAIResponsesStream(
             switch (event.type) {
                 case 'response.output_item.added':
                 case 'response.output_item.done':
-                    if (typeof event.output_index === 'number' && event.item) {
+                    if (typeof event.output_index === 'number' && event.item
+                        && typeof event.item === 'object' && !Array.isArray(event.item)) {
+                        options?.onMeaningfulProgress?.();
                         ensureOutputItem(event.output_index, event.item);
+                        if (event.type === 'response.output_item.added'
+                            && event.item.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                            options?.onImageGenerationActivity?.();
+                        }
                         emitProgressUpdate();
                     }
+                    return;
+                case 'response.image_generation_call.in_progress':
+                case 'response.image_generation_call.generating':
+                case 'response.image_generation_call.completed':
+                case 'response.image_generation_call.partial_image':
+                    // Lifecycle-only activity. The final bytes always come from
+                    // the complete output item, never from these events, so they
+                    // are reported as activity and their payload is discarded.
+                    // V1 never persists or forwards a partial preview either.
+                    options?.onImageGenerationActivity?.();
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':
@@ -635,6 +961,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.output_text.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
                         if (part) {
@@ -655,7 +982,23 @@ export async function collectOpenAIResponsesStream(
                         }
                     }
                     return;
+                case 'response.output_text.annotation.added':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number' && event.annotation) {
+                        const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
+                        if (part) {
+                            if (!Array.isArray(part.annotations)) {
+                                part.annotations = [];
+                            }
+                            const annotationIndex = typeof event.annotation_index === 'number'
+                                ? event.annotation_index
+                                : part.annotations.length;
+                            part.annotations[annotationIndex] = event.annotation;
+                            emitProgressUpdate();
+                        }
+                    }
+                    return;
                 case 'response.refusal.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'refusal' });
                         if (part) {
@@ -677,6 +1020,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.function_call_arguments.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number') {
                         const item = ensureOutputItem(event.output_index, { type: 'function_call' });
                         if (item) {
@@ -704,6 +1048,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.reasoning_summary_text.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
                     emitSummaryUpdate();
                     return;
@@ -711,21 +1056,30 @@ export async function collectOpenAIResponsesStream(
                     summaryParts.set(key, event.text || summaryParts.get(key) || '');
                     emitSummaryUpdate();
                     return;
+                case 'response.metadata':
+                    if (event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+                        && event.metadata.type === 'safety_buffering') {
+                        options?.onSafetyBuffering?.(event.metadata);
+                    }
+                    return;
                 case 'response.completed':
                     completedResponse = event.response;
                     if (completedResponse) {
-                        const streamedOutputItems = buildOutputItems();
-                        if (streamedOutputItems.length > 0) {
-                            completedResponse.output = streamedOutputItems;
-                        }
+                        completedResponse.output = mergeCompletedOutputItems(completedResponse.output);
                         emitProgressUpdate();
                     }
                     return;
                 case 'response.failed':
-                    finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
+                    finish(() => reject(buildTerminalError('OpenAI Responses request failed.', event.response)));
+                    return;
+                case 'response.incomplete':
+                    finish(() => reject(buildTerminalError('OpenAI Responses request was incomplete.', event.response)));
                     return;
                 case 'response.error':
-                    finish(() => reject(new Error(event.error?.message || 'OpenAI Responses stream error.')));
+                    finish(() => reject(buildTerminalError('OpenAI Responses stream error.', event.error)));
+                    return;
+                case 'error':
+                    finish(() => reject(buildTerminalError('OpenAI Responses stream error.', event)));
                     return;
                 default:
                     return;
@@ -737,6 +1091,7 @@ export async function collectOpenAIResponsesStream(
                 return;
             }
 
+            options?.onRawChunk?.(text);
             buffer += text;
             buffer = buffer.replace(/\r\n/g, '\n');
 
@@ -744,6 +1099,7 @@ export async function collectOpenAIResponsesStream(
             while (boundaryIndex !== -1) {
                 const block = buffer.slice(0, boundaryIndex);
                 buffer = buffer.slice(boundaryIndex + 2);
+                options?.onRawSseBlock?.(block);
 
                 try {
                     const event = parseSseEventBlock(block);
@@ -760,10 +1116,14 @@ export async function collectOpenAIResponsesStream(
         };
 
         const onAbort = () => {
+            const error = makeAbortError();
+            finish(() => reject(error));
             try {
-                stream.destroy?.(makeAbortError());
+                // This collector owns the abort rejection. Destroy without an
+                // error after removing listeners so Node cannot emit a queued
+                // unhandled stream error after the promise has settled.
+                stream.destroy?.();
             } catch {}
-            finish(() => reject(makeAbortError()));
         };
 
         const onData = (chunk: any) => {
@@ -774,10 +1134,6 @@ export async function collectOpenAIResponsesStream(
             appendDecodedText(decoder.end());
             finish(() => {
                 if (completedResponse) {
-                    const streamedOutputItems = buildOutputItems();
-                    if (streamedOutputItems.length > 0) {
-                        completedResponse.output = streamedOutputItems;
-                    }
                     resolve(completedResponse);
                     return;
                 }
@@ -813,7 +1169,11 @@ export async function collectOpenAIChatCompletionsStream(
         let usage: any = null;
         let sawChoice = false;
         const decoder = new StringDecoder('utf8');
-        const toolCalls = new Map<number, any>();
+        const toolCallEntries: Array<{ streamIndex: number; progressIndex: number; sequence: number; toolCall: any }> = [];
+        const toolCallByIndex = new Map<number, { streamIndex: number; progressIndex: number; sequence: number; toolCall: any }>();
+        const usedProgressIndices = new Set<number>();
+        let nextToolCallSequence = 0;
+        let nextFallbackProgressIndex = 0;
         const message: any = {
             role: 'assistant',
             content: '',
@@ -835,32 +1195,69 @@ export async function collectOpenAIChatCompletionsStream(
             callback();
         };
 
-        const ensureToolCall = (index: number) => {
-            if (!toolCalls.has(index)) {
-                toolCalls.set(index, {
-                    id: '',
-                    type: 'function',
-                    function: {
-                        name: '',
-                        arguments: '',
-                    },
-                });
+        const makeToolCall = () => ({
+            id: '',
+            type: 'function',
+            function: {
+                name: '',
+                arguments: '',
+            },
+        });
+
+        const addToolCall = (index: number) => {
+            let progressIndex = index;
+            if (usedProgressIndices.has(progressIndex)) {
+                while (usedProgressIndices.has(nextFallbackProgressIndex)) {
+                    nextFallbackProgressIndex++;
+                }
+                progressIndex = nextFallbackProgressIndex++;
             }
-            return toolCalls.get(index);
+            usedProgressIndices.add(progressIndex);
+            const entry = {
+                streamIndex: index,
+                progressIndex,
+                sequence: nextToolCallSequence++,
+                toolCall: makeToolCall(),
+            };
+            toolCallEntries.push(entry);
+            toolCallByIndex.set(index, entry);
+            return entry;
         };
+
+        const ensureToolCall = (index: number, id?: string, hasInitialIdentity = false) => {
+            let entry = toolCallByIndex.get(index);
+            if (!entry) {
+                return addToolCall(index).toolCall;
+            }
+            // Some providers reuse the same index for each parallel tool call
+            // instead of incrementing it. Only split when the differing id is
+            // accompanied by the initial function identity/type expected at a
+            // genuinely new call; an id-only delta may be a normal fragment.
+            if (id && entry.toolCall.id && id !== entry.toolCall.id && hasInitialIdentity) {
+                entry = addToolCall(index);
+            }
+            return entry.toolCall;
+        };
+
+        const getOrderedToolCallEntries = () => [...toolCallEntries]
+            .sort((left, right) => left.streamIndex - right.streamIndex || left.sequence - right.sequence);
+
+        const getOrderedToolCalls = () => getOrderedToolCallEntries().map(entry => entry.toolCall);
 
         const buildReasoningSnapshot = (): string => [message.reasoning_content, message.reasoning]
             .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
             .join('\n');
 
         const buildToolCallSnapshot = (): OpenAIStreamToolCallSnapshot[] =>
-            Array.from(toolCalls.entries())
-                .sort(([left], [right]) => left - right)
-                .map(([index, toolCall]) => ({
-                    index,
+            getOrderedToolCallEntries().map(entry => {
+                const toolCall = entry.toolCall;
+                return {
+                    index: entry.progressIndex,
                     ...(cleanSnapshotString(toolCall.id) ? { id: cleanSnapshotString(toolCall.id) } : {}),
                     ...(cleanSnapshotString(toolCall.function?.name) ? { name: cleanSnapshotString(toolCall.function?.name) } : {}),
-                }));
+                    ...(typeof toolCall.function?.arguments === 'string' ? { arguments: toolCall.function.arguments } : {}),
+                };
+            });
 
         const emitProgressUpdate = () => {
             options?.onProgress?.({
@@ -894,6 +1291,7 @@ export async function collectOpenAIChatCompletionsStream(
                 }
 
                 const nextContent = appendDelta(message.content, delta.content);
+                if (typeof delta.content === 'string' && delta.content.length > 0) options?.onMeaningfulProgress?.();
                 if (nextContent !== message.content) {
                     message.content = nextContent || '';
                     changed = true;
@@ -901,19 +1299,35 @@ export async function collectOpenAIChatCompletionsStream(
                     message.content = message.content || '';
                 }
                 const nextReasoningContent = appendDelta(message.reasoning_content, delta.reasoning_content);
+                if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) options?.onMeaningfulProgress?.();
                 if (nextReasoningContent !== message.reasoning_content) {
                     message.reasoning_content = nextReasoningContent;
                     changed = true;
                 }
                 const nextReasoning = appendDelta(message.reasoning, delta.reasoning);
+                if (typeof delta.reasoning === 'string' && delta.reasoning.length > 0) options?.onMeaningfulProgress?.();
                 if (nextReasoning !== message.reasoning) {
                     message.reasoning = nextReasoning;
                     changed = true;
                 }
+                if (typeof delta.refusal === 'string' && delta.refusal.length > 0) {
+                    options?.onMeaningfulProgress?.();
+                }
+
+                // Opaque provider fields (e.g. reasoning_signature) are captured
+                // verbatim so later requests to the same concrete model can
+                // echo them back unchanged.
+                if (isProviderSpecificFields(delta.provider_specific_fields)) {
+                    message.provider_specific_fields = delta.provider_specific_fields;
+                }
 
                 if (Array.isArray(delta.tool_calls)) {
                     for (const toolCallDelta of delta.tool_calls) {
-                        const entry = ensureToolCall(toolCallDelta.index ?? 0);
+                        const hasInitialIdentity = !!(
+                            toolCallDelta.type
+                            || (typeof toolCallDelta.function?.name === 'string' && toolCallDelta.function.name.length > 0)
+                        );
+                        const entry = ensureToolCall(toolCallDelta.index ?? 0, toolCallDelta.id, hasInitialIdentity);
                         if (toolCallDelta.id) {
                             entry.id = appendDelta(entry.id, toolCallDelta.id) || entry.id;
                         }
@@ -921,6 +1335,9 @@ export async function collectOpenAIChatCompletionsStream(
                             entry.type = toolCallDelta.type;
                         }
                         if (toolCallDelta.function) {
+                            if (typeof toolCallDelta.function.arguments === 'string' && toolCallDelta.function.arguments.length > 0) {
+                                options?.onMeaningfulProgress?.();
+                            }
                             entry.function.name = appendDelta(entry.function.name, toolCallDelta.function.name) || entry.function.name;
                             entry.function.arguments = appendDelta(entry.function.arguments, toolCallDelta.function.arguments) || entry.function.arguments;
                         }
@@ -943,6 +1360,7 @@ export async function collectOpenAIChatCompletionsStream(
                 return;
             }
 
+            options?.onRawChunk?.(text);
             buffer += text;
             buffer = buffer.replace(/\r\n/g, '\n');
 
@@ -950,6 +1368,7 @@ export async function collectOpenAIChatCompletionsStream(
             while (boundaryIndex !== -1) {
                 const block = buffer.slice(0, boundaryIndex);
                 buffer = buffer.slice(boundaryIndex + 2);
+                options?.onRawSseBlock?.(block);
 
                 try {
                     const event = parseSseEventBlock(block);
@@ -966,10 +1385,14 @@ export async function collectOpenAIChatCompletionsStream(
         };
 
         const onAbort = () => {
+            const error = makeAbortError();
+            finish(() => reject(error));
             try {
-                stream.destroy?.(makeAbortError());
+                // This collector owns the abort rejection. Destroy without an
+                // error after removing listeners so Node cannot emit a queued
+                // unhandled stream error after the promise has settled.
+                stream.destroy?.();
             } catch {}
-            finish(() => reject(makeAbortError()));
         };
 
         const onData = (chunk: any) => {
@@ -984,12 +1407,9 @@ export async function collectOpenAIChatCompletionsStream(
                     return;
                 }
 
-                const sortedToolCalls = Array.from(toolCalls.entries())
-                    .sort(([left], [right]) => left - right)
-                    .map(([, toolCall]) => toolCall);
-
-                if (sortedToolCalls.length > 0) {
-                    message.tool_calls = sortedToolCalls;
+                const orderedToolCalls = getOrderedToolCalls();
+                if (orderedToolCalls.length > 0) {
+                    message.tool_calls = orderedToolCalls;
                 }
 
                 resolve({

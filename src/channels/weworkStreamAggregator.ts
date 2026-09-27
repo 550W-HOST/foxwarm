@@ -108,7 +108,21 @@ function formatToolStatusIcon(status: ChannelTurnToolStatus): string {
 }
 
 function formatToolGroup(block: WeWorkStreamToolGroupBlock): string {
-  const items = block.tools.map(tool => `${formatToolStatusIcon(tool.status)} ${tool.name || 'tool'}`);
+  const grouped = new Map<string, { name: string; status: ChannelTurnToolStatus; count: number }>();
+  for (const tool of block.tools) {
+    const name = tool.name || 'tool';
+    const key = `${tool.status}\u0000${name}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count++;
+    } else {
+      grouped.set(key, { name, status: tool.status, count: 1 });
+    }
+  }
+  const items = Array.from(grouped.values(), item => {
+    const count = item.count > 1 ? ` ×${item.count}` : '';
+    return `${formatToolStatusIcon(item.status)} ${item.name}${count}`;
+  });
   if (block.thinking) {
     items.push(THINKING_LABEL);
   }
@@ -147,6 +161,20 @@ export class WeWorkStreamAggregator {
     state.content = this.renderContent(state);
     this.byConversation.set(normalizedConversationId, state);
     this.byStreamId.set(streamId, state);
+    return this.toSnapshot(state);
+  }
+
+  supersedeActive(conversationId: string): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
+    const state = this.byConversation.get(String(conversationId || '').trim());
+    if (!state || state.finish) {
+      return undefined;
+    }
+
+    state.blocks = state.blocks.filter(block => block.type === 'text');
+    state.finish = true;
+    state.content = this.renderContent(state);
+    state.updatedAt = Date.now();
     return this.toSnapshot(state);
   }
 

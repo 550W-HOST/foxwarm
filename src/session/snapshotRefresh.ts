@@ -14,7 +14,7 @@ function getSessionIdleMs(session: Pick<Session, 'meta'>, now: number = Date.now
   return Math.max(0, now - lastMessageTime);
 }
 
-function shouldAutoRefreshSessionSnapshot(session: Pick<Session, 'meta'>, now: number = Date.now()): boolean {
+export function shouldAutoRefreshSessionSnapshot(session: Pick<Session, 'meta'>, now: number = Date.now()): boolean {
   return getSessionIdleMs(session, now) > AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS;
 }
 
@@ -24,7 +24,7 @@ export async function maybeRefreshStaleSessionSnapshot(
   now: number = Date.now(),
 ): Promise<boolean> {
   const idleMs = getSessionIdleMs(session, now);
-  if (idleMs <= AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS) {
+  if (!shouldAutoRefreshSessionSnapshot(session, now)) {
     return false;
   }
 

@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
 import * as sessionManager from '../sessionManager';
-import { resolveModelConfig } from '../config';
-import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
+import { getAgentDir, getAgentMemoryDir, loadModelsConfigFromObject, resolveModelConfig } from '../config';
+import { tool_create_child_session as rawToolCreateChildSession, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
 import { Session } from '../types';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
+import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
+
+const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis test child creation was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+const tool_create_child_session: typeof rawToolCreateChildSession = (args, ctx) => rawToolCreateChildSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -41,7 +47,7 @@ function getTestModels(): { primary: string; secondary: string } {
   return { primary, secondary };
 }
 
-test('create_session tool accepts explicit model override', async () => {
+test('create_session tool accepts intentional model and effort overrides', async () => {
   await sessionManager.loadSessions();
   const { primary, secondary } = getTestModels();
   const parentSessionId = makeId('create_session_model_parent');
@@ -50,18 +56,147 @@ test('create_session tool accepts explicit model override', async () => {
 
   try {
     const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'none';
+    await sessionManager.saveSession(parent.id);
     const result = await tool_create_session({
       agentName: 'main',
       sessionName,
-      model: secondary,
+      node: 'created-session-node',
+      forceModel: { modelId: secondary, effort: 'max' },
     }, { sessionId: parentSessionId, session: parent });
 
     assert.match(String(result), /Model:/);
+    assert.match(String(result), /Effort: raw=max, effective=max/);
     const created = await sessionManager.getSession(createdSessionId);
     assert.equal(created.model, secondary);
+    assert.equal(created.effort, 'max');
+    assert.equal(created.currentNode, 'created-session-node');
   } finally {
     await sessionManager.deleteSession(createdSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('creation forceModel supports empty, model-only, and effort-only overrides and rejects the old contract before effects', async () => {
+  await sessionManager.loadSessions();
+  const { primary, secondary } = getTestModels();
+  const parentSessionId = makeId('force_model_parent');
+  const childIds = ['empty', 'model', 'effort', 'old', 'invalid', 'unknown'].map(suffix => `${parentSessionId}_${suffix}`);
+  const unknownSessionName = makeId('force_model_unknown_session');
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'low';
+    await sessionManager.saveSession(parent.id);
+
+    await tool_create_child_session({ suffix: 'empty', forceModel: {} }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(childIds[0])).model, primary);
+    assert.equal((await sessionManager.getSession(childIds[0])).effort, 'low');
+
+    await tool_create_child_session({ suffix: 'model', forceModel: { modelId: secondary } }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(childIds[1])).model, secondary);
+
+    await tool_create_child_session({ suffix: 'effort', forceModel: { effort: 'max' } }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(childIds[2])).model, primary);
+    assert.equal((await sessionManager.getSession(childIds[2])).effort, 'max');
+
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'old', model: secondary }, { sessionId: parent.id, session: parent }),
+      /no longer accepts top-level model or effort/,
+    );
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'invalid', forceModel: { unknown: true } }, { sessionId: parent.id, session: parent }),
+      /accepts only modelId and effort/,
+    );
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'unknown', bogus: true }, { sessionId: parent.id, session: parent }),
+      /unknown key: bogus/,
+    );
+    await assert.rejects(
+      () => tool_create_session({ agentName: 'main', sessionName: unknownSessionName, bogus: true }, { sessionId: parent.id, session: parent }),
+      /unknown key: bogus/,
+    );
+    assert.equal(sessionManager.getAllSessions().has(childIds[3]), false);
+    assert.equal(sessionManager.getAllSessions().has(childIds[4]), false);
+    assert.equal(sessionManager.getAllSessions().has(childIds[5]), false);
+    assert.equal(sessionManager.getAllSessions().has(unknownSessionName), false);
+  } finally {
+    for (const id of [...childIds, unknownSessionName, parentSessionId]) await sessionManager.deleteSession(id).catch(() => {});
+  }
+});
+
+test('agent main-session creation inherits raw current and future-child effort settings from its exact source', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('create_agent_effort_parent');
+  const agentName = makeId('effort_agent');
+  const mainSessionId = `${agentName}/main`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'none';
+    parent.childModelDefault = primary;
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parent.id);
+    await sessionManager.createAgentWithMainSession({
+      agentName,
+      sourceSessionId: parent.id,
+      sourceSessionOverride: parent,
+    });
+    const created = await sessionManager.getSession(mainSessionId);
+    assert.equal(created.model, primary);
+    assert.equal(created.effort, 'none');
+    assert.equal(created.childModelDefault, primary);
+    assert.equal(created.childEffortDefault, 'max');
+  } finally {
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+    await sessionManager.deleteSession(parentSessionId).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
+  }
+});
+
+test('agent creation with shared inheritance materializes the new main session from the inherited memory', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const inheritedAgent = makeId('create_agent_inherit_source');
+  const agentName = makeId('create_agent_inherit_target');
+  const mainSessionId = `${agentName}/main`;
+  await fs.ensureDir(getAgentMemoryDir(inheritedAgent));
+  await fs.writeFile(`${getAgentMemoryDir(inheritedAgent)}/MEMORY.md`, 'CREATE_AGENT_INHERITED_MEMORY', 'utf8');
+  try {
+    await sessionManager.createAgentWithMainSession({ agentName, inherit: inheritedAgent, model: primary });
+    const created = await sessionManager.getSession(mainSessionId);
+    assert.equal(sessionManager.getAgentMetadata(agentName).inherit, inheritedAgent);
+    assert.match(created.persistentMemorySnapshot, /CREATE_AGENT_INHERITED_MEMORY/);
+  } finally {
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+    await sessionManager.setAgentInherit(agentName, undefined).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
+    await fs.remove(getAgentDir(inheritedAgent)).catch(() => {});
+  }
+});
+
+test('agent conversion with shared inheritance refreshes the exact converted lifetime even when inactive', async () => {
+  await sessionManager.loadSessions();
+  const inheritedAgent = makeId('convert_agent_inherit_source');
+  const agentName = makeId('convert_agent_inherit_target');
+  const sourceSessionId = makeId('convert_agent_inactive_source');
+  const mainSessionId = `${agentName}/main`;
+  await fs.ensureDir(getAgentMemoryDir(inheritedAgent));
+  await fs.writeFile(`${getAgentMemoryDir(inheritedAgent)}/MEMORY.md`, 'CONVERTED_AGENT_INHERITED_MEMORY', 'utf8');
+  try {
+    const source = await ensureSession(sourceSessionId);
+    source.meta = { ...(source.meta || {}), lastMessageTime: Date.now() - (2 * 60 * 60 * 1000) };
+    source.persistentMemorySnapshot = 'PRE_CONVERSION_SNAPSHOT';
+    await sessionManager.saveSession(source.id);
+    await sessionManager.createAgentWithMainSession({ agentName, inherit: inheritedAgent, convertSessionId: source.id });
+    const converted = await sessionManager.getSession(mainSessionId);
+    assert.match(converted.persistentMemorySnapshot, /CONVERTED_AGENT_INHERITED_MEMORY/);
+    assert.doesNotMatch(converted.persistentMemorySnapshot, /PRE_CONVERSION_SNAPSHOT/);
+  } finally {
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+    await sessionManager.deleteSession(sourceSessionId).catch(() => {});
+    await sessionManager.setAgentInherit(agentName, undefined).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
+    await fs.remove(getAgentDir(inheritedAgent)).catch(() => {});
   }
 });
 
@@ -151,6 +286,393 @@ test('create_child_session defaults to non-fork when fork is omitted', async () 
   }
 });
 
+test('forked and non-fork children resolve one current model/effort pair without copying future-child defaults', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('child_effort_parent');
+  const inheritedId = `${parentSessionId}_inherited`;
+  const explicitId = `${parentSessionId}_explicit`;
+  const forkedId = `${parentSessionId}_forked`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'low';
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parent.id);
+
+    await sessionManager.createChildSession(parent.id, 'inherited', false, { sourceOverride: parent });
+    const inherited = await sessionManager.getSession(inheritedId);
+    assert.equal(inherited.effort, 'max');
+    assert.equal(inherited.model, primary);
+    assert.equal(inherited.childModelDefault, undefined);
+    assert.equal(inherited.childEffortDefault, undefined);
+
+    await sessionManager.createChildSession(parent.id, 'explicit', false, { effort: 'none', sourceOverride: parent });
+    assert.equal((await sessionManager.getSession(explicitId)).effort, 'none');
+
+    await sessionManager.createChildSession(parent.id, 'forked', true, { sourceOverride: parent });
+    const forked = await sessionManager.getSession(forkedId);
+    assert.equal(forked.effort, 'max');
+    assert.equal(forked.model, primary);
+    assert.equal(forked.childModelDefault, undefined);
+    assert.equal(forked.childEffortDefault, undefined);
+
+    delete parent.childEffortDefault;
+    assert.equal(sessionManager.resolveSpawnedSessionEffort(parent), 'low');
+    delete parent.effort;
+    assert.equal(sessionManager.resolveSpawnedSessionEffort(parent), undefined);
+  } finally {
+    for (const id of [inheritedId, explicitId, forkedId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('unset effort remains unset for local new/fork children and a virtual route does not materialize a leaf default', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('child_unset_effort_parent');
+  const newChildId = `${parentSessionId}_new`;
+  const forkChildId = `${parentSessionId}_fork`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    delete parent.effort;
+    delete parent.childEffortDefault;
+    await sessionManager.saveSession(parent.id);
+    await sessionManager.createChildSession(parent.id, 'new', false, { sourceOverride: parent });
+    await sessionManager.createChildSession(parent.id, 'fork', true, { sourceOverride: parent });
+    for (const id of [newChildId, forkChildId]) {
+      const child = await sessionManager.getSession(id);
+      assert.equal(child.effort, undefined);
+      assert.equal(child.childEffortDefault, undefined);
+    }
+
+    const virtualConfig = loadModelsConfigFromObject({
+      default: 'route',
+      providers: {
+        leaf: {
+          providerType: 'anthropic',
+          effort: { allowed: ['medium', 'max'], default: 'max' },
+          models: ['one'],
+        },
+        fallback: {
+          providerType: 'openai-completions',
+          effort: { allowed: ['low', 'high'], default: 'high' },
+          models: ['two'],
+        },
+        route: { providerType: 'failover', targets: ['leaf/one', 'fallback/two'] },
+      },
+    });
+    assert.deepEqual(
+      sessionManager.resolveSpawnedSessionModelEffort({ model: 'route' }, undefined, undefined, virtualConfig),
+      { model: 'route', effort: undefined },
+    );
+  } finally {
+    for (const id of [newChildId, forkChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('child current settings consume distinct parent child defaults without copying the policy pair', async () => {
+  await sessionManager.loadSessions();
+  const { primary, secondary } = getTestModels();
+  const parentSessionId = makeId('child_distinct_defaults_parent');
+  const newChildId = `${parentSessionId}_new`;
+  const forkChildId = `${parentSessionId}_fork`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'low';
+    parent.childModelDefault = secondary;
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parent.id);
+
+    await sessionManager.createChildSession(parent.id, 'new', false, { sourceOverride: parent });
+    await sessionManager.createChildSession(parent.id, 'fork', true, { sourceOverride: parent });
+    for (const id of [newChildId, forkChildId]) {
+      const child = await sessionManager.getSession(id);
+      assert.equal(child.model, secondary);
+      assert.equal(child.effort, 'max');
+      assert.equal(child.childModelDefault, undefined);
+      assert.equal(child.childEffortDefault, undefined);
+      const presentation = buildSessionModelEffortPresentation(child);
+      assert.equal(presentation.effectiveChildModelKey, secondary);
+      assert.equal(presentation.childModelPolicySource, 'follow-parent');
+      const childAllowed = presentation.childEffort.allowed;
+      assert.equal(
+        presentation.childEffort.effective,
+        childAllowed.includes('max') ? 'max' : presentation.childEffort.defaultEffort || 'default',
+      );
+    }
+  } finally {
+    for (const id of [newChildId, forkChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('create_child_session replaces main leaf for agent-qualified parents', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const agentName = makeId('child_main_agent');
+  const agentMainId = `${agentName}/main`;
+  const agentChildId = `${agentName}/task1`;
+
+  try {
+    const agentMain = await ensureSession(agentMainId, primary);
+    agentMain.agent = agentName;
+    await sessionManager.saveSession(agentMainId);
+
+    await tool_create_child_session({ suffix: 'task1', fork: false }, { sessionId: agentMainId, session: agentMain });
+    const agentChild = await sessionManager.getSession(agentChildId);
+    assert.equal(agentChild.parentSessionId, agentMainId);
+    assert.equal(agentChild.agent, agentName);
+  } finally {
+    for (const id of [agentChildId, agentMainId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('cross-agent fresh children use target identity and memory while consuming caller child settings once', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('cross_agent_parent');
+  const targetAgent = makeId('cross_agent_target');
+  const targetMemoryDir = getAgentMemoryDir(targetAgent);
+  const childId = `${targetAgent}/worker`;
+  const collisionId = `${childId}_2`;
+  const sameAgentChildId = `${parentSessionId}_same`;
+
+  await fs.ensureDir(targetMemoryDir);
+  await fs.writeFile(`${targetMemoryDir}/MEMORY.md`, '# Target role\nTARGET_AGENT_MEMORY_ONLY\n', 'utf8');
+  await sessionManager.setAgentIsolation(targetAgent, 'target-bound-node');
+
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.currentNode = 'parent-node';
+    parent.effort = 'low';
+    parent.childModelDefault = primary;
+    parent.childEffortDefault = 'max';
+    parent.systemPromptFiles = ['parent-only-prompt.md'];
+    parent.persistentMemorySnapshot = 'PARENT_AGENT_SNAPSHOT_ONLY';
+    parent.promptCacheKey = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    await sessionManager.saveSession(parent.id);
+
+    await tool_create_child_session({
+      agentName: targetAgent,
+      suffix: 'worker',
+      node: 'ignored-explicit-node',
+    }, { sessionId: parent.id, session: parent });
+
+    const child = await sessionManager.getSession(childId);
+    assert.equal(child.agent, targetAgent);
+    assert.equal(child.parentSessionId, parent.id);
+    assert.equal(child.currentNode, 'target-bound-node');
+    assert.equal(child.model, primary);
+    assert.equal(child.effort, 'max');
+    assert.equal(child.childModelDefault, undefined);
+    assert.equal(child.childEffortDefault, undefined);
+    assert.equal(child.systemPromptFiles, undefined);
+    assert.match(child.persistentMemorySnapshot, /TARGET_AGENT_MEMORY_ONLY/);
+    assert.doesNotMatch(child.persistentMemorySnapshot, /PARENT_AGENT_SNAPSHOT_ONLY/);
+    assert.notEqual(child.promptCacheKey, parent.promptCacheKey);
+
+    await assert.rejects(
+      () => tool_create_child_session({ agentName: targetAgent, suffix: 'forked', fork: true }, { sessionId: parent.id, session: parent }),
+      /cannot fork across agents/,
+    );
+    assert.equal(sessionManager.getAllSessions().has(`${targetAgent}/forked`), false);
+    await assert.rejects(
+      () => tool_create_child_session({ agentName: `${targetAgent}_missing`, suffix: 'missing' }, { sessionId: parent.id, session: parent }),
+      /does not exist/,
+    );
+
+    parent.systemPromptFiles = undefined;
+    await sessionManager.saveSession(parent.id);
+    await tool_create_child_session({ agentName: 'main', suffix: 'same' }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(sameAgentChildId)).agent, 'main');
+
+    await sessionManager.deleteSession(childId);
+    await tool_create_child_session({ agentName: targetAgent, suffix: 'worker' }, { sessionId: parent.id, session: parent });
+    const collision = await sessionManager.getSession(collisionId);
+    assert.equal(collision.agent, targetAgent);
+    assert.equal(collision.parentSessionId, parent.id);
+  } finally {
+    for (const id of [collisionId, childId, sameAgentChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+    await sessionManager.setAgentIsolation(targetAgent, undefined).catch(() => {});
+    await fs.remove(getAgentDir(targetAgent)).catch(() => {});
+  }
+});
+
+test('new and forked descendants follow the current pair unless their direct parent sets a child policy', async () => {
+  await sessionManager.loadSessions();
+  const { primary, secondary } = getTestModels();
+  assert.notEqual(primary, secondary);
+  const rootId = makeId('policy_subtree_root');
+  const childId = `${rootId}_child`;
+  const newGrandId = `${childId}_newgrand`;
+  const forkGrandId = `${childId}_forkgrand`;
+  const pinnedGrandId = `${childId}_pinned`;
+  const pinnedForkGrandId = `${childId}_pinnedfork`;
+  const overrideId = `${rootId}_override`;
+  const overrideGrandId = `${overrideId}_grand`;
+  const forkOverrideId = `${rootId}_forkoverride`;
+  const forkOverrideGrandId = `${forkOverrideId}_grand`;
+  const unsetId = `${rootId}_unset`;
+  try {
+    const root = await ensureSession(rootId, primary);
+    root.childModelDefault = secondary;
+    root.childEffortDefault = 'max';
+    await sessionManager.saveSession(root.id);
+
+    await sessionManager.createChildSession(rootId, 'child', false, { sourceOverride: root });
+    const child = await sessionManager.getSession(childId);
+    assert.equal(child.model, secondary);
+    assert.equal(child.effort, 'max');
+    assert.equal(child.childModelDefault, undefined);
+    assert.equal(child.childEffortDefault, undefined);
+
+    child.model = primary;
+    child.effort = 'low';
+    await sessionManager.saveSession(childId);
+
+    // Both creation paths consume the direct parent's changed current pair.
+    await sessionManager.createChildSession(childId, 'newgrand', false, { sourceOverride: child });
+    await sessionManager.createChildSession(childId, 'forkgrand', true, { sourceOverride: child });
+    for (const id of [newGrandId, forkGrandId]) {
+      const grand = await sessionManager.getSession(id);
+      assert.equal(grand.model, primary);
+      assert.equal(grand.effort, 'low');
+      assert.equal(grand.childModelDefault, undefined);
+      assert.equal(grand.childEffortDefault, undefined);
+    }
+
+    const grandPresentation = buildSessionModelEffortPresentation(
+      await sessionManager.getSession(newGrandId),
+      undefined,
+      sessionId => sessionManager.getSessionCatalog(sessionId),
+    );
+    assert.deepEqual(
+      grandPresentation.childPolicyChain.map(entry => ({ level: entry.level, supplies: entry.supplies })),
+      [
+        { level: 'session', supplies: true },
+        { level: 'inherited', supplies: false },
+        { level: 'inherited', supplies: false },
+      ],
+    );
+
+    // An explicitly set future policy stays independent even if it initially
+    // equals the current pair; changing the current pair must not erase it.
+    await tool_set_session_child_model({ model: primary, effort: 'low' }, {
+      sessionId: childId,
+      session: child,
+      persistCurrentSession: () => sessionManager.saveSession(childId),
+    });
+    assert.equal(child.childModelDefault, primary);
+    assert.equal(child.childEffortDefault, 'low');
+    child.model = secondary;
+    child.effort = 'max';
+    await sessionManager.saveSession(childId);
+    await sessionManager.createChildSession(childId, 'pinned', false, { sourceOverride: child });
+    await sessionManager.createChildSession(childId, 'pinnedfork', true, { sourceOverride: child });
+    for (const id of [pinnedGrandId, pinnedForkGrandId]) {
+      const pinned = await sessionManager.getSession(id);
+      assert.equal(pinned.model, primary);
+      assert.equal(pinned.effort, 'low');
+      assert.equal(pinned.childModelDefault, undefined);
+      assert.equal(pinned.childEffortDefault, undefined);
+    }
+
+    // A one-time forceModel override changes this child's current pair, not
+    // future descendants back to the root's distinct child policy.
+    for (const [suffix, fork, grandId] of [
+      ['override', false, overrideGrandId],
+      ['forkoverride', true, forkOverrideGrandId],
+    ] as const) {
+      await tool_create_child_session({ suffix, fork, forceModel: { modelId: primary, effort: 'low' } }, { sessionId: rootId, session: root });
+      const overrideIdForPath = `${rootId}_${suffix}`;
+      const overridden = await sessionManager.getSession(overrideIdForPath);
+      assert.equal(overridden.model, primary);
+      assert.equal(overridden.effort, 'low');
+      assert.equal(overridden.childModelDefault, undefined);
+      assert.equal(overridden.childEffortDefault, undefined);
+      await sessionManager.createChildSession(overrideIdForPath, 'grand', false, { sourceOverride: overridden });
+      const grandchild = await sessionManager.getSession(grandId);
+      assert.equal(grandchild.model, primary);
+      assert.equal(grandchild.effort, 'low');
+    }
+
+    // An unset policy keeps following the parent's model and stays unset for the child.
+    delete root.childModelDefault;
+    delete root.childEffortDefault;
+    await sessionManager.saveSession(root.id);
+    await sessionManager.createChildSession(rootId, 'unset', false, { sourceOverride: root });
+    const unsetChild = await sessionManager.getSession(unsetId);
+    assert.equal(unsetChild.model, primary);
+    assert.equal(unsetChild.childModelDefault, undefined);
+    assert.equal(unsetChild.childEffortDefault, undefined);
+  } finally {
+    for (const id of [rootId, childId, newGrandId, forkGrandId, pinnedGrandId, pinnedForkGrandId, overrideId, overrideGrandId, forkOverrideId, forkOverrideGrandId, unsetId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('child session id builder handles bare main and non-main parents', () => {
+  assert.equal(sessionManager.buildChildSessionId('main', 'task1'), 'task1');
+  assert.equal(sessionManager.buildChildSessionId('agent/main', 'task1'), 'agent/task1');
+  assert.equal(sessionManager.buildChildSessionId('agent/worker', 'task1'), 'agent/worker_task1');
+  assert.equal(sessionManager.buildChildSessionId('worker', 'task1'), 'worker_task1');
+});
+
+test('create_child_session from bare main uses suffix as child id', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const suffix = makeId('bare_main_child');
+  const childSessionId = suffix;
+  const existingMain = await sessionManager.getExistingSession('main');
+  const parent = existingMain || await ensureSession('main', primary);
+
+  try {
+    await tool_create_child_session({ suffix, fork: false }, { sessionId: 'main', session: parent });
+    const child = await sessionManager.getSession(childSessionId);
+    assert.equal(child.parentSessionId, 'main');
+  } finally {
+    await sessionManager.deleteSession(childSessionId).catch(() => {});
+    if (!existingMain) {
+      await sessionManager.deleteSession('main').catch(() => {});
+    }
+  }
+});
+
+test('forked create_child_session also replaces main leaf and preserves collision handling', async () => {
+  await sessionManager.loadSessions();
+  const agentName = makeId('fork_main_agent');
+  const parentSessionId = `${agentName}/main`;
+  const firstChildId = `${agentName}/research`;
+  const collisionChildId = `${firstChildId}_2`;
+
+  try {
+    const parent = await ensureSession(parentSessionId);
+    parent.agent = agentName;
+    await sessionManager.saveSession(parentSessionId);
+
+    await sessionManager.createChildSession(parentSessionId, 'research', true);
+    await sessionManager.createChildSession(parentSessionId, 'research', true);
+
+    const firstChild = await sessionManager.getSession(firstChildId);
+    const collisionChild = await sessionManager.getSession(collisionChildId);
+    assert.equal(firstChild.parentSessionId, parentSessionId);
+    assert.equal(collisionChild.parentSessionId, parentSessionId);
+  } finally {
+    for (const id of [collisionChildId, firstChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
 test('forked child sessions append inherited tool responses as tool-role messages', async () => {
   await sessionManager.loadSessions();
   const parentSessionId = makeId('fork_tool_role_parent');
@@ -162,7 +684,7 @@ test('forked child sessions append inherited tool responses as tool-role message
       {
         role: 'model',
         parts: [
-          { functionCall: { id: 'call_create_child', name: 'create_child_session', args: { suffix: 'forked' } } },
+          { functionCall: { id: 'call_create_child', name: 'create_child_session', args: { suffix: 'forked', confirmation: TEST_CONFIRMATION } } },
           { functionCall: { id: 'call_other', name: 'read', args: { filePath: 'MEMORY.md' } } },
         ],
       },

@@ -1,32 +1,49 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { Message, Session } from '../types';
+import { isQueueItem, Message, Session } from '../types';
 import { logger } from '../common';
 import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 import { DiskJsonData } from '../utils/diskJsonData';
+import { isSessionCatalogInitialized, sessionCatalogStore } from './catalogStore';
+import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload, omitObsoleteContextFrontierItem } from './stateValidation';
 
-const SESSION_HISTORY_STATE_FIELDS = [
+export const SESSION_STATE_FORMAT_VERSION = CURRENT_SESSION_STATE_VERSION;
+
+export const SESSION_HISTORY_STATE_FIELDS = [
   'queue',
   'parentSessionId',
   'promptCacheKey',
   'systemPromptFiles',
   'indexingState',
+  'vectorIndexPosition',
   'historyVersion',
+  'stats',
+  'meta',
   'displayName',
   'currentNode',
   'cwd',
   'model',
+  'effort',
   'childModelDefault',
+  'childEffortDefault',
   'agent',
   'verbose',
   'aliases',
   'busy',
   'busyStartedAt',
+  'stopping',
   'nextMessageSeq',
   'nextBlockId',
   'goalState',
+  'childHandoffState',
   'compactThresholdTokens',
+  'lastAppliedMailboxId',
 ] as const;
+
+const LEGACY_CATALOG_SEEDED_STATE_FIELDS = ['stats', 'meta', 'vectorIndexPosition'] as const;
+const SESSION_SEMANTIC_FIELDS = ['history', 'persistentMemorySnapshot', ...SESSION_HISTORY_STATE_FIELDS] as const;
+
+export type SessionSemanticSnapshot = Partial<Record<(typeof SESSION_SEMANTIC_FIELDS)[number], unknown>>;
 
 const SESSION_METADATA_FIELDS = [
   'id',
@@ -37,14 +54,17 @@ const SESSION_METADATA_FIELDS = [
   'busy',
   'busyStartedAt',
   'stopping',
-  'queue',
   'meta',
   'displayName',
   'archived',
+  'pinned',
+  'sidebarOrder',
   'currentNode',
   'cwd',
   'model',
+  'effort',
   'childModelDefault',
+  'childEffortDefault',
   'verbose',
   'vectorIndexPosition',
   'indexingState',
@@ -68,28 +88,107 @@ function pickDefinedFields<T extends readonly string[]>(source: Record<string, a
   return result as Record<T[number], any>;
 }
 
+function serializeGoalState(goalState: Session['goalState']): Session['goalState'] {
+  if (!goalState || typeof goalState !== 'object') {
+    return goalState;
+  }
+
+  // Older session snapshots may retain this removed setting. Keep accepting
+  // them on load, but do not carry it forward into newly written snapshots.
+  const { remindOnTurnEnd: _removed, ...currentGoalState } = goalState as Session['goalState'] & { remindOnTurnEnd?: unknown };
+  return currentGoalState;
+}
+
+function serializeSessionStateFields(session: Session, fields: readonly string[]): Record<string, any> {
+  const state = pickDefinedFields(session as Record<string, any>, fields);
+  if (state.goalState !== undefined) {
+    state.goalState = serializeGoalState(state.goalState);
+  }
+  return state;
+}
+
 export function serializeSessionHistoryPayload(session: Session): Record<string, any> {
+  const state = serializeSessionStateFields(session, SESSION_HISTORY_STATE_FIELDS);
+  if (state.meta && typeof state.meta === 'object') {
+    const { lastChannel: _catalogOnly, ...semanticMeta } = state.meta;
+    state.meta = semanticMeta;
+  }
   return {
-    history: session.history,
+    sessionStateVersion: SESSION_STATE_FORMAT_VERSION,
+    history: session.history.map(omitObsoleteContextFrontierItem),
     persistentMemorySnapshot: session.persistentMemorySnapshot,
-    ...pickDefinedFields(session as Record<string, any>, SESSION_HISTORY_STATE_FIELDS),
+    ...state,
   };
 }
 
-export function applySessionHistoryState(target: Session, historyData: Record<string, any>): void {
-  Object.assign(target, pickDefinedFields(historyData, SESSION_HISTORY_STATE_FIELDS));
-
-  if (target.currentNode === undefined) {
-    target.currentNode = 'master';
+export function captureSessionSemanticState(session: Session): SessionSemanticSnapshot {
+  const snapshot: SessionSemanticSnapshot = {};
+  for (const field of SESSION_SEMANTIC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(session, field)) {
+      (snapshot as any)[field] = structuredClone((session as any)[field]);
+    }
   }
+  return snapshot;
+}
 
-  if (!Array.isArray(target.queue)) {
-    target.queue = [];
+/** Exact semantic restore; top-level catalog/UI fields and runtime callbacks are not enumerated or deleted. */
+export function restoreSessionSemanticState(session: Session, snapshot: SessionSemanticSnapshot): void {
+  for (const field of SESSION_SEMANTIC_FIELDS) delete (session as any)[field];
+  for (const field of SESSION_SEMANTIC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
+      (session as any)[field] = structuredClone((snapshot as any)[field]);
+    }
   }
 }
 
-export function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
-  return pickDefinedFields(session as Record<string, any>, SESSION_METADATA_FIELDS) as Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'>;
+/** Exact semantic replace followed by current-format defaults. */
+export function replaceSessionSemanticState(session: Session, snapshot: SessionSemanticSnapshot): void {
+  const catalogLastChannel = session.meta?.lastChannel === undefined ? undefined : structuredClone(session.meta.lastChannel);
+  restoreSessionSemanticState(session, snapshot);
+  if (!Array.isArray(session.history)) session.history = [];
+  if (typeof session.persistentMemorySnapshot !== 'string') session.persistentMemorySnapshot = '';
+  if (!session.stats || typeof session.stats !== 'object') {
+    session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  }
+  if (!Array.isArray(session.queue)) session.queue = [];
+  session.queue = session.queue.filter(isQueueItem);
+  if (!session.meta || typeof session.meta !== 'object') session.meta = { lastMessageTime: 0 };
+  delete session.meta.lastChannel;
+  if (catalogLastChannel !== undefined) session.meta.lastChannel = catalogLastChannel;
+  if (typeof session.meta.lastMessageTime !== 'number') session.meta.lastMessageTime = 0;
+  if (typeof session.busy !== 'boolean') session.busy = false;
+  if (!session.currentNode) session.currentNode = 'master';
+  if (!Number.isSafeInteger(session.lastAppliedMailboxId) || (session.lastAppliedMailboxId || 0) < 0) {
+    session.lastAppliedMailboxId = 0;
+  }
+}
+
+export function prepareSessionSemanticStateForHydration(
+  catalogStub: Session,
+  raw: Record<string, any>,
+): { snapshot: SessionSemanticSnapshot; upgradedLegacy: boolean } {
+  raw = normalizeAndValidateSessionAuthorityPayload(raw);
+  const version = raw.sessionStateVersion;
+  const upgradedLegacy = version === undefined;
+  const source: Record<string, any> = structuredClone(raw);
+  if (source.meta && typeof source.meta === 'object') delete source.meta.lastChannel;
+  if (upgradedLegacy) {
+    for (const field of LEGACY_CATALOG_SEEDED_STATE_FIELDS) {
+      const catalogValue = (catalogStub as any)[field];
+      if (!Object.prototype.hasOwnProperty.call(source, field) && catalogValue !== undefined) {
+        source[field] = structuredClone(catalogValue);
+      } else if ((field === 'meta' || field === 'stats') && source[field] && typeof source[field] === 'object'
+        && catalogValue && typeof catalogValue === 'object') {
+        source[field] = { ...structuredClone(catalogValue), ...source[field] };
+      }
+      if (field === 'meta' && source.meta && typeof source.meta === 'object') delete source.meta.lastChannel;
+    }
+  }
+  const snapshot: SessionSemanticSnapshot = {};
+  for (const field of SESSION_SEMANTIC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) (snapshot as any)[field] = source[field];
+  }
+  return { snapshot, upgradedLegacy };
 }
 
 export function getSessionHistoryFilePath(sessionId: string): string {
@@ -97,14 +196,7 @@ export function getSessionHistoryFilePath(sessionId: string): string {
 }
 
 function normalizeSessionHistoryPayload(raw: any, filePath: string): Record<string, any> {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`Invalid session history payload in ${filePath}`);
-  }
-
-  return {
-    ...raw,
-    history: Array.isArray(raw.history) ? raw.history : [],
-  };
+  return normalizeAndValidateSessionAuthorityPayload(raw, `Session authority ${filePath}`);
 }
 
 export function createSessionHistoryStore(filePath: string): DiskJsonData<Record<string, any>> {
@@ -130,7 +222,10 @@ export async function readSessionHistorySnapshot(sessionId: string): Promise<Rec
   return getSessionHistoryStore(sessionId).readFromPath();
 }
 
-export async function writeSessionHistoryAtomically(sessionId: string, data: Record<string, any>): Promise<void> {
+export async function writeSessionHistoryAtomically(
+  sessionId: string,
+  data: Record<string, any>,
+): Promise<void> {
   await getSessionHistoryStore(sessionId).write(data);
 }
 
@@ -165,8 +260,18 @@ export function createSessionsMetadataStore(filePath: string = SESSIONS_FILE): D
 }
 
 export const sessionsMetadataStore = createSessionsMetadataStore();
+let sessionsMetadataWriteTail: Promise<void> = Promise.resolve();
 
-async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
+export async function withSessionsMetadataWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = sessionsMetadataWriteTail;
+  let release!: () => void;
+  sessionsMetadataWriteTail = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try { return await operation(); }
+  finally { release(); }
+}
+
+export async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
   if (!await fs.pathExists(dir)) {
     return [];
   }
@@ -179,14 +284,14 @@ async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
       files.push(...await collectSessionHistoryFiles(fullPath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith('.json')) {
+    if (entry.isFile() && entry.name.endsWith('.json') && !entry.name.endsWith('.frontier.json')) {
       files.push(fullPath);
     }
   }
   return files;
 }
 
-function deriveSessionIdFromHistoryFile(historyFilePath: string): string {
+export function deriveSessionIdFromHistoryFile(historyFilePath: string): string {
   return path.relative(SESSIONS_DIR, historyFilePath).replace(/\.json$/, '').split(path.sep).join('/');
 }
 
@@ -205,7 +310,7 @@ function inferSessionLastMessageTime(history: Message[], historyFilePath: string
   }
 }
 
-function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<string, any>, history: Message[]): Record<string, any> {
+export function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<string, any>, history: Message[]): Record<string, any> {
   const recovered = pickDefinedFields(historyData, SESSION_METADATA_FIELDS);
   const inferredAgent = historyData.agent || (sessionId.includes('/') ? sessionId.split('/').slice(0, -1).join('/') : 'main');
   const inferredNextSeq = typeof historyData.nextMessageSeq === 'number'
@@ -238,7 +343,7 @@ function buildRecoveredSessionMetadata(sessionId: string, historyData: Record<st
   };
 }
 
-async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
+export async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
   const data: any = { sessions: {} };
   const historyFiles = await collectSessionHistoryFiles(SESSIONS_DIR);
 
@@ -257,6 +362,12 @@ async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
 }
 
 export async function loadSessionsMetadataSnapshot(): Promise<{ data: any; source: string }> {
+  if (isSessionCatalogInitialized()) {
+    return {
+      data: { sessions: Object.fromEntries(sessionCatalogStore.list().map(metadata => [metadata.id, metadata])) },
+      source: sessionCatalogStore.filePath,
+    };
+  }
   const loaded = await sessionsMetadataStore.loadFirstAvailable();
   if (loaded) {
     return loaded;

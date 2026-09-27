@@ -7,9 +7,26 @@ import { MessagePart } from './types';
 
 export interface ChannelMessage {
   parts: MessagePart[];
+  /**
+   * Ephemeral structured metadata inserted inside the canonical channel
+   * wrapper after command detection. The router copies these parts into the
+   * queued user message; this field itself is never persisted.
+   */
+  ingressMetadataParts?: MessagePart[];
   channelUserId: string; // Legacy field: channel-side conversation/chat/room target id
   conversationId?: string; // Preferred name for channel-side conversation/chat/room target id
   username?: string;
+  /** Browser-generated identity used to reconcile one optimistic WebUI row. */
+  clientMessageId?: string;
+  /**
+   * Ephemeral pre-queue materialization hook for channel media.
+   *
+   * The router invokes this only after the source has passed canonical
+   * authorization and a session has been resolved. The callback is never
+   * copied into a queue item or persisted; it exists to keep untrusted media
+   * URLs out of the network/storage path for unauthorized inbound messages.
+   */
+  materializeParts?: (sessionId: string) => Promise<MessagePart[]>;
 }
 
 export interface ChannelContext {
@@ -22,8 +39,6 @@ export interface ChannelContext {
   sendTyping: () => Promise<void>;
   platform: string; // Legacy alias of channelType
   senderId?: string; // Actual sender/user identity, used for allowlist checks when available
-  preferDirectReply?: boolean; // Prefer the source reply path instead of session broadcast for this turn
-  weworkStreamId?: string; // WeWork intelligent-bot stream id for this inbound turn, when applicable
   selfName?: string; // Optional channel-configured bot/self display name for stripping leading @mentions before command parsing
   // `sessionId` is set in handleMessage internal only for tools that need it.
   // If you want to specify the session, should use `attachChannel(channelId, conversationId, targetSession)`.
@@ -75,6 +90,12 @@ export interface Channel {
    */
   sendMessage(channelUserId: string, text: string, options?: any): Promise<void>;
 
+  /** Handle automatic Session turn lifecycle without requiring an empty platform message. */
+  handleTurnLifecycle?(channelUserId: string, options: any): Promise<void>;
+
+  /** Whether native lifecycle presentation currently replaces generic progress text. */
+  isTurnLifecycleActive?(channelUserId: string): boolean;
+
   /**
    * Send a local file to a user/channel. Optional because some channels only
    * support text responses.
@@ -94,7 +115,7 @@ export interface Channel {
   /**
    * Set command handler (optional)
    */
-  onCommand?(handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void;
+  onCommand?(handler: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>): void;
 }
 
 // Channel registry for broadcast

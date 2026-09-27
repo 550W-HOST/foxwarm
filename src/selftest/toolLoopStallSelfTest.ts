@@ -10,6 +10,9 @@ import * as vector from '../vector';
 import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages, tool_set_goal } from '../toolsSessionAgent';
+import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
+
+const SELFTEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nI checked that this self-test handoff is necessary, targets the correct parent, contains the complete fixture message, and follows the parent-child communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -38,6 +41,13 @@ async function ensureSession(id: string, parentSessionId?: string): Promise<Sess
   Object.assign(existing, createBaseSession(id, parentSessionId));
   await sessionManager.saveSession(id);
   return existing;
+}
+
+async function processOwnedTurn(router: MessageRouter, sessionId: string, text: string): Promise<void> {
+  const session = await sessionManager.getSession(sessionId);
+  session.queue.push({ type: 'user', parts: [{ text }] });
+  await sessionManager.saveSession(sessionId);
+  await router.processSessionQueue(sessionId);
 }
 
 async function cleanupSessions(sessionIds: string[]): Promise<void> {
@@ -113,7 +123,7 @@ async function main(): Promise<void> {
     await test('session continues across apply_patch -> read -> exec -> final response', async () => {
       const sessionId = makeSessionId('selftest_tool_chain');
       createdSessionIds.push(sessionId);
-      const session = await ensureSession(sessionId);
+      await ensureSession(sessionId);
       const sampleFile = path.join(tempRoot, 'tool-chain.txt');
       await fs.writeFile(sampleFile, 'alpha\nomega\n');
 
@@ -161,9 +171,7 @@ async function main(): Promise<void> {
         return { text: 'SELFTEST_DONE' };
       };
 
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'run tool chain selftest' }],
-      });
+      await processOwnedTurn(router, sessionId, 'run tool chain selftest');
 
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(finalSession.busy, false);
@@ -197,7 +205,7 @@ async function main(): Promise<void> {
         }
 
         if (activeSession.id === childId && nextCall === 2) {
-          const toolCall = { id: 'child-report', name: 'send_to_session', args: { sessionId: parentId, message: 'child-ok' } };
+          const toolCall = { id: 'child-report', name: 'send_to_session', args: { sessionId: parentId, message: 'child-ok', confirmation: SELFTEST_HANDOFF_CONFIRMATION } };
           await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
           return { text: '', toolCalls: [toolCall] };
         }
@@ -215,9 +223,7 @@ async function main(): Promise<void> {
         throw new Error(`unexpected session/call combination: ${activeSession.id}#${nextCall}`);
       };
 
-      await (router as any).runSessionTurn(childId, {
-        parts: [{ text: 'child task' }],
-      });
+      await processOwnedTurn(router, childId, 'child task');
 
       const childAfter = await sessionManager.getSession(childId);
       const parentAfterChildRun = await sessionManager.getSession(parentId);
@@ -229,7 +235,7 @@ async function main(): Promise<void> {
 
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentAfter.busy, false);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-ok'))));
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => ((part.system || part.text || '')).includes('child-ok'))));
       assertLastModelText(parentAfter, 'parent observed child message');
       assert.strictEqual(parentAfter.queue.length, 0);
 
@@ -237,7 +243,7 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
-    await test('send_to_session plus wait stops the current turn without an extra LLM round', async () => {
+    await test('completed child report finishes idle without an extra LLM round', async () => {
       const parentId = makeSessionId('selftest_parent_wait');
       const childId = makeSessionId('selftest_child_wait');
       createdSessionIds.push(parentId, childId);
@@ -255,15 +261,10 @@ async function main(): Promise<void> {
             const sendToolCall = {
               id: 'child-report-wait',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-wait-ok' },
+              args: { sessionId: parentId, message: 'child-wait-ok', afterSend: 'finish', confirmation: SELFTEST_HANDOFF_CONFIRMATION },
             };
-            const waitCall = {
-              id: 'child-wait',
-              name: 'wait',
-              args: {},
-            };
-            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: waitCall }]);
-            return { text: '', toolCalls: [sendToolCall, waitCall] };
+            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }]);
+            return { text: '', toolCalls: [sendToolCall] };
           }
 
           throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
@@ -278,25 +279,24 @@ async function main(): Promise<void> {
         throw new Error(`unexpected session in wait selftest: ${activeSession.id}`);
       };
 
-      await (router as any).runSessionTurn(childId, {
-        parts: [{ text: 'child task with immediate handoff' }],
-      });
+      await processOwnedTurn(router, childId, 'child task with immediate handoff');
 
       const childAfter = await sessionManager.getSession(childId);
       const parentAfterChildRun = await sessionManager.getSession(parentId);
       assert.strictEqual(childCallCount, 1);
       assert.strictEqual(childAfter.busy, false);
+      assert.strictEqual(childAfter.meta.wait, undefined);
       assert.strictEqual(parentAfterChildRun.queue.length, 1);
       assert.strictEqual(childAfter.history[childAfter.history.length - 1]?.role, 'tool');
       assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'send_to_session')));
-      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'wait')));
+      assert(!childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'wait')));
 
       await router.processSessionQueue(parentId);
 
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentCallCount, 1);
       assert.strictEqual(parentAfter.queue.length, 0);
-      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.text || '').includes('child-wait-ok'))));
+      assert(parentAfter.history.some(msg => msg.role === 'user' && msg.parts.some(part => ((part.system || part.text || '')).includes('child-wait-ok'))));
       assertLastModelText(parentAfter, 'parent received wait handoff');
     });
 
@@ -317,7 +317,7 @@ async function main(): Promise<void> {
             const toolCall = {
               id: 'child-report-endturn-compat',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-endturn-compat-ok', noFurtherAssistantReply: true },
+              args: { sessionId: parentId, message: 'child-endturn-compat-ok', noFurtherAssistantReply: true, confirmation: SELFTEST_HANDOFF_CONFIRMATION },
             };
             await appendStubModelMessage(activeSession, [{ functionCall: toolCall }]);
             return { text: '', toolCalls: [toolCall] };
@@ -334,9 +334,7 @@ async function main(): Promise<void> {
         throw new Error(`unexpected session in end-turn compatibility selftest: ${activeSession.id}`);
       };
 
-      await (router as any).runSessionTurn(childId, {
-        parts: [{ text: 'child task with compat immediate handoff' }],
-      });
+      await processOwnedTurn(router, childId, 'child task with compat immediate handoff');
 
       const childAfter = await sessionManager.getSession(childId);
       assert.strictEqual(childCallCount, 1);
@@ -417,7 +415,7 @@ async function main(): Promise<void> {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
             args: {
-              createBlocks: [] as any[],
+              replaceAsBlocks: '[]',
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
@@ -427,14 +425,14 @@ async function main(): Promise<void> {
         if (llmCallCount === 4) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
-          assert.match(systemText, /createBlocks must contain at least one block/);
+          assert.match(systemText, /replaceAsBlocks must contain at least one block/);
           assertCompactKeepsDefaultToolSchema(options);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
             name: 'submit_compact_plan',
             args: {
-              createBlocks: [{
+              replaceAsBlocks: [{
                 level: 1,
                 sourceKind: 'message',
                 sourceStart: compactMessageRange.sourceStart,
@@ -448,8 +446,7 @@ async function main(): Promise<void> {
         }
 
         if (llmCallCount === 5) {
-          assert(Array.isArray(parts));
-          assert(parts.some(part => part.text === 'compact this session now'));
+          assert.strictEqual(parts, null);
           assert(activeSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
           await appendStubModelMessage(activeSession, [{ text: 'continued after compact' }]);
           return { text: 'continued after compact' };
@@ -458,29 +455,28 @@ async function main(): Promise<void> {
         throw new Error(`compact_session self-request should resume after the dedicated compaction flow, got LLM call ${llmCallCount}`);
       };
 
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'compact this session now' }],
-      });
+      await processOwnedTurn(router, sessionId, 'compact this session now');
 
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 5);
       assert.strictEqual(finalSession.busy, false);
       assert.strictEqual(finalSession.goalState?.goal, 'Keep the session goal alive across compaction.');
-      const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || '')));
+      const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"')));
       const compactCompletionSystem = compactCompletion?.parts.find(part => typeof part.system === 'string')?.system || '';
-      assert.match(compactCompletionSystem, /Session goal reminder:/);
-      assert.match(compactCompletionSystem, /Keep the session goal alive across compaction/);
+      assert.match(compactCompletionSystem, /event="compact-completed"/);
+      assert(compactCompletion?.parts.some(part => (part.system || '').includes('kind="goal-reminder"')));
+      assert(compactCompletion?.parts.some(part => (part.system || '').includes('Keep the session goal alive across compaction')));
       assert.strictEqual(compactCompletion?.__meta?.goalReminder, true);
       assert.strictEqual(finalSession.goalState?.anchorSeq, compactCompletion?.__meta?.seq);
       assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 1);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('layered compact summary'))));
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || ''))));
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
       assertLastModelText(finalSession, 'continued after compact');
     });
 
-    await test('queued compact request can run asynchronously and commit a compatible prefix later', async () => {
-      const sessionId = makeSessionId('selftest_async_compact_queue');
+    await test('background compact planning can commit a compatible prefix later', async () => {
+      const sessionId = makeSessionId('selftest_async_compact');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
@@ -519,7 +515,7 @@ async function main(): Promise<void> {
           id: 'async-compact-plan',
           name: 'submit_compact_plan',
           args: {
-            createBlocks: [{
+            replaceAsBlocks: [{
               level: 1,
               sourceKind: 'message',
               sourceStart: 1,
@@ -555,25 +551,32 @@ async function main(): Promise<void> {
         parts: [{ text: 'tail message appended after async compact job started' }],
       });
 
+      let compactCommittedInline = false;
       for (let attempt = 0; attempt < 50; attempt += 1) {
         const maybeReady = await sessionManager.getSession(sessionId);
         if (maybeReady.queue.some(item => item.type === 'compact-commit')) {
+          break;
+        }
+        if (maybeReady.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary')))) {
+          compactCommittedInline = true;
           break;
         }
         await new Promise(resolve => setTimeout(resolve, 10));
       }
 
       const beforeCommit = await sessionManager.getSession(sessionId);
-      assert(beforeCommit.queue.some(item => item.type === 'compact-commit'));
-
-      await router.processSessionQueue(sessionId);
+      if (beforeCommit.queue.some(item => item.type === 'compact-commit')) {
+        await router.processSessionQueue(sessionId);
+      } else {
+        assert(compactCommittedInline || beforeCommit.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
+      }
 
       const finalSession = await sessionManager.getSession(sessionId);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
       assert(finalSession.history.some(msg => msg.parts.some(part => (part.text || '').includes('tail message appended after async compact job started'))));
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || ''))));
-      assert(!finalSession.history.some(msg => msg.parts.some(part => (part.system || '').includes('Session goal reminder:'))));
+      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
+      assert(!finalSession.history.some(msg => msg.parts.some(part => (part.system || '').includes('kind="goal-reminder"'))));
     });
 
     await test('get_archived_messages reads archived session history by seq range', async () => {
@@ -654,7 +657,7 @@ async function main(): Promise<void> {
             id: 'auto-compact-plan',
             name: 'submit_compact_plan',
             args: {
-              createBlocks: [{
+              replaceAsBlocks: [{
                 level: 1,
                 sourceKind: 'message',
                 sourceStart: autoCompactMessageRange.sourceStart,
@@ -691,9 +694,7 @@ async function main(): Promise<void> {
         throw new Error(`automatic in-turn compaction should keep main turn to two calls, got main=${mainTurnCallCount} compact=${compactJobCallCount}`);
       };
 
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'trigger auto compact now' }],
-      });
+      await processOwnedTurn(router, sessionId, 'trigger auto compact now');
 
       let compactCommittedInline = false;
       for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -721,11 +722,13 @@ async function main(): Promise<void> {
       assert.strictEqual(finalSession.busy, false);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
-      assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => /COMPACTION COMPLETED/i.test(part.system || '') && (part.system || '').includes('You can continue working now.'))));
+      assert(finalSession.history.some(msg => msg.role === 'user'
+        && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))
+        && msg.parts.some(part => (part.system || '').includes('You can continue working now.'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('continued before async compact commit'))));
     });
 
-    await test('tool-noise compaction replaces oversized archived tool parts in older history only', async () => {
+    await test('historical tool-response pruning keeps call args and prunes older responses only', async () => {
       const sessionId = makeSessionId('selftest_tool_noise_compact');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
@@ -750,26 +753,23 @@ async function main(): Promise<void> {
       });
 
       const result = await sessionManager.compactSessionToolMessages(sessionId, 0.25);
-      assert.strictEqual(result.replacedFunctionCalls, 1);
+      assert.strictEqual(result.replacedFunctionCalls, 0);
       assert.strictEqual(result.replacedFunctionResponses, 1);
 
       const updated = await sessionManager.getSession(sessionId);
       const compactedCallPart = updated.history[1].parts[0];
       const compactedResponsePart = updated.history[2].parts[0];
-      assert(compactedCallPart.functionCall, 'expected compacted function call part to preserve functionCall structure');
-      assert(compactedResponsePart.functionResponse, 'expected compacted function response part to preserve functionResponse structure');
+      assert(compactedCallPart.functionCall, 'expected function call structure to remain');
+      assert(compactedResponsePart.functionResponse, 'expected pruned function response structure to remain');
       assert.strictEqual(compactedCallPart.functionCall?.name, 'exec');
       assert.strictEqual(compactedResponsePart.functionResponse?.name, 'exec');
-      assert.strictEqual(compactedCallPart.functionCall?.args?.__compacted, true);
-      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /compacted tool call/);
-      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /recall/);
-      assert.strictEqual(compactedResponsePart.functionResponse?.response?.__compacted, true);
-      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /compacted tool response/);
+      assert.deepStrictEqual(compactedCallPart.functionCall?.args, longArgs);
+      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /historical tool response pruned/);
       assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /recall/);
       assert.match(updated.history[3].parts[0].text || '', /recent tail should stay untouched/);
     });
 
-    await test('post-tool LLM failure leaves a visible terminal model message without auto-notifying parent', async () => {
+    await test('post-tool LLM failure leaves a display-only retry notice without auto-notifying parent', async () => {
       const parentId = makeSessionId('selftest_error_parent');
       const childId = makeSessionId('selftest_error_child');
       createdSessionIds.push(parentId, childId);
@@ -780,7 +780,7 @@ async function main(): Promise<void> {
 
       let childCallCount = 0;
       let parentCallCount = 0;
-      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, iteration = 0) => {
+      (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, iteration = 0, options?: any) => {
         if (activeSession.id === childId) {
           childCallCount += 1;
           if (childCallCount === 1) {
@@ -790,7 +790,7 @@ async function main(): Promise<void> {
             return { text: '', toolCalls: [toolCall] };
           }
 
-          return originalChat(parts, activeSession, iteration);
+          return originalChat(parts, activeSession, iteration, options);
         }
 
         if (activeSession.id === parentId) {
@@ -810,9 +810,7 @@ async function main(): Promise<void> {
       const originalSetTimeout = global.setTimeout;
       (global as any).setTimeout = ((fn: (...args: any[]) => void, _ms?: number, ...args: any[]) => originalSetTimeout(fn, 0, ...args)) as typeof setTimeout;
       try {
-        await (router as any).runSessionTurn(childId, {
-          parts: [{ text: 'child should surface failure' }],
-        });
+        await processOwnedTurn(router, childId, 'child should surface failure');
       } finally {
         (global as any).setTimeout = originalSetTimeout;
       }
@@ -821,7 +819,9 @@ async function main(): Promise<void> {
       const lastChild = childAfter.history[childAfter.history.length - 1];
       const lastChildText = lastChild.parts.find(part => typeof part.text === 'string')?.text || '';
       assert.strictEqual(lastChild.role, 'model');
-      assert(lastChildText.startsWith('Error: API request failed after 3 attempts'));
+      assert.strictEqual(lastChild.modelVisible, false);
+      assert.strictEqual(lastChild.__meta?.noticeType, 'llm-retry');
+      assert.match(lastChildText, /Attempt \d+\/\d+ failed: (?:simulated network failure|\(same error\))\. No more retries\./);
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentAfter.queue.length, 0);
       assert(!parentAfter.history.some(msg => msg.parts.some(part => (part.text || '').includes(`Child session \`${childId}\` failed before reporting back.`))));

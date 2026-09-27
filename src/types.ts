@@ -1,21 +1,38 @@
+import type { ModelEffort } from './config';
+
 // Message format types
 export interface MessagePart {
   text?: string;
   system?: string;
   systemPayload?: boolean;
+  /** OpenAI Responses assistant message phase, preserved when provided. */
+  phase?: 'commentary' | 'final_answer';
   thinking?: string;
   providerMeta?: {
     thinkingSummaries?: string[]; // OpenAI Responses
     encryptedThinking?: string;  // OpenAI Responses
     signature?: string; // kimi-k2.5
+    /** Ordered, concrete-model-scoped OpenAI Responses output metadata. */
+    openaiResponses?: OpenAIResponsesPartMeta;
   };
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
   toolUseId?: string;
-  inlineData?: InlineData;  // Internal format - always use this
+  inlineData?: InlineData;  // Transient ingress/provider-boundary compatibility shape
   inlineDataRef?: InlineDataRef;
   imageMeta?: ImageMeta;
   [key: string]: any;  // Allow additional properties for flexibility
+}
+
+/**
+ * Opaque OpenAI Responses output metadata which must be replayed only to the
+ * concrete model that produced it. The output item is kept on a MessagePart
+ * so provider output ordering survives the provider-neutral history shape.
+ */
+export interface OpenAIResponsesPartMeta {
+  sourceModelId: string;
+  outputItem?: Record<string, any>;
+  annotations?: Array<Record<string, any>>;
 }
 
 export interface FunctionCall {
@@ -26,9 +43,35 @@ export interface FunctionCall {
   argsParseError?: string;
 }
 
+/**
+ * Message-level opaque provider metadata. Persisted with assistant messages
+ * and echoed back verbatim on later provider requests.
+ */
+export interface MessageProviderMeta {
+  /**
+   * OpenAI Chat Completions `provider_specific_fields` (e.g.
+   * `reasoning_signature`), captured from the assistant message and sent back
+   * unchanged on subsequent requests to the same concrete model.
+   */
+  providerSpecificFields: Record<string, unknown>;
+  /** Canonical concrete model id which produced `providerSpecificFields`. */
+  sourceModelId: string;
+}
+
 export interface FunctionResponse {
   tool_use_id: string;
   name: string;
+  /** Measured duration of the tool invocation until its result returns. */
+  executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
+  /**
+   * Internal timing for the model request which produced this tool batch.
+   * It is persisted with the first tool response so serializers never need to
+   * infer it from neighboring history.
+   */
+  previousLlmRequest?: {
+    time: string;
+    durationMs: number;
+  };
   response: {
     output?: any;
     content?: any;
@@ -47,8 +90,10 @@ export interface InlineData {
 
 export interface InlineDataRef {
   imageId: string;
-  format: string;
-  path: string;
+  blobId?: string;
+  apiPath?: string; // WebUI transport-only; never written by canonical persistence.
+  format?: string;
+  path?: string; // Legacy archive reference; current writers use blobId.
   mimeType: string;
   byteLength: number;
   sha256: string;
@@ -58,6 +103,12 @@ export interface InlineDataRef {
 
 export interface ImageMeta {
   imageId: string;
+  /**
+   * Provider-neutral provenance. `generated` marks an assistant image created
+   * by a hosted image-generation tool, so incompatible-model projections can
+   * describe it honestly even after opaque provider metadata is stripped.
+   */
+  origin?: 'generated' | 'uploaded' | 'tool';
   mimeType?: string;
   width?: number;
   height?: number;
@@ -69,8 +120,16 @@ export type MaybePromise<T> = T | Promise<T>;
 export type SessionReply = (text: string, options?: any) => MaybePromise<void>;
 export type SessionBroadcast = (text: string, options?: any) => void;
 
+export interface LlmRequestTiming {
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+}
+
 export interface Message {
   role: 'user' | 'model' | 'tool';
+  /** Message-level provider metadata echoed back on later requests. */
+  providerMeta?: MessageProviderMeta;
   /**
    * Whether this persisted timeline message should be included in future
    * model-facing context. Defaults to true for legacy/ordinary messages.
@@ -84,8 +143,16 @@ export interface Message {
     seq?: number;
     /** Canonical provider-prefixed model id used to create this model message. */
     modelId?: string;
+    /** Resolved virtual models-config key requested for this model message, when applicable. */
+    virtualModelKey?: string;
     /** Token usage reported for the model call that produced this model message. */
     usage?: TokenUsage;
+    /** Persisted wall-clock boundaries and monotonic duration for the logical LLM request. */
+    llmRequestTiming?: LlmRequestTiming;
+    /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
+    contextBlock?: ContextBlockMessageMeta;
+    /** Present when a raw message is intentionally preserved after a covering block. */
+    preservedFromBlockId?: number;
     [key: string]: any;
   };
 }
@@ -105,6 +172,20 @@ export interface ModelStreamToolCall {
   index: number;
   id?: string;
   name?: string;
+  /** Provider-assembled raw JSON text. Transient presentation only. */
+  arguments?: string;
+}
+
+export interface ModelStreamTextDelta {
+  offset: number;
+  text: string;
+}
+
+export interface ModelStreamToolCallDelta {
+  index: number;
+  id?: string;
+  name?: string;
+  argumentsDelta?: ModelStreamTextDelta;
 }
 
 export type ChannelTurnToolStatus = 'running' | 'success' | 'error';
@@ -128,6 +209,19 @@ export interface SessionStreamEvent {
   // model-stream-* fields:
   streamId?: string;
   iteration?: number;
+  /** Version 2 events use offset-addressed deltas instead of cumulative fields. */
+  streamVersion?: 2;
+  /** First raw emitter sequence covered by this event (equal to sequence before Worker coalescing). */
+  sequenceStart?: number;
+  sequence?: number;
+  /** Exact-owner server timestamp for the current reset generation. */
+  startedAt?: number;
+  /** Existing durable outer LLM request identity; transiently binds this stream to its canonical model row. */
+  llmRequestId?: string;
+  reasoningDelta?: ModelStreamTextDelta;
+  textDelta?: ModelStreamTextDelta;
+  toolCallDeltas?: ModelStreamToolCallDelta[];
+  /** Legacy cumulative fields retained for tolerant readers only. */
   reasoning?: string;
   text?: string;
   toolCalls?: ModelStreamToolCall[];
@@ -140,9 +234,24 @@ export interface SessionStreamEvent {
 export interface SessionGoalState {
   goal: string;
   remindEvery: number;
-  remindOnTurnEnd?: boolean;
   anchorSeq: number;
   updatedAt: number;
+}
+
+export interface ContextBlockMessageMeta {
+  id: number;
+  level: number;
+  rawStartSeq: number;
+  rawEndSeq: number;
+  sourceKind: 'message' | 'block';
+  sourceStart: number;
+  sourceEnd: number;
+  sourceBlockIds?: number[];
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
+  createdAt?: number;
+  sourceSessionId?: string;
+  inherited?: boolean;
 }
 
 // Session types
@@ -162,12 +271,22 @@ export interface SessionTokenTotals {
 export interface TokenUsage {
   cachedTokens: number;
   inputTokens: number;
+  /**
+   * Provider-reported reasoning tokens within `outputTokens`, when that
+   * provider protocol exposes the component separately. This is not an
+   * additional total.
+   */
+  reasoningTokens?: number;
   outputTokens: number;
 }
 
 export interface SessionMeta {
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
+  /** Newest 32 authoritative receipts for externally acknowledged session events. */
+  acceptedExternalEventIds?: string[];
+  /** Bounded exact-owner receipts for wait-liveness graph nudges. */
+  waitLivenessFingerprints?: string[];
   lastChannel?: {
     channelId: string; // Configured channel instance id
     channelType?: string; // Adapter/platform type
@@ -185,26 +304,62 @@ export interface QueueSource {
   conversationId?: string; // Preferred channel-side conversation target id
   username?: string;
   senderId?: string;
-  weworkStreamId?: string; // WeWork intelligent-bot stream id for binding channel broadcasts to the originating turn
 }
 
 export interface QueueItem {
-  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact' | 'compact-commit';
+  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;
+  /** Canonical source/target topology classification captured at inter-session ingress. */
+  sourceSessionRelation?: 'direct-child' | 'parent' | 'other';
+  /** Browser-generated identity propagated to the persisted user message. */
+  clientMessageId?: string;
   parts?: MessagePart[];
   message?: Message;
   waitTimeoutId?: string;
+  /** Exact persistent exec identity for completion-boundary validation. */
+  execId?: string;
+  /** Exact graph fingerprint atomically recorded when a quiescence nudge is admitted. */
+  waitLivenessFingerprint?: string;
+  waitLivenessWaitId?: string;
+  /** Durable producer identity used to make acknowledged external events idempotent. */
+  externalEventId?: string;
+}
+
+/** Presentation-only queue-origin history append; never persisted as Session state. */
+export interface QueueHistoryAppendPresentation {
+  messages: Message[];
+  queuedMessages: Message[];
+  queueLength: number;
+  queuedPreviewOmittedCount: number;
+  messageCount: number;
+  historyVersion: number;
+  latestSeq: number;
+}
+
+export interface CompactionRequest {
   keepPercent?: number;
   compactGuidance?: string;
   completionMarker?: string;
-  stopAfterCurrentTurn?: boolean;
-  requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
 }
 
-export type ContextFrontierItem =
-  | { kind: 'message'; seq: number; preservedFromBlockId?: number }
-  | { kind: 'block'; id: number; level: number; rawStartSeq: number; rawEndSeq: number };
+const CURRENT_QUEUE_ITEM_TYPES = new Set<QueueItem['type']>([
+  'user',
+  'intersession',
+  'background',
+  'trigger',
+  'onboot',
+  'compact-commit',
+]);
+
+export function isQueueItem(value: unknown): value is QueueItem {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Record<string, unknown>;
+  if (!CURRENT_QUEUE_ITEM_TYPES.has(item.type as QueueItem['type'])) return false;
+  if (item.type === 'compact-commit') return true;
+  return (Array.isArray(item.parts) && item.parts.length > 0)
+    || (!!item.message && typeof item.message === 'object');
+}
 
 export interface Session {
   id: string;
@@ -222,20 +377,30 @@ export interface Session {
   meta: SessionMeta;
   displayName?: string; // User-defined display name for the session
   archived?: boolean; // Whether the session is archived
+  pinned?: boolean; // Whether the session is presentation-pinned at the top of the WebUI session list
+  sidebarOrder?: number; // Optional WebUI sidebar sibling ordering key; lower sorts first within a parent group
   currentNode?: string; // Current node ID for tool execution (default: 'master')
   cwd?: string; // Default working directory for exec/terminal-style operations on currentNode
   model?: string; // Model key for this session (default: global)
+  effort?: ModelEffort; // Explicit effort override; undefined => selected concrete leaf default
   childModelDefault?: string; // Default model override for child/new sessions spawned from this session; undefined => follow session.model
+  childEffortDefault?: ModelEffort; // Default effort override for child/new sessions; undefined => follow session.effort/model default
   verbose?: boolean; // Whether to broadcast tool call info (default: false)
   vectorIndexPosition?: number; // Track last indexed message position
   indexingState?: IndexingState; // Track ongoing indexing operation
   historyVersion?: number; // Incremented on compact/clear to detect changes
   nextMessageSeq?: number; // Next per-session sequence number for append-only archive logging
   nextBlockId?: number; // Next per-session layered-context block id
-  contextFrontier?: ContextFrontierItem[]; // Structured layered-context frontier; session.history is a rendered view
   parentSessionId?: string; // Parent session ID for child sessions
   goalState?: SessionGoalState; // Session-local goal reminder configuration
+  /** Persisted boundary used by child-session missing-handoff reminders. */
+  childHandoffState?: {
+    boundary: 'direct-user' | 'report-required';
+    resolved: boolean;
+  };
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
+  /** Last durable session-worker mailbox row incorporated into this authoritative state file. */
+  lastAppliedMailboxId?: number;
   broadcast?: SessionBroadcast; // Broadcast message to all attached channels (fire-and-forget)
 }
 
@@ -253,9 +418,22 @@ export interface ChatResult {
   text: string;
   /** Canonical provider-prefixed model id used for the LLM request. */
   modelId?: string;
+  /** Resolved virtual models-config key requested for the LLM request, when applicable. */
+  virtualModelKey?: string;
   usage?: TokenUsage;
   toolCalls?: Array<FunctionCall>;
   allParts?: MessagePart[];
+  /** Message-level provider metadata carried to the persisted assistant message. */
+  providerMeta?: MessageProviderMeta;
+  /** Timing of the logical provider request through its usable successful result, including retries. */
+  previousLlmRequest?: {
+    completedAt: number;
+    durationMs: number;
+  };
+  /** Durable canonical request journal identity, when journaling succeeded before send. */
+  llmRequestId?: string;
+  /** Physical provider attempt which produced this successful result. */
+  llmAttempt?: number;
 }
 
 export interface AnthropicMessage {

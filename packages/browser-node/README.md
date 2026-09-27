@@ -79,7 +79,8 @@ packages/browser-node/
 ## Protocol
 
 Uses the standard Foxwarm node WebSocket protocol:
-- **Pairing**: `ws://host/node_ws?token=TOKEN` → `pair_request` → approval → credentials
-- **Auth**: `ws://host/node_ws?id=ID&auth=AUTH` → `node_register` → `registered`
+- **Pairing**: `ws://host/node_ws?token=TOKEN` → `pair_request` with core protocol range → approval → credentials
+- **Auth**: `ws://host/node_ws?id=ID&auth=AUTH` → `node_register` with core protocol range → negotiated `registered`
+- **Compatibility**: a protocol mismatch is shown as upgrade-required and stops automatic reconnect; update/reload the extension rather than waiting for a later tool failure
 - **Tools**: `tool_call` → `tool_call_response` / `tool_call_error`
 - **Heartbeat**: JSON ping/pong (browser WebSocket handles WS-level pong automatically)

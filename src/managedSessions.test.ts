@@ -22,8 +22,10 @@ async function appendStubModelMessage(session: Session, text: string): Promise<v
   });
 }
 
-function flattenText(parts: MessagePart[] | null): string {
-  return (parts || [])
+function flattenUserHistoryText(session: Session): string {
+  return session.history
+    .filter(message => message.role === 'user')
+    .flatMap(message => message.parts)
     .map(part => part.text || part.system || '')
     .filter(Boolean)
     .join(' | ');
@@ -38,7 +40,7 @@ test('managed session diverts external queue items into a pending inbox and step
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     await appendStubUserMessage(activeSession, parts);
-    const text = flattenText(parts);
+    const text = flattenUserHistoryText(activeSession);
     await appendStubModelMessage(activeSession, `child saw: ${text}`);
     return { text: `child saw: ${text}` };
   };
@@ -75,14 +77,16 @@ test('managed session diverts external queue items into a pending inbox and step
     assert.equal(step.yieldReason, 'idle');
     assert.equal(step.consumedPendingInboxCount, 1);
     assert.equal(step.pendingInboxCount, 0);
-    assert.equal(step.newMessages.length, 2);
-    assert.equal(step.newMessages[0].role, 'user');
+    assert.deepEqual(step.newMessages.map(message => message.role), ['user', 'user', 'model']);
     assert.deepEqual(
       step.newMessages[0].parts.map(part => part.text).filter(Boolean),
-      ['outside event', 'manager directive'],
+      ['outside event'],
     );
-    assert.equal(step.newMessages[1].role, 'model');
-    assert.match(step.newMessages[1].parts[0].text || '', /outside event \| manager directive/);
+    assert.deepEqual(
+      step.newMessages[1].parts.map(part => part.text).filter(Boolean),
+      ['manager directive'],
+    );
+    assert.match(step.newMessages[2].parts[0].text || '', /outside event .* manager directive/);
 
     const released = await managedSessions.releaseManagedSession({
       sessionId: childId,
@@ -107,7 +111,8 @@ test('message router queues direct user messages into managed inbox instead of a
   const originalChat = llm.chat;
   const channelId = `managed-router-${Date.now()}`;
   const conversationId = `conv-${Math.random().toString(36).slice(2, 7)}`;
-  const sessionId = sessionManager.attachChannel(channelId, conversationId);
+  const { session: managedTarget } = await sessionManager.createEmptySession();
+  const sessionId = sessionManager.attachChannel(channelId, conversationId, managedTarget.id);
   const ownerSessionId = `managed-router-owner-${Date.now()}`;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
@@ -135,7 +140,6 @@ test('message router queues direct user messages into managed inbox instead of a
       username: 'managed-user',
       channelUserId: conversationId,
       conversationId,
-      preferDirectReply: true,
     } as any;
 
     await router.handleMessage(ctx, {
@@ -169,7 +173,7 @@ test('managed session step can place manager input before pending inbox items', 
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     await appendStubUserMessage(activeSession, parts);
-    const text = flattenText(parts);
+    const text = flattenUserHistoryText(activeSession);
     await appendStubModelMessage(activeSession, `order saw: ${text}`);
     return { text: `order saw: ${text}` };
   };
@@ -193,10 +197,10 @@ test('managed session step can place manager input before pending inbox items', 
 
     assert.equal(step.inboxOrder, 'after');
     assert.equal(step.yieldReason, 'idle');
-    assert.deepEqual(
-      step.newMessages[0].parts.map(part => part.text).filter(Boolean),
-      ['manager first', 'queued later'],
-    );
+    assert.deepEqual(step.newMessages.map(message => message.role), ['user', 'user', 'model']);
+    assert.deepEqual(step.newMessages[0].parts.map(part => part.text).filter(Boolean), ['manager first']);
+    assert.deepEqual(step.newMessages[1].parts.map(part => part.text).filter(Boolean), ['queued later']);
+    assert.match(step.newMessages[2].parts[0].text || '', /manager first .* queued later/);
   } finally {
     (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
@@ -220,7 +224,7 @@ test('managed session step can yield after the first tool batch', async () => {
       const toolCall = {
         id: 'managed_tool_call_1',
         name: 'search_tools',
-        args: { query: 'read file', sources: ['builtin'], limit: 1, includeSchema: false },
+        args: { query: 'read file', sources: ['node'], limit: 1, includeSchema: false },
       };
       await sessionManager.appendSessionMessage(activeSession, {
         role: 'model',
@@ -294,7 +298,7 @@ test('managed session notifies owner on inbox arrival and stale leases are recla
     await sessionManager.createEmptySession(parentId);
     await sessionManager.createEmptySession(childId);
 
-    const lease = await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
+    await managedSessions.openManagedSession({ sessionId: childId, ownerSessionId: parentId });
     await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'wake owner' }], 'background');
 
     const ownerAfterWake = await sessionManager.getSession(parentId);
@@ -309,7 +313,7 @@ test('managed session notifies owner on inbox arrival and stale leases are recla
     assert.equal(managedState, undefined);
     assert.equal(recoveredChild.queue.length, 2);
     assert.deepEqual(
-      recoveredChild.queue.map(item => item.parts?.[0]?.text).filter(Boolean),
+      recoveredChild.queue.flatMap(item => item.parts || []).map(part => part.text).filter(Boolean),
       ['wake owner', 'stale should recover'],
     );
   } finally {

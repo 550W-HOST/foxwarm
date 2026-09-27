@@ -6,7 +6,8 @@ import { getAgentDir } from './config';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { formatStructuredValue, formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
-import { takeUnicodeSafe, takeUnicodeSafeEnd, truncateUnicodeSafe } from './utils/unicode';
+import { truncateOutputForDisplay, type OutputTruncationResult } from '../packages/shared/dist/outputTruncation';
+import { truncateUnicodeSafe } from './utils/unicode';
 
 export const TOOL_OUTPUT_GUARD_CHAR_LIMIT = 40000;
 const TOOL_OUTPUT_GUARD_EXCERPT_LIMIT = 30000;
@@ -120,18 +121,6 @@ async function saveCompleteText(text: string, options: ToolOutputGuardOptions, s
   };
 }
 
-function buildExcerpt(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-
-  const marker = `\n\n[...TRUNCATED: ${text.length - maxChars} characters omitted...]\n\n`;
-  const available = Math.max(0, maxChars - marker.length);
-  const headLength = Math.ceil(available * 0.62);
-  const tailLength = Math.max(0, available - headLength);
-  return `${takeUnicodeSafe(text, headLength)}${marker}${tailLength > 0 ? takeUnicodeSafeEnd(text, tailLength) : ''}`;
-}
-
 function buildSavedOutputLocation(saved: SavedToolOutput): string {
   return [
     `Complete output saved to:`,
@@ -143,18 +132,30 @@ function buildSavedOutputLocation(saved: SavedToolOutput): string {
 function buildTruncatedNotice(args: {
   label: string;
   saved: SavedToolOutput;
-  excerpt: string;
+  excerpt: OutputTruncationResult;
 }): string {
+  const metadata = args.excerpt.footerNotes.length > 0
+    ? ['', '---', ...args.excerpt.footerNotes]
+    : [];
   return [
     `[TOOL OUTPUT TOO LONG: ${args.label}]`,
     `The complete ${args.label} was ${args.saved.lengthChars} characters and has been truncated in the tool response.`,
     buildSavedOutputLocation(args.saved),
     '',
     'Showing a truncated excerpt:',
-    args.excerpt,
+    args.excerpt.text,
+    ...metadata,
     '',
     `[END TRUNCATED TOOL OUTPUT; full ${args.label} saved to ${args.saved.path} on node ${args.saved.nodeId}]`,
   ].join('\n');
+}
+
+function buildExcerpt(text: string, maxChars: number): OutputTruncationResult {
+  return truncateOutputForDisplay(text, {
+    maxChars,
+    force: text.length > maxChars,
+    lineOmissionReason: 'this file is too long',
+  });
 }
 
 function formatValueForOutputField(value: unknown): string {
@@ -183,7 +184,7 @@ function truncatePreservedError(value: unknown, saved: SavedToolOutput): unknown
   return `[TOOL ERROR OUTPUT TOO LONG] The original error content was included in the full saved tool output at ${saved.path} on node ${saved.nodeId}. ${truncateUnicodeSafe(text, 1200, '...')}`;
 }
 
-function buildStageBSummary(originalResult: any, saved: SavedToolOutput, excerpt: string): Record<string, any> {
+function buildStageBSummary(originalResult: any, saved: SavedToolOutput, excerpt: OutputTruncationResult): Record<string, any> {
   const summary: Record<string, any> = {
     output: buildTruncatedNotice({
       label: 'formatted tool response',
@@ -279,11 +280,13 @@ export async function guardToolOutputForModel(rawResult: any, options: ToolOutpu
       return result;
     }
 
+    const fallbackExcerpt = buildExcerpt(fallbackText, TOOL_OUTPUT_GUARD_STAGE_B_EXCERPT_LIMIT);
     const fallback = {
       output: [
         '[TOOL OUTPUT TOO LONG]',
         `The tool output was ${fallbackText.length} characters. Saving the full output failed: ${error?.message || String(error)}`,
-        buildExcerpt(fallbackText, TOOL_OUTPUT_GUARD_STAGE_B_EXCERPT_LIMIT),
+        fallbackExcerpt.text,
+        ...(fallbackExcerpt.footerNotes.length > 0 ? ['---', ...fallbackExcerpt.footerNotes] : []),
       ].join('\n\n'),
       originalLengthChars: fallbackText.length,
       truncated: true,

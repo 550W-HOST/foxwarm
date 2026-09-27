@@ -78,7 +78,7 @@ Rules:
 - Do not load the `subagent-explorer` skill; the assignment already contains what you need.
 - Do not create child sessions.
 - Use tools to inspect code/tests/logs as needed, but keep the investigation focused.
-Report back with `send_to_session({ sessionId: "<PARENT_SESSION_ID>", message: "..." })`.
+Report back with `send_to_session({ sessionId: "<PARENT_SESSION_ID>", message: "...", afterSend: "finish", confirmation: "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed." })`. When the current tool schema requires `confirmation`, keep it last and replace the placeholder with your own review; when the schema omits it, the property may be omitted.
 
 Report format:
 ## Conclusion

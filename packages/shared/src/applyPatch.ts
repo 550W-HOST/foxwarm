@@ -3,6 +3,11 @@ export type ApplyPatchOperation =
   | { action: 'add'; filePath: string; lines: string[] }
   | { action: 'delete'; filePath: string };
 
+export interface ApplyPatchLineCounts {
+  added: number;
+  deleted: number;
+}
+
 interface ApplyPatchChunk {
   origIndex: number;
   delLines: string[];
@@ -17,6 +22,20 @@ interface ParserState {
 
 const END_PATCH = '*** End Patch';
 const END_FILE = '*** End of File';
+
+const FORMAT_HINT = `Expected apply_patch format:
+*** Begin Patch
+*** Update File: <path>
+@@ optional anchor
+ context line (prefix with space)
+-line to delete
++line to insert
+*** Add File: <path>
++new file content line
+*** Delete File: <path>
+*** End Patch
+For Update File: context lines start with space, deletions with '-', insertions with '+'. Use '@@' to start a new section. See the apply_patch tool description for full details.`;
+
 const FILE_HEADER_PREFIXES = [
   '*** Update File: ',
   '*** Add File: ',
@@ -54,10 +73,10 @@ export function extractPatchEnvelope(input: string): string {
   }
 
   if (!trimmed) {
-    throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.');
+    throw new Error(`Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.\n${FORMAT_HINT}`);
   }
 
-  throw new Error('Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.');
+  throw new Error(`Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.\n${FORMAT_HINT}`);
 }
 
 export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
@@ -79,7 +98,7 @@ export function parseApplyPatchInput(input: string): ApplyPatchOperation[] {
     const line = body[i];
     const match = /^\*\*\* (Update|Add|Delete) File: (.+)$/.exec(line);
     if (!match) {
-      throw new Error(`Invalid apply_patch input: expected file action header, got: ${line}`);
+      throw new Error(`Invalid apply_patch input: expected file action header (*** Update File: / *** Add File: / *** Delete File:), got: ${line}\n${FORMAT_HINT}`);
     }
 
     const action = match[1].toLowerCase() as 'update' | 'add' | 'delete';
@@ -207,7 +226,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     }
     if (raw === '***') break;
     if (raw.startsWith('***')) {
-      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${raw}`);
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${raw}\n${FORMAT_HINT}`);
     }
 
     index += 1;
@@ -222,7 +241,7 @@ function readSection(lines: string[], startIndex: number, filePath: string): {
     } else if (line[0] === ' ') {
       mode = 'keep';
     } else {
-      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}`);
+      throw new Error(`Invalid apply_patch input for ${filePath}: invalid line: ${line}. Each line must start with ' ' (context), '-' (delete), or '+' (insert).\n${FORMAT_HINT}`);
     }
 
     line = line.slice(1);
@@ -400,4 +419,35 @@ export function applyUpdatePatch(content: string, lines: string[], filePath: str
 
 export function buildAddedFileContent(lines: string[]): string {
   return lines.join('\n');
+}
+
+export function countApplyPatchOperationLines(operation: ApplyPatchOperation): ApplyPatchLineCounts {
+  if (operation.action === 'add') {
+    return { added: operation.lines.length, deleted: 0 };
+  }
+
+  if (operation.action === 'delete') {
+    return { added: 0, deleted: 0 };
+  }
+
+  let added = 0;
+  let deleted = 0;
+  for (const line of operation.lines) {
+    if (line.startsWith('+')) added += 1;
+    if (line.startsWith('-')) deleted += 1;
+  }
+  return { added, deleted };
+}
+
+export function formatApplyPatchOperationSummary(operation: ApplyPatchOperation, displayPath = operation.filePath): string {
+  if (operation.action === 'delete') {
+    return `Deleted ${displayPath}`;
+  }
+
+  const counts = countApplyPatchOperationLines(operation);
+  if (operation.action === 'add') {
+    return `Added ${displayPath} (+${counts.added})`;
+  }
+
+  return `Updated ${displayPath} (+${counts.added} -${counts.deleted})`;
 }

@@ -6,10 +6,14 @@ import { logger } from './common';
 import * as llm from './llm';
 import * as managedSessions from './managedSessions';
 import { resolveAgentPath } from './utils/pathResolve';
+import { isToolResultImageRefPart } from './toolImages';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
+import { RpcError } from './rpc';
+import { isToolAuthorizationPolicyUnavailable } from './toolAuthorization';
 
 type ToolArgs = Record<string, any>;
 
@@ -20,7 +24,14 @@ type ToolContext = {
   runtimeNodeId?: string;
   toolScriptRunId?: string;
   toolUseId?: string;
+  sessionPlacement?: 'local' | 'session-worker';
 };
+
+function assertManagedPlacement(ctx: ToolContext): void {
+  if (ctx.sessionPlacement === 'session-worker') {
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'SESSION_WORKER_TOOL_UNAVAILABLE: ToolScript managed-session operations are not available in Session-worker placement yet.', true);
+  }
+}
 
 type ToolScriptRunMode = 'foreground' | 'background';
 type ToolScriptRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
@@ -84,6 +95,7 @@ type ToolScriptRunRecord = {
   filePath: string;
   scriptPath: string;
   scriptName: string;
+  vmRuntime?: ToolScriptVmRuntimeIdentity;
   snapshotBase64?: string;
   stdout: string;
   executedTools: string[];
@@ -111,6 +123,7 @@ type ToolScriptResult = {
   ownerSessionId: string;
   scriptPath: string;
   filePath: string;
+  vmRuntime?: ToolScriptVmRuntimeIdentity;
   stdout: string;
   executedTools: string[];
   subCalls?: ToolScriptSubCall[];
@@ -128,6 +141,8 @@ type ToolScriptResult = {
   cancelledAt?: number;
   result?: any;
   error?: string;
+  /** Canonical image parts promoted from the script result, handed to the tool-result image pipeline. */
+  imageParts?: MessagePart[];
 };
 
 type RuntimeState = {
@@ -139,26 +154,52 @@ type RuntimeState = {
 };
 
 type MontyModule = {
-  Monty: new (code: string, options?: Record<string, any>) => any;
-  MontySnapshot: { load(data: Buffer, options?: Record<string, any>): any };
+  Monty: { create(options?: Record<string, any>): Promise<any> };
   MontyComplete: new (...args: any[]) => any;
-  MontyNameLookup: new (...args: any[]) => any;
+  FunctionSnapshot: new (...args: any[]) => any;
+  NameLookupSnapshot: new (...args: any[]) => any;
+  FutureSnapshot: new (...args: any[]) => any;
+};
+
+type MontyRuntime = {
+  monty: MontyModule;
+  pool: any;
+};
+
+type ToolScriptVmRuntimeIdentity = {
+  engine: '@pydantic/monty';
+  version: '0.0.19';
+  snapshotFormat: 'monty-pool-snapshot-v0.0.19';
 };
 
 const TOOLSCRIPT_RUNS_DIR = path.join(STATE_DIR, 'toolscript-runs');
 const METADATA_KEYS = new Set(['toolId', 'source', 'name', 'server', 'nodeId', 'args']);
 const DEFAULT_TOOLSCRIPT_TIMEOUT_SECS = 30;
 const DEFAULT_SCRIPT_LIMITS = {
-  maxAllocations: 200000,
   maxMemory: 64 * 1024 * 1024,
   maxRecursionDepth: 200,
 };
+const CURRENT_VM_RUNTIME: ToolScriptVmRuntimeIdentity = {
+  engine: '@pydantic/monty',
+  version: '0.0.19',
+  snapshotFormat: 'monty-pool-snapshot-v0.0.19',
+};
 
-let montyModulePromise: Promise<MontyModule> | null = null;
+let montyRuntimePromise: Promise<MontyRuntime> | null = null;
+let montyRuntimeShutdownPromise: Promise<void> | null = null;
+let montyRuntimeFactoryForTests: (() => Promise<MontyRuntime>) | null = null;
+let nativeMontyImportFailureForTests: Error | null = null;
 const activeBackgroundRuns = new Set<string>();
 
 function nativeImport<T = any>(specifier: string): Promise<T> {
   return Function('s', 'return import(s)')(specifier) as Promise<T>;
+}
+
+function importNativeMonty(): Promise<MontyModule> {
+  if (nativeMontyImportFailureForTests) {
+    return Promise.reject(nativeMontyImportFailureForTests);
+  }
+  return nativeImport<MontyModule>('@pydantic/monty');
 }
 
 function buildToolScriptSource(code: string): string {
@@ -208,7 +249,7 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
     `- sliceElapsedMs: ${getElapsedSliceMs(record)}`,
     `- hostCallCount: ${runtimeState.hostCallCount}`,
     `- executedTools: ${runtimeState.executedTools.length ? runtimeState.executedTools.join(', ') : '(none)'}`,
-    `- limits: maxDurationSecs=${record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS}, maxAllocations=${DEFAULT_SCRIPT_LIMITS.maxAllocations}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
+    `- limits: maxDurationSecs=${record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
   ];
 
   if (runtimeState.lastHostCall) {
@@ -230,11 +271,50 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
   return lines.join('\n');
 }
 
-async function importMonty(): Promise<MontyModule> {
-  if (!montyModulePromise) {
-    montyModulePromise = nativeImport<MontyModule>('@pydantic/monty');
+async function createMontyRuntime(): Promise<MontyRuntime> {
+  if (montyRuntimeFactoryForTests) {
+    return await montyRuntimeFactoryForTests();
   }
-  return await montyModulePromise;
+  let monty: MontyModule;
+  try {
+    monty = await importNativeMonty();
+  } catch (nativeError: any) {
+    logger.warn({ err: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
+    monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
+  }
+  const pool = await monty.Monty.create();
+  return { monty, pool };
+}
+
+async function getMontyRuntime(): Promise<MontyRuntime> {
+  while (montyRuntimeShutdownPromise) {
+    await montyRuntimeShutdownPromise;
+  }
+  if (!montyRuntimePromise) {
+    montyRuntimePromise = createMontyRuntime();
+  }
+  return await montyRuntimePromise;
+}
+
+export function shutdownToolScriptRuntime(): Promise<void> {
+  if (montyRuntimeShutdownPromise) {
+    return montyRuntimeShutdownPromise;
+  }
+  const pending = montyRuntimePromise;
+  if (!pending) {
+    return Promise.resolve();
+  }
+  montyRuntimePromise = null;
+  let shutdown!: Promise<void>;
+  shutdown = pending
+    .then(runtime => runtime.pool.close())
+    .finally(() => {
+      if (montyRuntimeShutdownPromise === shutdown) {
+        montyRuntimeShutdownPromise = null;
+      }
+    });
+  montyRuntimeShutdownPromise = shutdown;
+  return shutdown;
 }
 
 function runFilePath(runId: string): string {
@@ -392,7 +472,7 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
     }
 
     return {
-      source: metadata.source || 'builtin',
+      source: metadata.source || (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(first as any) ? 'node' : 'builtin'),
       name: first,
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
@@ -429,11 +509,15 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
       throw new Error('call_tool args must be an object.');
     }
 
+    const inferredName = kwMetadata.name ?? metadata.name;
     return {
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(kwMetadata.toolId !== undefined ? { toolId: kwMetadata.toolId } : {}),
       ...(metadata.source !== undefined ? { source: metadata.source } : {}),
       ...(kwMetadata.source !== undefined ? { source: kwMetadata.source } : {}),
+      ...(metadata.source === undefined && kwMetadata.source === undefined && typeof inferredName === 'string'
+        ? { source: NODE_ENVIRONMENT_BUILTIN_NAMES.includes(inferredName as any) ? 'node' : 'builtin' }
+        : {}),
       ...(metadata.name !== undefined ? { name: metadata.name } : {}),
       ...(kwMetadata.name !== undefined ? { name: kwMetadata.name } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
@@ -459,6 +543,9 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
     return {
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(metadata.source !== undefined ? { source: metadata.source } : {}),
+      ...(metadata.source === undefined && typeof metadata.name === 'string'
+        ? { source: NODE_ENVIRONMENT_BUILTIN_NAMES.includes(metadata.name as any) ? 'node' : 'builtin' }
+        : {}),
       ...(metadata.name !== undefined ? { name: metadata.name } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
       ...(metadata.nodeId !== undefined ? { nodeId: metadata.nodeId } : {}),
@@ -527,31 +614,60 @@ function buildWaitingFor(run: ToolScriptRunRecord): any {
   return undefined;
 }
 
-function extractAndCleanInlineData(lastResult: any): { inlineDataFields: { inlineData?: any; inlineDataItems?: any[] }; cleanedResult: any } {
+function extractAndCleanInlineData(lastResult: any): {
+  inlineDataFields: { inlineData?: any; inlineDataItems?: any[]; imageParts?: MessagePart[] };
+  cleanedResult: any;
+} {
   if (!lastResult || typeof lastResult !== 'object' || Array.isArray(lastResult)) {
     return { inlineDataFields: {}, cleanedResult: lastResult };
   }
-  const inlineDataFields: { inlineData?: any; inlineDataItems?: any[] } = {};
-  let hasInlineData = false;
+  const inlineDataFields: { inlineData?: any; inlineDataItems?: any[]; imageParts?: MessagePart[] } = {};
+  let hasPromotedImages = false;
   if (lastResult.inlineData && typeof lastResult.inlineData === 'object' && typeof lastResult.inlineData.data === 'string') {
     inlineDataFields.inlineData = lastResult.inlineData;
-    hasInlineData = true;
+    hasPromotedImages = true;
   }
   if (Array.isArray(lastResult.inlineDataItems) && lastResult.inlineDataItems.length > 0) {
     inlineDataFields.inlineDataItems = lastResult.inlineDataItems;
-    hasInlineData = true;
+    hasPromotedImages = true;
   }
-  if (!hasInlineData) {
+  // Canonical image parts returned by a script keep their bytes in the image
+  // Blob store, so only the reference travels to the outer tool result, where
+  // the tool-result image pipeline turns it into a session image part.
+  let promotedImageParts: MessagePart[] | undefined;
+  let remainingParts: any[] | undefined;
+  if (Array.isArray(lastResult.parts)) {
+    const candidates = lastResult.parts.filter((part: any) => isToolResultImageRefPart(part)) as MessagePart[];
+    if (candidates.length > 0) {
+      promotedImageParts = candidates;
+      remainingParts = lastResult.parts.filter((part: any) => !isToolResultImageRefPart(part));
+      hasPromotedImages = true;
+    }
+  }
+  if (!hasPromotedImages) {
     return { inlineDataFields, cleanedResult: lastResult };
   }
-  // Strip inlineData from result and replace with a placeholder so the base64 blob
-  // does not bloat the text representation seen by the model.
+  // Strip raw image bytes and promoted references from result and replace them with
+  // bounded placeholders so they do not bloat the text representation seen by the model.
+  // Unrelated result fields, including a `parts` list without promoted image parts,
+  // are preserved verbatim.
   const { inlineData, inlineDataItems, ...rest } = lastResult;
   if (inlineData) {
     rest.inlineData = `[image promoted, mimeType=${inlineData.mimeType || 'unknown'}]`;
   }
   if (inlineDataItems) {
     rest.inlineDataItems = `[${inlineDataItems.length} image(s) promoted]`;
+  }
+  if (promotedImageParts) {
+    inlineDataFields.imageParts = promotedImageParts;
+    const placeholder = `[${promotedImageParts.length} image part(s) promoted]`;
+    // Text that rode along on a promoted part stays visible; only the promoted
+    // image entries themselves are replaced by the bounded placeholder.
+    const retainedTexts = promotedImageParts
+      .filter(part => typeof part.text === 'string' && part.text.length > 0)
+      .map(part => ({ text: part.text }));
+    const survivors = [...(remainingParts || []), ...retainedTexts];
+    rest.parts = survivors.length > 0 ? [...survivors, placeholder] : placeholder;
   }
   return { inlineDataFields, cleanedResult: rest };
 }
@@ -571,6 +687,7 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     ownerSessionId: run.ownerSessionId,
     scriptPath: run.scriptPath,
     filePath: run.filePath,
+    ...(run.vmRuntime ? { vmRuntime: structuredClone(run.vmRuntime) } : {}),
     stdout: run.stdout,
     executedTools: [...run.executedTools],
     ...(run.subCalls?.length ? { subCalls: run.subCalls.map(sc => ({ ...sc })) } : {}),
@@ -662,12 +779,36 @@ function removeManagedLeaseRef(record: ToolScriptRunRecord, sessionId: string, l
   record.relatedManagedSessions = record.relatedManagedSessions.filter(ref => !(ref.sessionId === sessionId && ref.leaseId === leaseId));
 }
 
+async function releaseRelatedManagedSessionLeases(record: ToolScriptRunRecord, logMessage: string): Promise<void> {
+  if (!record.relatedManagedSessions?.length) {
+    return;
+  }
+  const unreleased: ToolScriptManagedLeaseRef[] = [];
+  for (const ref of record.relatedManagedSessions) {
+    try {
+      await managedSessions.releaseManagedSession({
+        sessionId: ref.sessionId,
+        ownerSessionId: record.ownerSessionId,
+        leaseId: ref.leaseId,
+        ...(record.runId ? { controllerRunId: record.runId } : {}),
+      });
+    } catch (error: any) {
+      unreleased.push(ref);
+      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, logMessage);
+    }
+  }
+  record.relatedManagedSessions = unreleased;
+}
+
 function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtimeState?: RuntimeState): string {
   const augmentWithContext = (message: string): string => {
+    const namedMessage = record
+      ? message.replace(/<python-input-\d+>/g, record.scriptName)
+      : message;
     if (!record || !runtimeState) {
-      return message;
+      return namedMessage;
     }
-    return `${message}\n\n${formatRuntimeContext(record, runtimeState)}`;
+    return `${namedMessage}\n\n${formatRuntimeContext(record, runtimeState)}`;
   };
 
   if (!error) {
@@ -700,7 +841,35 @@ function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtime
   return augmentWithContext(String(error));
 }
 
-async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string }> {
+/**
+ * Projects a low-level model result into the canonical parts a script may hand
+ * back: text parts and image parts whose bytes stay in the image Blob store.
+ * Reasoning, function calls, provider metadata, and raw image bytes are not
+ * exposed to the script or to the outer tool result.
+ */
+function projectOneShotResultParts(allParts: MessagePart[] | undefined): MessagePart[] {
+  const parts: MessagePart[] = [];
+  for (const part of allParts || []) {
+    // A provider part is not an exclusive union, so text and an image reference
+    // are projected independently and neither can silently drop the other.
+    const projected: MessagePart = {};
+    if (typeof part.text === 'string' && part.text.length > 0) {
+      projected.text = part.text;
+    }
+    const ref = part.inlineDataRef;
+    if (ref && typeof ref.blobId === 'string' && ref.blobId.length > 0) {
+      // `apiPath` is WebUI transport state and never belongs to a canonical part.
+      const { apiPath: _apiPath, ...canonicalRef } = ref;
+      projected.inlineDataRef = canonicalRef;
+    }
+    if (projected.text !== undefined || projected.inlineDataRef) {
+      parts.push(projected);
+    }
+  }
+  return parts;
+}
+
+async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string; parts: MessagePart[] }> {
   const result = await llm.requestLlmOnce({
     contents: [{
       role: 'user',
@@ -708,13 +877,19 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     }],
     systemPrompt: '',
     model: model || session.model,
+    effort: session.effort,
     sessionId: session.id,
+    promptCacheKey: llm.ensurePromptCacheKey(session),
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,
+    purpose: 'toolscript-one-shot',
   });
 
-  return { text: result.text || '' };
+  return {
+    text: result.text || '',
+    parts: projectOneShotResultParts(result.allParts),
+  };
 }
 
 function getToolScriptSession(ctx: ToolContext, functionName: string): Session {
@@ -815,7 +990,7 @@ function validateManagedSessionInputParts(parts: MessagePart[]): MessagePart[] {
   });
 }
 
-function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
+function normalizeManagedSessionStepInput(_positionalArgs: any[], kwargs: Record<string, any>): { parts?: MessagePart[]; message?: Message } {
   const rawParts = kwargs.parts;
   if (rawParts !== undefined) {
     const normalizedParts = normalizeMontyValue(rawParts);
@@ -853,6 +1028,7 @@ function normalizeManagedSessionStepInput(positionalArgs: any[], kwargs: Record<
 }
 
 function emitToolScriptProgress(ctx: ToolContext, state: RuntimeState): void {
+  if (ctx.sessionPlacement === 'session-worker') return;
   if (!ctx.sessionId || !ctx.toolUseId) return;
   sessionManager.notifySessionEvent(ctx.sessionId, {
     type: 'toolscript-progress',
@@ -982,6 +1158,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'open_managed_session') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1003,6 +1180,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'session_step') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1054,6 +1232,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'release_managed_session') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1084,6 +1263,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'wait_for_managed_event') {
+    assertManagedPlacement(ctx);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
       'session_id',
@@ -1114,7 +1294,21 @@ async function executeScriptHostCall(
     return result;
   }
 
-  throw new Error(`Unsupported ToolScript host function: ${functionName}`);
+  throw new Error(
+    `Unknown ToolScript function \`${functionName}\`. `
+    + 'Available host functions are call_tool, request_model_without_context, ask_agent, '
+    + 'open_managed_session, session_step, release_managed_session, and wait_for_managed_event.',
+  );
+}
+
+function buildMontyResumeError(type: string, message: string): Error {
+  const error = new Error(message);
+  error.name = type;
+  return error;
+}
+
+async function dumpMontySnapshot(progress: any): Promise<string> {
+  return Buffer.from(await progress.dump()).toString('base64');
 }
 
 async function advanceExecution(args: {
@@ -1145,13 +1339,22 @@ async function advanceExecution(args: {
       return buildBaseResult(record);
     }
 
-    if (progress instanceof monty.MontyNameLookup) {
-      progress = progress.resume();
+    if (progress instanceof monty.NameLookupSnapshot) {
+      progress = await progress.resume();
       continue;
     }
 
-    if (!progress || typeof progress !== 'object' || typeof progress.resume !== 'function') {
+    if (progress instanceof monty.FutureSnapshot) {
+      throw new Error('ToolScript execution returned an unsupported Monty future suspension.');
+    }
+
+    if (!(progress instanceof monty.FunctionSnapshot)) {
       throw new Error('ToolScript execution returned an unexpected Monty state.');
+    }
+
+    if (progress.isOsFunction) {
+      progress = await progress.resumeNotHandled();
+      continue;
     }
 
     const functionName = String(progress.functionName || '');
@@ -1161,7 +1364,7 @@ async function advanceExecution(args: {
     if (functionName === 'ask_agent') {
       const questionValue = positionalArgs.length > 0 ? positionalArgs[0] : kwargs.question;
       const question = formatQuestion(questionValue);
-      record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+      record.snapshotBase64 = await dumpMontySnapshot(progress);
       markRunWaiting(record, {
         reason: 'agent',
         waitingSince: Date.now(),
@@ -1188,7 +1391,7 @@ async function advanceExecution(args: {
         }
       }
       if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
-        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, {
           reason: 'managed_event',
           waitingSince: Date.now(),
@@ -1211,7 +1414,7 @@ async function advanceExecution(args: {
         return buildBaseResult(record);
       }
       if (shouldPauseForTimeout(record)) {
-        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
           mode: 'return',
           value: normalizeMontyValue(result),
@@ -1219,10 +1422,11 @@ async function advanceExecution(args: {
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = progress.resume({ returnValue: result });
+      progress = await progress.resume(result);
     } catch (error: any) {
+      if (isToolAuthorizationPolicyUnavailable(error)) throw error;
       if (shouldPauseForTimeout(record)) {
-        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
           mode: 'exception',
           exception: {
@@ -1233,12 +1437,7 @@ async function advanceExecution(args: {
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = progress.resume({
-        exception: {
-          type: 'RuntimeError',
-          message: error?.message || String(error),
-        },
-      });
+      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', error?.message || String(error)));
     }
   }
 }
@@ -1255,7 +1454,7 @@ async function requireSessionContext(ctx: ToolContext): Promise<{ sessionId: str
   return { sessionId, session };
 }
 
-async function readScriptSource(filePath: string, ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
+async function readScriptSource(filePath: string, _ctx: ToolContext, session: Session): Promise<{ scriptPath: string; code: string }> {
   if (!filePath || typeof filePath !== 'string') {
     throw new Error('filePath is required');
   }
@@ -1288,6 +1487,7 @@ function createRunRecord(args: {
     filePath: args.filePath,
     scriptPath: args.scriptPath,
     scriptName: args.scriptPath === '<inline>' ? 'inline.py' : (path.basename(args.scriptPath) || 'script.py'),
+    vmRuntime: structuredClone(CURRENT_VM_RUNTIME),
     stdout: '',
     executedTools: [],
     relatedManagedSessions: [],
@@ -1322,25 +1522,69 @@ async function failRun(record: ToolScriptRunRecord, runtimeState: RuntimeState, 
   return buildBaseResult(record);
 }
 
+function getSnapshotCompatibilityError(record: ToolScriptRunRecord): string | null {
+  const runtime = record.vmRuntime;
+  if (
+    runtime?.engine === CURRENT_VM_RUNTIME.engine
+    && runtime.version === CURRENT_VM_RUNTIME.version
+    && runtime.snapshotFormat === CURRENT_VM_RUNTIME.snapshotFormat
+  ) {
+    return null;
+  }
+  const found = runtime
+    ? `${runtime.engine} ${runtime.version} (${runtime.snapshotFormat})`
+    : 'an unknown legacy Monty snapshot format';
+  return `ToolScript run \`${record.runId}\` was suspended by ${found} and cannot be resumed by `
+    + `${CURRENT_VM_RUNTIME.engine} ${CURRENT_VM_RUNTIME.version}. Start a new run. `
+    + 'The historical run record and incompatible snapshot were retained.';
+}
+
+async function failIncompatibleSnapshot(record: ToolScriptRunRecord, runtimeState: RuntimeState, message: string): Promise<ToolScriptResult> {
+  await releaseRelatedManagedSessionLeases(record, 'Failed to release managed session after incompatible ToolScript snapshot');
+  record.status = 'failed';
+  record.waiting = undefined;
+  record.stdout = currentStdout(runtimeState);
+  record.executedTools = [...runtimeState.executedTools];
+  record.subCalls = runtimeState.subCalls.map(sc => ({ ...sc }));
+  record.hostCallCount = runtimeState.hostCallCount;
+  record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
+  record.error = `${message}\n\n${formatRuntimeContext(record, runtimeState)}`;
+  record.updatedAt = Date.now();
+  await saveRun(record);
+  logger.warn({ runId: record.runId, vmRuntime: record.vmRuntime }, 'ToolScript snapshot runtime is incompatible');
+  return buildBaseResult(record);
+}
+
 async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: any, ctx: ToolContext): Promise<ToolScriptResult> {
-  const monty = await importMonty();
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
+  let montySession: any;
   try {
-    const runner = new monty.Monty(buildToolScriptSource(code), { scriptName: record.scriptName, inputs: ['args'] });
-    const progress = runner.start({
-      inputs: { args: normalizeMontyValue(scriptArgs || {}) },
+    const { monty, pool } = await getMontyRuntime();
+    montySession = await pool.checkout({
+      scriptName: record.scriptName,
       limits: buildMontyLimits(record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS),
+    });
+    const progress = await montySession.feedStart(buildToolScriptSource(code), {
+      inputs: { args: normalizeMontyValue(scriptArgs || {}) },
       printCallback: printCallbackFor(runtimeState),
     });
     return await advanceExecution({ progress, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
-    return await failRun(record, runtimeState, error, 'ToolScript run failed during startup');
+    const result = await failRun(record, runtimeState, error, 'ToolScript run failed during startup');
+    if (record.mode === 'foreground' && isToolAuthorizationPolicyUnavailable(error)) throw error;
+    return result;
+  } finally {
+    await montySession?.close().catch(() => {});
   }
 }
 
 async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: ToolContext, logMessage: string): Promise<ToolScriptResult> {
-  const monty = await importMonty();
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
+  const compatibilityError = getSnapshotCompatibilityError(record);
+  if (compatibilityError) {
+    return await failIncompatibleSnapshot(record, runtimeState, compatibilityError);
+  }
+  let montySession: any;
   try {
     if (!record.snapshotBase64) {
       throw new Error(`ToolScript run \`${record.runId}\` has no resumable snapshot.`);
@@ -1349,15 +1593,27 @@ async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: Too
     record.lastResumeAt = Date.now();
     record.updatedAt = record.lastResumeAt;
     await saveRun(record);
-    const snapshot = monty.MontySnapshot.load(Buffer.from(record.snapshotBase64, 'base64'), {
+    const { monty, pool } = await getMontyRuntime();
+    montySession = await pool.checkout();
+    const snapshot = await montySession.loadSnapshot(Buffer.from(record.snapshotBase64, 'base64'), {
       printCallback: printCallbackFor(runtimeState),
     });
+    if (!(snapshot instanceof monty.FunctionSnapshot) || snapshot.isOsFunction) {
+      throw new Error('ToolScript persisted snapshot is not a resumable Foxwarm host-call snapshot.');
+    }
     const resumed = resumeValue && typeof resumeValue === 'object' && (resumeValue as any).__toolscriptResumeException
-      ? snapshot.resume({ exception: normalizeMontyValue((resumeValue as any).__toolscriptResumeException) })
-      : snapshot.resume({ returnValue: normalizeMontyValue(resumeValue) });
+      ? await snapshot.resumeError(buildMontyResumeError(
+        String((resumeValue as any).__toolscriptResumeException?.type || 'RuntimeError'),
+        String((resumeValue as any).__toolscriptResumeException?.message || 'ToolScript host call failed'),
+      ))
+      : await snapshot.resume(normalizeMontyValue(resumeValue));
     return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
-    return await failRun(record, runtimeState, error, logMessage);
+    const result = await failRun(record, runtimeState, error, logMessage);
+    if (record.mode === 'foreground' && isToolAuthorizationPolicyUnavailable(error)) throw error;
+    return result;
+  } finally {
+    await montySession?.close().catch(() => {});
   }
 }
 
@@ -1414,6 +1670,7 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
+  if (record.relatedManagedSessions?.length) assertManagedPlacement(ctx);
   if (record.status !== 'waiting' || !record.snapshotBase64 || !record.waiting || (record.waiting.reason !== 'agent' && record.waiting.reason !== 'timeout')) {
     throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);
   }
@@ -1486,22 +1743,17 @@ export async function tool_cancel_toolscript_run(args: ToolArgs, ctx: ToolContex
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
+  if (record.relatedManagedSessions?.length) assertManagedPlacement(ctx);
   if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') {
+    if (record.relatedManagedSessions?.length) {
+      await releaseRelatedManagedSessionLeases(record, 'Failed to retry managed-session cleanup for terminal ToolScript run');
+      record.updatedAt = Date.now();
+      await saveRun(record);
+    }
     return buildBaseResult(record);
   }
 
-  for (const ref of record.relatedManagedSessions || []) {
-    try {
-      await managedSessions.releaseManagedSession({
-        sessionId: ref.sessionId,
-        ownerSessionId: record.ownerSessionId,
-        leaseId: ref.leaseId,
-        ...(record.runId ? { controllerRunId: record.runId } : {}),
-      });
-    } catch (error: any) {
-      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, 'Failed to release managed session during ToolScript cancel');
-    }
-  }
+  await releaseRelatedManagedSessionLeases(record, 'Failed to release managed session during ToolScript cancel');
 
   activeBackgroundRuns.delete(record.runId);
   record.status = 'cancelled';
@@ -1556,6 +1808,30 @@ export async function getToolScriptRunForTests(runId: string): Promise<ToolScrip
   return await loadRun(runId);
 }
 
+export async function resetToolScriptMontyRuntimeForTests(): Promise<void> {
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
+  nativeMontyImportFailureForTests = null;
+}
+
+export async function forceToolScriptNativeImportFailureForTests(error: Error): Promise<void> {
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
+  nativeMontyImportFailureForTests = error;
+}
+
 export async function resetToolScriptRunsForTests(): Promise<void> {
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
+  nativeMontyImportFailureForTests = null;
   await fs.remove(TOOLSCRIPT_RUNS_DIR);
+}
+
+export async function setToolScriptMontyRuntimeFactoryForTests(factory: (() => Promise<MontyRuntime>) | null): Promise<void> {
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = factory;
+}
+
+export async function ensureToolScriptMontyRuntimeForTests(): Promise<void> {
+  await getMontyRuntime();
 }

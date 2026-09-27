@@ -13,11 +13,14 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: foxwarm-test
+    init: true
     ports:
       - "3002:3001" # TODO: before merging to main, remember to revisit/revert this test-env-only port tweak.
+    environment:
+      FOXWARM_DATA_DIR: /app/test
     volumes:
       - ..:/app
-      - /home/ldmbot/temp-worktrees/foxwarm-toolscript-phase1/node_modules:/app/node_modules
+      - ../node_modules:/app/node_modules
       - ./state:/app/state
       - ./agents:/app/agents
       - ./.env:/app/.env:ro

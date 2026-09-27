@@ -1,259 +1,781 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Activity, ArrowDownLeft, ArrowUpRight, Database, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
 import type { Session } from './SessionListCore'
+import AgentCreationMenu from './AgentCreationMenu'
+import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
+import { API_BASE_PATH } from '../config'
+import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
+import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
+import { webUiRealtime } from '../realtime'
+import { parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
+import { filterArchitectureSessions, getArchitectureNodePreview, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, orderArchitectureAgents, type ArchitectureStatusFilter } from '../architectureOperations'
+import { makeVscodeWebUrl } from '../vscodeWeb'
 
 interface ArchitectureViewProps {
-  sessions: Session[]
   currentSession?: string
   onSelectSession: (sessionId: string) => void
   onBack?: () => void
+  onCreateAgent?: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateSession?: (agentId: string, sessionId?: string) => Promise<void>
+  onAgentsChanged?: () => void | Promise<void>
+  onOpenAgentMemory?: (memoryRoot: string, filePath?: string) => void
 }
 
-const ROOT_CHILD_PREVIEW_COUNT = 10
-const CHILD_PREVIEW_COUNT = 8
-
-const sortSessions = (a: Session, b: Session) => {
-  if ((a.busy || false) !== (b.busy || false)) {
-    return a.busy ? -1 : 1
-  }
-  if ((a.queueLength || 0) !== (b.queueLength || 0)) {
-    return (b.queueLength || 0) - (a.queueLength || 0)
-  }
-  if ((a.childSessions?.length || 0) !== (b.childSessions?.length || 0)) {
-    return (b.childSessions?.length || 0) - (a.childSessions?.length || 0)
-  }
-  return (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
+type AgentRegistryEntry = {
+  id: string
+  inherit: string | null
+  inheritanceChain: string[]
+  isolated: boolean
+  isolatedNode: string | null
+  sessionCount: number
+  activeSessionCount: number
+  queuedSessionCount: number
+  memoryRoot: string
+  memoryFileCount: number
+  memoryLastModified: number | null
 }
+
+type AgentMemoryFile = { path: string; absolutePath: string; size: number; modifiedAt: number }
 
 const formatRelativeTime = (timestamp?: number) => {
   if (!timestamp) return 'No messages yet'
-
-  const diff = Date.now() - timestamp
+  const diff = Math.max(0, Date.now() - timestamp)
   const minute = 60 * 1000
   const hour = 60 * minute
   const day = 24 * hour
-
   if (diff < minute) return 'just now'
   if (diff < hour) return `${Math.floor(diff / minute)}m ago`
   if (diff < day) return `${Math.floor(diff / hour)}h ago`
   return `${Math.floor(diff / day)}d ago`
 }
 
-const formatBusyDuration = (busyStartedAt?: number | null, now: number = Date.now()) => {
-  if (!busyStartedAt) return '—'
-  const diff = Math.max(0, now - busyStartedAt)
-  const totalSeconds = Math.floor(diff / 1000)
+const formatBusyDuration = (startedAt?: number | null, now: number = Date.now()) => {
+  if (!startedAt) return '—'
+  const totalSeconds = Math.floor(Math.max(0, now - startedAt) / 1000)
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
-
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (hours > 0) return `${hours}h ${minutes}m`
   if (minutes > 0) return `${minutes}m ${seconds}s`
   return `${seconds}s`
 }
 
-const formatTokenMillions = (value: number | undefined) => {
+const formatTokenCount = (value: number | undefined) => {
   const tokens = value || 0
-  const millions = tokens / 1_000_000
-  if (millions === 0) return '0m'
-  if (millions >= 10) return `${millions.toFixed(1)}m`
-  if (millions >= 1) return `${millions.toFixed(2)}m`
-  return `${millions.toFixed(3)}m`
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 1 : 2)}M`
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 100_000 ? 0 : 1)}K`
+  return String(tokens)
 }
 
 const renderMetaBadge = (label: string, tone: 'default' | 'active' | 'warning' | 'muted' = 'default') => {
   const toneClasses = {
-    default: 'bg-gray-100 text-gray-700 dark:bg-gray-700/70 dark:text-gray-200',
-    active: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200',
-    warning: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200',
-    muted: 'bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+    default: 'bg-fw-neutral-surface text-fw-text dark:bg-fw-surface-raised/70 dark:text-fw-text-strong',
+    active: 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent',
+    warning: 'bg-fw-warning-surface text-fw-warning dark:bg-fw-warning-surface-strong/40 dark:text-fw-warning',
+    muted: 'bg-fw-surface-sunken text-fw-text-muted dark:bg-fw-surface dark:text-fw-text-muted',
   }
-
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-1 text-[11px] font-medium ${toneClasses[tone]}`}>
-      {label}
-    </span>
-  )
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${toneClasses[tone]}`}>{label}</span>
 }
 
-interface SessionNodeProps {
-  session: Session
-  parent: Session | null
-  children: Session[]
-  depth: number
-  now: number
-  expandedSessions: Set<string>
-  showMoreChildren: Set<string>
-  onToggleExpanded: (sessionId: string) => void
-  onToggleShowMore: (sessionId: string) => void
-  onSelectSession: (sessionId: string) => void
-  sessionMap: Map<string, Session>
-  childrenMap: Map<string, Session[]>
+const getStatusTone = (session: Session) => {
+  const state = getSessionRuntimeStateName(session)
+  if (state === 'requesting-model') return 'bg-fw-accent'
+  if (state === 'running-tool') return 'bg-fw-special'
+  if (state === 'waiting') return 'bg-fw-warning'
+  return 'bg-fw-border-strong dark:bg-fw-text'
 }
 
-function SessionNode({
-  session,
-  parent,
-  children,
-  depth,
-  now,
-  expandedSessions,
-  showMoreChildren,
-  onToggleExpanded,
-  onToggleShowMore,
-  onSelectSession,
-  sessionMap,
-  childrenMap,
-}: SessionNodeProps) {
-  const expanded = expandedSessions.has(session.id)
-  const previewCount = depth === 0 ? ROOT_CHILD_PREVIEW_COUNT : CHILD_PREVIEW_COUNT
-  const showingAllChildren = showMoreChildren.has(session.id)
-  const visibleChildren = showingAllChildren ? children : children.slice(0, previewCount)
-  const hiddenChildrenCount = Math.max(0, children.length - visibleChildren.length)
-  const tokenUsage = session.tokenUsage || { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-  const totalTokens = tokenUsage.cachedTokens + tokenUsage.inputTokens + tokenUsage.outputTokens
-  const sessionName = session.displayName || session.id
-  const canExpand = children.length > 0
-  const statusText = `${session.busy ? 'busy' : 'idle'} ${session.busy ? formatBusyDuration(session.busyStartedAt, now) : '—'}`
-
-  const handleCardClick = () => {
-    if (canExpand) {
-      onToggleExpanded(session.id)
-    }
-  }
-
-  return (
-    <div className="relative">
-      <div
-        className={`rounded-xl border px-4 py-2.5 shadow-sm transition-colors ${
-          expanded && canExpand
-            ? 'border-blue-300 bg-blue-50/70 dark:border-blue-700 dark:bg-blue-950/20'
-            : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
-        } ${session.archived ? 'opacity-80' : ''} ${canExpand ? 'cursor-pointer hover:border-gray-300 dark:hover:border-gray-600' : ''}`}
-        onClick={handleCardClick}
-      >
-        {/* Row 1: Name + badges + jump button */}
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
-            <h3 title={sessionName} className="truncate text-sm font-semibold text-gray-900 dark:text-white">
-              {sessionName}
-            </h3>
-            {session.displayName && (
-              <span className="truncate font-mono text-[11px] text-gray-500 dark:text-gray-400">{session.id}</span>
-            )}
-            {renderMetaBadge(`agent:${session.agent || 'main'}`, 'default')}
-            {session.archived && renderMetaBadge('archived', 'muted')}
-            {session.isolated && renderMetaBadge('isolated', 'warning')}
-            {parent ? (
-              <span className="text-[11px] text-gray-500 dark:text-gray-400">
-                child of{' '}
-                <button
-                  onClick={(e) => { e.stopPropagation(); onSelectSession(parent.id) }}
-                  className="rounded font-mono text-blue-600 underline decoration-dotted underline-offset-2 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
-                >
-                  {parent.displayName || parent.id}
-                </button>
-              </span>
-            ) : null}
-            <span className="text-[11px] text-gray-500 dark:text-gray-400">
-              updated {formatRelativeTime(session.lastMessageTime)}
-            </span>
-          </div>
-
-          <button
-            onClick={(e) => { e.stopPropagation(); onSelectSession(session.id) }}
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            <span>Jump</span>
-          </button>
-        </div>
-
-        {/* Row 2: Metadata */}
-        <div className="mt-1.5 flex items-center gap-x-3 text-xs text-gray-600 dark:text-gray-300">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">status</span> {statusText}</span>
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">msgs</span> {session.messageCount || 0}</span>
-            {children.length > 0 && <span><span className="font-medium text-gray-900 dark:text-gray-100">children</span> {children.length}</span>}
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">node</span> {session.currentNode || 'master'}</span>
-            {!!session.queueLength && <span><span className="font-medium text-gray-900 dark:text-gray-100">queued</span> {session.queueLength}</span>}
-            {session.cwd && (
-              <span className="truncate font-mono text-[11px] text-gray-500 dark:text-gray-400 max-w-[200px]" title={session.cwd}>
-                cwd {session.cwd}
-              </span>
-            )}
-          </div>
-          <div className="flex-shrink-0 flex items-center gap-x-2 text-right">
-            <span><span className="font-medium text-gray-900 dark:text-gray-100">tokens</span> {formatTokenMillions(totalTokens)}</span>
-            <span className="text-gray-400 dark:text-gray-500">
-              cached {formatTokenMillions(tokenUsage.cachedTokens)} · in {formatTokenMillions(tokenUsage.inputTokens)} · out {formatTokenMillions(tokenUsage.outputTokens)}
-            </span>
-          </div>
-        </div>
+function SummaryMetric({ label, value, detail, icon, active, onClick }: {
+  label: string
+  value: string | number
+  detail?: string
+  icon: ReactNode
+  active?: boolean
+  onClick?: () => void
+}) {
+  const content = (
+    <>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-fw-text-muted">{label}</span>
+        <span className="text-fw-text-muted">{icon}</span>
       </div>
+      <div className="mt-2 text-2xl font-semibold tabular-nums text-fw-text-strong">{value}</div>
+      {detail ? <div className="mt-1 truncate text-xs text-fw-text-muted">{detail}</div> : null}
+    </>
+  )
+  const classes = `rounded-xl border p-3 text-left transition-colors ${active
+    ? 'border-fw-accent-border bg-fw-accent-surface dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30'
+    : 'border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface'} ${onClick ? 'hover:border-fw-border-strong dark:hover:border-fw-border-strong' : ''}`
+  return onClick ? <button type="button" onClick={onClick} className={classes}>{content}</button> : <div className={classes}>{content}</div>
+}
 
-      {/* Children list (indented) */}
-      {expanded && children.length > 0 && (
-        <div className="ml-5 mt-1.5 space-y-1.5 border-l-2 border-gray-200 pl-3 dark:border-gray-700">
-          {children.length > 0 && hiddenChildrenCount > 0 && (
-            <div className="flex items-center justify-between px-1 py-1">
-              <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {children.length} child session{children.length > 1 ? 's' : ''}
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); onToggleShowMore(session.id) }}
-                className="rounded-lg border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              >
-                {showingAllChildren ? 'Show less' : `Show ${hiddenChildrenCount} more`}
-              </button>
-            </div>
-          )}
+type LoadedUsage = { cachedTokens: number; inputTokens: number; outputTokens: number; count: number }
 
-          {visibleChildren.map(child => (
-            <SessionNode
-              key={child.id}
-              session={child}
-              parent={sessionMap.get(session.id) || null}
-              children={childrenMap.get(child.id) || []}
-              depth={depth + 1}
-              now={now}
-              expandedSessions={expandedSessions}
-              showMoreChildren={showMoreChildren}
-              onToggleExpanded={onToggleExpanded}
-              onToggleShowMore={onToggleShowMore}
-              onSelectSession={onSelectSession}
-              sessionMap={sessionMap}
-              childrenMap={childrenMap}
-            />
-          ))}
+function addLoadedUsage(total: LoadedUsage, session: Session) {
+  if (!session.tokenUsage) return total
+  total.cachedTokens += session.tokenUsage.cachedTokens || 0
+  total.inputTokens += session.tokenUsage.inputTokens || 0
+  total.outputTokens += session.tokenUsage.outputTokens || 0
+  total.count += 1
+  return total
+}
 
-          {!showingAllChildren && hiddenChildrenCount > 0 && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onToggleShowMore(session.id) }}
-              className="ml-1 rounded-lg px-2 py-1 text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-            >
-              Show {hiddenChildrenCount} more…
-            </button>
-          )}
-        </div>
-      )}
+const emptyLoadedUsage = (): LoadedUsage => ({ cachedTokens: 0, inputTokens: 0, outputTokens: 0, count: 0 })
+
+const usageNumber = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+
+function UsageDetails({ usage, loaded = false, detailed = false }: {
+  usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }
+  loaded?: boolean
+  detailed?: boolean
+}) {
+  const total = usage ? usage.cachedTokens + usage.inputTokens + usage.outputTokens : 0
+  const parts = [
+    { label: 'Cached', value: usage?.cachedTokens || 0, color: 'bg-fw-text-subtle', ink: 'text-fw-text-muted', icon: Database },
+    { label: 'Input', value: usage?.inputTokens || 0, color: 'bg-fw-accent', ink: 'text-fw-accent', icon: ArrowDownLeft },
+    { label: 'Output', value: usage?.outputTokens || 0, color: 'bg-fw-special', ink: 'text-fw-special', icon: ArrowUpRight },
+  ]
+  const label = loaded ? 'Loaded tokens' : 'Tokens'
+  const description = usage ? `${label}: ${total.toLocaleString('en')}. ${parts.map(part => `${part.label}: ${part.value.toLocaleString('en')}`).join(', ')}` : `${label}: unavailable`
+  return (
+    <div className="min-w-0" title={description}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-[10px] text-fw-text-muted"><Layers3 className="h-3 w-3" aria-hidden="true" />{label}</span>
+        <strong className={`${detailed ? 'text-lg' : 'text-sm'} font-semibold tabular-nums leading-none text-fw-text-strong`}>{usage ? usageNumber(total) : '—'}</strong>
+      </div>
+      <div role="img" aria-label={description} className="mt-2 flex h-1 overflow-hidden rounded-full bg-fw-border-muted">
+        {total > 0 ? parts.filter(part => part.value > 0).map(part => <span key={part.label} className={part.color} style={{ width: `${part.value / total * 100}%` }} />) : null}
+      </div>
+      {detailed && usage ? <div className="mt-3 space-y-2">
+        {parts.map(part => <div key={part.label} className="flex min-w-0 items-center gap-2 text-xs tabular-nums">
+          <part.icon className={`h-3 w-3 shrink-0 ${part.ink}`} aria-hidden="true" />
+          <span className="text-fw-text-muted">{part.label}</span>
+          <span className="ml-auto shrink-0 font-medium text-fw-text-strong">{usageNumber(part.value)}</span>
+          <span className="w-14 shrink-0 text-right text-fw-text-muted">{total > 0 ? (part.value / total * 100).toFixed(1) : '0.0'}%</span>
+        </div>)}
+      </div> : null}
     </div>
   )
 }
 
+function UsagePie({ usage, loaded = false, global = false }: { usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }; loaded?: boolean; global?: boolean }) {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const popup = useRef<HTMLDivElement>(null)
+  const total = usage ? usage.cachedTokens + usage.inputTokens + usage.outputTokens : 0
+  const cached = total ? usage!.cachedTokens / total * 100 : 0
+  const inputEnd = cached + (total ? usage!.inputTokens / total * 100 : 0)
+  useEffect(() => {
+    if (!position) return
+    const dismiss = (event: PointerEvent) => {
+      if (!popup.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setPosition(null)
+    }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setPosition(null); trigger.current?.focus() } }
+    const close = () => setPosition(null)
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape); window.removeEventListener('resize', close); window.removeEventListener('scroll', close, true) }
+  }, [position])
+  return <>
+    <button ref={trigger} type="button" aria-label={global ? 'Global token usage' : loaded ? 'Loaded token usage' : 'Token usage'} aria-haspopup="dialog" aria-expanded={!!position}
+      title={usage ? `${usageNumber(total)} ${loaded ? 'loaded tokens' : 'tokens'}` : 'Token usage unavailable'}
+      onKeyDown={event => event.stopPropagation()}
+      onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setPosition(position ? null : { left: Math.max(8, Math.min(rect.right - 280, window.innerWidth - 288)), top: rect.bottom + 210 < window.innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 210) }) }}
+      className={`flex shrink-0 items-center rounded-lg transition-colors hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${global ? 'gap-3 px-3 py-1.5 text-left' : 'h-8 w-8 justify-center'}`}>
+      <span aria-hidden="true" className={`${global ? 'h-8 w-8' : 'h-5 w-5'} shrink-0 rounded-full ring-1 ring-inset ring-fw-border/30`} style={{ background: total ? `conic-gradient(var(--foxwarm-color-text-subtle) 0% ${cached}%, var(--foxwarm-color-accent) ${cached}% ${inputEnd}%, var(--foxwarm-color-special) ${inputEnd}% 100%)` : 'var(--foxwarm-color-border)' }} />
+      {global ? <>
+        <span className="flex flex-col gap-0.5"><span className="text-[10px] font-medium tracking-wide text-fw-text-muted">Usage</span><strong className="text-lg font-semibold leading-none tabular-nums text-fw-text-strong">{usage ? usageNumber(total) : '—'}</strong></span>
+        <ChevronRight aria-hidden="true" className={`ml-1 h-3.5 w-3.5 text-fw-text-muted transition-transform ${position ? '-rotate-90' : 'rotate-90'}`} />
+      </> : null}
+    </button>
+    {position ? createPortal(<div ref={popup} role="dialog" aria-label="Token usage" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
+      className="fixed z-[1000] w-[280px] max-w-[calc(100vw-16px)] rounded-xl border border-fw-border bg-fw-surface p-4 shadow-xl" style={position}>
+      <UsageDetails usage={usage} loaded={loaded} detailed />
+    </div>, document.body) : null}
+  </>
+}
+
+
+function SessionOperationRow({ session, selected, current, now, onInspect, onOpen }: {
+  session: Session
+  selected: boolean
+  current: boolean
+  now: number
+  onInspect: () => void
+  onOpen: () => void
+}) {
+  const runtimeState = getSessionRuntimeStateName(session)
+  const runtimeSummary = getRuntimeStateSummary(session.runtimeState, !!session.busy)
+  const queueLength = session.runtimeState?.queueLength ?? session.queueLength ?? 0
+  const activeSince = session.runtimeState?.since || session.busyStartedAt
+  const model = session.runtimeState?.active?.modelKey || session.modelKey || session.model || session.defaultModelKey
+  const name = session.displayName || session.id
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      data-architecture-session-id={session.id}
+      data-architecture-session-selected={selected ? 'true' : 'false'}
+      onClick={onInspect}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onInspect() } }}
+      className={`group rounded-lg border px-3 py-2.5 outline-none transition-colors ${selected
+        ? 'border-fw-accent-border bg-fw-accent-surface/80 ring-1 ring-fw-focus-ring dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30 dark:ring-fw-focus-ring'
+        : 'border-fw-border bg-fw-surface-sunken/70 hover:border-fw-border-strong hover:bg-fw-surface dark:border-fw-border dark:bg-fw-canvas/40 dark:hover:border-fw-border-strong dark:hover:bg-fw-hover'} focus-visible:ring-2 focus-visible:ring-fw-focus-ring`}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${getStatusTone(session)}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-fw-text-strong" title={name}>{name}</span>
+            {current ? renderMetaBadge('current', 'active') : null}
+            {session.isolated ? renderMetaBadge('isolated', 'warning') : null}
+            {session.archived ? renderMetaBadge('archived', 'muted') : null}
+          </div>
+          {session.displayName ? <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text-muted">
+            <span className="font-medium text-fw-text-strong">{runtimeSummary}</span>
+            {runtimeState !== 'idle' ? <span>{formatBusyDuration(activeSince, now)}</span> : null}
+            <span>agent {session.agent || 'main'}</span>
+            {queueLength > 0 ? <span className="text-fw-warning dark:text-fw-warning">queued {queueLength}</span> : null}
+            {model ? <span className="max-w-[180px] truncate" title={model}>model {model}</span> : null}
+          </div>
+
+        </div>
+        <UsagePie usage={session.tokenUsage} />
+        <button
+          type="button"
+          onClick={(event) => { event.stopPropagation(); onOpen() }}
+          title="Open session"
+          className="rounded-md p-1.5 text-fw-text-muted opacity-70 transition hover:bg-fw-hover hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspect, onOpen }: {
+  node: WebUiNodeTarget
+  rows: Session[]
+  selectedSessionId: string | null
+  currentSession?: string
+  now: number
+  onInspect: (sessionId: string) => void
+  onOpen: (sessionId: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const usage = useMemo(() => rows.reduce(addLoadedUsage, emptyLoadedUsage()), [rows])
+  const activeCount = rows.filter(isSessionRuntimeActive).length
+  const waitingCount = rows.filter(session => getSessionRuntimeStateName(session) === 'waiting').length
+  const serviceCount = Object.keys(node.services || {}).length
+  const upgradeRequired = node.protocolStatus === 'upgrade-required'
+  const ready = node.online && !upgradeRequired
+  const quarantined = node.online && upgradeRequired
+  const statusLabel = quarantined ? 'upgrade required' : node.online ? 'ready' : upgradeRequired ? 'offline · upgrade required' : 'offline'
+  const preferredIds = new Set([selectedSessionId, currentSession].filter((id): id is string => !!id))
+  const visibleRows = expanded ? rows : getArchitectureNodePreview(rows, preferredIds)
+  return (
+    <section data-architecture-node-id={node.id} className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-fw-border-muted px-4 py-3 dark:border-fw-border">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${ready ? 'bg-fw-success-surface text-fw-success' : quarantined ? 'bg-fw-warning-surface text-fw-warning' : 'bg-fw-neutral-surface text-fw-text-muted'}`}>
+            <Server className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-sm font-semibold text-fw-text-strong">{node.displayName || node.id}</h3>
+              <span className={`h-1.5 w-1.5 rounded-full ${ready ? 'bg-fw-success' : quarantined ? 'bg-fw-warning' : 'bg-fw-text-subtle'}`} />
+              <span className={`text-[10px] uppercase tracking-wide ${quarantined ? 'text-fw-warning' : 'text-fw-text-muted'}`}>{statusLabel}</span>
+            </div>
+            <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{node.id} · {node.type || 'remote'}{serviceCount ? ` · ${serviceCount} services` : ''}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-fw-text-muted">
+          <span>{rows.length} loaded</span>
+          <UsagePie usage={usage.count ? usage : undefined} loaded />
+          {activeCount > 0 ? <span className="text-fw-accent dark:text-fw-accent">{activeCount} active</span> : null}
+          {waitingCount > 0 ? <span className="text-fw-warning dark:text-fw-warning">{waitingCount} waiting</span> : null}
+        </div>
+      </header>
+      {rows.length > 0 ? (
+        <>
+
+          <div data-architecture-node-session-scroll className="max-h-[360px] overflow-y-auto overscroll-contain">
+            <div className="grid gap-2 p-3 lg:grid-cols-2">
+              {visibleRows.map(session => (
+                <SessionOperationRow
+                  key={session.id}
+                  session={session}
+                  selected={selectedSessionId === session.id}
+                  current={currentSession === session.id}
+                  now={now}
+                  onInspect={() => onInspect(session.id)}
+                  onOpen={() => onOpen(session.id)}
+                />
+              ))}
+            </div>
+          </div>
+          {rows.length > 6 ? (
+            <div className="border-t border-fw-border-muted px-3 py-2 dark:border-fw-border">
+              <button type="button" onClick={() => setExpanded(value => !value)} className="w-full rounded-lg px-3 py-1.5 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30">
+                {expanded ? 'Show operational preview' : `Browse ${rows.length - visibleRows.length} more in this node…`}
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+const InspectorField = ({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) => (
+  <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 py-1.5 text-xs">
+    <dt className="text-fw-text-muted">{label}</dt>
+    <dd className={`min-w-0 break-words text-fw-text-strong ${mono ? 'font-mono text-[11px]' : ''}`}>{value || '—'}</dd>
+  </div>
+)
+
+function SessionInspector({ session, parent, children, childTotal, hasMoreChildren, now, current, node, onInspect, onOpen, onLoadMoreChildren }: {
+  session: Session | null
+  parent: Session | null
+  children: Session[]
+  childTotal: number
+  hasMoreChildren: boolean
+  now: number
+  current: boolean
+  node: WebUiNodeTarget | null
+  onInspect: (sessionId: string) => void
+  onOpen: (sessionId: string) => void
+  onLoadMoreChildren: (sessionId: string) => void
+}) {
+  if (!session) {
+    return (
+      <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50">
+        <CircleDot className="mx-auto h-6 w-6 text-fw-text" />
+        <h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select a session</h3>
+        <p className="mt-1 text-xs leading-5 text-fw-text-muted">Inspect runtime, placement, queue, tokens, and lineage without navigating away.</p>
+      </aside>
+    )
+  }
+
+  const state = getSessionRuntimeStateName(session)
+  const runtime = session.runtimeState
+  const queueLength = runtime?.queueLength ?? session.queueLength ?? 0
+  const tokenUsage = session.tokenUsage || { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
+  const totalTokens = tokenUsage.cachedTokens + tokenUsage.inputTokens + tokenUsage.outputTokens
+  const model = runtime?.active?.modelKey || session.modelKey || session.model || session.defaultModelKey
+  const waiting = runtime?.waiting
+  const tool = runtime?.tool
+
+  return (
+    <aside data-architecture-inspector-session-id={session.id} className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface xl:sticky xl:top-4">
+      <div className="border-b border-fw-border-muted p-4 dark:border-fw-border">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-base font-semibold text-fw-text-strong">{session.displayName || session.id}</h2>
+              {current ? renderMetaBadge('current', 'active') : null}
+            </div>
+            {session.displayName ? <div className="mt-1 break-all font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
+          </div>
+          <button type="button" onClick={() => onOpen(session.id)} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-fw-text-strong px-2.5 py-1.5 text-xs font-medium text-fw-surface hover:bg-fw-text">
+            <ExternalLink className="h-3.5 w-3.5" /> Open
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span className={`h-2 w-2 rounded-full ${getStatusTone(session)}`} />
+          <span className="font-medium text-fw-text-strong">{getRuntimeStateSummary(runtime, !!session.busy)}</span>
+          {state !== 'idle' ? <span className="text-fw-text-muted">for {formatBusyDuration(runtime?.since || session.busyStartedAt, now)}</span> : null}
+        </div>
+      </div>
+
+      <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">
+        <section>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Runtime</h3>
+          <dl className="mt-1">
+            <InspectorField label="State" value={state} />
+            <InspectorField label="Phase" value={runtime?.active?.phase || '—'} />
+            <InspectorField label="Model" value={model || '—'} mono />
+            <InspectorField label="Queue" value={String(queueLength)} />
+            {tool ? <InspectorField label="Tool" value={`${tool.name}${typeof tool.index === 'number' && typeof tool.total === 'number' ? ` ${tool.index + 1}/${tool.total}` : ''}`} /> : null}
+            {tool?.argsPreview ? <InspectorField label="Arguments" value={tool.argsPreview} mono /> : null}
+          </dl>
+        </section>
+
+        {waiting ? (
+          <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-warning">Wait condition</h3>
+            <dl className="mt-1">
+              <InspectorField label="Waiting for" value={waiting.waitingFor} />
+              <InspectorField label="Reason" value={waiting.reason || '—'} />
+              {waiting.waitAllSessions ? <InspectorField label="Sessions" value={`${waiting.satisfiedSessions?.length || 0}/${waiting.waitAllSessions.length} satisfied`} /> : null}
+              {waiting.pendingSessions?.length ? <InspectorField label="Pending" value={waiting.pendingSessions.join(', ')} mono /> : null}
+              {waiting.waitExecIds?.length ? <InspectorField label="Exec IDs" value={waiting.waitExecIds.join(', ')} mono /> : null}
+            </dl>
+          </section>
+        ) : null}
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Placement</h3>
+          <dl className="mt-1">
+            <InspectorField label="Agent" value={session.agent || 'main'} />
+            <InspectorField label="Node" value={<span className="inline-flex items-center gap-1.5"><span className={`h-1.5 w-1.5 rounded-full ${node?.online ? 'bg-fw-success' : 'bg-fw-text-subtle'}`} />{node?.displayName || getArchitectureSessionNodeId(session)}</span>} />
+            <InspectorField label="Node ID" value={getArchitectureSessionNodeId(session)} mono />
+            <InspectorField label="CWD" value={session.cwd || '—'} mono />
+            <InspectorField label="Isolation" value={session.isolated ? 'isolated agent' : 'shared runtime'} />
+          </dl>
+        </section>
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
+          <dl className="mt-1">
+            <InspectorField label="Messages" value={String(session.messageCount || 0)} />
+            <InspectorField label="Updated" value={formatRelativeTime(session.lastMessageTime)} />
+            <InspectorField label="Tokens" value={formatTokenCount(totalTokens)} />
+            <InspectorField label="Cached" value={formatTokenCount(tokenUsage.cachedTokens)} />
+            <InspectorField label="Input / output" value={`${formatTokenCount(tokenUsage.inputTokens)} / ${formatTokenCount(tokenUsage.outputTokens)}`} />
+          </dl>
+        </section>
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Relationships</h3>
+          <div className="mt-2 space-y-1.5">
+            {parent ? (
+              <button type="button" onClick={() => onInspect(parent.id)} className="flex w-full items-center gap-2 rounded-lg border border-fw-border px-2.5 py-2 text-left text-xs hover:bg-fw-hover dark:border-fw-border dark:hover:bg-fw-hover">
+                <GitFork className="h-3.5 w-3.5 rotate-180 text-fw-text-muted" />
+                <span className="min-w-0 flex-1 truncate"><span className="text-fw-text-muted">parent</span> {parent.displayName || parent.id}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-fw-text" />
+              </button>
+            ) : <div className="text-xs text-fw-text-muted">Root session</div>}
+            {children.map(child => (
+              <button key={child.id} type="button" onClick={() => onInspect(child.id)} className="flex w-full items-center gap-2 rounded-lg border border-fw-border px-2.5 py-2 text-left text-xs hover:bg-fw-hover dark:border-fw-border dark:hover:bg-fw-hover">
+                <GitFork className="h-3.5 w-3.5 text-fw-text-muted" />
+                <span className="min-w-0 flex-1 truncate"><span className="text-fw-text-muted">child</span> {child.displayName || child.id}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-fw-text" />
+              </button>
+            ))}
+            {children.length === 0 && childTotal === 0 ? <div className="text-xs text-fw-text-muted">No child sessions</div> : null}
+            {hasMoreChildren ? <button type="button" onClick={() => onLoadMoreChildren(session.id)} className="w-full rounded-lg px-2.5 py-1.5 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30">Load more relationships…</button> : null}
+          </div>
+        </section>
+      </div>
+    </aside>
+  )
+}
+
+const formatBytes = (size: number) => {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${size} B`
+}
+
+function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent: AgentRegistryEntry; usage?: LoadedUsage; selected: boolean; onSelect: () => void }) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect() } }}
+      data-architecture-agent-id={agent.id}
+      data-architecture-agent-selected={selected ? 'true' : 'false'}
+      onClick={onSelect}
+      className={`rounded-xl border p-4 text-left shadow-sm transition-colors ${selected
+        ? 'border-fw-accent-border bg-fw-accent-surface/80 ring-1 ring-fw-focus-ring dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30 dark:ring-fw-focus-ring'
+        : 'border-fw-border bg-fw-surface hover:border-fw-border-strong dark:border-fw-border dark:bg-fw-surface dark:hover:border-fw-border-strong'}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fw-special-surface text-fw-special dark:bg-fw-special-surface/40 dark:text-fw-special"><Bot className="h-4 w-4" /></span>
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-fw-text-strong">{agent.id}</h3>
+            <p className="mt-0.5 truncate text-[11px] text-fw-text-muted">{agent.inherit ? `inherits ${agent.inherit}` : 'independent memory'}</p>
+          </div>
+        </div>
+        <UsagePie usage={usage?.count ? usage : undefined} loaded />
+        {agent.isolated ? renderMetaBadge(agent.isolatedNode ? `isolated · ${agent.isolatedNode}` : 'isolated', 'warning') : null}
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.sessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">sessions</div></div>
+        <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-accent dark:text-fw-accent">{agent.activeSessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">active</div></div>
+        <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.memoryFileCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">memory</div></div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-fw-text-muted">
+        <span>{agent.queuedSessionCount > 0 ? `${agent.queuedSessionCount} queued` : 'queue clear'}</span>
+        <span>{agent.memoryLastModified ? `memory ${formatRelativeTime(agent.memoryLastModified)}` : 'no memory files'}</span>
+      </div>
+    </div>
+  )
+}
+
+function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLoading, memoryError, onOpenMemory, onSave, onDelete }: {
+  agent: AgentRegistryEntry | null
+  allAgents: AgentRegistryEntry[]
+  nodes: WebUiNodeTarget[]
+  memoryFiles: AgentMemoryFile[]
+  memoryLoading: boolean
+  memoryError: string
+  onOpenMemory: (memoryRoot: string, filePath?: string) => void
+  onSave: (agentId: string, changes: { inheritAgent: string | null; isolatedNode: string | null }) => Promise<void>
+  onDelete: (agentId: string) => Promise<void>
+}) {
+  const [inheritAgent, setInheritAgent] = useState('')
+  const [isolatedNode, setIsolatedNode] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setInheritAgent(agent?.inherit || '')
+    setIsolatedNode(agent?.isolatedNode || '')
+    setDeleteOpen(false)
+    setDeleteConfirm('')
+    setError('')
+  }, [agent?.id, agent?.inherit, agent?.isolatedNode])
+
+  if (!agent) {
+    return <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50"><Bot className="mx-auto h-6 w-6 text-fw-text" /><h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select an agent</h3><p className="mt-1 text-xs text-fw-text-muted">Inspect memory, inheritance, isolation, and lifecycle controls.</p></aside>
+  }
+
+  const dirty = inheritAgent !== (agent.inherit || '') || isolatedNode !== (agent.isolatedNode || '')
+  const save = async () => {
+    setSaving(true); setError('')
+    try { await onSave(agent.id, { inheritAgent: inheritAgent || null, isolatedNode: isolatedNode || null }) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setSaving(false) }
+  }
+  const remove = async () => {
+    setSaving(true); setError('')
+    try { await onDelete(agent.id) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setSaving(false) }
+  }
+
+  return (
+    <aside data-architecture-agent-inspector-id={agent.id} className="order-first overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface xl:order-none xl:sticky xl:top-4">
+      <header className="border-b border-fw-border-muted p-4 dark:border-fw-border">
+        <div className="flex items-start justify-between gap-3">
+          <div><h2 className="text-base font-semibold text-fw-text-strong">{agent.id}</h2><p className="mt-1 text-xs text-fw-text-muted">Persistent workspace and memory owner</p></div>
+          <button type="button" onClick={() => onOpenMemory(agent.memoryRoot)} className="inline-flex items-center gap-1.5 rounded-lg bg-fw-text-strong px-2.5 py-1.5 text-xs font-medium text-fw-surface hover:bg-fw-text"><FolderOpen className="h-3.5 w-3.5" /> Memory</button>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">{renderMetaBadge(`${agent.sessionCount} sessions`)}{agent.activeSessionCount ? renderMetaBadge(`${agent.activeSessionCount} active`, 'active') : null}{agent.isolated ? renderMetaBadge('isolated', 'warning') : renderMetaBadge('shared runtime', 'muted')}</div>
+      </header>
+
+      <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">
+        <section>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Memory inheritance</h3>
+          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fw-text-muted">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>
+          <label className="mt-3 block text-xs text-fw-text-muted">Inherit agent<select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">None</option>{allAgents.filter(item => item.id !== agent.id && !item.isolated).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
+        </section>
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><Shield className="h-3.5 w-3.5" /> Isolation</h3>
+          <label className="mt-2 block text-xs text-fw-text-muted">Execution node<select value={isolatedNode} onChange={event => setIsolatedNode(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">Shared runtime</option>{nodes.filter(node => node.id !== 'master').map(node => <option key={node.id} value={node.id} disabled={node.protocolStatus === 'upgrade-required'}>{node.displayName} · {node.protocolStatus === 'upgrade-required' ? 'upgrade required' : node.online ? 'ready' : 'offline'}</option>)}</select></label>
+          <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-fw-accent px-3 py-2 text-xs font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
+        </section>
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <div className="flex items-center justify-between gap-2"><h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><MemoryStick className="h-3.5 w-3.5" /> Memory files</h3><span className="text-[10px] text-fw-text-muted">{memoryFiles.length} Markdown</span></div>
+          <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+            {memoryLoading ? <div className="py-4 text-center text-xs text-fw-text-muted">Loading memory manifest…</div> : null}
+            {memoryError ? <div className="rounded-lg bg-fw-danger-surface px-2.5 py-2 text-xs text-fw-danger dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{memoryError}</div> : null}
+            {!memoryLoading && !memoryError && memoryFiles.map(file => (
+              <button key={file.path} type="button" onClick={() => onOpenMemory(agent.memoryRoot, file.absolutePath)} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-fw-hover dark:hover:bg-fw-hover">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-fw-text-muted" /><span className="min-w-0 flex-1 truncate font-mono text-[10px] text-fw-text-strong" title={file.path}>{file.path}</span><span className="shrink-0 text-[9px] text-fw-text-muted">{formatBytes(file.size)}</span>
+              </button>
+            ))}
+            {!memoryLoading && !memoryError && memoryFiles.length === 0 ? <div className="py-4 text-center text-xs text-fw-text-muted">No Markdown memory files.</div> : null}
+          </div>
+        </section>
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-danger">Danger zone</h3>
+          {agent.id === 'main' ? <p className="mt-2 text-xs text-fw-text-muted">The main agent cannot be deleted.</p> : !deleteOpen ? <button type="button" onClick={() => setDeleteOpen(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-fw-danger-border px-2.5 py-1.5 text-xs font-medium text-fw-danger hover:bg-fw-danger-surface dark:border-fw-danger-border dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/30"><Trash2 className="h-3.5 w-3.5" /> Delete agent</button> : (
+            <div className="mt-2 rounded-lg border border-fw-danger-border bg-fw-danger-surface/50 p-3 dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/20"><p className="text-xs leading-5 text-fw-danger dark:text-fw-danger">Deletes {agent.sessionCount} session(s), this workspace, and self-owned memory. Durable session archives remain reserved. Type <strong>{agent.id}</strong> to confirm.</p><input value={deleteConfirm} onChange={event => setDeleteConfirm(event.target.value)} className="mt-2 w-full rounded-md border border-fw-danger-border bg-fw-surface px-2.5 py-1.5 font-mono text-xs outline-none dark:border-fw-danger-border dark:bg-fw-canvas" /><div className="mt-2 flex gap-2"><button type="button" onClick={() => { setDeleteOpen(false); setDeleteConfirm('') }} className="flex-1 rounded-md border border-fw-border px-2 py-1.5 text-xs dark:border-fw-border">Cancel</button><button type="button" disabled={deleteConfirm !== agent.id || saving} onClick={() => { void remove() }} className="flex-1 rounded-md bg-fw-danger px-2 py-1.5 text-xs font-medium text-fw-text-inverse disabled:opacity-40">Delete</button></div></div>
+          )}
+        </section>
+        {error ? <div className="mt-3 rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div> : null}
+      </div>
+    </aside>
+  )
+}
+
 export default function ArchitectureView({
-  sessions,
   currentSession,
   onSelectSession,
   onBack,
+  onCreateAgent,
+  onCreateSession,
+  onAgentsChanged,
+  onOpenAgentMemory,
 }: ArchitectureViewProps) {
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [rootIds, setRootIds] = useState<string[]>([])
+  const [rootCursor, setRootCursor] = useState<string | null>(null)
+  const [rootTarget, setRootTarget] = useState(50)
+  const [childCursors, setChildCursors] = useState<Map<string, string | null>>(new Map())
+  const [childTotals, setChildTotals] = useState<Map<string, number>>(new Map())
+  const [childIds, setChildIds] = useState<Map<string, string[]>>(new Map())
+  const [focusPathIds, setFocusPathIds] = useState<Set<string>>(new Set())
+  const [agentCounts, setAgentCounts] = useState<Array<{ agent: string; count: number }>>([])
+  const [globalSummary, setGlobalSummary] = useState({ total: 0, busy: 0, queued: 0, managed: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0 })
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
-  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
-  const [showMoreChildren, setShowMoreChildren] = useState<Set<string>>(new Set())
+  const [statusFilter, setStatusFilter] = useState<ArchitectureStatusFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [inspectedSessionId, setInspectedSessionId] = useState<string | null>(currentSession || null)
+  const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>(() => parseWebUiNodeTargets({ nodes: [] }))
+  const [nodeTargetsError, setNodeTargetsError] = useState('')
+  const [surface, setSurface] = useState<'topology' | 'agents'>('topology')
+  const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
+  const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>('main')
+  const [agentMemoryFiles, setAgentMemoryFiles] = useState<AgentMemoryFile[]>([])
+  const [agentMemoryLoading, setAgentMemoryLoading] = useState(false)
+  const [agentMemoryError, setAgentMemoryError] = useState('')
+  const [agentRegistryError, setAgentRegistryError] = useState('')
   const [now, setNow] = useState(Date.now())
+  const generationRef = useRef(0)
+  const rowStoreRef = useRef(createEpochRows<Session>())
+  const branchTargetsRef = useRef(new Map<string, number>())
+  const selectedAgentRef = useRef(selectedAgent); selectedAgentRef.current = selectedAgent
+  const rootTargetRef = useRef(rootTarget); rootTargetRef.current = rootTarget
+  const currentSessionRef = useRef(currentSession); currentSessionRef.current = currentSession
+  const invalidationIdentityRef = useRef<string | null>(null)
+
+  const collectArchitectureRoots = async (target: number, agent: string | null) => {
+    const result = await replayCursorWindow<Session>({ targetCount: target, pageCap: 100, fetchPage: async (cursor, limit) => {
+      const params = new URLSearchParams({ limit: String(limit), childLimit: '10' }); if (agent) params.set('agent', agent); if (cursor) params.set('cursor', cursor)
+      const response = await fetch(`${API_BASE_PATH}/session-list/architecture?${params}`); if (!response.ok) throw new Error(`Architecture query failed (${response.status})`)
+      const payload = await response.json(); return { ...payload.roots, items: payload.roots?.sessions || [], nextCursor: payload.roots?.nextCursor || null, architecturePayload: payload }
+    } })
+    const rows = [...result.items]; const ids = new Map<string, string[]>(); const totals = new Map<string, number>(); const cursors = new Map<string, string | null>()
+    let summary = globalSummary; let counts = agentCounts
+    for (const page of result.pages as any[]) { const payload = page.architecturePayload; summary = payload.summary || summary; counts = payload.agentCounts || counts
+      for (const group of payload.children || []) { ids.set(group.parentSessionId, (group.sessions || []).map((row: Session) => row.id)); totals.set(group.parentSessionId, Number(group.total || 0)); cursors.set(group.parentSessionId, group.nextCursor || null); rows.push(...(group.sessions || [])) } }
+    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childIds: ids, childTotals: totals, childCursors: cursors, rows, summary, agentCounts: counts, revision: result.revision }
+  }
+
+  const collectArchitectureBranches = async (targets: Map<string, number>, agent: string | null, expectedRevision?: string) => replayCursorBranches<Session>({ targets, pageCap: 20, parentBatchCap: 20, expectedRevision,
+    fetchBatch: async (parents, limit) => { const response = await fetch(`${API_BASE_PATH}/session-list/children`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'time', limit, ...(agent ? { agent } : {}), parents }) }); if (!response.ok) throw new Error(`Architecture child query failed (${response.status})`)
+      const payload = await response.json(); return { reset: payload.reset, revision: payload.revision, groups: (payload.children || []).map((group: any) => ({ parentSessionId: group.parentSessionId, items: group.sessions, nextCursor: group.nextCursor, total: group.total })) } } })
+
+  const collectArchitectureFocus = async (requestedId: string | undefined, selectedAgent: string | null) => {
+    if (!requestedId) return { rows: [] as Session[], path: [] as string[], missing: false, revision: undefined as string | undefined }
+    const response = await fetch(`${API_BASE_PATH}/session-list/by-id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [requestedId], includePaths: true }) })
+    if (!response.ok) throw new Error(`Architecture focus query failed (${response.status})`)
+    const payload = await response.json(); const result = payload.results?.[0]
+    if (!result?.session) return { rows: [] as Session[], path: [] as string[], missing: true, revision: payload.revision as string | undefined }
+    const path = payload.paths?.[requestedId] || [result.session.id]; const rows: Session[] = []
+    for (let index = 0; index < path.length; index += 100) { const exactResponse = await fetch(`${API_BASE_PATH}/session-list/by-id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: path.slice(index, index + 100), includePaths: false }) }); if (!exactResponse.ok) throw new Error(`Architecture focus path query failed (${exactResponse.status})`); const exact = await exactResponse.json(); if (payload.revision !== undefined && exact.revision !== payload.revision) throw new BoundedReplayRevisionMismatch(); rows.push(...(exact.results || []).flatMap((item: any) => item.session ? [item.session] : [])) }
+    const rowMap = new Map(rows.map(row => [row.id, row])); const filteredPath = filterPresentationPathForAgent(path, rowMap, result.session.id, selectedAgent); const owned = new Set(filteredPath)
+    return { rows: rows.filter(row => owned.has(row.id)), path: filteredPath, missing: false, revision: payload.revision as string | undefined }
+  }
+
+  const replayArchitecture = async (target: number, branchTargets: Map<string, number>) => trackHttpRowsRequest(rowStoreRef.current, async startEpoch => {
+    const generation = ++generationRef.current; const requestAgent = selectedAgentRef.current; const requestFocus = currentSessionRef.current
+    const { roots: combined, branches } = await replayAtomicWindows({ loadRoots: async () => { const roots = await collectArchitectureRoots(target, requestAgent); const focus = await collectArchitectureFocus(requestFocus, requestAgent); if (roots.revision !== undefined && focus.revision !== undefined && roots.revision !== focus.revision) throw new BoundedReplayRevisionMismatch(); return { ...roots, focus } },
+      loadBranches: combined => { const targets = new Map(branchTargets); for (const parent of combined.focus.path.slice(0, -1)) targets.set(parent, Math.max(1, targets.get(parent) || 0)); return targets.size ? collectArchitectureBranches(targets, requestAgent, combined.revision) : Promise.resolve(new Map<string, { items: Session[]; nextCursor: string | null; total: number }>()) } })
+    const { focus, ...roots } = combined
+    if (generation !== generationRef.current || selectedAgentRef.current !== requestAgent || currentSessionRef.current !== requestFocus) return
+    const ids = new Map(roots.childIds); const totals = new Map(roots.childTotals); const cursors = new Map(roots.childCursors); const rows = [...roots.rows]
+    for (const [parent, branch] of branches) { ids.set(parent, branch.items.map(row => row.id)); totals.set(parent, branch.total); cursors.set(parent, branch.nextCursor); rows.push(...branch.items) }
+    rows.push(...focus.rows)
+    const forced = mergeForcedPresentationPath(roots.rootIds, ids, focus.path); roots.rootIds = forced.rootIds; for (const [parent, children] of forced.childIds) ids.set(parent, children)
+    const reachable = new Set(roots.rootIds); let changed = true
+    while (changed) { changed = false; for (const [parent, children] of ids) if (reachable.has(parent)) for (const child of children) if (!reachable.has(child)) { reachable.add(child); changed = true } }
+    for (const parent of [...branchTargets.keys()]) if (!reachable.has(parent)) { branchTargets.delete(parent); ids.delete(parent); totals.delete(parent); cursors.delete(parent) }
+    const keep = new Set([...roots.rootIds, ...[...ids].flatMap(([parent, children]) => [parent, ...children])]); mergeHttpRows(rowStoreRef.current, rows, startEpoch)
+    if (focus.missing && requestFocus && (rowStoreRef.current.epochs.get(requestFocus) || 0) <= startEpoch) mergeDeltaRows(rowStoreRef.current, [], [requestFocus])
+    pruneEpochRows(rowStoreRef.current, keep)
+    setSessions([...rowStoreRef.current.rows.values()]); setRootIds(roots.rootIds); setRootCursor(roots.rootCursor); setRootTarget(target)
+    setChildIds(ids); setChildTotals(totals); setChildCursors(cursors); setAgentCounts(roots.agentCounts); setGlobalSummary(roots.summary)
+    setFocusPathIds(new Set(focus.path))
+    branchTargetsRef.current = new Map(branchTargets)
+  })
 
   useEffect(() => {
-    const hasBusySession = sessions.some(session => session.busy)
+    branchTargetsRef.current = new Map(); setSessions([]); rowStoreRef.current = createEpochRows<Session>()
+    setChildIds(new Map()); setChildTotals(new Map()); setChildCursors(new Map()); setFocusPathIds(new Set()); setRootIds([]); setRootTarget(50)
+    void replayArchitecture(50, new Map()).catch(error => console.error('Failed Architecture bootstrap', error))
+  }, [selectedAgent])
+  useEffect(() => {
+    setInspectedSessionId(currentSession || null)
+    void replayArchitecture(rootTargetRef.current, new Map(branchTargetsRef.current)).catch(error => console.error('Failed Architecture focus replay', error))
+  }, [currentSession])
+
+  useEffect(() => {
+    let disposed = false
+    const loadNodes = async () => {
+      try {
+        const response = await fetch(`${API_BASE_PATH}/nodes`)
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || `Node query failed (${response.status})`)
+        if (!disposed) { setNodeTargets(parseWebUiNodeTargets(payload)); setNodeTargetsError('') }
+      } catch (error) {
+        if (!disposed) setNodeTargetsError(error instanceof Error ? error.message : String(error))
+      }
+    }
+    void loadNodes()
+    const timer = window.setInterval(() => { void loadNodes() }, 30_000)
+    return () => { disposed = true; window.clearInterval(timer) }
+  }, [])
+
+  const loadAgentRegistry = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_PATH}/agents`)
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || `Agent query failed (${response.status})`)
+      const nextAgents = Array.isArray(payload.agents) ? payload.agents as AgentRegistryEntry[] : []
+      setAgentRegistry(nextAgents)
+      setSelectedRegistryAgentId(previous => previous && nextAgents.some(agent => agent.id === previous) ? previous : nextAgents.find(agent => agent.id === 'main')?.id || nextAgents[0]?.id || null)
+      setAgentRegistryError('')
+    } catch (error) {
+      setAgentRegistryError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadAgentRegistry()
+    if (surface !== 'agents') return
+    const timer = window.setInterval(() => { void loadAgentRegistry() }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [loadAgentRegistry, surface])
+
+  useEffect(() => {
+    if (surface !== 'agents' || !selectedRegistryAgentId) { setAgentMemoryFiles([]); return }
+    let disposed = false
+    setAgentMemoryLoading(true); setAgentMemoryError('')
+    void fetch(`${API_BASE_PATH}/agents/${encodeURIComponent(selectedRegistryAgentId)}/memory`)
+      .then(async response => {
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || `Memory query failed (${response.status})`)
+        if (!disposed) setAgentMemoryFiles(Array.isArray(payload.files) ? payload.files : [])
+      })
+      .catch(error => { if (!disposed) { setAgentMemoryFiles([]); setAgentMemoryError(error instanceof Error ? error.message : String(error)) } })
+      .finally(() => { if (!disposed) setAgentMemoryLoading(false) })
+    return () => { disposed = true }
+  }, [selectedRegistryAgentId, surface])
+
+  const architectureSubscriptionIds = useMemo(() => [...rootIds, ...[...childIds].flatMap(([parent, ids]) => [parent, ...ids])].filter((id, index, all) => all.indexOf(id) === index), [rootIds, childIds])
+  useEffect(() => {
+    const scheduler = createSessionListRefreshScheduler(() => replayArchitecture(rootTargetRef.current, new Map(branchTargetsRef.current)))
+    const subscriptionAgent = selectedAgent
+    const unsubscribe = webUiRealtime.subscribeSessionList(architectureSubscriptionIds, {
+      onOpen: () => requestSessionListStreamOpenResync(scheduler),
+      onMessage: data => { if (selectedAgentRef.current !== subscriptionAgent) return
+        if (data.type === 'session-list-delta') { mergeDeltaRows(rowStoreRef.current, data.sessions || [], data.deletedIds || []); setSessions([...rowStoreRef.current.rows.values()]) }
+        if (data.type === 'session-list-invalidated' || data.type === 'sessions-updated') { const identity = data.eventId !== undefined ? `${data.eventId}:${data.presentationRevision ?? ''}` : null; if (!identity || invalidationIdentityRef.current !== identity) { invalidationIdentityRef.current = identity; scheduler.requestRefresh() } }
+      },
+    })
+    return () => { scheduler.dispose(); unsubscribe() }
+  }, [selectedAgent, architectureSubscriptionIds.join('\0')])
+
+  useEffect(() => {
+    const hasBusySession = sessions.some(session => isSessionRuntimeActive(session))
     if (!hasBusySession) return
 
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -262,22 +784,7 @@ export default function ArchitectureView({
 
   const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
 
-  const agents = useMemo(() => {
-    const agentMap = new Map<string, { name: string; sessionCount: number; busyCount: number }>()
-
-    for (const session of sessions) {
-      const agentName = session.agent || 'main'
-      const existing = agentMap.get(agentName)
-      if (existing) {
-        existing.sessionCount++
-        if (session.busy) existing.busyCount++
-      } else {
-        agentMap.set(agentName, { name: agentName, sessionCount: 1, busyCount: session.busy ? 1 : 0 })
-      }
-    }
-
-    return Array.from(agentMap.values()).sort((a, b) => b.sessionCount - a.sessionCount)
-  }, [sessions])
+  const agents = useMemo(() => agentCounts.map(item => ({ name: item.agent, sessionCount: item.count })), [agentCounts])
 
   // Reset selectedAgent if it no longer exists
   useEffect(() => {
@@ -322,220 +829,264 @@ export default function ArchitectureView({
 
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
-
-    for (const session of sessions) {
-      const parentId = normalizedParentMap.get(session.id)
-      if (!parentId) continue
-      // When filtering, skip children that don't belong to the selected agent
-      if (filteredSessionSet && !filteredSessionSet.has(session.id)) continue
-
-      if (!map.has(parentId)) {
-        map.set(parentId, [])
-      }
-
-      map.get(parentId)?.push(session)
-    }
-
-    for (const children of map.values()) {
-      children.sort(sortSessions)
-    }
-
+    for (const [parentId, ids] of childIds) map.set(parentId, ids.map(id => sessionMap.get(id))
+      .filter((row): row is Session => !!row && (!filteredSessionSet || filteredSessionSet.has(row.id) || focusPathIds.has(row.id))))
     return map
-  }, [sessions, normalizedParentMap, filteredSessionSet])
+  }, [childIds, sessionMap, filteredSessionSet, focusPathIds])
 
-  const roots = useMemo(
-    () => {
-      if (!filteredSessionSet) {
-        return sessions.filter(session => !normalizedParentMap.get(session.id)).sort(sortSessions)
-      }
-      // When filtering by agent: a session is a root if it belongs to the selected agent AND
-      // either has no parent or its parent is not in the filtered set
-      return sessions.filter(session => {
-        if (!filteredSessionSet.has(session.id)) return false
-        const parentId = normalizedParentMap.get(session.id)
-        return !parentId || !filteredSessionSet.has(parentId)
-      }).sort(sortSessions)
-    },
-    [sessions, normalizedParentMap, filteredSessionSet],
-  )
-
-  useEffect(() => {
-    if (!currentSession) return
-
-    const next = new Set<string>()
-    let cursor: string | null | undefined = currentSession
-    while (cursor) {
-      next.add(cursor)
-      cursor = normalizedParentMap.get(cursor)
+  const loadedAgentUsage = useMemo(() => {
+    const totals = new Map<string, LoadedUsage>()
+    for (const session of sessions) {
+      const agent = session.agent || 'main'
+      const total = totals.get(agent) || emptyLoadedUsage()
+      addLoadedUsage(total, session)
+      totals.set(agent, total)
     }
-
-    setExpandedSessions(prev => {
-      const merged = new Set(prev)
-      for (const id of next) merged.add(id)
-      return merged
-    })
-  }, [currentSession, normalizedParentMap])
-
-  const summary = useMemo(() => {
-    const busyCount = sessions.filter(session => session.busy).length
-    const queuedSessions = sessions.filter(session => (session.queueLength || 0) > 0)
-    const queuedItems = queuedSessions.reduce((sum, session) => sum + (session.queueLength || 0), 0)
-    const totalCachedTokens = sessions.reduce((sum, session) => sum + (session.tokenUsage?.cachedTokens || 0), 0)
-    const totalInputTokens = sessions.reduce((sum, session) => sum + (session.tokenUsage?.inputTokens || 0), 0)
-    const totalOutputTokens = sessions.reduce((sum, session) => sum + (session.tokenUsage?.outputTokens || 0), 0)
-    const agentCount = new Set(sessions.map(session => session.agent || 'main')).size
-
-    return {
-      agentCount,
-      sessionCount: sessions.length,
-      busyCount,
-      queuedSessions: queuedSessions.length,
-      queuedItems,
-      totalCachedTokens,
-      totalInputTokens,
-      totalOutputTokens,
-    }
+    return totals
   }, [sessions])
 
-  const toggleExpanded = (sessionId: string) => {
-    setExpandedSessions(prev => {
-      const next = new Set(prev)
-      if (next.has(sessionId)) {
-        next.delete(sessionId)
-      } else {
-        next.add(sessionId)
-      }
-      return next
-    })
+  const summary = {
+    agentCount: agentCounts.length,
+    sessionCount: globalSummary.total,
+    activeCount: globalSummary.busy,
+    waitingCount: sessions.filter(session => getSessionRuntimeStateName(session) === 'waiting').length,
+    queuedSessions: globalSummary.queued,
+    managedCount: globalSummary.managed,
+    totalCachedTokens: globalSummary.cachedTokens,
+    totalInputTokens: globalSummary.inputTokens,
+    totalOutputTokens: globalSummary.outputTokens,
   }
 
-  const toggleShowMore = (sessionId: string) => {
-    setShowMoreChildren(prev => {
-      const next = new Set(prev)
-      if (next.has(sessionId)) {
-        next.delete(sessionId)
-      } else {
-        next.add(sessionId)
+  const visibleSessions = useMemo(
+    () => filterArchitectureSessions(sessions, statusFilter, searchQuery),
+    [sessions, statusFilter, searchQuery],
+  )
+  const groupedSessions = useMemo(() => groupArchitectureSessionsByNode(visibleSessions), [visibleSessions])
+
+  const displayNodes = useMemo(() => {
+    const byId = new Map(nodeTargets.map(node => [node.id, node]))
+    for (const nodeId of groupedSessions.keys()) {
+      if (!byId.has(nodeId)) {
+        byId.set(nodeId, { id: nodeId, type: 'unavailable', displayName: nodeId, online: false, services: {}, unavailable: true })
       }
-      return next
+    }
+    return [...byId.values()].sort((left, right) => {
+      if (left.id === 'master') return -1
+      if (right.id === 'master') return 1
+      if (left.online !== right.online) return left.online ? -1 : 1
+      return left.displayName.localeCompare(right.displayName)
     })
+  }, [nodeTargets, groupedSessions])
+
+  const nodeMap = useMemo(() => new Map(displayNodes.map(node => [node.id, node])), [displayNodes])
+  const inspectedSession = inspectedSessionId ? sessionMap.get(inspectedSessionId) || null : null
+  const inspectedParentId = inspectedSession ? normalizedParentMap.get(inspectedSession.id) : null
+  const inspectedParent = inspectedParentId ? sessionMap.get(inspectedParentId) || null : null
+  const inspectedChildren = inspectedSession ? childrenMap.get(inspectedSession.id) || [] : []
+  const inspectedChildTotal = inspectedSession ? childTotals.get(inspectedSession.id) ?? inspectedChildren.length : 0
+  const inspectedNode = inspectedSession ? nodeMap.get(getArchitectureSessionNodeId(inspectedSession)) || null : null
+
+  const loadSessionRelationships = (sessionId: string, increment = 10) => {
+    const targets = new Map(branchTargetsRef.current)
+    const loaded = childIds.get(sessionId)?.length || 0
+    targets.set(sessionId, Math.max(loaded + increment, targets.get(sessionId) || 0, 10))
+    branchTargetsRef.current = targets
+    void replayArchitecture(rootTargetRef.current, targets).catch(error => console.error('Failed Architecture relationship replay', error))
+  }
+
+  const inspectSession = (sessionId: string) => {
+    setInspectedSessionId(sessionId)
+    if (!branchTargetsRef.current.has(sessionId)) loadSessionRelationships(sessionId)
+  }
+
+  useEffect(() => {
+    if (inspectedSessionId && sessionMap.has(inspectedSessionId)) return
+    if (currentSession && sessionMap.has(currentSession)) { setInspectedSessionId(currentSession); return }
+    const firstActive = sessions.find(isSessionRuntimeActive)
+    setInspectedSessionId(firstActive?.id || sessions[0]?.id || null)
+  }, [currentSession, inspectedSessionId, sessionMap, sessions])
+
+  const statusFilters: Array<{ id: ArchitectureStatusFilter; label: string; count?: number }> = [
+    { id: 'all', label: 'All', count: sessions.length },
+    { id: 'active', label: 'Active', count: sessions.filter(isSessionRuntimeActive).length },
+    { id: 'waiting', label: 'Waiting', count: summary.waitingCount },
+    { id: 'queued', label: 'Queued', count: sessions.filter(session => Number(session.runtimeState?.queueLength ?? session.queueLength ?? 0) > 0).length },
+    { id: 'isolated', label: 'Isolated', count: sessions.filter(session => session.isolated).length },
+  ]
+
+  const readyNodes = displayNodes.filter(node => node.online && node.protocolStatus !== 'upgrade-required').length
+  const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
+  const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
+
+  const createAgentFromRegistry = async (agentId: string, inheritAgent?: string) => {
+    if (onCreateAgent) await onCreateAgent(agentId, inheritAgent)
+    else {
+      const response = await fetch(`${API_BASE_PATH}/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId, inheritAgent }) })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Failed to create agent')
+      if (payload.sessionId) onSelectSession(payload.sessionId)
+    }
+    await loadAgentRegistry(); setSelectedRegistryAgentId(agentId); await onAgentsChanged?.()
+  }
+
+  const createSessionFromRegistry = async (agentId: string, sessionId?: string) => {
+    if (onCreateSession) await onCreateSession(agentId, sessionId)
+    else {
+      const response = await fetch(`${API_BASE_PATH}/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId, sessionId: sessionId || undefined }) })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Failed to create session')
+      if (payload.sessionId) onSelectSession(payload.sessionId)
+    }
+    await loadAgentRegistry(); await onAgentsChanged?.()
+  }
+
+  const openAgentMemory = (memoryRoot: string, filePath?: string) => {
+    if (onOpenAgentMemory) { onOpenAgentMemory(memoryRoot, filePath); return }
+    const workspace = { nodeId: 'master', path: memoryRoot }
+    window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspace, filePath ? { openFile: { kind: 'openFile', nodeId: 'master', path: filePath } } : undefined).toString(), '_blank', 'noopener,noreferrer')
+  }
+
+  const saveRegistryAgent = async (agentId: string, changes: { inheritAgent: string | null; isolatedNode: string | null }) => {
+    const response = await fetch(`${API_BASE_PATH}/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'Failed to update agent')
+    await loadAgentRegistry(); await onAgentsChanged?.()
+  }
+
+  const deleteRegistryAgent = async (agentId: string) => {
+    const response = await fetch(`${API_BASE_PATH}/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmAgentId: agentId }) })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'Failed to delete agent')
+    setSelectedRegistryAgentId(null); await loadAgentRegistry(); await onAgentsChanged?.()
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-100 dark:bg-gray-900">
-      <div className="mx-auto max-w-[1200px] p-4 md:p-5 lg:p-6">
-        <div className="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div className="h-full overflow-y-auto bg-fw-canvas">
+      <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
+        <header className="mb-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
-                {onBack && (
-                  <button
-                    onClick={onBack}
-                    className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 md:hidden"
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                    <span>Back</span>
+                {onBack ? (
+                  <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-fw-border bg-fw-surface px-3 py-1.5 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong dark:hover:bg-fw-hover md:hidden">
+                    <ArrowLeft className="h-4 w-4" /> Back
                   </button>
-                )}
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Agents</h1>
+                ) : null}
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></span>
+                <div>
+                  <h1 className="text-2xl font-bold text-fw-text-strong">System Architecture</h1>
+                  <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
+                </div>
               </div>
-              <p className="mt-2 max-w-4xl text-sm text-gray-600 dark:text-gray-300">
-                Runtime session hierarchy with status, busy time, message counts, agent ownership, and token usage.
-              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-fw-text-muted">
+              <div className="inline-flex rounded-lg border border-fw-border bg-fw-surface p-0.5 dark:border-fw-border dark:bg-fw-surface">
+                <button type="button" data-active={surface === 'topology'} aria-pressed={surface === 'topology'} onClick={() => setSurface('topology')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'topology' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Topology</button>
+                <button type="button" data-active={surface === 'agents'} aria-pressed={surface === 'agents'} onClick={() => setSurface('agents')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'agents' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Agents</button>
+              </div>
+              <span>{sessions.length} loaded of {summary.sessionCount} sessions</span>
+              {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
+              {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/70">
-              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Agents</div>
-              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{summary.agentCount}</div>
-            </div>
-            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/70">
-              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Sessions</div>
-              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{summary.sessionCount}</div>
-            </div>
-            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/70">
-              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Busy</div>
-              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{summary.busyCount}</div>
-            </div>
-            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/70">
-              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Queued</div>
-              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">{summary.queuedSessions}</div>
-              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{summary.queuedItems} queued items</div>
-            </div>
-            <div className="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/70 xl:col-span-2">
-              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total token usage</div>
-              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
-                {formatTokenMillions(summary.totalCachedTokens + summary.totalInputTokens + summary.totalOutputTokens)}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
-                <span>cached {formatTokenMillions(summary.totalCachedTokens)}</span>
-                <span>input {formatTokenMillions(summary.totalInputTokens)}</span>
-                <span>output {formatTokenMillions(summary.totalOutputTokens)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <section className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setSelectedAgent(null)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                selectedAgent === null
-                  ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                  : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-700 dark:hover:bg-gray-700'
-              }`}
-            >
-              All
-              <span className="ml-1.5 text-xs opacity-70">{sessions.length}</span>
-            </button>
-            {agents.map(agent => (
-              <button
-                key={agent.name}
-                onClick={() => setSelectedAgent(prev => prev === agent.name ? null : agent.name)}
-                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                  selectedAgent === agent.name
-                    ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                    : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-700 dark:hover:bg-gray-700'
-                }`}
-              >
-                {agent.name}
-                <span className="ml-1.5 text-xs opacity-70">{agent.sessionCount}</span>
-                {agent.busyCount > 0 && (
-                  <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
-                    {agent.busyCount} busy
-                  </span>
-                )}
-              </button>
-            ))}
+          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+            <SummaryMetric label="Agents" value={agentRegistry.length || summary.agentCount} detail="persistent workspaces" icon={<Bot className="h-4 w-4" />} onClick={() => setSurface('agents')} active={surface === 'agents'} />
+            <SummaryMetric label="Sessions" value={summary.sessionCount} detail={`${sessions.length} in loaded window`} icon={<Layers3 className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('all') }} active={surface === 'topology' && statusFilter === 'all'} />
+            <SummaryMetric label="Active" value={summary.activeCount} detail="model or tool work" icon={<Activity className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('active') }} active={surface === 'topology' && statusFilter === 'active'} />
+            <SummaryMetric label="Waiting" value={summary.waitingCount} detail="loaded wait conditions" icon={<Clock3 className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('waiting') }} active={surface === 'topology' && statusFilter === 'waiting'} />
+            <SummaryMetric label="Queued" value={summary.queuedSessions} detail="sessions with pending work" icon={<MessageSquare className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('queued') }} active={surface === 'topology' && statusFilter === 'queued'} />
+            <SummaryMetric label="Nodes ready" value={`${readyNodes}/${displayNodes.length}`} detail="protocol-compatible execution" icon={<Server className="h-4 w-4" />} onClick={() => setSurface('topology')} />
           </div>
 
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Sessions
-            {selectedAgent && <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">filtered by {selectedAgent}</span>}
-          </h2>
+        </header>
 
-          <div className="space-y-2">
-            {roots.map(root => (
-              <SessionNode
-                key={root.id}
-                session={root}
-                parent={null}
-                children={childrenMap.get(root.id) || []}
-                depth={0}
+        {surface === 'topology' ? <div className="mb-5 border-b border-fw-border-muted pb-4">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <label className="relative w-full sm:w-72 lg:w-80 sm:shrink-0">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
+                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} aria-label="Search sessions, models, tools" placeholder="Search sessions…" className="h-9 w-full rounded-lg border border-fw-border bg-fw-surface py-0 pl-9 pr-3 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring hover:bg-fw-hover dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring" />
+              </label>
+              <label className="relative min-w-0 flex-1 sm:w-48 sm:flex-none">
+                <Bot className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
+                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border hover:bg-fw-hover dark:text-fw-text-strong">
+                  <option value="">All agents · {summary.sessionCount}</option>
+                  {agents.map(agent => <option key={agent.name} value={agent.name}>{agent.name} · {agent.sessionCount}</option>)}
+                </select>
+                <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
+              </label>
+              <label className="relative min-w-0 flex-1 sm:w-36 sm:flex-none">
+                <ListFilter className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
+                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-transparent bg-transparent py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border hover:bg-fw-hover dark:text-fw-text-strong">
+                  {statusFilters.map(filter => <option key={filter.id} value={filter.id}>{filter.label}{typeof filter.count === 'number' ? ` · ${filter.count}` : ''}</option>)}
+                </select>
+                <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
+              </label>
+            </div>
+            <div className="ml-auto flex shrink-0 items-center">
+              <UsagePie global usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens }} />
+            </div>
+          </div>
+        </div> : null}
+
+        {surface === 'topology' ? <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="flex items-center justify-between gap-3 px-1 xl:col-span-2 xl:pr-[376px]">
+              <div>
+                <h2 className="text-sm font-semibold text-fw-text-strong">Execution topology</h2>
+                <p className="mt-0.5 text-xs text-fw-text-muted">Sessions are grouped by their effective tool-execution node, not sidebar hierarchy.</p>
+              </div>
+              <span className="text-xs text-fw-text-muted">{visibleSessions.length} matching</span>
+            </div>
+          <main className="min-w-0 space-y-3">
+            {displayNodes.map(node => (
+              <NodeLane
+                key={node.id}
+                node={node}
+                rows={groupedSessions.get(node.id) || []}
+                selectedSessionId={inspectedSession?.id || null}
+                currentSession={currentSession}
                 now={now}
-                expandedSessions={expandedSessions}
-                showMoreChildren={showMoreChildren}
-                onToggleExpanded={toggleExpanded}
-                onToggleShowMore={toggleShowMore}
-                onSelectSession={onSelectSession}
-                sessionMap={sessionMap}
-                childrenMap={childrenMap}
+                onInspect={inspectSession}
+                onOpen={onSelectSession}
               />
             ))}
+            {rootCursor ? (
+              <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-surface dark:border-fw-border dark:bg-fw-surface/50 dark:text-fw-accent dark:hover:bg-fw-hover">
+                Load 50 more root sessions…
+              </button>
+            ) : null}
+          </main>
+
+          <SessionInspector
+            session={inspectedSession}
+            parent={inspectedParent}
+            children={inspectedChildren}
+            childTotal={inspectedChildTotal}
+            hasMoreChildren={!!(inspectedSession && childCursors.get(inspectedSession.id))}
+            now={now}
+            current={!!inspectedSession && inspectedSession.id === currentSession}
+            node={inspectedNode}
+            onInspect={inspectSession}
+            onOpen={onSelectSession}
+            onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
+          />
+        </div> : (
+          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <main className="min-w-0">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
+                <div><h2 className="text-sm font-semibold text-fw-text-strong">Agent registry</h2><p className="mt-0.5 text-xs text-fw-text-muted">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
+                <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted">{agentRegistry.length} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
+              </div>
+              {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{agentRegistryError}</div> : null}
+              <div className="grid gap-3 md:grid-cols-2">
+                {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} usage={loadedAgentUsage.get(agent.id)} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
+                {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted dark:border-fw-border">No agents found.</div> : null}
+              </div>
+            </main>
+            <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
-        </section>
+        )}
       </div>
     </div>
   )

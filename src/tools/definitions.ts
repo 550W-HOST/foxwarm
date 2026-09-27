@@ -1,18 +1,69 @@
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
+import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '../permissions';
+import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
+import { addHandoffConfirmationSchema } from '../toolCallControls';
 
+const TOOL_RULES_SCHEMA = {
+    type: 'array',
+    maxItems: MAX_AGENT_TOOL_RULES,
+    description: "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated, alongside the instance-wide authorization policy.",
+    items: {
+        oneOf: [
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['builtin'] },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'tool'],
+            },
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['node'] },
+                    node: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'node', 'tool'],
+            },
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['mcp'] },
+                    server: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'server', 'tool'],
+            },
+        ],
+    },
+};
 
-export const definitions = [
+const FORCE_MODEL_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    description: "Only use when the user explicitly requests a model or effort override for this task or session. Otherwise omit this parameter to use the normal inherited defaults; an empty object also leaves them unchanged.",
+    properties: {
+        modelId: { type: 'string', description: "Configured model key to use." },
+        effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: "Effort override. Can be set without modelId to use the otherwise selected model." },
+    },
+};
+
+const baseDefinitions = [
         {
             name: 'read',
             defaultInject: true,
-            description: 'Read a file or list a directory. Directory reads are non-recursive, default to 50 items, and use startLine/endLine as item numbers; passing 0 for startLine/endLine is treated as omitted. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: "Read a file, view an image, or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",
             parameters: {
                 type: 'object',
                 properties: { 
-                    filePath: { type: 'string' },
-                    startLine: { type: 'number', description: 'Starting line number/item number (1-indexed, optional). 0 is treated as omitted.' },
-                    endLine: { type: 'number', description: 'Ending line number/item number (1-indexed, inclusive, optional). 0 is treated as omitted.' }
+                    filePath: { type: 'string' , description: "File or directory path. Relative paths use the session working directory, or the agent directory if no working directory is set. Absolute paths and ~/ paths are accepted subject to permissions."},
+                    startLine: { type: 'number', description: "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning." },
+                    endLine: { type: 'number', description: "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range." }
                 },
                 required: ['filePath']
             }
@@ -20,15 +71,15 @@ export const definitions = [
         {
             name: 'write',
             defaultInject: true,
-            description: 'Write a file. By default, parent directories must already exist; pass createDirs=true to create missing parent directories. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write failure with overwrite=true to reuse the cached attempted content for the same path.',
+            description: "Write text to a file. Existing files are protected unless overwrite is true; missing parent directories are created only when createDirs is true. Supply content for a new write, or contentRef to retry previously cached content.",
             parameters: {
                 type: 'object',
                 properties: { 
-                    content: { type: 'string' },
-                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. Use with overwrite=true and the same filePath to write the cached content without resending it.' },
-                    filePath: { type: 'string' },
-                    overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' },
-                    createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' }
+                    content: { type: 'string' , description: "Complete file contents. Use either content or contentRef, not both."},
+                    contentRef: { type: 'string', description: "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same session/agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived." },
+                    filePath: { type: 'string' , description: "Destination path. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+                    overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
+                    createDirs: { type: 'boolean', description: "Create missing parent directories. Defaults to false." }
                 },
                 required: ['filePath']
             }
@@ -36,13 +87,13 @@ export const definitions = [
         {
             name: 'edit',
             defaultInject: true,
-            description: 'Replace exact text in a file (legacy surgical edit). Relative file paths resolve from the current session cwd when set, otherwise from the current agent folder. Use oldText/newText for direct single-match replacement. Prefer apply_patch for patch-style changes.',
+            description: "Replace one exact occurrence of text in a file. Use apply_patch when a line-based patch is more suitable.",
             parameters: {
                 type: 'object',
                 properties: { 
-                    filePath: { type: 'string' },
-                    oldText: { type: 'string', description: 'The exact text to find' },
-                    newText: { type: 'string', description: 'The text to replace it with' },
+                    filePath: { type: 'string' , description: "File to edit. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+                    oldText: { type: 'string', description: "Exact text to replace; it must identify a single occurrence." },
+                    newText: { type: 'string', description: "Replacement text." },
                 },
                 required: ['filePath', 'oldText', 'newText']
             }
@@ -50,11 +101,37 @@ export const definitions = [
         {
             name: 'apply_patch',
             defaultInject: true,
-            description: 'This is a custom utility that makes it more convenient to add, remove, or edit code files. Paths in patch file headers resolve like other file tools: relative paths resolve from the current session cwd when set, otherwise from the current agent folder; absolute paths and ~/... are also accepted when allowed. Pass the patch command text as `input`. The expected format uses an apply_patch envelope with `*** Begin Patch` / `*** End Patch`, and file actions such as `*** Update File: path`, `*** Add File: path`, or `*** Delete File: path`. Update File bodies use a line-based patch format: optional `@@` / `@@ anchor` section markers, context lines prefixed with a single space, `-` deletions, `+` insertions, and optional `*** End of File`.',
+            description: `Add, modify, or delete files with a line-based patch. Relative paths in patch headers use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. Supply the patch as input.
+
+The patch must be enclosed in \`*** Begin Patch\` / \`*** End Patch\`. Each file operation starts with a header line:
+- \`*** Update File: <path>\` — modify an existing file
+- \`*** Add File: <path>\` — create a new file (all body lines must start with \`+\`)
+- \`*** Delete File: <path>\` — delete a file (no body lines)
+
+For Update File, the body uses line-based diff syntax:
+- Lines starting with a single space \` \` are context (must match the existing file content)
+- Lines starting with \`-\` are deletions (must match existing content)
+- Lines starting with \`+\` are insertions (new content)
+- \`@@\` or \`@@ <anchor text>\` starts a new section (anchor text helps locate the position in the file)
+- \`*** End of File\` marks that the following context is at the end of the file
+
+Example:
+\`\`\`
+*** Begin Patch
+*** Update File: src/app.ts
+@@ function main()
+ import { foo } from './foo';
+-const old = 'removed';
++const newVar = 'added';
+ console.log(newVar);
+*** Add File: src/newfile.ts
++export const hello = 'world';
+*** End Patch
+\`\`\``,
             parameters: {
                 type: 'object',
                 properties: {
-                    input: { type: 'string', description: 'The apply_patch command text that you wish to execute.' }
+                    input: { type: 'string', description: "Complete patch text in the format described above." }
                 },
                 required: ['input']
             }
@@ -62,13 +139,13 @@ export const definitions = [
         {
             name: 'read_memory',
             defaultInject: true,
-            description: 'Read a file from the current agent\'s memory/ directory. Pass a path relative to memory/ (for example `MEMORY.md` or `notes/foo.md`). This always targets your own memory files on master; do not prefix with `memory/` or pass node=master.',
+            description: "Read a file in this agent's memory directory on master. Use memory-relative paths such as MEMORY.md or notes/project.md.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-                    startLine: { type: 'number', description: 'Starting line number (1-indexed, optional). 0 is treated as omitted.' },
-                    endLine: { type: 'number', description: 'Ending line number (1-indexed, inclusive, optional). 0 is treated as omitted.' }
+                    filePath: { type: 'string', description: "Path relative to this agent's memory directory, without a memory/ prefix." },
+                    startLine: { type: 'number', description: "First line to read, counting from 1. Omit or use 0 to start at the beginning." },
+                    endLine: { type: 'number', description: "Last line to include, counting from 1. Omit or use 0 to read through the end." }
                 },
                 required: ['filePath']
             }
@@ -76,12 +153,12 @@ export const definitions = [
         {
             name: 'write_memory',
             defaultInject: true,
-            description: 'Create a new file under the current agent\'s memory/ directory. Pass a path relative to memory/. This tool never overwrites existing files; use edit_memory to modify an existing memory file.',
+            description: "Create a file in this agent's memory directory on master. Existing files are not overwritten; use edit_memory to change one.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-                    content: { type: 'string', description: 'File contents to create.' }
+                    filePath: { type: 'string', description: "Path relative to this agent's memory directory, without a memory/ prefix." },
+                    content: { type: 'string', description: "Complete contents of the new file." }
                 },
                 required: ['filePath', 'content']
             }
@@ -89,13 +166,13 @@ export const definitions = [
         {
             name: 'edit_memory',
             defaultInject: true,
-            description: 'Edit an existing file under the current agent\'s memory/ directory using an exact oldText/newText replacement. Pass a path relative to memory/.',
+            description: "Replace one exact occurrence of text in a file in this agent's memory directory on master.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' },
-                    oldText: { type: 'string', description: 'The exact text to find' },
-                    newText: { type: 'string', description: 'The text to replace it with' }
+                    filePath: { type: 'string', description: "Path relative to this agent's memory directory, without a memory/ prefix." },
+                    oldText: { type: 'string', description: "Exact text to replace; it must identify a single occurrence." },
+                    newText: { type: 'string', description: "Replacement text." }
                 },
                 required: ['filePath', 'oldText', 'newText']
             }
@@ -103,11 +180,11 @@ export const definitions = [
         {
             name: 'delete_memory',
             defaultInject: true,
-            description: 'Delete a single file inside the current agent\'s memory/ directory. Pass a path relative to memory/.',
+            description: "Delete one file from this agent's memory directory on master.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Relative file path inside the current agent memory/ directory.' }
+                    filePath: { type: 'string', description: "Path relative to this agent's memory directory, without a memory/ prefix." }
                 },
                 required: ['filePath']
             }
@@ -115,39 +192,27 @@ export const definitions = [
         {
             name: 'apply_patch_memory',
             defaultInject: true,
-            description: 'Apply an apply_patch-style patch only within the current agent\'s memory/ directory. Pass memory-relative paths in the patch file headers; `memory/` prefixes are accepted but optional. Supports the same patch envelope and bare-patch compatibility as apply_patch.',
+            description: "Add, modify, or delete this agent's memory files on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted.",
             parameters: {
                 type: 'object',
                 properties: {
-                    input: { type: 'string', description: 'The apply_patch command text to execute against files under the current agent memory/ directory.' }
+                    input: { type: 'string', description: "Patch text using the same format as apply_patch." }
                 },
                 required: ['input']
             }
         },
         {
-            name: 'delete_file',
-            defaultInject: true,
-            description: 'Delete a single file or symlink. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Refuses to delete directories.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    filePath: { type: 'string', description: 'File path. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' }
-                },
-                required: ['filePath']
-            }
-        },
-        {
             name: 'copy_between_nodes',
             defaultInject: true,
-            description: 'Copy a file between master/remote nodes. Absolute paths and ~/... are accepted when allowed. Relative paths resolve under the current agent folder on each endpoint. Non-isolated sessions have no Foxwarm path restriction; isolated sessions are restricted only when accessing master (to their own agent folder).',
+            description: "Copy a file between two Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use this agent's directory on each Node, not the session working directory.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sourceNode: { type: 'string', description: 'Source node id. Use `master` for local files.' },
-                    sourcePath: { type: 'string', description: 'Source file path on the source node. Absolute paths and ~/... are accepted when allowed; relative paths resolve under the current agent folder on that node.' },
-                    targetNode: { type: 'string', description: 'Target node id. Use `master` for local files.' },
-                    targetPath: { type: 'string', description: 'Target file path on the target node. Absolute paths and ~/... are accepted when allowed; relative paths resolve under the current agent folder on that node.' },
-                    overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false' },
+                    sourceNode: { type: 'string', description: "Node containing the source file. Use master for the Main host." },
+                    sourcePath: { type: 'string', description: "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted." },
+                    targetNode: { type: 'string', description: "Node that will receive the file. Use master for the Main host." },
+                    targetPath: { type: 'string', description: "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted." },
+                    overwrite: { type: 'boolean', description: "Allow replacement of an existing destination file. Defaults to false." },
                 },
                 required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
             }
@@ -155,15 +220,15 @@ export const definitions = [
         {
             name: 'image_crop',
             defaultInject: true,
-            description: 'Crop an image that was previously returned in this session by image id. Returns another inline image that can be cropped again or written to a file.',
+            description: "Crop an image previously returned by a tool in this session. Returns a new image that can be viewed, cropped again, or saved with image_write_to_file.",
             parameters: {
                 type: 'object',
                 properties: {
-                    id: { type: 'string', description: 'Image id from a prior tool-returned image label, such as `[IMAGE: id=...]`.' },
-                    x: { type: 'number', description: 'Left coordinate in pixels.' },
-                    y: { type: 'number', description: 'Top coordinate in pixels.' },
-                    width: { type: 'number', description: 'Crop width in pixels.' },
-                    height: { type: 'number', description: 'Crop height in pixels.' },
+                    id: { type: 'string', description: "Image ID from a tool result, such as the value in [IMAGE: id=...]." },
+                    x: { type: 'number', description: "Left edge of the crop, in pixels." },
+                    y: { type: 'number', description: "Top edge of the crop, in pixels." },
+                    width: { type: 'number', description: "Crop width in pixels." },
+                    height: { type: 'number', description: "Crop height in pixels." },
                 },
                 required: ['id', 'x', 'y', 'width', 'height']
             }
@@ -171,14 +236,14 @@ export const definitions = [
         {
             name: 'image_write_to_file',
             defaultInject: true,
-            description: 'Write a previously returned session image to a file so it can be reused or sent with send_file. On master, relative paths resolve from the current session cwd when set, otherwise from the current agent folder; on remote nodes, relative paths resolve under that node\'s agent folder. Absolute paths and ~/... are also accepted when allowed.',
+            description: "Save an image previously returned by a tool in this session. The saved file can be reused or delivered with send_file.",
             parameters: {
                 type: 'object',
                 properties: {
-                    id: { type: 'string', description: 'Image id from a prior tool-returned image label.' },
-                    filePath: { type: 'string', description: 'Output file path. On master, relative paths resolve from the current session cwd when set, otherwise from the current agent folder; on remote nodes, relative paths resolve under that node\'s agent folder.' },
-                    overwrite: { type: 'boolean', description: 'Overwrite the target file if it already exists. Default: false.' },
-                    node: { type: 'string', description: 'Optional. Node where the file should be written. Defaults to the current node.' },
+                    id: { type: 'string', description: "Image ID from a previous tool result." },
+                    filePath: { type: 'string', description: "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted." },
+                    overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
+                    node: { type: 'string', description: "Node on which to save the image. Defaults to the current Node." },
                 },
                 required: ['id', 'filePath']
             }
@@ -186,40 +251,32 @@ export const definitions = [
         {
             name: 'exec',
             defaultInject: true,
-            description: 'Execute a shell command. The working directory is the explicit cwd when provided (relative cwd resolves from the session cwd when set, otherwise from the current node default), otherwise the session cwd when set, otherwise the current node default (master default is the agent folder). Output over 10000 tokens is automatically truncated (keeps first/last 5000 tokens), full output is saved under the agent folder .temp/exec area. Commands running longer than the configured timeout (default 15s, allowed range 1-60s) continue in the background and send a completion system message later.',
+            description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream.",
             parameters: {
                 type: 'object',
                 properties: {
-                    command: { type: 'string' },
-                    cwd: { type: 'string', description: 'Optional working directory override. Relative paths resolve from session.cwd when set, otherwise from the current node default.' },
-                    timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, maximum: MAX_EXEC_TIMEOUT_SECONDS, description: `Optional timeout in seconds before the command is moved to background. Default: ${DEFAULT_EXEC_TIMEOUT_SECONDS}. Allowed range: ${MIN_EXEC_TIMEOUT_SECONDS}-${MAX_EXEC_TIMEOUT_SECONDS}.` }
+                    command: { type: 'string' , description: "Shell command or pipeline to execute."},
+                    cwd: { type: 'string', description: "Working directory for this command. Relative paths use the session working directory, or the Node's default directory if unset. When omitted, execution uses that same default chain; on master, the final default is the agent directory." },
+                    timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, description: `Seconds to wait before returning a still-running command as a background execution. Defaults to ${DEFAULT_EXEC_TIMEOUT_SECONDS}; values above ${MAX_EXEC_TIMEOUT_SECONDS} are reduced to ${MAX_EXEC_TIMEOUT_SECONDS} with a warning.` }
                 },
                 required: ['command']
             }
         },
         {
-            name: 'get_memory_context',
-            description: 'Retrieve messages around a specific point in time to see conversation flow.',
-            parameters: {
-                type: 'object',
-                properties: { 
-                    timestamp: { type: 'number', description: 'The center timestamp to search around' },
-                    limit: { type: 'number', description: 'Total messages to fetch' }
-                },
-                required: ['timestamp']
-            }
-        },
-        {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. If handing off to the child is your final step for this turn, call wait afterward in the same response.',
+            description: "Create a child session under the current or a specified agent. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
             parameters: {
                 type: 'object',
                 properties: {
-                    suffix: { type: 'string', description: 'Suffix to append to session ID for identification (e.g., "task1", "research")' },
-                    fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
-                    message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
-                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
+                    agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
+                    suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
+                    displayName: { type: 'string', description: "Display name for the new child session. This does not change its session ID." },
+                    fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },
+                    message: { type: 'string', description: "Initial task or message to send immediately after creation. Omit to create the child without starting a turn." },
+                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session." },
+                    node: { type: 'string', description: "Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node." },
+                    forceModel: FORCE_MODEL_SCHEMA,
                 },
                 required: ['suffix']
             }
@@ -227,12 +284,13 @@ export const definitions = [
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Isolated sessions can only communicate with parent/child sessions. If this handoff is your final step, call wait in parallel in the same response.',
+            description: "Send a message to another session. Use this to assign work or report results across sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Target session ID' },
-                    message: { type: 'string', description: 'Message to send' }
+                    sessionId: { type: 'string', description: "Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist. Access is subject to session permissions." },
+                    message: { type: 'string', description: "Message to deliver." },
+                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session." },
                 },
                 required: ['sessionId', 'message']
             }
@@ -240,29 +298,45 @@ export const definitions = [
         {
             name: 'wait',
             defaultInject: true,
-            description: 'Pause this session until a new message or event arrives. Use this only when you have no useful user-facing reply or tool work to do right now. Omit timeoutSeconds or pass 0 for no timeout. If a positive timeoutSeconds is provided, the session will be woken by a system message after that many seconds only if no other message/event woke it first.',
+            description: "End the current turn and wait for more information before continuing. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
             parameters: {
                 type: 'object',
+                // Anthropic-compatible gateways reject top-level schema combinators.
+                // tool_wait enforces mutual exclusion before starting a wait.
                 properties: {
-                    reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
+                    reason: { type: 'string', description: "Briefly explain what you are waiting for." },
+                    wakeIfNoActivityAfterSeconds: { type: 'number', exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Use this as a fallback so you can check progress or decide what to do next." },
                     waitAllSessions: {
                         type: 'array',
-                        description: 'Optional list of session IDs. Omit or pass [] for ordinary wait. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
-                        items: { type: 'string', description: 'Session ID that must report before this wait-all condition is satisfied.' }
-                    }
+                        description: "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Cannot be combined with waitAnySessions.",
+                        uniqueItems: true,
+                        minItems: 2,
+                        items: { type: 'string', pattern: '.*\\S.*', description: "Session ID." }
+                    },
+                    waitAnySessions: {
+                        type: 'array', minItems: 1, uniqueItems: true,
+                        description: "Session IDs from which you expect a response. Use this when a response from any one of them is enough to continue.",
+                        items: { type: 'string', pattern: '.*\\S.*', description: "Session ID." }
+                    },
+                    waitExecIds: {
+                        type: 'array',
+                        description: "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path.",
+                        minItems: 1, uniqueItems: true,
+                        items: { type: 'string', description: "Execution ID returned by exec." }
+                    },
+                    waitForInput: { type: 'boolean', enum: [true], description: "Set to true when waiting for a user message or another external event that is not covered by the session or execution options." }
                 }
-            }
+            } as any
         },
         {
             name: 'send_to_channel',
             defaultInject: true,
-            description: 'Send a message directly to users via a specific channel target (<channel-instance-id>:<conversation-id>). Usually you should not need this, because normal assistant text replies are already broadcast to all non-send-only channels attached to the current session. Use this only when the user explicitly wants a reply sent to a specific conversation / room / group.',
+            description: "Send a message to a specific channel destination. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
             parameters: {
                 type: 'object',
                 properties: {
-                    channelTargetId: { type: 'string', description: 'Target channel in format <channel-instance-id>:<conversation-id>' },
-                    message: { type: 'string', description: 'Message to send' }
+                    channelTargetId: { type: 'string', description: "Destination in the form <channel-instance-id>:<conversation-id>." },
+                    message: { type: 'string', description: "Message to deliver." }
                 },
                 required: ['channelTargetId', 'message']
             }
@@ -270,29 +344,32 @@ export const definitions = [
         {
             name: 'send_file',
             defaultInject: true,
-            description: 'Send a local file or image to users. channelTargetId and sessionId are both optional, but not at the same time: if channelTargetId is specified, send only there; otherwise sessionId defaults to the current session, and the file is sent to all channels attached to that session.',
+            description: "Deliver a file or image from a Node to users. Choose either one channelTargetId or a sessionId whose attached channels should receive it. With neither, delivery uses the current session.",
             parameters: {
                 type: 'object',
                 properties: {
-                    channelTargetId: { type: 'string', description: 'Optional target channel in format <channel-instance-id>:<conversation-id>. Cannot be combined with sessionId.' },
-                    sessionId: { type: 'string', description: 'Optional target session ID whose attached channels should receive the file. Defaults to the current session when omitted.' },
-                    filePath: { type: 'string', description: 'File path on the selected node. On master, relative paths resolve from the current session cwd when set, otherwise from the current agent folder; on remote nodes, relative paths resolve under that node\'s agent folder. Absolute paths and ~/... are also accepted when allowed.' },
-                    node: { type: 'string', description: 'Optional. Node where the file lives. Defaults to the current node; send_file still delivers through master-side channel/session routing.' },
-                    caption: { type: 'string', description: 'Optional caption/text sent with the file where supported' },
-                    text: { type: 'string', description: 'Alias of caption for convenience' }
+                    channelTargetId: { type: 'string', description: "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with sessionId." },
+                    sessionId: { type: 'string', description: "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId." },
+                    filePath: { type: 'string', description: "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted." },
+                    node: { type: 'string', description: "Node containing the file. Defaults to the current Node." },
+                    caption: { type: 'string', description: "Text to accompany the file, where the destination supports captions." },
+                    text: { type: 'string', description: "Alternative name for caption." }
                 },
                 required: ['filePath']
             }
         },
         {
-            name: 'list_sessions',
+            name: 'session',
             defaultInject: true,
-            description: 'Get list of all sessions with basic info (ID, message count, last message time, channel status)',
+            description: "Inspect this session's status, list sessions, or change a session's display name. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.",
             parameters: {
                 type: 'object',
                 properties: {
-                    start: { type: 'number', description: 'Start index in the session list sorted by last activity desc. Default: 0' },
-                    count: { type: 'number', description: 'Number of sessions to return. Default: 20' }
+                    action: { type: 'string', enum: ['status', 'list', 'update-display-name'], description: "status (default) inspects this session; list returns a page of sessions; update-display-name sets or clears a session's display name." },
+                    start: { type: 'number', description: "Zero-based offset for list, ordered by most recent activity. Defaults to 0." },
+                    count: { type: 'number', description: "Number of sessions to return for list. Defaults to 20." },
+                    sessionId: { type: 'string', description: "Target for update-display-name. Defaults to this session; status always describes this session." },
+                    name: { type: 'string', description: "New display name for update-display-name. An empty string clears it." }
                 },
                 required: [] as string[]
             }
@@ -300,7 +377,7 @@ export const definitions = [
         {
             name: 'list_agents',
             defaultInject: true,
-            description: 'List all agents with their session counts',
+            description: "List agents and the number of sessions belonging to each.",
             parameters: {
                 type: 'object',
                 properties: {},
@@ -308,176 +385,152 @@ export const definitions = [
             }
         },
         {
-            name: 'list_skills',
+            name: 'skill',
             defaultInject: true,
-            description: 'List available skills for the current session agent (or an optionally specified agent), including agent-local, inherited-agent, and global skills.',
+            description: "List available skills or read a skill's instructions and resource list. Skills may come from the agent, its inherited agents, or the global collection. Read any needed resource files separately; loading instructions does not enable additional tools.",
             parameters: {
                 type: 'object',
                 properties: {
-                    agentName: { type: 'string', description: 'Optional agent name whose visible skills should be listed. Defaults to the current session agent.' }
+                    action: { type: 'string', enum: ['list', 'load'], description: "list shows available skills; load reads one skill." },
+                    skillName: { type: 'string', description: "Skill to read when action is load." },
+                    agentName: { type: 'string', description: "Agent whose available skills to use. Defaults to this session's agent." }
                 },
-                required: [] as string[]
-            }
-        },
-        {
-            name: 'load_skill',
-            defaultInject: true,
-            description: 'Load skill documentation content using the current session agent skill resolution (or an optionally specified agent). This only returns skill documents and metadata; it does not dynamically add tools.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    skillName: { type: 'string', description: 'Skill name to load' },
-                    agentName: { type: 'string', description: 'Optional agent name whose skill search path should be used. Defaults to the current session agent.' }
-                },
-                required: ['skillName']
+                required: ['action']
             }
         },
         {
             name: 'get_session_messages',
             defaultInject: true,
-            description: 'Get messages from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can filter with query/includeRegex/excludeRegex.',
+            description: "Read a page of a session's messages and its current execution state. Defaults to the latest 10 messages. Filters narrow the selected page, not the entire conversation; use recall for semantic search or older context.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID' },
-                    start: { type: 'number', description: 'Start index (0-based, optional). Negative values count from end (e.g., -10 for last 10 messages)' },
-                    count: { type: 'number', description: 'Number of messages to retrieve (optional)' },
-                    previewLength: { type: 'number', description: 'Total output preview budget, not per-message length. Values below 1000 or above 20000 are automatically clamped with a warning. Omit or pass 0 for the default.' },
-                    query: { type: 'string', description: 'Optional literal case-insensitive text filter. Matching messages are previewed around the match when possible.' },
-                    includeRegex: { type: 'string', description: 'Optional case-insensitive regex; messages must match this pattern in their full text/tool content.' },
-                    excludeRegex: { type: 'string', description: 'Optional case-insensitive regex; matching messages are excluded.' },
-                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: 'How much tool call/result content to show. Default names folds tools to name/id/status only; snippets shows short tool snippets; full expands tool args/results within the total preview budget.' }
+                    sessionId: { type: 'string', description: "Session to read." },
+                    start: { type: 'number', description: "Zero-based message offset. Negative values count back from the end; -10 starts at the tenth-last message." },
+                    count: { type: 'number', description: "Number of messages to retrieve." },
+                    previewLength: { type: 'number', description: "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000-20,000." },
+                    contentFilter: { type: 'string', description: "Keep selected messages whose full text or tool content contains this text, ignoring case. Previews show the matching area when possible." },
+                    includeRegex: { type: 'string', description: "Keep selected messages matching this regular expression, ignoring case." },
+                    excludeRegex: { type: 'string', description: "Exclude selected messages matching this regular expression, ignoring case." },
+                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget." }
                 },
                 required: ['sessionId']
             }
         },
         {
             name: 'get_archived_messages',
-            description: 'Read archived session messages from the JSONL archive by seq range. This queries archived history, not just the current working history.',
+            description: "Read archived messages by sequence number, including messages no longer present in the active conversation.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-                    startSeq: { type: 'number', description: 'Optional inclusive starting seq number' },
-                    endSeq: { type: 'number', description: 'Optional inclusive ending seq number' },
-                    previewLength: { type: 'number', description: 'Maximum preview length per message (default: 1000)' }
+                    sessionId: { type: 'string', description: "Session to read. Defaults to this session." },
+                    startSeq: { type: 'number', description: "First message sequence number to include." },
+                    endSeq: { type: 'number', description: "Last message sequence number to include." },
+                    previewLength: { type: 'number', description: "Maximum preview characters per message. Defaults to 1,000." }
                 }
             }
         },
         {
             name: 'get_archived_blocks',
-            description: 'Read archived layered-context block summaries by block id range for a session.',
+            description: "Read archived context-block summaries by block ID.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-                    startId: { type: 'number', description: 'Optional inclusive starting block id' },
-                    endId: { type: 'number', description: 'Optional inclusive ending block id' },
-                    previewLength: { type: 'number', description: 'Maximum preview length per block summary (default: 1000)' }
+                    sessionId: { type: 'string', description: "Session to read. Defaults to this session." },
+                    startId: { type: 'number', description: "First block ID to include." },
+                    endId: { type: 'number', description: "Last block ID to include." },
+                    previewLength: { type: 'number', description: "Maximum preview characters per summary. Defaults to 1,000." }
                 }
             }
         },
         {
             name: 'recall',
             defaultInject: true,
-            description: 'Recall earlier session context by expanding CTX-BLOCK ids (for example `B#126`), reading message ranges, or doing semantic vector retrieval with vector_query. Use this when the working context contains a `[CTX-BLOCK ...]` reference and you need to drill down. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can filter with query/includeRegex/excludeRegex.',
+            description: "Recover earlier conversation context. Use target to open a known context block or message range, or vector_query to search by meaning. Filters narrow the retrieved items; they do not change which range is opened or replace semantic search.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-                    target: { type: 'string', description: 'Target selector. Omit or use `overview` for help/ranges. Supported examples: `blocks`, `B#126`, `block#126`, `msg:B#126`, `msg#10637-10680`, `msg#10637`.' },
-                    vector_query: { type: 'string', description: 'Optional semantic search query. When provided, recall searches vector-indexed history, loads the original archived message/block ranges from hit metadata, then renders them with the same preview/filter behavior.' },
-                    limit: { type: 'number', description: 'Optional vector_query result limit. Default 5, max 20.' },
-                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: 'For vector_query: requested scope. Non-isolated sessions are limited to the current agent; isolated sessions are limited to the current session.' },
-                    agentName: { type: 'string', description: 'For vector_query: optional agent name, limited to your current agent.' },
-                    previewLength: { type: 'number', description: 'Total output preview budget, not per-item length. Values below 1000 or above 20000 are automatically clamped with a warning. Omit or pass 0 for the default.' },
-                    query: { type: 'string', description: 'Optional literal case-insensitive text filter applied to full message/block/tool content; previews center around matches when possible.' },
-                    includeRegex: { type: 'string', description: 'Optional case-insensitive regex; returned items must match this pattern in their full text/tool content.' },
-                    excludeRegex: { type: 'string', description: 'Optional case-insensitive regex; matching items are excluded.' },
-                    preferBlocks: { type: 'boolean', description: 'For vector_query: if true, give block summary hits a modest ranking boost.' },
-                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: 'How much tool call/result content to show. Default names folds tools to name/id/status only; snippets shows short tool snippets; full expands tool args/results within the total preview budget.' }
+                    sessionId: { type: 'string', description: "Session for exact context lookup. Defaults to this session." },
+                    target: { type: 'string', description: "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted." },
+                    vector_query: { type: 'string', description: "Search earlier context by meaning and return matching messages or block summaries." },
+                    limit: { type: 'number', description: "Maximum semantic search results. Defaults to 5, up to 20." },
+                    scope: { type: 'string', enum: ['all', 'current-session', 'current-agent'], description: "Scope for semantic search. Searches stay within this agent; legacy isolated agents are further limited to the current session." },
+                    agentName: { type: 'string', description: "Agent for semantic search. Only this session's agent is supported." },
+                    previewLength: { type: 'number', description: "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000-20,000." },
+                    contentFilter: { type: 'string', description: "Keep retrieved items containing this text, ignoring case, and show the matching area when possible. Omit to read the complete selected context." },
+                    includeRegex: { type: 'string', description: "Keep retrieved items matching this regular expression, ignoring case." },
+                    excludeRegex: { type: 'string', description: "Exclude retrieved items matching this regular expression, ignoring case." },
+                    preferBlocks: { type: 'boolean', description: "Give context-block summaries a small ranking preference in semantic search." },
+                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget." }
                 }
             }
         },
         {
             name: 'delete_session',
-            description: 'Delete a session permanently. Cannot delete current session.',
+            description: "Permanently delete another session. The current session cannot delete itself.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID to delete' }
+                    sessionId: { type: 'string', description: "Session to delete." }
                 },
                 required: ['sessionId']
             }
         },
         {
-            name: 'update_session_name',
-            defaultInject: true,
-            description: 'Update the display name of a session. The display name is shown in the session list.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, default: current session)' },
-                    name: { type: 'string', description: 'New display name for the session. Use empty string to clear the name.' }
-                },
-                required: ['name']
-            }
-        },
-        {
             name: 'set_goal',
             defaultInject: true,
-            description: 'Set or clear the long-term goal reminder for the current session. The goal is preserved across session compaction so the session can retain its long-horizon objective even when older context is summarized.',
+            description: "Keep a goal reminder in this session during substantial work that may span compaction. Use it when this session will perform the work over many steps, not for short tasks or work mostly delegated to children. The reminder survives compaction and applies only to this session.",
             parameters: {
                 type: 'object',
                 properties: {
-                    goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
-                    remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 10.' },
-                    remindOnTurnEnd: { type: 'boolean', description: 'Optional. Whether to inject goal reminders at the end of a turn when newer work happened. If omitted, reuse the current setting or default to true.' },
-                    clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
+                    goal: { type: 'string', description: "Goal to remember. An empty string clears it." },
+                    remindEvery: { type: 'number', description: "Number of subsequent non-reminder messages between reminders. Omit to keep the current interval, or use the default of 20 if none is set." },
+                    clear: { type: 'boolean', description: "Remove the current goal reminder." }
                 }
             }
         },
         {
             name: 'set_session_child_model',
-            description: 'Set, clear, or inspect the per-session default model used when this session creates child or related new sessions. When unset, spawned sessions follow the current session model behavior.',
+            description: "Inspect or change the default model and effort for future child or related new sessions. Unset settings follow the source session's normal model and effort defaults.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-                    model: { type: 'string', description: 'Model key to use by default for child/new sessions spawned from this session.' },
-                    clear: { type: 'boolean', description: 'If true, clear the override and fall back to following the current session model.' }
+                    sessionId: { type: 'string', description: "Session whose defaults to inspect or change. Defaults to this session." },
+                    model: { type: 'string', description: "Configured model key for future child or related new sessions." },
+                    effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'default', 'unset'], description: "Effort setting; use default or unset to clear the override." },
+                    clear: { type: 'boolean', description: "Clear only the model override. Do not combine with model." }
                 }
             }
         },
         {
             name: 'set_session_compact_threshold',
-            description: 'Set, clear, or inspect the per-session auto-compact threshold override in tokens. When unset, the session inherits the default threshold derived from the active model context window.',
+            description: "Inspect or change the context-token threshold that triggers automatic compaction for a session. Without an override, the threshold follows the active model's context window.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
-                    thresholdTokens: { type: 'number', description: 'Positive token threshold override for auto-compaction. Omit to inspect current status.' },
-                    clear: { type: 'boolean', description: 'If true, clear the session override and inherit the default threshold again.' }
+                    sessionId: { type: 'string', description: "Session to inspect or change. Defaults to this session." },
+                    thresholdTokens: { type: 'number', description: "Token threshold for automatic compaction. Omit to inspect the current setting." },
+                    clear: { type: 'boolean', description: "Remove the override and use the model-derived default." }
                 }
             }
         },
         {
-            name: 'update_session_snapshot',
-            description: 'Refresh a session prompt snapshot from the latest session-configured memory sources, inheritance, and visible skills catalog. Defaults to the current session.',
+            name: 'refresh_session_snapshot',
+            description: "Refresh a session's prompt snapshot now after changes to memory, inheritance, or available skills, without waiting for an automatic refresh.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID (optional, default: current session)' }
+                    sessionId: { type: 'string', description: "Session to refresh now, even if it has been inactive for more than an hour. Defaults to this session." }
                 }
             }
         },
         {
             name: 'stop_session',
-            description: 'Stop a running session. Sets a flag that will stop tool call recursion after the current tool completes.',
+            description: "Request that a running session stop its current turn. An in-flight model request may be aborted; a tool already running may need to finish.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Session ID to stop' }
+                    sessionId: { type: 'string', description: "Session to stop." }
                 },
                 required: ['sessionId']
             }
@@ -485,73 +538,89 @@ export const definitions = [
         COMPACT_PLAN_TOOL_DEFINITION,
         {
             name: 'compact_session',
-            description: 'Request a compaction flow for the current session or another idle session. This does not return compact candidates directly. Instead, the target session enters a dedicated compaction planning flow where the model must call submit_compact_plan. Use summary only as optional extra guidance for the compaction prompt, not as the final compacted summary.',
+            description: "Start compaction for this session or another idle session. The target uses a separate planning turn to produce a summary plan with submit_compact_plan; this call does not return the candidates or supply the final summary.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Target session ID (optional, default: current session)' },
-                    summary: { type: 'string', description: 'Optional extra guidance for the compaction prompt. The model must still submit the actual keep/drop plan and final summary via submit_compact_plan.' },
-                    keepPercent: { type: 'number', description: 'How much recent history to keep. Use 0-1 fraction or 1-100 percentage. Optional.' }
+                    sessionId: { type: 'string', description: "Session to compact. Defaults to this session." },
+                    summary: { type: 'string', description: "Additional instructions for the compaction planner, not the final summary or plan." },
+                    keepPercent: { type: 'number', description: "Recent history to retain, expressed as a fraction from 0 to 1 or a percentage from 1 to 100." }
                 }
             }
         },
         {
             name: 'create_timer',
-            defaultInject: true,
-            description: 'Create a one-shot or recurring timer for a session. Timers persist across restarts and deliver structured system events when they fire.',
+            description: "Schedule a message for a session, once or on a recurring schedule. Choose one of at, afterSeconds, or cron. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' },
-                    at: { type: ['string', 'number'], description: 'Absolute trigger time as ISO string or epoch milliseconds (one-shot)' },
-                    afterSeconds: { type: 'number', description: 'Trigger after N seconds (one-shot)' },
-                    cron: { type: 'string', description: 'Cron expression for recurring timers' },
-                    message: { type: 'string', description: 'Message delivered when the timer fires' },
-                    newSession: { type: 'boolean', description: 'If true, each trigger creates a new session instead of using the owner session' },
-                    sessionPrefix: { type: 'string', description: 'Prefix for newly created timer sessions (default: timer)' },
-                    agentName: { type: 'string', description: 'Target agent for new timer-created sessions (default: owner session agent)' }
+                    sessionId: { type: 'string', description: "Session that owns the timer. Defaults to this session." },
+                    at: { type: ['string', 'number'], description: "One-time trigger time as an ISO date-time string or Unix epoch milliseconds." },
+                    afterSeconds: { type: 'number', description: "Seconds from now until a one-time trigger." },
+                    cron: { type: 'string', description: "Cron schedule for recurring triggers." },
+                    message: { type: 'string', description: "Message delivered on each trigger." },
+                    newSession: { type: 'boolean', description: "Deliver each trigger to a newly created session instead of the owner session." },
+                    sessionPrefix: { type: 'string', description: "Name prefix for newly created sessions. Defaults to timer; applies when newSession is true." },
+                    agentName: { type: 'string', description: "Agent for newly created sessions. Defaults to the owner session's agent; applies when newSession is true." }
                 },
                 required: ['message']
             }
         },
         {
             name: 'list_timers',
-            defaultInject: true,
-            description: 'List timers for a session. Defaults to the current session.',
+            description: "List timers owned by a session.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' }
+                    sessionId: { type: 'string', description: "Owner Session ID. Defaults to this session." }
                 }
             }
         },
         {
-            name: 'delete_timer',
-            defaultInject: true,
-            description: 'Delete a timer by ID. Defaults to the current session scope.',
+            name: 'update_timer',
+            description: "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of at, afterSeconds, or cron. Load the timer-automation skill before changing timers.",
             parameters: {
                 type: 'object',
                 properties: {
-                    timerId: { type: 'string', description: 'Timer ID to delete' },
-                    sessionId: { type: 'string', description: 'Owner session ID (optional, default: current session)' }
+                    timerId: { type: 'string', description: "Timer to update." },
+                    sessionId: { type: 'string', description: "Owner Session ID. Defaults to this session." },
+                    at: { type: ['string', 'number'], description: "New one-time trigger time as an ISO date-time string or Unix epoch milliseconds." },
+                    afterSeconds: { type: 'number', description: "Seconds from now until the rescheduled one-time trigger." },
+                    cron: { type: 'string', description: "New recurring cron schedule." },
+                    message: { type: 'string', description: "Replacement message for future triggers." },
+                    newSession: { type: 'boolean', description: "Use a new session for each trigger when true. Setting false returns delivery to the owner and clears new-session target settings." },
+                    sessionPrefix: { type: 'string', description: "Name prefix for new sessions; applies only when newSession is true." },
+                    agentName: { type: 'string', description: "Agent for new sessions; applies only when newSession is true and defaults to the owner session's agent." }
+                },
+                required: ['timerId']
+            }
+        },
+        {
+            name: 'delete_timer',
+            description: "Delete a timer so it no longer fires.",
+            parameters: {
+                type: 'object',
+                properties: {
+                    timerId: { type: 'string', description: "Timer to delete." },
+                    sessionId: { type: 'string', description: "Owner Session ID. Defaults to this session." }
                 },
                 required: ['timerId']
             }
         },
         {
             name: 'browse_open',
-            description: 'Open a new browser tab and navigate to URL. Returns tab ID for future operations.',
+            description: "Open a browser tab at a URL and return its tab ID for later browser calls.",
             parameters: {
                 type: 'object',
                 properties: {
-                    url: { type: 'string', description: 'URL to visit' }
+                    url: { type: 'string', description: "URL to open." }
                 },
                 required: ['url']
             }
         },
         {
             name: 'browse_list',
-            description: 'List all open browser tabs with their IDs, titles, and URLs.',
+            description: "List open browser tabs with their IDs, titles, and URLs.",
             parameters: {
                 type: 'object',
                 properties: {}
@@ -559,14 +628,14 @@ export const definitions = [
         },
         {
             name: 'browse_get',
-            description: 'Get content or screenshot from a browser tab.',
+            description: "Read a browser tab's text or capture its screenshot.",
             parameters: {
                 type: 'object',
                 properties: {
-                    tabId: { type: 'string', description: 'Tab ID (e.g., "tab1")' },
+                    tabId: { type: 'string', description: "Tab ID returned by browse_open or browse_list." },
                     screenshot: { 
                         type: ['boolean', 'string'], 
-                        description: 'If true, return screenshot to LLM for viewing. If a file path (string), save screenshot to that file. If false/omitted, return text content.',
+                        description: "Omit or set false for text. Set true to return an image, or provide an absolute path beginning with / to save the screenshot there.",
                         default: false 
                     }
                 },
@@ -575,38 +644,38 @@ export const definitions = [
         },
         {
             name: 'browse_close',
-            description: 'Close a browser tab.',
+            description: "Close a browser tab.",
             parameters: {
                 type: 'object',
                 properties: {
-                    tabId: { type: 'string', description: 'Tab ID to close' }
+                    tabId: { type: 'string', description: "Tab to close." }
                 },
                 required: ['tabId']
             }
         },
         {
             name: 'browse_interact',
-            description: 'Interact with a browser tab. Supports: click, type, fill, press (keyboard), scroll, wait, evaluate (JS), goto, back, forward, reload.',
+            description: "Interact with a browser tab: click, type, fill, press a key, scroll, wait, evaluate JavaScript, or navigate.",
             parameters: {
                 type: 'object',
                 properties: {
-                    tabId: { type: 'string', description: 'Tab ID' },
+                    tabId: { type: 'string', description: "Tab to control." },
                     action: { 
                         type: 'string', 
-                        description: 'Action to perform: click, type, fill, press, scroll, wait, evaluate, goto, back, forward, reload',
+                        description: "Browser action to perform.",
                         enum: ['click', 'type', 'fill', 'press', 'scroll', 'wait', 'evaluate', 'goto', 'back', 'forward', 'reload']
                     },
                     params: { 
                         type: 'object', 
-                        description: 'Action parameters. Examples: {selector: "#id"}, {selector: "input", text: "hello"}, {key: "Enter"}, {y: 500}, {url: "https://..."}, {code: "document.title"}',
+                        description: "Arguments for the action, such as {selector: '#id'} for click, {selector: 'input', text: 'hello'} for fill, {key: 'Enter'} for press, {y: 500} for scroll, {url: 'https://example.com'} for goto, or {code: 'document.title'} for evaluate.",
                         properties: {
-                            selector: { type: 'string', description: 'CSS selector' },
-                            text: { type: 'string', description: 'Text to type/fill' },
-                            key: { type: 'string', description: 'Key to press (e.g., Enter, Tab, Escape)' },
-                            y: { type: 'number', description: 'Scroll distance in pixels' },
-                            url: { type: 'string', description: 'URL to navigate to' },
-                            code: { type: 'string', description: 'JavaScript code to evaluate' },
-                            timeout: { type: 'number', description: 'Timeout in milliseconds (default: 5000)' }
+                            selector: { type: 'string', description: "CSS selector for the target element." },
+                            text: { type: 'string', description: "Text to type or fill." },
+                            key: { type: 'string', description: "Key to press, such as Enter, Tab, or Escape." },
+                            y: { type: 'number', description: "Vertical scroll distance in pixels." },
+                            url: { type: 'string', description: "Destination URL for goto." },
+                            code: { type: 'string', description: "JavaScript to evaluate in the tab." },
+                            timeout: { type: 'number', description: "Action timeout in milliseconds. Defaults to 5,000." }
                         }
                     }
                 },
@@ -616,70 +685,69 @@ export const definitions = [
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: "Find tools and their calling schemas. Results include a toolId or explicit source fields you can pass to call_tool. Search builtin for session and management tools, node for file, shell, browser, and other Node tools, or mcp for connected servers. Use limit=1 when looking up one known tool.",
             parameters: {
                 type: 'object',
                 properties: {
-                    query: { type: 'string', description: 'Optional search query matched against tool names/descriptions. Multi-word queries are split on spaces and ranked by how many words match.' },
+                    query: { type: 'string', description: "Words to match in tool names and descriptions. Results matching more words rank higher. Omit to list tools." },
                     sources: {
                         type: 'array',
-                        description: 'Optional source filter. Defaults to builtin + mcp + node.',
+                        description: "Sources to search. Defaults to builtin, mcp, and node.",
                         items: { type: 'string', enum: ['builtin', 'mcp', 'node'] }
                     },
-                    server: { type: 'string', description: 'Optional MCP server filter; if omitted while searching MCP tools, all enabled MCP servers are searched.' },
-                    nodeId: { type: 'string', description: 'Optional remote node id filter. For source=`node`, omitted means use the current node instead of listing tools from every node.' },
-                    limit: { type: 'number', description: 'Maximum number of results to return (default: 20, max: 200).' },
-                    includeSchema: { type: 'boolean', description: 'If true (default), include each tool\'s input schema in results.' }
+                    server: { type: 'string', description: "Limit MCP results to this server. Omit to search all enabled MCP servers." },
+                    nodeId: { type: 'string', description: "Node to search. Omit to search the current Node, or master when no Node is selected; this does not search every Node." },
+                    limit: { type: 'integer', minimum: 1, maximum: 200, description: "Maximum results. Defaults to 5, up to 200." },
+                    includeSchema: { type: 'boolean', description: "Include input schemas for up to the first 10 results. Defaults to true; remaining results use short summaries." }
                 }
             }
         },
         {
             name: 'call_tool',
             defaultInject: true,
-            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Put the target tool arguments inside `args` when visible, or use `argsJson` as a JSON object string fallback when the provider hides free-form object fields. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}` or `{toolId:"builtin:read", argsJson:"{\\"filePath\\":\\"README.md\\"}"}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
+            description: "Call a tool found with search_tools. Supply its toolId, or identify it with source and name plus server or nodeId when needed. Put the tool's arguments in args. File, shell, and browser tools use source=node; session and management tools use builtin. Calling through this tool applies the target tool's normal permissions.",
             parameters: {
                 type: 'object',
                 properties: {
-                    toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:read, mcp:server/tool, node:node-id/tool).' },
-                    source: { type: 'string', enum: ['builtin', 'mcp', 'node'], description: 'Explicit source when not using toolId.' },
-                    name: { type: 'string', description: 'Tool name when not using toolId.' },
-                    server: { type: 'string', description: 'MCP server name; required when source=\"mcp\" and toolId is not provided.' },
-                    nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`. Prefer this when visible.', additionalProperties: true },
-                    argsJson: { type: 'string', description: 'JSON object string fallback for target tool arguments, for providers that do not expose free-form object fields. Example: `{"filePath":"README.md"}`. Used when `args` is not available.' }
+                    toolId: { type: 'string', description: "Tool ID returned by search_tools, such as builtin:list_timers, mcp:server/tool, or node:node-id/tool." },
+                    source: { type: 'string', enum: ['builtin', 'mcp', 'node'], description: "Tool source when not using toolId." },
+                    name: { type: 'string', description: "Tool name when not using toolId." },
+                    server: { type: 'string', description: "MCP server name. Required for source=mcp unless included in toolId." },
+                    nodeId: { type: 'string', description: "Node for source=node. Omit or use current to select this session's current Node." },
+                    args: { type: 'object', description: "Arguments for the selected tool.", additionalProperties: true },
+                    argsJson: { type: 'string', description: "Arguments encoded as a JSON object string when args cannot be supplied, for example {\"filePath\":\"README.md\"}." }
                 }
             }
         },
         {
             name: 'run_script',
             defaultInject: true,
-            description: 'Start a ToolScript run from the current agent workspace. Every script execution becomes a persisted ToolScript run with a runId, mode, status, waiting metadata, stdout, and executed tool summary. Supports foreground (default) and background modes. Also supports a per-slice timeout budget (default 30s); when that timeout is hit at a safe checkpoint, the run pauses in a continue-able timeout state instead of failing immediately.',
+            description: "Run ToolScript code to coordinate tool calls. Supply a script file or inline code defining main(args). Returns a runId for inspecting or resuming the run. A run that reaches its time budget at a safe pause point can be resumed with continue_script.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' },
-                    code: { type: 'string', description: 'Inline ToolScript code to execute directly. Must define `def main(args):`. When provided, filePath is not required.' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
-                    argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
-                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Run mode. foreground is the default. background runs are intended for persistent controller-style scripts.' },
-                    timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
+                    filePath: { type: 'string', description: "Script path. Relative paths use the session working directory, or the agent directory if unset." },
+                    code: { type: 'string', description: "Inline ToolScript defining def main(args):. When supplied, a filePath is not required." },
+                    args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
+                    argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
+                    mode: { type: 'string', enum: ['foreground', 'background'], description: "foreground (default) runs until a result or pause; background starts a run that can continue independently." },
+                    timeoutSecs: { type: 'number', description: "Time budget in seconds for this run segment. Defaults to 30. At a safe pause point after the budget is reached, the run pauses for continue_script rather than failing." }
                 },
                 required: []
             }
         },
         {
             name: 'start_toolscript_run',
-            defaultInject: true,
-            description: 'Explicit background-oriented ToolScript run starter. Equivalent to run_script(..., mode="background") but with a clearer controller-run intent.',
+            description: "Start a background ToolScript run. Retained for existing automation; use run_script with mode=background for new calls.",
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Path to the ToolScript file. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' },
-                    code: { type: 'string', description: 'Inline ToolScript code to execute directly. Must define `def main(args):`. When provided, filePath is not required.' },
-                    args: { type: 'object', description: 'Optional object exposed to the script as the `args` input variable. Prefer this when visible.', additionalProperties: true },
-                    argsJson: { type: 'string', description: 'JSON object string fallback exposed to the script as the `args` input variable, for providers that do not expose free-form object fields. Example: `{"key":"value"}`. Used when `args` is not available.' },
-                    mode: { type: 'string', enum: ['foreground', 'background'], description: 'Optional explicit mode override. Defaults to background for this tool.' },
-                    timeoutSecs: { type: 'number', description: 'Optional ToolScript execution timeout budget for this run slice in seconds. Default 30. When exceeded at a safe checkpoint, the run pauses with waitingReason="timeout" and can be resumed with continue_script.' }
+                    filePath: { type: 'string', description: "Script path. Relative paths use the session working directory, or the agent directory if unset." },
+                    code: { type: 'string', description: "Inline ToolScript defining def main(args):. When supplied, a filePath is not required." },
+                    args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
+                    argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
+                    mode: { type: 'string', enum: ['foreground', 'background'], description: "Run mode. Defaults to background for this compatibility entry point." },
+                    timeoutSecs: { type: 'number', description: "Time budget in seconds for this run segment. Defaults to 30. At a safe pause point after the budget is reached, the run pauses for continue_script rather than failing." }
                 },
                 required: []
             }
@@ -687,161 +755,105 @@ export const definitions = [
         {
             name: 'continue_script',
             defaultInject: true,
-            description: 'Resume a waiting ToolScript run created by run_script/start_toolscript_run. Used both for ask_agent continuations and for timeout-paused runs that explicitly report they can continue. The returned stdout field is only the stdout/print output produced by this continuation slice; fetch the run to see the persisted full stdout.',
+            description: "Resume a ToolScript run paused for agent input or a time budget. Use the runId and continuationId from the pause result. The returned stdout contains only newly produced output; get_toolscript_run returns the accumulated output.",
             parameters: {
                 type: 'object',
                 properties: {
-                    runId: { type: 'string', description: 'ToolScript run identifier returned by run_script.' },
-                    continuationId: { type: 'string', description: 'Continuation identifier returned when the script paused at ask_agent or timeout.' },
-                    input: { type: 'string', description: 'String value returned to the paused ask_agent(...) call inside the script. For structured values, pass a JSON string and let the script parse it. Ignored for timeout-paused runs.' },
-                    timeoutSecs: { type: 'number', description: 'Optional timeout budget for the resumed run slice in seconds. Default is to reuse the prior run timeout value.' }
+                    runId: { type: 'string', description: "Run ID returned by run_script." },
+                    continuationId: { type: 'string', description: "Continuation ID from the pause result." },
+                    input: { type: 'string', description: "Text returned to the script's paused ask_agent call. Encode structured input as JSON text. Ignored when resuming a time-budget pause." },
+                    timeoutSecs: { type: 'number', description: "Time budget for this continuation, in seconds. Defaults to the previous segment's budget." }
                 },
                 required: ['runId', 'continuationId']
             }
         },
         {
             name: 'list_toolscript_runs',
-            description: 'List ToolScript runs owned by the current session. Returns structured run summaries including status, mode, waiting metadata, managed-session refs, timestamps, and tool/stdout summaries.',
+            description: "List this session's ToolScript runs with their status and progress summaries.",
             parameters: {
                 type: 'object',
                 properties: {
-                    limit: { type: 'number', description: 'Maximum number of runs to return. Default 20, max 200.' },
-                    status: { type: 'string', enum: ['running', 'waiting', 'completed', 'failed', 'cancelled'], description: 'Optional status filter.' }
+                    limit: { type: 'number', description: "Maximum runs to return. Defaults to 20, up to 200." },
+                    status: { type: 'string', enum: ['running', 'waiting', 'completed', 'failed', 'cancelled'], description: "Include only runs with this status." }
                 }
             }
         },
         {
             name: 'get_toolscript_run',
-            description: 'Get a single ToolScript run with structured metadata including waiting reason, managed-session relations, timestamps, stdout, and tool summary.',
+            description: "Inspect a ToolScript run, including its status, pause details, accumulated output, and tool activity.",
             parameters: {
                 type: 'object',
                 properties: {
-                    runId: { type: 'string', description: 'ToolScript run identifier.' }
+                    runId: { type: 'string', description: "Run to inspect." }
                 },
                 required: ['runId']
             }
         },
         {
             name: 'cancel_toolscript_run',
-            description: 'Cancel an active/waiting ToolScript run owned by the current session. Best-effort releases managed-session leases tracked by the run before marking it cancelled.',
+            description: "Cancel an active or paused ToolScript run owned by this session. It also attempts to release any sessions the run controls.",
             parameters: {
                 type: 'object',
                 properties: {
-                    runId: { type: 'string', description: 'ToolScript run identifier.' }
+                    runId: { type: 'string', description: "Run to cancel." }
                 },
                 required: ['runId']
             }
         },
         {
-            name: 'remote_node',
-            description: 'Query and execute tools from dynamically registered remote nodes (browser-extension, android, etc). This is for remote hardware/browser nodes, NOT for MCP servers. Use this to discover what tools are available from connected remote nodes, then call them. Example: First call with action="list" to see available nodes and their tools, then call with action="call" to execute a specific tool on a remote node.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    action: {
-                        type: 'string',
-                        enum: ['list', 'call'],
-                        description: 'Action: "list" to see all connected remote nodes and their tools, "call" to execute a specific tool on a remote node'
-                    },
-                    nodeId: {
-                        type: 'string',
-                        description: 'Node ID (get from list action, required for call action)'
-                    },
-                    tool: {
-                        type: 'string',
-                        description: 'Tool name to call (required when action=call)'
-                    },
-                    args: {
-                        type: 'object',
-                        description: 'Tool arguments as key-value pairs (required when action=call)'
-                    }
-                },
-                required: ['action']
-            }
-        },
-        {
             name: 'mcp_config',
-            defaultInject: true,
-            description: 'Configure an MCP server (store in state/mcp.json). Use enable=false to disable an existing server.',
+            description: "Add or update an MCP server connection. Successful changes apply to subsequent calls without restarting Foxwarm; use enable=false to disable a server. Load the mcp-management skill before changing connections. Use this tool rather than editing the configuration file when the change must apply immediately.",
             parameters: {
                 type: 'object',
                 properties: {
-                    name: { type: 'string', description: 'Server name' },
-                    url: { type: 'string', description: 'Standard MCP server endpoint URL. Use the /mcp endpoint for streamable-http or auto, or the SSE endpoint for sse.' },
-                    command: { type: 'string', description: 'Executable to run when transport=stdio.' },
-                    args: { type: 'array', items: { type: 'string' }, description: 'Command line arguments for stdio transport.' },
-                    env: { type: 'object', description: 'Extra environment variables for stdio transport. Prefer this when visible.', additionalProperties: { type: 'string' } },
-                    envJson: { type: 'string', description: 'JSON object string fallback for extra environment variables, for providers that do not expose string-map object fields. Values must be strings. Example: `{"API_KEY":"..."}`. Used when `env` is not available.' },
-                    cwd: { type: 'string', description: 'Working directory for stdio transport.' },
-                    stderr: { type: 'string', description: 'How to handle stdio server stderr: inherit, pipe, or ignore.' },
-                    token: { type: 'string', description: 'Optional bearer token (sets Authorization: Bearer <token>)' },
-                    headers: { type: 'object', description: 'Custom HTTP headers as key-value pairs. Overrides token header if both specified. Prefer this when visible.', additionalProperties: { type: 'string' } },
-                    headersJson: { type: 'string', description: 'JSON object string fallback for custom HTTP headers, for providers that do not expose string-map object fields. Values must be strings. Example: `{"X-API-Key":"..."}`. Used when `headers` is not available.' },
-                    transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
-                    type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
-                    description: { type: 'string', description: 'Optional description' },
-                    enable: { type: 'boolean', description: 'Enable/disable this server' }
+                    name: { type: 'string', description: "Name identifying the server." },
+                    url: { type: 'string', description: "MCP endpoint URL. Use its streamable HTTP endpoint for streamable-http or auto, or its SSE endpoint for sse." },
+                    command: { type: 'string', description: "Executable to start for stdio transport." },
+                    args: { type: 'array', items: { type: 'string' }, description: "Command-line arguments for the stdio server." },
+                    env: { type: 'object', description: "Additional environment variables for the stdio server.", additionalProperties: { type: 'string' } },
+                    envJson: { type: 'string', description: "Environment variables as a JSON object string when env cannot be supplied. All values must be strings." },
+                    cwd: { type: 'string', description: "Working directory for the stdio server." },
+                    stderr: { type: 'string', description: "How to handle the stdio server's standard error stream: inherit, pipe, or ignore." },
+                    token: { type: 'string', description: "Bearer token for the Authorization header." },
+                    headers: { type: 'object', description: "HTTP request headers. An explicit Authorization header takes precedence over token.", additionalProperties: { type: 'string' } },
+                    headersJson: { type: 'string', description: "HTTP headers as a JSON object string when headers cannot be supplied. All values must be strings." },
+                    transport: { type: 'string', description: "Connection transport. Defaults to auto." },
+                    type: { type: 'string', description: "Alternative name for transport." },
+                    description: { type: 'string', description: "Short description of the server." },
+                    timeoutSeconds: { type: 'number', minimum: 0, maximum: 3600, description: "Time limit for calls to this server, in seconds, from 1 to 3,600. Use 0 to restore the MCP SDK default. Does not change connection or tool-listing timeouts." },
+                    enable: { type: 'boolean', description: "Whether this server is enabled." }
                 },
                 required: ['name']
             }
         },
         {
-            name: 'call_mcp',
-            description: 'Call a tool from a configured MCP server. Use search_mcp_tools to list/search available tools first.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    tool: { type: 'string', description: 'Tool name to call' },
-                    args: { type: 'object', description: 'Tool arguments' }
-                },
-                required: ['tool']
-            }
-        },
-        {
-            name: 'search_mcp_tools',
-            description: 'Search or list tools from an MCP server. Prefer using query to reduce output size.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    query: { type: 'string', description: 'Search query (optional)' }
-                }
-            }
-        },
-        {
             name: 'list_mcp_servers',
-            defaultInject: true,
-            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
+            description: "List configured MCP servers, including disabled ones, with redacted connection summaries. A null timeoutSeconds means the MCP SDK default is used.",
             parameters: {
                 type: 'object',
                 properties: {}
             }
         },
         {
-            name: 'list_nodes',
+            name: 'node',
             defaultInject: true,
-            description: 'List all registered nodes.',
-            parameters: {
-                type: 'object',
-                properties: {}
-            }
-        },
-        {
-            name: 'change_current_node',
-            defaultInject: true,
-            description: 'Change the current node for the session. Execute future tools on the specified node.',
+            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
             parameters: {
                 type: 'object',
                 properties: {
-                    nodeId: { type: 'string', description: 'Node ID to switch to' }
+                    action: { type: 'string', enum: ['list', 'select', 'create', 'ensure', 'inspect', 'destroy'], description: "list shows Nodes; select changes this session's Node; create or ensure uses a provider; inspect shows a Node's details; destroy requests its removal." },
+                    nodeId: { type: 'string', description: "Node to select, inspect, or destroy. For create or ensure, supply it when requesting a specific Node ID." },
+                    providerId: { type: 'string', description: "Configured provider to use for create or ensure. Existing Nodes identify their own provider for inspect or destroy." },
+                    parameters: { type: 'object', description: "Provider-specific options for the lifecycle operation.", additionalProperties: true },
+                    parametersJson: { type: 'string', description: "Provider options as a JSON object string when parameters cannot be supplied." },
+                    confirmation: { type: 'string', description: "For destroy, exactly: destroy node <nodeId>." }
                 },
-                required: ['nodeId']
+                required: ['action']
             }
         },
         {
             name: 'node_bootstrap_info',
-            description: 'Return structured LLM-facing node bootstrap info: pairing token, BASE_URL placeholder semantics, bootstrap endpoint paths/URLs written with $BASE_URL, and example commands. This helper explains the URL principle instead of pretending the system knows the one true external address.',
+            description: "Get Node setup instructions, bootstrap endpoints, and the pairing token. Choose a BASE_URL reachable from the new Node and substitute it into the returned commands. Treat the pairing token as a secret.",
             parameters: {
                 type: 'object',
                 properties: {}
@@ -849,19 +861,19 @@ export const definitions = [
         },
         {
             name: 'node_pair_approve',
-            description: 'Approve a pending node pairing request. Use node_pair_list first to see pending requests.',
+            description: "Approve a pending Node pairing request. First inspect node_pair_list and verify the request is from the Node you intend to trust.",
             parameters: {
                 type: 'object',
                 properties: {
-                    pendingId: { type: 'string', description: 'Pending pairing ID (from node_pair_list)' },
-                    nodeId: { type: 'string', description: 'Optional node ID to assign (defaults to requested name)' },
+                    pendingId: { type: 'string', description: "Pending request ID from node_pair_list." },
+                    nodeId: { type: 'string', description: "Node ID to assign. Defaults to the requested name." },
                 },
                 required: ['pendingId']
             }
         },
         {
             name: 'node_pair_list',
-            description: 'List all pending node pairing requests.',
+            description: "List Node pairing requests awaiting approval.",
             parameters: {
                 type: 'object',
                 properties: {}
@@ -869,36 +881,38 @@ export const definitions = [
         },
         {
             name: 'create_agent',
-            description: 'Create a new persistent agent (workspace + memory container) under agents/{agentName}. By default it also creates the main session, but createMainSession=false keeps only the agent definition. Prefer inherit for shared knowledge and createMainSession/session creation for runnable threads.',
+            description: "Create an agent with its own persistent workspace and memory. A main session is also created by default. Use create_session instead when you only need another conversation under an existing agent.",
             parameters: {
                 type: 'object',
                 properties: {
-                    agentName: { type: 'string', description: 'Agent name (alphanumeric, hyphens, underscores only)' },
-                    inheritMemory: { type: 'boolean', description: 'Legacy compatibility: copy memory files from the source agent into the new agent directory.' },
-                    inherit: { type: 'string', description: 'Optional shared-memory parent agent name for agent.inherit.' },
-                    isolatedNode: { type: 'string', description: 'Optional non-master node id to make the agent isolated and bound to that node.' },
-                    createMainSession: { type: 'boolean', description: 'Whether to also create {agentName}/main (default: true).' },
-                    sourceSessionId: { type: 'string', description: 'Optional source session ID to inherit current node/model from (default: current session)' },
-                    convertSession: { type: 'boolean', description: 'If true, convert an existing session into the agent main session (requires createMainSession=true).' }
+                    agentName: { type: 'string', description: "New agent name, using letters, numbers, hyphens, or underscores." },
+                    inheritMemory: { type: 'boolean', description: "Copy memory files from the source agent once. Use inherit for ongoing shared-memory inheritance." },
+                    inherit: { type: 'string', description: "Agent whose memory should be inherited by the new agent." },
+                    isolatedNode: { type: 'string', description: "Non-master Node to bind when creating an isolated agent." },
+                    toolRules: TOOL_RULES_SCHEMA,
+                    createMainSession: { type: 'boolean', description: "Also create the agent's main session. Defaults to true." },
+                    sourceSessionId: { type: 'string', description: "Session whose current Node and model provide creation defaults. Defaults to this session." },
+                    convertSession: { type: 'boolean', description: "Convert an existing session into this agent's main session. Requires createMainSession=true." }
                 },
                 required: ['agentName']
             }
         },
         {
             name: 'create_session',
-            description: 'Create a new session under an existing agent. Prefer this when you need a new conversation thread without duplicating the agent or its memory.',
+            description: "Create a conversation under an existing agent, reusing that agent's memory and workspace.",
             parameters: {
                 type: 'object',
                 properties: {
-                    agentName: { type: 'string', description: 'Existing agent name that will own the session.' },
-                    sessionName: { type: 'string', description: 'Session name without agent prefix (cannot contain /).' },
-                    displayName: { type: 'string', description: 'Optional display name for the new session.' },
-                    parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
-                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' },
+                    agentName: { type: 'string', description: "Existing agent that will own the session." },
+                    sessionName: { type: 'string', description: "Session name without the agent prefix; it cannot contain /." },
+                    displayName: { type: 'string', description: "Display name for the new session." },
+                    parentSessionId: { type: 'string', description: "Existing session to record as the new session's parent." },
+                    node: { type: 'string', description: "Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node." },
+                    forceModel: FORCE_MODEL_SCHEMA,
                     systemPromptFiles: {
                         type: 'array',
-                        description: 'Optional file list for composing the memory-file portion of the new session snapshot. When set, only these files are used as memory sources, while other system injections remain.',
-                        items: { type: 'string', description: 'A file path. Relative paths resolve from the agent directory; absolute and ~/ paths are also accepted.' }
+                        description: "Memory source files for the new prompt snapshot. When supplied, these replace the default memory-file selection; other system instructions remain.",
+                        items: { type: 'string', description: "File path. Relative paths use the agent directory; absolute paths and ~/ paths are accepted." }
                     }
                 },
                 required: ['agentName', 'sessionName']
@@ -906,41 +920,63 @@ export const definitions = [
         },
         {
             name: 'set_agent_inherit',
-            description: 'Set or clear shared memory inheritance for an agent. Inherited memory is injected in root -> ... -> self order without deduplicating same filenames.',
+            description: "Set or clear an agent's shared-memory inheritance. Memory is included from the oldest ancestor through the agent itself; files with the same name are not deduplicated. Existing session snapshots are unchanged unless refreshSnapshots is true.",
             parameters: {
                 type: 'object',
                 properties: {
-                    agentName: { type: 'string', description: 'Agent whose shared memory inheritance should be updated.' },
-                    inheritAgentName: { type: 'string', description: 'Parent agent to inherit shared memory from. Use empty string to clear inheritance.' }
+                    agentName: { type: 'string', description: "Agent to update." },
+                    inheritAgentName: { type: 'string', description: "Agent to inherit from. An empty string clears inheritance." },
+                    refreshSnapshots: { type: 'boolean', description: "Refresh snapshots now for this agent and its inheriting agents, skipping sessions inactive for more than one hour because they refresh automatically when their next turn starts. Defaults to false.", default: false }
                 },
                 required: ['agentName']
             }
         },
         {
             name: 'set_agent_isolated',
-            description: 'Set or clear agent-level isolation. Isolated agents are bound to a non-master node and their sessions inherit isolated restrictions.',
+            description: "Set or clear legacy agent-level isolation and its non-master Node binding. These restrictions apply to all sessions in the agent, in addition to any instance-wide tool authorization policy.",
             parameters: {
                 type: 'object',
                 properties: {
-                    agentName: { type: 'string', description: 'Agent whose isolation setting should be updated.' },
-                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' }
+                    agentName: { type: 'string', description: "Agent to update." },
+                    nodeId: { type: 'string', description: "Non-master Node to bind. An empty string clears isolation; omission leaves the current binding unchanged." },
+                    toolRules: { ...TOOL_RULES_SCHEMA, description: "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated." },
                 },
                 required: ['agentName']
             }
         },
         {
-            name: 'move_session',
-            description: 'Move/rename a session, optionally to a different agent or create a new agent. Old session ID becomes an alias.',
+            name: 'set_tool_rules',
+            defaultInject: false,
+            description: "Install a complete tool authorization policy from a file on master. The candidate is validated before atomically replacing state/tool-authorization.yaml. Your current permissions must allow both this operation and reading the candidate file.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: 'Source session ID (default: current session)' },
-                    newSessionId: { type: 'string', description: 'New session ID without agent prefix (cannot contain /). Default to "main" if createAgent=true.' },
-                    createAgent: { type: 'boolean', description: 'Whether to create a new agent (default: false)' },
-                    newAgentName: { type: 'string', description: 'Target agent name. Required if createAgent=true or moving to different agent. If omitted, renames within same agent.' },
-                    createAgentInheritMemory: { type: 'boolean', description: 'Whether to inherit memory when creating agent (only valid when createAgent=true)' }
+                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML policy." }
+                },
+                required: ['filePath'],
+                additionalProperties: false
+            }
+        },
+        {
+            name: 'move_session',
+            description: "Rename a session or move it to another agent, optionally creating that agent. The old Session ID remains an alias.",
+            parameters: {
+                type: 'object',
+                properties: {
+                    sessionId: { type: 'string', description: "Session to move. Defaults to this session." },
+                    newSessionId: { type: 'string', description: "New session name without an agent prefix or /. Defaults to main when createAgent is true." },
+                    createAgent: { type: 'boolean', description: "Create the destination agent. Defaults to false." },
+                    newAgentName: { type: 'string', description: "Destination agent. Required when creating an agent or moving across agents; omit to rename within the source agent." },
+                    createAgentInheritMemory: { type: 'boolean', description: "Copy source memory when creating the destination agent. Applies only when createAgent is true." },
+                    parentSessionId: { type: 'string', description: "Existing parent session to assign after the move. Omit to keep the current parent relation." }
                 }
             }
         }
-    ];
+];
+
+export function buildToolDefinitions(handoffConfirmationEnabled: boolean) {
+    return baseDefinitions.map(definition => addHandoffConfirmationSchema(definition, handoffConfirmationEnabled));
+}
+
+export const definitions = buildToolDefinitions(HANDOFF_CONFIRMATION_ENABLED);
 

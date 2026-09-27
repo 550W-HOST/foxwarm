@@ -114,15 +114,13 @@
         });
         if (!authRes.ok) {
           errorDiv.style.display = 'block';
-          errorDiv.textContent = 'Invalid token. Find the token in state/token or startup logs.';
+          errorDiv.textContent = 'Invalid token. Check it and try again.';
           return;
         }
 
         const cookiePath = window.location.pathname.replace(/[^/]+$/, '');
         document.cookie = `foxwarm_token=${encodeURIComponent(token)}; path=${cookiePath}; max-age=31536000; SameSite=Strict`;
-        document.cookie = `alphabot_token=; path=${cookiePath}; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict`;
         localStorage.setItem('foxwarm_token', token);
-        localStorage.removeItem('alphabot_token');
         window.location.href = './';
       } catch (err) {
         errorDiv.style.display = 'block';

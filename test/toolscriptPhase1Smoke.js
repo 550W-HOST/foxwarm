@@ -18,6 +18,10 @@ async function writeScript(fileName, content) {
   return fullPath;
 }
 
+function asMain(lines) {
+  return ['def main(args):', ...lines.map(line => `    ${line}`)].join('\n');
+}
+
 async function main() {
   await sessionManager.loadSessions();
 
@@ -25,25 +29,25 @@ async function main() {
   const askAgentScript = `${makeId('toolscript_ask_agent')}.py`;
   const requestModelScript = `${makeId('toolscript_request_model')}.py`;
 
-  await writeScript(completedScript, [
+  await writeScript(completedScript, asMain([
     'print("phase1-start")',
     'res = call_tool("search_tools", {"query": "read file", "sources": ["builtin"], "limit": 3, "includeSchema": False})',
-    'print(res["count"])',
-    '{"status": "done", "count": res["count"]}',
-  ].join('\n'));
+    'print(res["output"].splitlines()[0])',
+    'return {"status": "done", "output": res["output"]}',
+  ]));
 
-  await writeScript(askAgentScript, [
+  await writeScript(askAgentScript, asMain([
     'print("before-question")',
     'answer = ask_agent("Reply with EXACT_SMOKE_ANSWER")',
     'print(answer)',
-    '{"answer": answer}',
-  ].join('\n'));
+    'return {"answer": answer}',
+  ]));
 
-  await writeScript(requestModelScript, [
+  await writeScript(requestModelScript, asMain([
     'res = request_model_without_context("Reply with exactly TOOLSCRIPT_MODEL_OK")',
     'print(res["text"])',
-    'res',
-  ].join('\n'));
+    'return res',
+  ]));
 
   const sessionId = makeId('toolscript_live_smoke');
   const session = await sessionManager.getSession(sessionId);
@@ -66,7 +70,7 @@ async function main() {
 
   const completedResponse = toolMessage.parts[0].functionResponse.response;
   assert.equal(completedResponse.status, 'completed');
-  assert.equal(completedResponse.stdout, 'phase1-start\n3\n');
+  assert.match(completedResponse.stdout, /^phase1-start\nShowing 3 of \d+ matching tools\.\n$/);
   assert.deepEqual(completedResponse.executedTools, ['search_tools']);
 
   const persistedAfterCompleted = await sessionManager.getExistingSession(sessionId);
@@ -77,7 +81,8 @@ async function main() {
   assert.ok(!historyJson.includes('"name":"search_tools","args"'), 'internal search_tools functionCall should not be persisted in session history');
 
   const paused = await tool_run_script({ filePath: askAgentScript }, { sessionId, session });
-  assert.equal(paused.status, 'paused_for_agent');
+  assert.equal(paused.status, 'waiting');
+  assert.equal(paused.waitingReason, 'agent');
   assert.equal(paused.question, 'Reply with EXACT_SMOKE_ANSWER');
   assert.equal(paused.stdout, 'before-question\n');
 
@@ -88,7 +93,7 @@ async function main() {
   }, { sessionId, session });
   assert.equal(resumed.status, 'completed');
   assert.deepEqual(resumed.result, { answer: 'EXACT_SMOKE_ANSWER' });
-  assert.equal(resumed.stdout, 'before-question\nEXACT_SMOKE_ANSWER\n');
+  assert.equal(resumed.stdout, 'EXACT_SMOKE_ANSWER\n');
 
   const requestModelResult = await tool_run_script({ filePath: requestModelScript }, { sessionId, session });
 
@@ -101,7 +106,7 @@ async function main() {
       persistedHistoryRoles: historyRoles,
     },
     askAgent: {
-      pausedStatus: paused.status,
+      waitingStatus: paused.status,
       question: paused.question,
       resumedStatus: resumed.status,
       resumedResult: resumed.result,

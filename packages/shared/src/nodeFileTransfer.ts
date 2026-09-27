@@ -35,12 +35,26 @@ function expandHomePath(filePath: string): string {
   return filePath;
 }
 
+// A node's filesystem root belongs to the node process, not to an individual
+// session cwd. Capture it once so a later process.chdir() cannot relocate
+// agent-owned state into whichever project a session is currently using.
+const NODE_RUNTIME_ROOT = path.resolve(process.cwd());
+
+export function resolveNodeAgentDir(
+  agentName = 'main',
+  env: NodeJS.ProcessEnv = process.env,
+  nodeRuntimeRoot: string = NODE_RUNTIME_ROOT,
+): string {
+  const root = path.resolve(nodeRuntimeRoot);
+  const explicit = env.FOXWARM_AGENT_DIR?.trim();
+  if (explicit) return path.resolve(root, expandHomePath(explicit));
+  const agentsDir = env.FOXWARM_AGENTS_DIR?.trim();
+  if (agentsDir) return path.resolve(root, expandHomePath(agentsDir), agentName);
+  return path.resolve(root, 'agents', agentName);
+}
+
 export function getNodeAgentDir(agentName = 'main'): string {
-  const explicit = process.env.FOXWARM_AGENT_DIR?.trim();
-  if (explicit) return path.resolve(expandHomePath(explicit));
-  const agentsDir = process.env.FOXWARM_AGENTS_DIR?.trim();
-  if (agentsDir) return path.resolve(expandHomePath(agentsDir), agentName);
-  return path.resolve(process.cwd(), 'agents', agentName);
+  return resolveNodeAgentDir(agentName);
 }
 
 export function resolveNodePath(filePath: string, agentName = 'main', sessionCwd?: string): string {
@@ -82,6 +96,19 @@ export async function writeNodeTransferFile(filePath: string, agentName: string,
   if (exists && !overwrite) throw new Error(`File already exists: ${filePath}. Use overwrite=true to replace it.`);
   const buffer = Buffer.from(dataBase64, 'base64');
   await fs.ensureDir(path.dirname(fullPath));
-  await fs.writeFile(fullPath, buffer);
+  const tempPath = `${fullPath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.writeFile(tempPath, buffer, { flag: 'wx' });
+    if (overwrite) {
+      await fs.rename(tempPath, fullPath);
+    } else {
+      // A hard-link publish is atomic and preserves the no-overwrite contract
+      // even if another writer creates the destination after the initial check.
+      await fs.link(tempPath, fullPath);
+      await fs.remove(tempPath);
+    }
+  } finally {
+    await fs.remove(tempPath).catch(() => {});
+  }
   return { filePath, absolutePath: fullPath, sizeBytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex'), overwritten: exists };
 }

@@ -3,8 +3,9 @@ import {
   ToolContext,
   formatTimerTimestamp,
   formatTimerSummary,
+  formatTimerUpdateSummary,
 } from './helpers';
-import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import * as timers from '../timers';
 import { checkTimerPermission } from '../isolatedCheck';
 
@@ -21,7 +22,7 @@ export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionId is required when there is no current session context.');
   }
 
-  const targetSession = await sessionManager.getExistingSession(targetSessionId);
+  const targetSession = await sessionRuntime.getSession(targetSessionId);
   if (!targetSession) {
     throw new Error(`Session \`${targetSessionId}\` not found.`);
   }
@@ -67,6 +68,36 @@ export async function tool_list_timers(args: ToolArgs, ctx: ToolContext) {
   }
 
   return result.trimEnd();
+}
+
+export async function tool_update_timer(args: ToolArgs, ctx: ToolContext) {
+  await checkTimerPermission(ctx, {
+    targetSessionId: args.sessionId,
+    newSession: args.newSession,
+    agentName: args.agentName,
+    sessionPrefix: args.sessionPrefix,
+  });
+
+  const { timerId } = args;
+  const targetSessionId = args.sessionId || ctx.sessionId;
+
+  if (!timerId || typeof timerId !== 'string') {
+    throw new Error('timerId is required');
+  }
+
+  const timer = await timers.updateTimer({
+    timerId,
+    sessionId: targetSessionId,
+    at: args.at,
+    afterSeconds: args.afterSeconds,
+    cron: args.cron,
+    message: args.message,
+    newSession: args.newSession,
+    sessionPrefix: args.sessionPrefix,
+    agentName: args.agentName,
+  });
+
+  return formatTimerUpdateSummary(timer);
 }
 
 export async function tool_delete_timer(args: ToolArgs, ctx: ToolContext) {

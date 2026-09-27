@@ -9,6 +9,10 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { logger } from './common';
 
+function isMcpPath(path: string): boolean {
+  return path.toLowerCase() === '/mcp' || path.toLowerCase() === '/mcp/';
+}
+
 export interface HttpServerOptions {
   port?: number;
   enableWebUI?: boolean;
@@ -68,17 +72,19 @@ export class HttpServer {
       level: 6,
       threshold: 1024,
       filter: (req, res) => {
-        if (req.path.includes('/stream')) {
+        if (req.path.includes('/stream') || isMcpPath(req.path)) {
           return false;
         }
         return compression.filter(req, res);
       }
     }));
     
-    this.app.use(express.json());
+    const parseJson = express.json();
+    this.app.use((req, res, next) => isMcpPath(req.path) ? next() : parseJson(req, res, next));
     
     // Cookie parser
-    this.app.use((req, res, next) => {
+    this.app.use((req, _res, next) => {
+      if (isMcpPath(req.path)) return next();
       req.cookies = {};
       const cookieHeader = req.headers.cookie;
       if (cookieHeader) {
@@ -119,23 +125,16 @@ export class HttpServer {
     return undefined;
   }
 
-  private extractTokenFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): string | undefined {
-    return this.parseCookieToken(cookieHeader) || this.extractBearerToken(authHeader);
-  }
-
   private checkAdminTokenFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): boolean {
-    return this.extractTokenFromHeaders(cookieHeader, authHeader) === this.token;
+    return this.parseCookieToken(cookieHeader) === this.token || this.extractBearerToken(authHeader) === this.token;
   }
 
   private async getAuthContextFromHeaders(cookieHeader: string | undefined, authHeader: string | string[] | undefined): Promise<HttpAuthContext | null> {
-    const token = this.extractTokenFromHeaders(cookieHeader, authHeader);
-    if (!token) {
-      return null;
-    }
-
-    if (token === this.token) {
+    if (this.checkAdminTokenFromHeaders(cookieHeader, authHeader)) {
       return { role: 'admin' };
     }
+    const token = this.extractBearerToken(authHeader) || this.parseCookieToken(cookieHeader);
+    if (!token) return null;
 
     if (this.guestTokenVerifier) {
       try {
@@ -157,7 +156,7 @@ export class HttpServer {
       cookies[name.trim()] = decodeURIComponent(rest.join('='));
     });
 
-    return cookies.foxwarm_token || cookies.alphabot_token;
+    return cookies.foxwarm_token;
   }
 
   addRoute(route: RouteHandler): void {

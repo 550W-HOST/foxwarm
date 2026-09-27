@@ -4,19 +4,21 @@ import { logger } from '../common';
 import { AGENTS_FILE, getAgentDir } from '../config';
 import { Session } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
+import { AgentToolRule, normalizeAgentToolRules } from '../permissions';
+import { shouldAutoRefreshSessionSnapshot } from './snapshotRefresh';
 
-function getSessionSystemPromptOptions(session: Session): { agentName: string; sessionId: string; systemPromptFiles?: string[] } {
-  return {
-    agentName: session.agent || 'main',
-    sessionId: session.id,
-    systemPromptFiles: session.systemPromptFiles,
-  };
+async function rebuildSessionSnapshotIfMaterialized(session: Session): Promise<boolean> {
+  const snapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
+  if (snapshot === undefined) return false;
+  session.persistentMemorySnapshot = snapshot;
+  return true;
 }
 
 export interface AgentMetadata {
   isolated?: boolean;
   isolatedNode?: string;
   inherit?: string;
+  toolRules?: AgentToolRule[];
   [key: string]: any;
 }
 
@@ -58,12 +60,18 @@ export function resetAgentMetadataForTests(): void {
   agentMetadata.clear();
 }
 
+export function installAgentMetadataSnapshotForWorker(agentName: string, meta: AgentMetadata): void {
+  agentMetadata.set(agentName, normalizeAgentMetadata(meta));
+}
+
 function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
   const nextMeta = { ...meta };
   const isolatedNode = typeof meta.isolatedNode === 'string' && meta.isolatedNode.trim()
     ? meta.isolatedNode.trim()
     : undefined;
   delete nextMeta.skills;
+  if (meta.toolRules !== undefined) nextMeta.toolRules = normalizeAgentToolRules(meta.toolRules);
+  else delete nextMeta.toolRules;
   if (nextMeta.isolated) {
     if (isolatedNode) nextMeta.isolatedNode = isolatedNode;
   } else {
@@ -81,27 +89,48 @@ async function saveAgentMetadata(): Promise<void> {
 }
 
 export async function loadAgentMetadata(): Promise<void> {
-  agentMetadata.clear();
   const loaded = await agentMetadataStore.loadFirstAvailable();
-  if (loaded) {
-    try {
-      const data = loaded.data;
-      for (const [agentName, meta] of Object.entries(data)) {
-        agentMetadata.set(agentName, normalizeAgentMetadata(meta as AgentMetadata));
-      }
-      if (loaded.source !== agentMetadataStore.filePath) {
-        logger.warn({ source: loaded.source }, 'Recovering agent metadata from fallback source');
-        await agentMetadataStore.write(data);
-      }
-      logger.info({ count: agentMetadata.size }, 'Agent metadata loaded');
-    } catch (e) {
-      logger.error({ err: e }, 'Failed to load agent metadata');
-    }
+  if (!loaded) {
+    logger.info({ count: agentMetadata.size }, 'Agent metadata unavailable; preserving current authority snapshot');
+    return;
   }
+  const data = loaded.data;
+  const normalizedEntries = Object.entries(data).map(([agentName, meta]) => [agentName, normalizeAgentMetadata(meta as AgentMetadata)] as const);
+  if (loaded.source !== agentMetadataStore.filePath) {
+    logger.warn({ source: loaded.source }, 'Recovering agent metadata from fallback source');
+    await agentMetadataStore.write(Object.fromEntries(normalizedEntries));
+  }
+  agentMetadata.clear();
+  for (const [agentName, meta] of normalizedEntries) agentMetadata.set(agentName, meta);
+  logger.info({ count: agentMetadata.size }, 'Agent metadata loaded');
+}
+
+export async function refreshAgentMetadata(agentName: string): Promise<void> {
+  const loaded = await agentMetadataStore.loadFirstAvailable();
+  if (!loaded) return;
+  const raw = loaded?.data?.[agentName];
+  if (raw === undefined) return;
+  agentMetadata.set(agentName, normalizeAgentMetadata(raw as AgentMetadata));
 }
 
 export function getAgentMetadata(agentName: string): AgentMetadata {
   return agentMetadata.get(agentName) || {};
+}
+
+export function getAgentToolRules(agentName: string): AgentToolRule[] {
+  return getAgentMetadata(agentName).toolRules || [];
+}
+
+export function listAgentMetadataEntries(): Array<[string, AgentMetadata]> {
+  return [...agentMetadata.entries()].map(([agentName, metadata]) => [agentName, {
+    ...metadata,
+    ...(metadata.toolRules ? { toolRules: metadata.toolRules.map(rule => ({ ...rule })) } : {}),
+  }]);
+}
+
+export async function deleteAgentMetadata(agentName: string): Promise<void> {
+  if (!agentMetadata.delete(agentName)) return;
+  await saveAgentMetadata();
 }
 
 export function getAgentIsolationNode(agentName: string): string | undefined {
@@ -126,15 +155,27 @@ export async function setAgentMetadata(agentName: string, meta: AgentMetadata): 
   await saveAgentMetadata();
 }
 
+export async function setAgentToolRules(agentName: string, toolRules: unknown): Promise<number> {
+  const normalized = normalizeAgentToolRules(toolRules);
+  await setAgentMetadata(agentName, { ...getAgentMetadata(agentName), toolRules: normalized });
+  return normalized.length;
+}
+
 export async function refreshSessionSnapshot(deps: AgentMetadataDeps, sessionId: string): Promise<{ sessionId: string; agentName: string }> {
   const session = await deps.getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session "${sessionId}" not found.`);
   }
 
+  return refreshSessionSnapshotForSession(session, () => deps.saveSession(session.id));
+}
+
+export async function refreshSessionSnapshotForSession(
+  session: Session,
+  persistSession: () => Promise<void>,
+): Promise<{ sessionId: string; agentName: string }> {
   const agentName = session.agent || 'main';
-  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-  await deps.saveSession(session.id);
+  if (await rebuildSessionSnapshotIfMaterialized(session)) await persistSession();
 
   return { sessionId: session.id, agentName };
 }
@@ -158,7 +199,12 @@ export function getAgentInheritanceChain(agentName: string): string[] {
   return chain;
 }
 
-export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
+export async function setAgentInherit(
+  deps: AgentMetadataDeps,
+  agentName: string,
+  inheritAgentName?: string,
+  refreshSnapshots: boolean = false,
+): Promise<{ affectedSessions: string[] }> {
   deps.validateAgentName(agentName);
 
   const agentDir = getAgentDir(agentName);
@@ -194,13 +240,15 @@ export async function setAgentInherit(deps: AgentMetadataDeps, agentName: string
   await setAgentMetadata(agentName, nextMeta);
 
   const affectedSessions: string[] = [];
+  if (!refreshSnapshots) return { affectedSessions };
+  const refreshStartedAt = Date.now();
   for (const [sessionId, sessionMeta] of deps.getSessionsMap().entries()) {
     const sessionAgent = sessionMeta.agent || 'main';
     if (!getAgentInheritanceChain(sessionAgent).includes(agentName)) continue;
+    if (shouldAutoRefreshSessionSnapshot(sessionMeta, refreshStartedAt)) continue;
 
     const session = await deps.getSession(sessionId);
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-    await deps.saveSession(sessionId);
+    if (await rebuildSessionSnapshotIfMaterialized(session)) await deps.saveSession(sessionId);
     affectedSessions.push(sessionId);
   }
 
@@ -211,7 +259,8 @@ export async function setAgentIsolation(
   deps: AgentMetadataDeps,
   agentName: string,
   isolatedNode?: string,
-): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+  toolRules?: unknown,
+): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
   deps.validateAgentName(agentName);
 
   const agentDir = getAgentDir(agentName);
@@ -221,6 +270,7 @@ export async function setAgentIsolation(
 
   const currentMeta = getAgentMetadata(agentName);
   const nextMeta = { ...currentMeta };
+  if (toolRules !== undefined) nextMeta.toolRules = normalizeAgentToolRules(toolRules);
   const normalizedNode = isolatedNode && String(isolatedNode).trim()
     ? String(isolatedNode).trim()
     : undefined;
@@ -247,10 +297,10 @@ export async function setAgentIsolation(
     if (normalizedNode) {
       session.currentNode = normalizedNode;
     }
-    session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
+    await rebuildSessionSnapshotIfMaterialized(session);
     await deps.saveSession(session.id);
     affectedSessions.push(session.id);
   }
 
-  return { affectedSessions, isolated: !!normalizedNode, node: normalizedNode };
+  return { affectedSessions, isolated: !!normalizedNode, node: normalizedNode, toolRuleCount: nextMeta.toolRules?.length || 0 };
 }

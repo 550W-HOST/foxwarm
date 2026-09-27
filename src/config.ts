@@ -2,10 +2,24 @@
  * Centralized configuration constants
  */
 import path from 'path';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
+import { normalizeMcpInboundConfig, type McpInboundConfig } from './mcpInboundConfig';
 
-export type TelegramConfig = {
+export { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from './mcpInboundConfig';
+export type { McpInboundConfig, NormalizedMcpInboundConfig } from './mcpInboundConfig';
+import { DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS } from './llmStreamingTimeout';
+
+export type ChannelProgressConfig = false | {
+  intervalMs: number;
+};
+
+export type CommonChannelConfig = {
+  channelProgress?: ChannelProgressConfig;
+};
+
+export type TelegramConfig = CommonChannelConfig & {
   enabled?: boolean;
   botToken?: string;
   allowedUsers?: string[];
@@ -13,7 +27,7 @@ export type TelegramConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
-export type MatrixConfig = {
+export type MatrixConfig = CommonChannelConfig & {
   enabled?: boolean;
   homeserver?: string;
   accessToken?: string;
@@ -22,7 +36,7 @@ export type MatrixConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
-export type WeWorkConfig = {
+export type WeWorkConfig = CommonChannelConfig & {
   enabled?: boolean;
   webhookUrl?: string;
   token?: string;
@@ -46,7 +60,7 @@ export type WeWorkConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
-export type WeixinConfig = {
+export type WeixinConfig = CommonChannelConfig & {
   enabled?: boolean;
   baseUrl?: string;
   token?: string;
@@ -58,6 +72,31 @@ export type WeixinConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
+export type QQBotMediaConfig = {
+  /** Safe inline-image threshold; larger images fall back to generic files. */
+  imageMaxBytes?: number;
+  /** Bounded generic-file cap for inbound/fallback files; local QQ sends are additionally capped at 100 MiB. */
+  fileMaxBytes?: number;
+  maxTotalBytes?: number;
+  maxAttachments?: number;
+};
+
+export type QQBotConfig = CommonChannelConfig & {
+  enabled?: boolean;
+  appId?: string;
+  clientSecret?: string;
+  /** Whether QQ group messages require an @mention before routing. */
+  requireMention?: boolean;
+  /** Number of prior QQ group messages retained as untrusted context. Defaults to 10. */
+  groupContextLimit?: number;
+  /** Fixed non-sliding ordinary-group batch window. Defaults to 5000; 0 disables batching. */
+  groupBatchWindowMs?: number;
+  allowedUsers?: string[];
+  allowAllUsers?: boolean;
+  guestAgent?: GuestAgentConfig;
+  media?: QQBotMediaConfig;
+};
+
 
 export type GuestAgentConfig = {
   agentId: string;
@@ -66,14 +105,14 @@ export type GuestAgentConfig = {
   node?: string;
 };
 
-export type GenericChannelConfig = Record<string, any> & {
+export type GenericChannelConfig = Record<string, any> & CommonChannelConfig & {
   type?: string;
   enabled?: boolean;
   allowedUsers?: string[];
   guestAgent?: GuestAgentConfig;
 };
 
-export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | GenericChannelConfig;
+export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | QQBotConfig | GenericChannelConfig;
 
 export type NormalizedChannelConfig<T extends AnyChannelConfig = AnyChannelConfig> = {
   id: string;
@@ -81,13 +120,435 @@ export type NormalizedChannelConfig<T extends AnyChannelConfig = AnyChannelConfi
   config: T;
 };
 
+export function normalizeChannelProgressInterval(value: unknown): number | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('channelProgress must be false or an object.');
+  }
+  const intervalMs = (value as Record<string, unknown>).intervalMs;
+  if (!Number.isInteger(intervalMs) || (intervalMs as number) < 30_000 || (intervalMs as number) > 1_800_000) {
+    throw new Error('channelProgress.intervalMs must be an integer between 30000 and 1800000.');
+  }
+  return intervalMs as number;
+}
+
 export type AsrServiceConfig = {
   enabled?: boolean;
   url?: string;
   key?: string;
 };
 
+export const DEFAULT_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS = 90;
+export const MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS = 300;
+export const MAX_EXECUTABLE_NODE_PROVIDER_ARGS = 64;
+export const MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH = 4096;
+
+export type ExecutableNodeProviderConfig = {
+  type: 'executable';
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+};
+
+export type DockerWorktreeNodeProviderConfig = {
+  type: 'docker-worktree';
+  command: string;
+  args?: string[];
+  image: string;
+  allowedWorktreeRoots: string[];
+  networkModes?: Array<'none' | 'bridge'>;
+  stateDir?: string;
+  memory?: string;
+  cpus?: number;
+  pidsLimit?: number;
+  tmpfsSize?: string;
+};
+
+export type NodeProvidersConfig = Record<string, ExecutableNodeProviderConfig | DockerWorktreeNodeProviderConfig>;
+
+export type NormalizedExecutableNodeProviderConfig = {
+  id: string;
+  type: 'executable';
+  command: string;
+  args: string[];
+  timeoutMs: number;
+};
+
+export type NormalizedDockerWorktreeNodeProviderConfig = {
+  id: string;
+  type: 'docker-worktree';
+  command: string;
+  args: string[];
+  image: string;
+  allowedWorktreeRoots: string[];
+  networkModes: Array<'none' | 'bridge'>;
+  stateDir?: string;
+  memory: string;
+  cpus: number;
+  pidsLimit: number;
+  tmpfsSize: string;
+};
+
+export type NormalizedNodeProviderConfig = NormalizedExecutableNodeProviderConfig | NormalizedDockerWorktreeNodeProviderConfig;
+
+export function normalizeNodeProvidersConfig(value: unknown): NormalizedNodeProviderConfig[] {
+  if (value === undefined) return [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `nodeProviders` must be an object.');
+  }
+
+  const normalized: NormalizedNodeProviderConfig[] = [];
+  for (const [id, candidate] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
+      throw new Error(`app config node provider id \`${id}\` must be 1-64 ASCII letters, digits, dot, underscore, or hyphen.`);
+    }
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`app config \`nodeProviders.${id}\` must be an object.`);
+    }
+    const raw = candidate as Record<string, unknown>;
+    const executableKeys = ['type', 'command', 'args', 'timeoutSeconds'];
+    const dockerKeys = ['type', 'command', 'args', 'image', 'allowedWorktreeRoots', 'networkModes', 'stateDir', 'memory', 'cpus', 'pidsLimit', 'tmpfsSize'];
+    const allowedKeys = raw.type === 'docker-worktree' ? dockerKeys : executableKeys;
+    const unknown = Object.keys(raw).filter(key => !allowedKeys.includes(key));
+    if (unknown.length > 0) {
+      throw new Error(`app config \`nodeProviders.${id}\` has unsupported field \`${unknown[0]}\`.`);
+    }
+    if (raw.type !== 'executable' && raw.type !== 'docker-worktree') {
+      throw new Error(`app config \`nodeProviders.${id}.type\` must be \`executable\` or \`docker-worktree\`.`);
+    }
+    if (typeof raw.command !== 'string'
+      || !raw.command
+      || raw.command.trim() !== raw.command
+      || raw.command.length > MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH
+      || /[\u0000-\u001f\u007f]/.test(raw.command)) {
+      throw new Error(`app config \`nodeProviders.${id}.command\` must be an exact non-empty string of at most ${MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH} characters.`);
+    }
+    if (raw.args !== undefined && !Array.isArray(raw.args)) {
+      throw new Error(`app config \`nodeProviders.${id}.args\` must be an array of strings.`);
+    }
+    const args = (raw.args || []) as unknown[];
+    if (args.length > MAX_EXECUTABLE_NODE_PROVIDER_ARGS) {
+      throw new Error(`app config \`nodeProviders.${id}.args\` may contain at most ${MAX_EXECUTABLE_NODE_PROVIDER_ARGS} entries.`);
+    }
+    for (const [index, arg] of args.entries()) {
+      if (typeof arg !== 'string' || arg.length > MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH || arg.includes('\0')) {
+        throw new Error(`app config \`nodeProviders.${id}.args[${index}]\` must be a string of at most ${MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH} characters.`);
+      }
+    }
+    if (raw.type === 'docker-worktree') {
+      if (typeof raw.image !== 'string' || !raw.image || raw.image.trim() !== raw.image || raw.image.length > 4096 || /[\u0000-\u001f\u007f]/.test(raw.image)) {
+        throw new Error(`app config \`nodeProviders.${id}.image\` must be an exact non-empty string of at most 4096 characters.`);
+      }
+      if (!Array.isArray(raw.allowedWorktreeRoots) || raw.allowedWorktreeRoots.length < 1 || raw.allowedWorktreeRoots.length > 64) {
+        throw new Error(`app config \`nodeProviders.${id}.allowedWorktreeRoots\` must be a non-empty array with at most 64 paths.`);
+      }
+      const allowedWorktreeRoots = raw.allowedWorktreeRoots.map((item, index) => {
+        if (typeof item !== 'string' || !item.trim() || item.trim() !== item || item.length > 4096) {
+          throw new Error(`app config \`nodeProviders.${id}.allowedWorktreeRoots[${index}]\` must be an exact non-empty path.`);
+        }
+        return path.resolve(resolvePathValue(item, item));
+      });
+      const networkModes = raw.networkModes === undefined ? ['none'] : raw.networkModes;
+      if (!Array.isArray(networkModes) || networkModes.length < 1 || networkModes.some(mode => mode !== 'none' && mode !== 'bridge')) {
+        throw new Error(`app config \`nodeProviders.${id}.networkModes\` must contain only \`none\` or \`bridge\`.`);
+      }
+      const stateDir = raw.stateDir === undefined ? undefined : raw.stateDir;
+      if (stateDir !== undefined && (typeof stateDir !== 'string' || !stateDir.trim() || stateDir.trim() !== stateDir || stateDir.length > 4096)) {
+        throw new Error(`app config \`nodeProviders.${id}.stateDir\` must be an exact non-empty path.`);
+      }
+      const memory = raw.memory === undefined ? '2g' : raw.memory;
+      const tmpfsSize = raw.tmpfsSize === undefined ? '256m' : raw.tmpfsSize;
+      if (typeof memory !== 'string' || !/^[1-9]\d*[kKmMgG]$/.test(memory)) throw new Error(`app config \`nodeProviders.${id}.memory\` is invalid.`);
+      if (typeof tmpfsSize !== 'string' || !/^[1-9]\d*[kKmMgG]$/.test(tmpfsSize)) throw new Error(`app config \`nodeProviders.${id}.tmpfsSize\` is invalid.`);
+      const cpus = raw.cpus === undefined ? 2 : raw.cpus;
+      const pidsLimit = raw.pidsLimit === undefined ? 256 : raw.pidsLimit;
+      if (typeof cpus !== 'number' || !Number.isFinite(cpus) || cpus <= 0 || cpus > 64) throw new Error(`app config \`nodeProviders.${id}.cpus\` must be between 0 and 64.`);
+      if (!Number.isInteger(pidsLimit) || Number(pidsLimit) < 16 || Number(pidsLimit) > 65536) throw new Error(`app config \`nodeProviders.${id}.pidsLimit\` must be an integer between 16 and 65536.`);
+      normalized.push({
+        id, type: 'docker-worktree', command: raw.command, args: [...args] as string[], image: raw.image,
+        allowedWorktreeRoots: Array.from(new Set(allowedWorktreeRoots)), networkModes: Array.from(new Set(networkModes)) as Array<'none' | 'bridge'>,
+        ...(stateDir === undefined ? {} : { stateDir: path.resolve(resolvePathValue(stateDir as string, stateDir as string)) }),
+        memory, cpus, pidsLimit: Number(pidsLimit), tmpfsSize,
+      });
+      continue;
+    }
+
+    const timeoutSeconds = raw.timeoutSeconds === undefined
+      ? DEFAULT_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS
+      : raw.timeoutSeconds;
+    if (typeof timeoutSeconds !== 'number'
+      || !Number.isInteger(timeoutSeconds)
+      || timeoutSeconds < 1
+      || timeoutSeconds > MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS) {
+      throw new Error(
+        `app config \`nodeProviders.${id}.timeoutSeconds\` must be an integer between 1 and ${MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS}.`,
+      );
+    }
+    normalized.push({
+      id,
+      type: 'executable',
+      command: raw.command,
+      args: [...args] as string[],
+      timeoutMs: timeoutSeconds * 1000,
+    });
+  }
+  return normalized;
+}
+
+export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
+export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
+export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
+export const DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS = 24;
+export const DEFAULT_COMPACT_KEEP_PERCENT = 0.3;
+export const DEFAULT_COMPACT_THRESHOLD_PERCENT = 0.85;
+
+export type SessionWorkersConfig = boolean | {
+  enabled?: boolean;
+  idleSeconds?: number;
+};
+
+export type NormalizedSessionWorkersConfig = {
+  enabled: boolean;
+  idleSeconds: number;
+};
+
+export type VectorMaintenanceConfig = {
+  enabled?: boolean;
+  retentionHours?: number;
+} | boolean;
+
+export type NormalizedVectorMaintenanceConfig = {
+  enabled: boolean;
+  retentionHours: number;
+};
+
+export type VectorConfig = false | {
+  enabled?: boolean;
+  baseUrl?: string;
+  lexicalIndex?: boolean;
+  hybridSearch?: boolean;
+};
+
+export type NormalizedVectorConfig = {
+  enabled: boolean;
+  baseUrl?: string;
+  lexicalIndex: boolean;
+  hybridSearch: boolean;
+  source: 'disabled-default' | 'vector' | 'legacy-ollama';
+};
+
+export type CompactionConfig = {
+  compactKeepPercent?: number;
+  compactThresholdPercent?: number;
+  /** Legacy persisted-config reader. Use compactKeepPercent for current configuration. */
+  compactPercent?: number;
+};
+
+export type NormalizedCompactionConfig = {
+  compactKeepPercent: number;
+  compactThresholdPercent: number;
+};
+
+function normalizeCompactionPercent(value: unknown, field: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`app config \`${field}\` must be a finite number greater than 0 and at most 1.`);
+  }
+  return value;
+}
+
+export function normalizeCompactionConfig(value: CompactionConfig | undefined): NormalizedCompactionConfig {
+  const keepValue = value?.compactKeepPercent !== undefined
+    ? value.compactKeepPercent
+    : value?.compactPercent;
+  return {
+    compactKeepPercent: normalizeCompactionPercent(
+      keepValue,
+      value?.compactKeepPercent !== undefined ? 'llm.compactKeepPercent' : 'llm.compactPercent',
+      DEFAULT_COMPACT_KEEP_PERCENT,
+    ),
+    compactThresholdPercent: normalizeCompactionPercent(
+      value?.compactThresholdPercent,
+      'llm.compactThresholdPercent',
+      DEFAULT_COMPACT_THRESHOLD_PERCENT,
+    ),
+  };
+}
+
+function normalizeAbsoluteHttpUrl(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`app config \`${field}\` must be a non-empty absolute http(s) URL.`);
+  }
+  const trimmed = value.trim().replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`app config \`${field}\` must be a non-empty absolute http(s) URL.`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)
+    || !parsed.hostname
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash) {
+    throw new Error(`app config \`${field}\` must be a non-empty absolute http(s) URL.`);
+  }
+  return trimmed;
+}
+
+export function normalizeVectorConfig(
+  vectorValue: unknown,
+  legacyOllamaBaseUrl?: unknown,
+): NormalizedVectorConfig {
+  if (vectorValue === undefined) {
+    if (typeof legacyOllamaBaseUrl !== 'string' || legacyOllamaBaseUrl.trim().length === 0) {
+      return { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'disabled-default' };
+    }
+    const legacyRoot = normalizeAbsoluteHttpUrl(legacyOllamaBaseUrl, 'llm.ollamaBaseUrl');
+    const parsed = new URL(legacyRoot);
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    if (!pathname.endsWith('/v1')) {
+      parsed.pathname = `${pathname || ''}/v1`;
+    }
+    return {
+      enabled: true,
+      baseUrl: parsed.toString().replace(/\/+$/, ''),
+      lexicalIndex: false,
+      hybridSearch: false,
+      source: 'legacy-ollama',
+    };
+  }
+  if (vectorValue === false) {
+    return { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'vector' };
+  }
+  if (!vectorValue || typeof vectorValue !== 'object' || Array.isArray(vectorValue)) {
+    throw new Error('app config `vector` must be false or an object.');
+  }
+  const raw = vectorValue as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `vector.enabled` must be a boolean.');
+  }
+  if (raw.lexicalIndex !== undefined && typeof raw.lexicalIndex !== 'boolean') {
+    throw new Error('app config `vector.lexicalIndex` must be a boolean.');
+  }
+  if (raw.hybridSearch !== undefined && typeof raw.hybridSearch !== 'boolean') {
+    throw new Error('app config `vector.hybridSearch` must be a boolean.');
+  }
+  if (raw.enabled === false) {
+    return {
+      enabled: false,
+      lexicalIndex: false,
+      hybridSearch: false,
+      ...(raw.baseUrl === undefined ? {} : { baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl') }),
+      source: 'vector',
+    };
+  }
+  return {
+    enabled: true,
+    baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl'),
+    lexicalIndex: raw.lexicalIndex === true,
+    hybridSearch: raw.lexicalIndex === true && raw.hybridSearch === true,
+    source: 'vector',
+  };
+}
+
+export function normalizeSessionWorkersConfig(value: unknown): NormalizedSessionWorkersConfig {
+  if (value === undefined || value === false) {
+    return { enabled: false, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
+  }
+  if (value === true) {
+    return { enabled: true, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `sessionWorkers` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `sessionWorkers.enabled` must be a boolean.');
+  }
+  const rawIdleSeconds = raw.idleSeconds;
+  let idleSeconds = DEFAULT_SESSION_WORKER_IDLE_SECONDS;
+  if (rawIdleSeconds !== undefined) {
+    if (typeof rawIdleSeconds !== 'number') {
+      throw new Error('app config `sessionWorkers.idleSeconds` must be a number.');
+    }
+    idleSeconds = rawIdleSeconds;
+  }
+  if (!Number.isInteger(idleSeconds)
+    || idleSeconds < MIN_SESSION_WORKER_IDLE_SECONDS
+    || idleSeconds > MAX_SESSION_WORKER_IDLE_SECONDS) {
+    throw new Error(
+      `app config \`sessionWorkers.idleSeconds\` must be an integer between ${MIN_SESSION_WORKER_IDLE_SECONDS} and ${MAX_SESSION_WORKER_IDLE_SECONDS}.`,
+    );
+  }
+
+  return {
+    // Supplying an object opts in unless it explicitly disables the worker.
+    enabled: raw.enabled !== false,
+    idleSeconds,
+  };
+}
+
+export function normalizeDbWorkersEnabled(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error('app config `dbWorkers` must be a boolean.');
+  }
+  return value;
+}
+
+export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVectorMaintenanceConfig {
+  if (value === undefined) {
+    return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (value === false) {
+    return { enabled: false, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (value === true) {
+    return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `vectorMaintenance` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `vectorMaintenance.enabled` must be a boolean.');
+  }
+  const retentionHours = raw.retentionHours === undefined
+    ? DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS
+    : raw.retentionHours;
+  if (typeof retentionHours !== 'number') {
+    throw new Error('app config `vectorMaintenance.retentionHours` must be a number.');
+  }
+  if (!Number.isInteger(retentionHours) || retentionHours < 1) {
+    throw new Error('app config `vectorMaintenance.retentionHours` must be a positive integer.');
+  }
+
+  return {
+    enabled: raw.enabled !== false,
+    retentionHours,
+  };
+}
+
+export function normalizeHandoffConfirmationEnabled(value: unknown): boolean {
+  if (value === undefined || value === false) return false;
+  if (value === true) return true;
+  throw new Error('app config `handoffConfirmation` must be a boolean.');
+}
+
 export type AppConfig = {
+  mcpInbound?: McpInboundConfig;
+  nodeProviders?: NodeProvidersConfig;
+  vector?: VectorConfig;
+  sessionWorkers?: SessionWorkersConfig;
+  dbWorkers?: boolean;
+  vectorMaintenance?: VectorMaintenanceConfig;
+  handoffConfirmation?: boolean;
   bot?: {
     name?: string;
     enableWebUI?: boolean;
@@ -95,12 +556,16 @@ export type AppConfig = {
     httpPort?: number;
     enableTUI?: boolean;
   };
-  llm?: {
+  llm?: CompactionConfig & {
+    providerImageOutputFormat?: 'webp' | 'jpeg';
     ollamaBaseUrl?: string;
     contextLimit?: number;
-    compactPercent?: number;
+    compactBlockLevelMinTokens?: number;
+    compactBlockLevelForceTokens?: number;
+    compactBlockCandidateFraction?: number;
+    compactBlockForceCompactFraction?: number;
+    compactMessageForceCompactFraction?: number;
     maxOutput?: number;
-    thinkingBudget?: number;
     openaiBaseUrl?: string;
     openaiApiKey?: string;
     anthropicBaseUrl?: string;
@@ -109,7 +574,6 @@ export type AppConfig = {
   paths?: {
     agentsDir?: string;
     skillsDir?: string;
-    modelsConfigPath?: string;
     mcpConfigPath?: string;
   };
   channels?: Record<string, AnyChannelConfig>;
@@ -160,6 +624,10 @@ function resolveDataRootDir(): string {
 export const DATA_ROOT_DIR = resolveDataRootDir();
 export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
 export const ARCHIVE_DB_PATH = path.join(STATE_DIR, 'archive-store.sqlite');
+export const CATALOG_DB_PATH = path.join(STATE_DIR, 'catalog.sqlite');
+export const SESSION_RUNTIME_DB_PATH = path.join(STATE_DIR, 'session-runtime.sqlite');
+export const SESSION_ID_RESERVATIONS_LOG_PATH = path.join(STATE_DIR, 'session-id-reservations.jsonl');
+export const SESSION_ID_MOVE_JOURNAL_PATH = path.join(STATE_DIR, 'session-id-move-pending.json');
 
 const CONFIG_PATH_ENV = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
 export const APP_CONFIG_PATH = CONFIG_PATH_ENV
@@ -194,8 +662,22 @@ export function readAppConfigFile(): AppConfig {
     return {};
   }
 
-  const parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
+  let parsed: AppConfig | undefined;
+  try {
+    parsed = yaml.load(fs.readFileSync(APP_CONFIG_PATH, 'utf8')) as AppConfig | undefined;
+  } catch (error) {
+    if (error instanceof yaml.YAMLException) throw safeAppConfigYamlError(error);
+    throw error;
+  }
   return parsed || {};
+}
+
+export function safeAppConfigYamlError(error: yaml.YAMLException): Error {
+  const line = error.mark && Number.isSafeInteger(error.mark.line) && error.mark.line >= 0 ? error.mark.line + 1 : undefined;
+  const column = error.mark && Number.isSafeInteger(error.mark.column) && error.mark.column >= 0 ? error.mark.column + 1 : undefined;
+  return new Error(line && column
+    ? `Invalid app config YAML at line ${line}, column ${column}.`
+    : 'Invalid app config YAML.');
 }
 
 function loadAppConfig(): AppConfig {
@@ -253,14 +735,35 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 }
 
 export const APP_CONFIG = loadAppConfig();
+export function normalizeProviderImageOutputFormat(value: unknown): 'webp' | 'jpeg' {
+  if (value === undefined || value === 'webp') return 'webp';
+  if (value === 'jpeg') return 'jpeg';
+  throw new Error('app config `llm.providerImageOutputFormat` must be `webp` or `jpeg`.');
+}
+export const PROVIDER_IMAGE_OUTPUT_FORMAT = normalizeProviderImageOutputFormat(APP_CONFIG.llm?.providerImageOutputFormat);
+
+export const MCP_INBOUND_CONFIG = normalizeMcpInboundConfig(APP_CONFIG.mcpInbound);
+export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
+export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
+export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
+export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;
+export const VECTOR_BASE_URL = VECTOR_CONFIG.baseUrl;
+export const VECTOR_LEXICAL_INDEX_ENABLED = VECTOR_CONFIG.lexicalIndex;
+export const VECTOR_HYBRID_SEARCH_ENABLED = VECTOR_CONFIG.hybridSearch;
+export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.sessionWorkers);
+export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
+export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
+export const DB_WORKERS_ENABLED = normalizeDbWorkersEnabled(APP_CONFIG.dbWorkers);
+export const VECTOR_MAINTENANCE_CONFIG = normalizeVectorMaintenanceConfig(APP_CONFIG.vectorMaintenance);
+export const HANDOFF_CONFIRMATION_ENABLED = normalizeHandoffConfirmationEnabled(APP_CONFIG.handoffConfirmation);
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
 export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;
 export const MATRIX_CONFIG: MatrixConfig = (getDefaultChannelConfigByType<MatrixConfig>('matrix', APP_CONFIG)?.config || {}) as MatrixConfig;
 export const WEWORK_CONFIG: WeWorkConfig = (getDefaultChannelConfigByType<WeWorkConfig>('wework', APP_CONFIG)?.config || {}) as WeWorkConfig;
 export const WEIXIN_CONFIG: WeixinConfig = (getDefaultChannelConfigByType<WeixinConfig>('weixin', APP_CONFIG)?.config || {}) as WeixinConfig;
+export const QQBOT_CONFIG: QQBotConfig = (getDefaultChannelConfigByType<QQBotConfig>('qqbot', APP_CONFIG)?.config || {}) as QQBotConfig;
 export const ASR_SERVICE_CONFIG: AsrServiceConfig = APP_CONFIG.asrService || {};
-export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 
 export const AGENTS_DIR = resolvePathValue(APP_CONFIG.paths?.agentsDir, path.join(DATA_ROOT_DIR, 'agents'));
 export const SKILLS_DIR = resolvePathValue(APP_CONFIG.paths?.skillsDir, path.join(BASE_DIR, 'skills'));
@@ -272,6 +775,7 @@ export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const DB_DIR = path.join(STATE_DIR, 'db');
 export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
 export const SESSIONS_BLOB_DIR = path.join(STATE_DIR, 'sessions-blob');
+export const IMAGE_BLOBS_DIR = path.join(STATE_DIR, 'image-blobs');
 export const AGENTS_SYSTEM_PROMPT_PATH = path.join(AGENTS_DIR, '00_SYSTEM.md');
 export const AGENTS_SYSTEM_PROMPT_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'agents', '00_SYSTEM.md');
 export const MAIN_AGENT_DIR = path.join(AGENTS_DIR, 'main');
@@ -280,6 +784,7 @@ export const MAIN_AGENT_MEMORY_DIR = path.join(MAIN_AGENT_DIR, 'memory');
 // Files
 export const TOKEN_FILE = path.join(STATE_DIR, 'token');
 export const NODE_TOKEN_FILE = path.join(STATE_DIR, 'node_token');
+export const NODE_EVENT_CAPABILITY_SECRET_FILE = path.join(STATE_DIR, 'node_event_capability_secret');
 export const NODES_FILE = path.join(STATE_DIR, 'nodes.json');
 export const SESSIONS_FILE = path.join(STATE_DIR, 'sessions.json');
 export const AGENTS_FILE = path.join(STATE_DIR, 'agents.json');
@@ -309,7 +814,7 @@ export function getSessionBlockArchiveLogPath(sessionId: string): string {
   return path.join(SESSION_LOGS_DIR, `${sessionId}.blocks.jsonl`);
 }
 
-export function getSessionFrontierPath(sessionId: string): string {
+export function getLegacySessionFrontierPath(sessionId: string): string {
   return path.join(SESSIONS_DIR, `${sessionId}.frontier.json`);
 }
 
@@ -328,21 +833,286 @@ export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 
 // Context and compaction settings
 export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
-export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.3;
+export const COMPACT_KEEP_PERCENT = COMPACTION_CONFIG.compactKeepPercent;
+export const COMPACT_THRESHOLD_PERCENT = COMPACTION_CONFIG.compactThresholdPercent;
+export const COMPACT_BLOCK_LEVEL_MIN_TOKENS = APP_CONFIG.llm?.compactBlockLevelMinTokens ?? 3000;
+export const COMPACT_BLOCK_LEVEL_FORCE_TOKENS = APP_CONFIG.llm?.compactBlockLevelForceTokens ?? 5000;
+export const COMPACT_BLOCK_CANDIDATE_FRACTION = APP_CONFIG.llm?.compactBlockCandidateFraction ?? 0.4;
+export const COMPACT_BLOCK_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactBlockForceCompactFraction ?? 0.2;
+export const COMPACT_MESSAGE_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactMessageForceCompactFraction ?? 0.2;
 
 // TODO: move to models config
-export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
-export const THINKING_BUDGET = APP_CONFIG.llm?.thinkingBudget || 10000;
+export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 32768;
 
 // Models configuration
-export const DEFAULT_MODELS_CONFIG_PATH = path.join(STATE_DIR, 'models.yaml');
+export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): string {
+  return path.join(dataRoot, 'state', 'models.yaml');
+}
+
+export const DEFAULT_MODELS_CONFIG_PATH = resolveDataModelsConfigPath();
 export const MODELS_CONFIG_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'models.example.yaml');
-export const MODELS_CONFIG_PATH = resolvePathValue(process.env.MODELS_CONFIG_PATH || APP_CONFIG.paths?.modelsConfigPath, DEFAULT_MODELS_CONFIG_PATH);
+
+export type OpenAIWebSearchUserLocation = {
+  type?: 'approximate';
+  country?: string;
+  city?: string;
+  region?: string;
+  timezone?: string;
+};
+
+export type OpenAIWebSearchOptions = {
+  /** Opt in to the hosted Responses API web search tool. */
+  enabled?: boolean;
+  /** Select automatic or required Responses tool use when search is enabled. */
+  toolChoice?: 'auto' | 'required';
+  searchContextSize?: 'low' | 'medium' | 'high';
+  allowedDomains?: string[];
+  userLocation?: OpenAIWebSearchUserLocation;
+};
+
+export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
+
+export type OpenAIImageGenerationAction = 'auto' | 'generate' | 'edit';
+export type OpenAIImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type OpenAIImageGenerationBackground = 'auto' | 'opaque' | 'transparent';
+export type OpenAIImageGenerationOutputFormat = 'png' | 'jpeg' | 'webp';
+
+export type OpenAIImageGenerationOptions = {
+  /** Opt in to the hosted Responses API `image_generation` tool. An object without `enabled` means enabled. */
+  enabled?: boolean;
+  /** Optional hosted image model override. Omitted means the provider default. */
+  model?: string;
+  action?: OpenAIImageGenerationAction;
+  size?: string;
+  quality?: OpenAIImageGenerationQuality;
+  background?: OpenAIImageGenerationBackground;
+  outputFormat?: OpenAIImageGenerationOutputFormat;
+  /** PNG/WebP compression percentage. Ignored by the provider for other formats. */
+  outputCompression?: number;
+};
+
+export type OpenAIImageGenerationConfig = boolean | OpenAIImageGenerationOptions;
+
+export const MODEL_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ModelEffort = (typeof MODEL_EFFORTS)[number];
+export const DEFAULT_MODEL_EFFORT: ModelEffort = 'high';
+
+export type ModelEffortConfig = {
+  allowed?: ModelEffort[];
+  default?: ModelEffort;
+};
+
+export type NormalizedModelEffortConfig = {
+  allowed: ModelEffort[];
+  /** Concrete entries always have a default. Virtual entries expose only the derived union. */
+  default?: ModelEffort;
+};
+
+export type NormalizedOpenAIWebSearchConfig = Omit<OpenAIWebSearchOptions, 'enabled'> & {
+  enabled: boolean;
+};
+
+export function normalizeOpenAIWebSearchConfig(value: unknown): NormalizedOpenAIWebSearchConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return { enabled: value };
+  }
+  if (!isPlainObject(value)) {
+    throw new Error('models config `webSearch` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('models config `webSearch.enabled` must be a boolean.');
+  }
+
+  const normalized: NormalizedOpenAIWebSearchConfig = {
+    enabled: raw.enabled !== false,
+  };
+  if (raw.toolChoice !== undefined) {
+    if (raw.toolChoice !== 'auto' && raw.toolChoice !== 'required') {
+      throw new Error('models config `webSearch.toolChoice` must be `auto` or `required`.');
+    }
+    normalized.toolChoice = raw.toolChoice;
+  }
+  if (raw.searchContextSize !== undefined) {
+    if (raw.searchContextSize !== 'low' && raw.searchContextSize !== 'medium' && raw.searchContextSize !== 'high') {
+      throw new Error('models config `webSearch.searchContextSize` must be `low`, `medium`, or `high`.');
+    }
+    normalized.searchContextSize = raw.searchContextSize;
+  }
+  if (raw.allowedDomains !== undefined) {
+    if (!Array.isArray(raw.allowedDomains)) {
+      throw new Error('models config `webSearch.allowedDomains` must be an array of strings.');
+    }
+    const allowedDomains = raw.allowedDomains.map((domain, index) => {
+      if (typeof domain !== 'string' || domain.trim().length === 0) {
+        throw new Error(`models config \`webSearch.allowedDomains[${index}]\` must be a non-empty string.`);
+      }
+      return domain.trim();
+    });
+    normalized.allowedDomains = allowedDomains;
+  }
+  if (raw.userLocation !== undefined) {
+    if (!isPlainObject(raw.userLocation)) {
+      throw new Error('models config `webSearch.userLocation` must be an object.');
+    }
+    const rawLocation = raw.userLocation as Record<string, unknown>;
+    if (rawLocation.type !== undefined && rawLocation.type !== 'approximate') {
+      throw new Error('models config `webSearch.userLocation.type` must be `approximate`.');
+    }
+    const userLocation: OpenAIWebSearchUserLocation = {};
+    if (rawLocation.type !== undefined) userLocation.type = 'approximate';
+    for (const key of ['country', 'city', 'region', 'timezone'] as const) {
+      const locationValue = rawLocation[key];
+      if (locationValue !== undefined) {
+        if (typeof locationValue !== 'string') {
+          throw new Error(`models config \`webSearch.userLocation.${key}\` must be a string.`);
+        }
+        userLocation[key] = locationValue.trim();
+      }
+    }
+    normalized.userLocation = userLocation;
+  }
+
+  return normalized;
+}
+
+function mergeOpenAIWebSearchConfig(
+  baseValue: OpenAIWebSearchConfig | undefined,
+  overrideValue: OpenAIWebSearchConfig | undefined,
+): NormalizedOpenAIWebSearchConfig | undefined {
+  const base = normalizeOpenAIWebSearchConfig(baseValue);
+  if (overrideValue === undefined) {
+    return base;
+  }
+  const override = normalizeOpenAIWebSearchConfig(overrideValue)!;
+  return {
+    ...(base || {}),
+    ...override,
+  };
+}
+
+export type NormalizedOpenAIImageGenerationConfig = Omit<OpenAIImageGenerationOptions, 'enabled'> & {
+  enabled: boolean;
+};
+
+const OPENAI_IMAGE_GENERATION_ACTIONS = ['auto', 'generate', 'edit'] as const;
+const OPENAI_IMAGE_GENERATION_QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const OPENAI_IMAGE_GENERATION_BACKGROUNDS = ['auto', 'opaque', 'transparent'] as const;
+const OPENAI_IMAGE_GENERATION_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
+
+export function normalizeOpenAIImageGenerationConfig(value: unknown): NormalizedOpenAIImageGenerationConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return { enabled: value };
+  }
+  if (!isPlainObject(value)) {
+    throw new Error('models config `imageGeneration` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('models config `imageGeneration.enabled` must be a boolean.');
+  }
+
+  const normalized: NormalizedOpenAIImageGenerationConfig = {
+    enabled: raw.enabled !== false,
+  };
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== 'string' || raw.model.trim().length === 0) {
+      throw new Error('models config `imageGeneration.model` must be a non-empty string.');
+    }
+    normalized.model = raw.model.trim();
+  }
+  if (raw.action !== undefined) {
+    if (typeof raw.action !== 'string' || !(OPENAI_IMAGE_GENERATION_ACTIONS as readonly string[]).includes(raw.action)) {
+      throw new Error('models config `imageGeneration.action` must be `auto`, `generate`, or `edit`.');
+    }
+    normalized.action = raw.action as OpenAIImageGenerationAction;
+  }
+  if (raw.size !== undefined) {
+    if (typeof raw.size !== 'string' || raw.size.trim().length === 0) {
+      throw new Error('models config `imageGeneration.size` must be a non-empty string.');
+    }
+    normalized.size = raw.size.trim();
+  }
+  if (raw.quality !== undefined) {
+    if (typeof raw.quality !== 'string' || !(OPENAI_IMAGE_GENERATION_QUALITIES as readonly string[]).includes(raw.quality)) {
+      throw new Error('models config `imageGeneration.quality` must be `auto`, `low`, `medium`, `high`, `xhigh`, or `max`.');
+    }
+    normalized.quality = raw.quality as OpenAIImageGenerationQuality;
+  }
+  if (raw.background !== undefined) {
+    if (typeof raw.background !== 'string' || !(OPENAI_IMAGE_GENERATION_BACKGROUNDS as readonly string[]).includes(raw.background)) {
+      throw new Error('models config `imageGeneration.background` must be `auto`, `opaque`, or `transparent`.');
+    }
+    normalized.background = raw.background as OpenAIImageGenerationBackground;
+  }
+  if (raw.outputFormat !== undefined) {
+    if (typeof raw.outputFormat !== 'string' || !(OPENAI_IMAGE_GENERATION_OUTPUT_FORMATS as readonly string[]).includes(raw.outputFormat)) {
+      throw new Error('models config `imageGeneration.outputFormat` must be `png`, `jpeg`, or `webp`.');
+    }
+    normalized.outputFormat = raw.outputFormat as OpenAIImageGenerationOutputFormat;
+  }
+  if (raw.outputCompression !== undefined) {
+    if (typeof raw.outputCompression !== 'number'
+      || !Number.isInteger(raw.outputCompression)
+      || raw.outputCompression < 0
+      || raw.outputCompression > 100) {
+      throw new Error('models config `imageGeneration.outputCompression` must be an integer between 0 and 100.');
+    }
+    normalized.outputCompression = raw.outputCompression;
+  }
+
+  if (hasTransparentJpegImageGenerationConflict(normalized)) {
+    throw new Error('models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent`.');
+  }
+
+  return normalized;
+}
+
+function hasTransparentJpegImageGenerationConflict(config: NormalizedOpenAIImageGenerationConfig | undefined): boolean {
+  return config?.outputFormat === 'jpeg' && config?.background === 'transparent';
+}
+
+function mergeOpenAIImageGenerationConfig(
+  baseValue: OpenAIImageGenerationConfig | undefined,
+  overrideValue: OpenAIImageGenerationConfig | undefined,
+): NormalizedOpenAIImageGenerationConfig | undefined {
+  const base = normalizeOpenAIImageGenerationConfig(baseValue);
+  if (overrideValue === undefined) {
+    return base;
+  }
+  const override = normalizeOpenAIImageGenerationConfig(overrideValue)!;
+  const merged: NormalizedOpenAIImageGenerationConfig = {
+    ...(base || {}),
+    ...override,
+  };
+  // Each side is valid on its own, so the effective combination has to be
+  // checked again after inheritance and overrides are applied.
+  if (hasTransparentJpegImageGenerationConflict(merged)) {
+    throw new Error(
+      'models config `imageGeneration` cannot combine `outputFormat: jpeg` with `background: transparent` '
+      + 'after merging the provider and model settings.',
+    );
+  }
+  return merged;
+}
 
 export type ModelConfigOverride = {
   contextLimit?: number;
+  streamContentInactivityTimeoutMs?: number;
+  effort?: ModelEffortConfig;
+  historyReasoningField?: HistoryReasoningField;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
+  imageGeneration?: OpenAIImageGenerationConfig;
 };
 
 export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
@@ -355,23 +1125,54 @@ export type ProviderConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  streamContentInactivityTimeoutMs?: number;
+  effort?: ModelEffortConfig;
+  historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
+  disallowEmptyResponse?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
+  imageGeneration?: OpenAIImageGenerationConfig;
+  targets?: string[];
+  failureThreshold?: number;
+  cooldownMs?: number;
+};
+
+export type ProviderConfigValue = ProviderConfigEntry | string;
+
+export type VirtualProviderType = 'session-hash' | 'failover';
+
+export type HistoryReasoningField = 'reasoning_content' | 'reasoning';
+
+export type VirtualModelRoutingConfig = {
+  strategy: VirtualProviderType;
+  targets: string[];
+  failureThreshold: number;
+  cooldownMs: number;
+  fingerprint: string;
 };
 
 export type ModelConfigEntry = {
   providerKey: string;
+  canonicalModelKey?: string;
   providerType?: string;
   model: string;
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  streamContentInactivityTimeoutMs?: number;
+  effort?: NormalizedModelEffortConfig;
+  historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
+  disallowEmptyResponse?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: NormalizedOpenAIWebSearchConfig;
+  imageGeneration?: NormalizedOpenAIImageGenerationConfig;
+  virtualRouting?: VirtualModelRoutingConfig;
 };
 
 export type ModelsConfig = {
@@ -383,7 +1184,9 @@ export type ModelsConfig = {
 let warnedTemplateModelsFallback = false;
 
 function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function cloneConfigValue<T>(value: T): T {
@@ -392,6 +1195,24 @@ function cloneConfigValue<T>(value: T): T {
   }
 
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function stableSerializeConfigValue(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableSerializeConfigValue(item)).join(',')}]`;
+  }
+  return `{${Object.keys(value as Record<string, unknown>)
+    .filter(key => (value as Record<string, unknown>)[key] !== undefined)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${stableSerializeConfigValue((value as Record<string, unknown>)[key])}`)
+    .join(',')}}`;
+}
+
+function hashConfigValue(value: unknown): string {
+  return crypto.createHash('sha256').update(stableSerializeConfigValue(value)).digest('hex');
 }
 
 function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, override: T): T {
@@ -415,8 +1236,68 @@ function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, ov
   return result as T;
 }
 
+function normalizeEffortValue(value: unknown, label: string): ModelEffort {
+  if (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort)) {
+    throw new Error(`${label} must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+  }
+  return value as ModelEffort;
+}
+
+function normalizeHistoryReasoningField(value: unknown, label: string): HistoryReasoningField {
+  if (value !== 'reasoning_content' && value !== 'reasoning') {
+    throw new Error(`${label} must be one of: reasoning_content, reasoning.`);
+  }
+  return value;
+}
+
+function normalizeEffortAllowed(value: unknown, label: string): ModelEffort[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array.`);
+  }
+  const allowed = value.map((item, index) => normalizeEffortValue(item, `${label}[${index}]`));
+  if (new Set(allowed).size !== allowed.length) {
+    throw new Error(`${label} must not contain duplicate values.`);
+  }
+  const selected = new Set(allowed);
+  return MODEL_EFFORTS.filter(effort => selected.has(effort));
+}
+
+export function normalizeModelEffortConfig(
+  value: unknown,
+  inherited?: NormalizedModelEffortConfig,
+  label = 'models config `effort`',
+): NormalizedModelEffortConfig {
+  if (value !== undefined && !isPlainObject(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const raw = (value || {}) as Record<string, unknown>;
+  const allowed = raw.allowed === undefined
+    ? [...(inherited?.allowed || MODEL_EFFORTS)]
+    : normalizeEffortAllowed(raw.allowed, `${label}.allowed`);
+  const defaultEffort = raw.default === undefined
+    ? (inherited?.default || DEFAULT_MODEL_EFFORT)
+    : normalizeEffortValue(raw.default, `${label}.default`);
+  if (!allowed.includes(defaultEffort)) {
+    throw new Error(`${label}.default \`${defaultEffort}\` must be included in ${label}.allowed.`);
+  }
+  return { allowed, default: defaultEffort };
+}
+
+export function getConcreteModelEffortConfig(entry: Pick<ModelConfigEntry, 'effort'>): Required<NormalizedModelEffortConfig> {
+  const normalized = normalizeModelEffortConfig(entry.effort);
+  return { allowed: normalized.allowed, default: normalized.default || DEFAULT_MODEL_EFFORT };
+}
+
 function getProviderType(providerEntry: ProviderConfigEntry): string {
   return providerEntry.providerType || providerEntry.provider || 'openai';
+}
+
+export function isVirtualProviderType(providerType: unknown): providerType is VirtualProviderType {
+  return providerType === 'session-hash' || providerType === 'failover';
+}
+
+export function isVirtualModelConfigEntry(entry: ModelConfigEntry | undefined): entry is ModelConfigEntry & { virtualRouting: VirtualModelRoutingConfig } {
+  return !!entry?.virtualRouting && isVirtualProviderType(entry.providerType);
 }
 
 function normalizeProviderModelsField(providerKey: string, providerEntry: ProviderConfigEntry): ProviderModelListItem[] | undefined {
@@ -470,7 +1351,7 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
     };
   }
 
-  if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-completions') {
+  if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-ws' || providerType === 'openai-completions') {
     return {
       ...providerEntry,
       providerType,
@@ -487,15 +1368,65 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  const providerType = resolvedProviderEntry.providerType;
+  if (providerType === 'openai-ws' && resolvedProviderEntry.requestCompression) {
+    throw new Error(`Provider \`${providerKey}\` requestCompression is not supported for openai-ws providers.`);
+  }
+  const hasProviderHistoryReasoningField = resolvedProviderEntry.historyReasoningField !== undefined;
+  const hasModelHistoryReasoningField = modelOverride?.historyReasoningField !== undefined;
+  if (providerType !== 'openai-completions' && (hasProviderHistoryReasoningField || hasModelHistoryReasoningField)) {
+    const scope = hasModelHistoryReasoningField ? `Model \`${providerKey}/${modelId}\`` : `Provider \`${providerKey}\``;
+    throw new Error(`${scope} historyReasoningField is supported only for openai-completions providers.`);
+  }
+  const historyReasoningField = providerType === 'openai-completions'
+    ? normalizeHistoryReasoningField(
+      modelOverride?.historyReasoningField ?? resolvedProviderEntry.historyReasoningField ?? 'reasoning_content',
+      hasModelHistoryReasoningField
+        ? `Model \`${providerKey}/${modelId}\` historyReasoningField`
+        : `Provider \`${providerKey}\` historyReasoningField`,
+    )
+    : undefined;
+  for (const [value, label] of [
+    [resolvedProviderEntry.streamContentInactivityTimeoutMs, `Provider ${providerKey}`],
+    [modelOverride?.streamContentInactivityTimeoutMs, `Model ${providerKey}/${modelId}`],
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 2_147_483_647)) {
+      throw new Error(`${label} streamContentInactivityTimeoutMs must be an integer between 1 and 2147483647 milliseconds.`);
+    }
+  }
+  const providerEffort = normalizeModelEffortConfig(
+    resolvedProviderEntry.effort,
+    undefined,
+    `Provider \`${providerKey}\` effort`,
+  );
+  const effort = normalizeModelEffortConfig(
+    modelOverride?.effort,
+    providerEffort,
+    `Model \`${providerKey}/${modelId}\` effort`,
+  );
+  const webSearch = mergeOpenAIWebSearchConfig(
+    resolvedProviderEntry.webSearch,
+    modelOverride?.webSearch,
+  );
+  const imageGeneration = mergeOpenAIImageGenerationConfig(
+    resolvedProviderEntry.imageGeneration,
+    modelOverride?.imageGeneration,
+  );
   return {
     providerKey,
-    providerType: resolvedProviderEntry.providerType,
+    canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
+    providerType,
     model: modelId,
     baseUrl: resolvedProviderEntry.baseUrl,
     apiKey: resolvedProviderEntry.apiKey,
     contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
+    streamContentInactivityTimeoutMs: modelOverride?.streamContentInactivityTimeoutMs
+      ?? resolvedProviderEntry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+    effort,
+    ...(historyReasoningField ? { historyReasoningField } : {}),
     asyncCompact: resolvedProviderEntry.asyncCompact,
     requestCompression: resolvedProviderEntry.requestCompression,
+    disallowEmptyResponse: resolvedProviderEntry.disallowEmptyResponse,
     extraHeaders: {
       ...(resolvedProviderEntry.extraHeaders || {}),
       ...(modelOverride?.extraHeaders || {}),
@@ -504,19 +1435,49 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
       resolvedProviderEntry.extraFields || {},
       modelOverride?.extraFields || {},
     ) || {},
+    ...(webSearch && Object.keys(webSearch).length > 0 ? { webSearch } : {}),
+    ...(imageGeneration && Object.keys(imageGeneration).length > 0 ? { imageGeneration } : {}),
   };
 }
 
-export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigEntry>) {
+export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigValue>) {
   const models: Record<string, ModelConfigEntry> = {};
+  const canonicalConcreteKeyByLookupKey = new Map<string, string>();
   const displayModels: string[] = [];
 
-  for (const [providerKey, providerEntry] of Object.entries(rawProviderEntries || {})) {
+  const virtualEntries: Array<[string, ProviderConfigEntry, VirtualProviderType]> = [];
+
+  for (const [providerKey, rawProviderEntry] of Object.entries(rawProviderEntries || {})) {
+    if (typeof rawProviderEntry === 'string') {
+      const target = rawProviderEntry.trim();
+      if (!target) {
+        throw new Error(`Provider alias \`${providerKey}\` must target a non-empty concrete model key.`);
+      }
+      virtualEntries.push([providerKey, { providerType: 'session-hash', targets: [target] }, 'session-hash']);
+      continue;
+    }
+    if (!isPlainObject(rawProviderEntry)) {
+      throw new Error(`Provider \`${providerKey}\` must be a plain object or non-empty alias string.`);
+    }
+    const providerEntry = rawProviderEntry as ProviderConfigEntry;
+    const providerType = getProviderType(providerEntry);
+    if (isVirtualProviderType(providerType)) {
+      virtualEntries.push([providerKey, providerEntry, providerType]);
+      continue;
+    }
+
+    for (const field of ['targets', 'failureThreshold', 'cooldownMs'] as const) {
+      if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
+        throw new Error(`Concrete provider \`${providerKey}\` (${providerType}) forbids routing field \`${field}\`.`);
+      }
+    }
+
     const normalizedModels = normalizeProviderModelsField(providerKey, providerEntry);
 
     // Allow empty/undefined (some providers has default model)
     if (!normalizedModels || normalizedModels.length === 0) {
       models[providerKey] = buildResolvedModelEntry(providerKey, providerEntry, '');
+      canonicalConcreteKeyByLookupKey.set(providerKey, providerKey);
       displayModels.push(providerKey);
       continue;
     }
@@ -526,8 +1487,11 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       const modelId = typeof onlyModel === 'string' ? onlyModel : onlyModel.id;
       const modelOverride = typeof onlyModel === 'string' ? undefined : onlyModel;
       const resolvedEntry = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+      const qualifiedModelKey = `${providerKey}/${modelId}`;
       models[providerKey] = resolvedEntry;
-      models[`${providerKey}/${modelId}`] = { ...resolvedEntry };
+      models[qualifiedModelKey] = { ...resolvedEntry };
+      canonicalConcreteKeyByLookupKey.set(providerKey, qualifiedModelKey);
+      canonicalConcreteKeyByLookupKey.set(qualifiedModelKey, qualifiedModelKey);
       displayModels.push(providerKey);
     } else {
       for (const rawModel of normalizedModels) {
@@ -535,38 +1499,182 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
         const modelOverride = typeof rawModel === 'string' ? undefined : rawModel;
         const modelKey = `${providerKey}/${modelId}`;
         models[modelKey] = buildResolvedModelEntry(providerKey, providerEntry, modelId, modelOverride);
+        canonicalConcreteKeyByLookupKey.set(modelKey, modelKey);
         displayModels.push(modelKey);
       }
     }
   }
 
-  return { models, displayModels };
+  const rawVirtualKeys = new Set(virtualEntries.map(([providerKey]) => providerKey));
+  const forbiddenVirtualFields: Array<keyof ProviderConfigEntry> = [
+    'models',
+    'model',
+    'baseUrl',
+    'apiKey',
+    'requestCompression',
+    'extraFields',
+    'extraHeaders',
+    'contextLimit',
+    'streamContentInactivityTimeoutMs',
+    'effort',
+    'historyReasoningField',
+    'asyncCompact',
+    'disallowEmptyResponse',
+    'webSearch',
+    'imageGeneration',
+  ];
+
+  for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
+    for (const field of forbiddenVirtualFields) {
+      if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
+        throw new Error(`Virtual provider \`${virtualKey}\` (${providerType}) forbids field \`${field}\`.`);
+      }
+    }
+
+    if (providerType === 'session-hash') {
+      for (const field of ['failureThreshold', 'cooldownMs'] as const) {
+        if (Object.prototype.hasOwnProperty.call(providerEntry, field)) {
+          throw new Error(`Virtual provider \`${virtualKey}\` (session-hash) forbids failover field \`${field}\`.`);
+        }
+      }
+    }
+
+    if (!Array.isArray(providerEntry.targets)) {
+      throw new Error(`Virtual provider \`${virtualKey}\` requires a \`targets\` array of concrete model ids.`);
+    }
+
+    const minimumTargets = providerType === 'failover' ? 2 : 1;
+    if (providerEntry.targets.length < minimumTargets) {
+      throw new Error(`Virtual provider \`${virtualKey}\` (${providerType}) requires at least ${minimumTargets} target${minimumTargets === 1 ? '' : 's'}.`);
+    }
+
+    const targets: string[] = [];
+    const seenCanonicalTargets = new Set<string>();
+    const leafEntries: ModelConfigEntry[] = [];
+    for (const [index, rawTarget] of providerEntry.targets.entries()) {
+      const target = typeof rawTarget === 'string' ? rawTarget.trim() : '';
+      if (!target) {
+        throw new Error(`Virtual provider \`${virtualKey}\` has an invalid empty targets[${index}] value.`);
+      }
+      if (target === virtualKey) {
+        throw new Error(`Virtual provider \`${virtualKey}\` cannot target itself.`);
+      }
+      if (rawVirtualKeys.has(target)) {
+        throw new Error(`Virtual provider \`${virtualKey}\` target \`${target}\` is virtual; nested virtual routing is not supported.`);
+      }
+
+      const targetEntry = models[target];
+      if (!targetEntry) {
+        throw new Error(`Virtual provider \`${virtualKey}\` has unknown concrete target \`${target}\`.`);
+      }
+      const canonicalTarget = canonicalConcreteKeyByLookupKey.get(target);
+      if (!canonicalTarget || !models[canonicalTarget]) {
+        throw new Error(`Virtual provider \`${virtualKey}\` could not canonicalize concrete target \`${target}\`.`);
+      }
+      if (seenCanonicalTargets.has(canonicalTarget)) {
+        throw new Error(`Virtual provider \`${virtualKey}\` has duplicate canonical target \`${canonicalTarget}\`.`);
+      }
+      seenCanonicalTargets.add(canonicalTarget);
+      targets.push(canonicalTarget);
+      leafEntries.push(targetEntry);
+    }
+
+    const failureThreshold = providerEntry.failureThreshold ?? 5;
+    if (!Number.isInteger(failureThreshold) || failureThreshold < 1) {
+      throw new Error(`Virtual provider \`${virtualKey}\` failureThreshold must be a positive integer.`);
+    }
+    const cooldownMs = providerEntry.cooldownMs ?? 600_000;
+    if (!Number.isInteger(cooldownMs) || cooldownMs < 1) {
+      throw new Error(`Virtual provider \`${virtualKey}\` cooldownMs must be a positive integer.`);
+    }
+
+    const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit || CONTEXT_LIMIT));
+    const asyncCompact = leafEntries.every(entry => entry.asyncCompact !== false);
+    const allowedEffortSet = new Set<ModelEffort>();
+    for (const entry of leafEntries) {
+      for (const effort of getConcreteModelEffortConfig(entry).allowed) allowedEffortSet.add(effort);
+    }
+    const allowedEfforts = MODEL_EFFORTS.filter(effort => allowedEffortSet.has(effort));
+    const fingerprint = hashConfigValue({
+      strategy: providerType,
+      targets,
+      failureThreshold,
+      cooldownMs,
+      leaves: targets.map((target, index) => {
+        const entry = leafEntries[index];
+        return {
+          target,
+          providerType: entry.providerType || 'openai',
+          model: entry.model,
+          baseUrl: entry.baseUrl || null,
+          requestCompression: entry.requestCompression || null,
+          contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
+          streamContentInactivityTimeoutMs: entry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+          asyncCompact: entry.asyncCompact !== false,
+          disallowEmptyResponse: entry.disallowEmptyResponse === true,
+          effort: getConcreteModelEffortConfig(entry),
+          historyReasoningField: entry.historyReasoningField || null,
+          apiKeyHash: hashConfigValue(entry.apiKey || ''),
+          extraFieldsHash: hashConfigValue(entry.extraFields || {}),
+          extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
+          webSearchHash: hashConfigValue(entry.webSearch || {}),
+          imageGenerationHash: hashConfigValue(entry.imageGeneration || {}),
+        };
+      }),
+    });
+
+    models[virtualKey] = {
+      providerKey: virtualKey,
+      canonicalModelKey: virtualKey,
+      providerType,
+      model: '',
+      contextLimit,
+      effort: { allowed: allowedEfforts },
+      asyncCompact,
+      virtualRouting: {
+        strategy: providerType,
+        targets,
+        failureThreshold,
+        cooldownMs,
+        fingerprint,
+      },
+    };
+    displayModels.push(virtualKey);
+  }
+
+  const orderedDisplayModels = Object.keys(rawProviderEntries || {}).flatMap(providerKey =>
+    displayModels.filter(modelKey => models[modelKey]?.providerKey === providerKey)
+  );
+  return { models, displayModels: orderedDisplayModels };
 }
 
-function getResolvedModelsConfigPath(): string {
-  if (process.env.MODELS_CONFIG_PATH) {
-    return MODELS_CONFIG_PATH;
-  }
-
-  if (fs.existsSync(DEFAULT_MODELS_CONFIG_PATH)) {
-    return DEFAULT_MODELS_CONFIG_PATH;
-  }
-
-  if (fs.existsSync(MODELS_CONFIG_TEMPLATE_PATH)) {
-    if (!warnedTemplateModelsFallback) {
-      warnedTemplateModelsFallback = true;
-      console.warn(
-        `[config] state/models.yaml not found; falling back to template models config: ${MODELS_CONFIG_TEMPLATE_PATH}`
-      );
-    }
-    return MODELS_CONFIG_TEMPLATE_PATH;
-  }
-
+export function getActiveModelsConfigPath(): string {
   return DEFAULT_MODELS_CONFIG_PATH;
 }
 
+export function getModelsConfigReadPath(
+  activePath: string = getActiveModelsConfigPath(),
+  templatePath: string = MODELS_CONFIG_TEMPLATE_PATH,
+): string {
+  if (fs.existsSync(activePath)) {
+    return activePath;
+  }
+
+  if (fs.existsSync(templatePath)) {
+    if (!warnedTemplateModelsFallback) {
+      warnedTemplateModelsFallback = true;
+      console.warn(
+        `[config] state/models.yaml not found; falling back to template models config: ${templatePath}`
+      );
+    }
+    return templatePath;
+  }
+
+  return activePath;
+}
+
 export function loadModelsConfig(): ModelsConfig {
-  const resolvedPath = getResolvedModelsConfigPath();
+  const resolvedPath = getModelsConfigReadPath();
 
   try {
     const rawText = fs.readFileSync(resolvedPath, 'utf8');
@@ -575,7 +1683,7 @@ export function loadModelsConfig(): ModelsConfig {
   } catch (e) {
     throw new Error(
       `Loading models config (${resolvedPath}) error: ${e}. ` +
-      `Set MODELS_CONFIG_PATH, or create ${DEFAULT_MODELS_CONFIG_PATH} from ${MODELS_CONFIG_TEMPLATE_PATH}.`
+      `Create ${getActiveModelsConfigPath()} from ${MODELS_CONFIG_TEMPLATE_PATH}.`
     );
   }
 }

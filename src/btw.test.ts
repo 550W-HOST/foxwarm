@@ -1,8 +1,11 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
+import { PassThrough } from 'node:stream';
 import * as llm from './llm';
-import { runBtwRequest, BTW_USAGE } from './btw';
+import { loadModelsConfigFromObject } from './config';
+import * as configModule from './config';
+import { cloneSessionForBtw, runBtwRequest, BTW_USAGE } from './btw';
 import { COMMANDS } from './commands';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
@@ -15,9 +18,54 @@ import { estimateSessionSummary } from './tokenCount';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import type { Message, MessagePart, Session } from './types';
 
+const TEST_MODELS_CONFIG = loadModelsConfigFromObject({
+  default: 'fixture/chat',
+  providers: {
+    fixture: {
+      providerType: 'openai-completions',
+      baseUrl: 'https://fixture.test/v1',
+      apiKey: 'test-key',
+      models: ['chat'],
+    },
+  },
+});
+const originalResolveModelConfig = configModule.resolveModelConfig;
+(configModule as any).resolveModelConfig = (sessionModel?: string) => {
+  const defaultKey = TEST_MODELS_CONFIG.default;
+  const currentKey = sessionModel && TEST_MODELS_CONFIG.models[sessionModel] ? sessionModel : defaultKey;
+  const modelEntry = TEST_MODELS_CONFIG.models[currentKey];
+  return { modelsConfig: TEST_MODELS_CONFIG, defaultKey, currentKey, modelEntry, contextLimit: modelEntry.contextLimit };
+};
+after(() => { (configModule as any).resolveModelConfig = originalResolveModelConfig; });
+
+function makeChatCompletionStream(text: string): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] })}\n\n`);
+    stream.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 0 } } })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+test('BTW snapshot preserves raw current and future-child effort settings', () => {
+  const source = {
+    id: 'btw-effort', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: 0 },
+    effort: 'none', childEffortDefault: 'max', childModelDefault: 'child-model',
+  } as Session;
+  const snapshot = cloneSessionForBtw(source);
+  assert.equal(snapshot.effort, 'none');
+  assert.equal(snapshot.childEffortDefault, 'max');
+  snapshot.effort = 'high';
+  assert.equal(source.effort, 'none');
+});
 
 function makeDeferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: any) => void } {
   let resolve!: (value: T) => void;
@@ -67,7 +115,7 @@ async function createTestSession(sessionId: string): Promise<Session> {
   return session;
 }
 
-async function appendTempConversation(activeSession: Session, parts: MessagePart[] | null, text: string, options?: { appendMessage?: (message: Message) => Promise<void> }): Promise<void> {
+async function appendTempConversation(parts: MessagePart[] | null, text: string, options?: { appendMessage?: (message: Message) => Promise<void> }): Promise<void> {
   if (parts) {
     await options?.appendMessage?.({ role: 'user', parts });
   }
@@ -97,6 +145,7 @@ test('/btw command acks immediately and writes async result as display-only hist
   let tempHistoryAtCall: Message[] = [];
   let requestPartsAtCall: MessagePart[] | null = null;
   let tempPromptCacheKeyAtCall: string | undefined;
+  let requestPurposeAtCall: string | undefined;
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
@@ -107,14 +156,21 @@ test('/btw command acks immediately and writes async result as display-only hist
     const broadcasts: string[] = [];
     session.broadcast = (text: string) => { broadcasts.push(String(text)); };
 
-    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void>; purpose?: string }) => {
       requestPartsAtCall = structuredClone(parts);
       tempHistoryAtCall = structuredClone(activeSession.history);
       tempPromptCacheKeyAtCall = activeSession.promptCacheKey;
+      requestPurposeAtCall = options?.purpose;
+      assert.equal((options as any)?.snapshotAuthority, 'detached');
       chatStarted.resolve();
       await chatGate.promise;
-      await appendTempConversation(activeSession, parts, 'btw text answer', options);
-      return { text: 'btw text answer', modelId: 'anthropic/claude-sonnet-4-5', allParts: [{ text: 'btw text answer' }] };
+      await appendTempConversation(parts, 'btw text answer', options);
+      return {
+        text: 'btw text answer',
+        modelId: 'anthropic/claude-sonnet-4-5',
+        virtualModelKey: 'fallback',
+        allParts: [{ text: 'btw text answer' }],
+      };
     };
 
     const replies: string[] = [];
@@ -134,6 +190,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.equal(tempHistoryAtCall.length, 1);
     assert.deepEqual(tempHistoryAtCall[0], originalFirstMessage);
     assert.equal(tempPromptCacheKeyAtCall, sourcePromptCacheKey);
+    assert.equal(requestPurposeAtCall, 'btw');
     assert.ok(requestPartsAtCall?.some(part => typeof part.system === 'string' && part.system.includes('Do not call tools in BTW mode')));
     assert.ok(requestPartsAtCall?.some(part => part.text === 'side question'));
 
@@ -150,6 +207,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.equal(after.history[1].modelVisible, false);
     assert.equal(after.history[1].__meta?.noticeType, 'btw');
     assert.equal(after.history[1].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
+    assert.equal(after.history[1].__meta?.virtualModelKey, 'fallback');
     assert.match(after.history[1].parts[0].text || '', /\[BTW result\]/);
     assert.match(after.history[1].parts[0].text || '', /btw text answer/);
     assert.equal(broadcasts.length, 1);
@@ -157,15 +215,13 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.match(broadcasts[0], /btw text answer/);
     assert.equal(after.history.some(message => message.role === 'user' && message.parts.some(part => part.text === 'side question')), false);
     assert.equal(after.promptCacheKey, sourcePromptCacheKey);
-    assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[display-only\]:/);
+    assert.match(formatSessionMessagesPreview(sessionId, after.history, 0, after.history.length), /model \[non-context\]:/);
 
     const toolPreview = await toolsSessionAgent.tool_get_session_messages({ sessionId }, { sessionId, session: after } as any);
-    assert.match(toolPreview, /model \[display-only\]: \[display-only message hidden\]/);
-    assert.doesNotMatch(toolPreview, /btw text answer/);
+    assert.match(toolPreview, /model \[non-context\]:[\s\S]*btw text answer/);
 
     const archivePreview = await toolsSessionAgent.tool_recall({ sessionId, target: 'msg#1-2' }, { sessionId, session: after } as any);
-    assert.match(archivePreview, /model \[display-only\]: \[display-only message hidden\]/);
-    assert.doesNotMatch(archivePreview, /btw text answer/);
+    assert.match(archivePreview, /model \[non-context\]:[\s\S]*btw text answer/);
 
     assert.deepEqual(tools.modelFacingDefinitions.map(def => def.name), toolNamesBefore);
   } finally {
@@ -190,7 +246,7 @@ test('/btw does not execute tool calls returned by the model', async () => {
     const broadcasts: string[] = [];
     session.broadcast = (text: string) => { broadcasts.push(String(text)); };
 
-    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
+    (llm as any).chat = async (parts: MessagePart[] | null, _activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
       if (parts) {
         await options?.appendMessage?.({ role: 'user', parts });
       }
@@ -240,10 +296,7 @@ test('display-only messages persist in history but are omitted from model-facing
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: {
-        content: [{ type: 'text', text: 'ok' }],
-        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 },
-      },
+      data: makeChatCompletionStream('ok'),
     };
   };
 
@@ -255,12 +308,12 @@ test('display-only messages persist in history but are omitted from model-facing
       id: makeId('btw_visibility'),
       agent: 'main',
       history: [ordinaryUser, displayOnly, ordinaryModel],
-      persistentMemorySnapshot: 'system prompt',
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
       meta: { lastMessageTime: Date.now() },
-      model: 'anthropic/claude-sonnet-4-5',
+      model: 'fixture/chat',
+      persistentMemorySnapshot: '<foxwarm-current-model model-id="fixture/chat" />\n\nsystem prompt',
     } as Session;
 
     await llm.chat(null, session, 0, {
@@ -277,7 +330,7 @@ test('display-only messages persist in history but are omitted from model-facing
 
     const preview = formatSessionMessagesPreview(session.id, [ordinaryUser, displayOnly, ordinaryModel], 0, 3);
     assert.match(preview, /hidden btw result/);
-    assert.match(preview, /model \[display-only\]:/);
+    assert.match(preview, /model \[non-context\]:/);
 
     const tokenSummary = estimateSessionSummary({ history: [ordinaryUser, displayOnly], persistentMemorySnapshot: '' });
     const visibleOnlySummary = estimateSessionSummary({ history: [ordinaryUser], persistentMemorySnapshot: '' });
@@ -344,13 +397,13 @@ test('manual compact drops display-only messages outside the force-kept range an
         id: 'compact_plan_1',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 2,
             sourceEnd: 4,
             summary: 'summary of visible before and visible after; display-only notice omitted',
-          }]),
+          }],
         },
       };
       return { text: '', allParts: [{ functionCall: toolCall }], toolCalls: [toolCall] };
@@ -373,7 +426,7 @@ test('manual compact drops display-only messages outside the force-kept range an
     assert.match(rendered, /summary of visible before and visible after/);
     assert.equal(compacted.history.some(message => message.modelVisible === false), false);
     assert.match(compacted.promptCacheKey || '', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    assert.notEqual(compacted.promptCacheKey, originalPromptCacheKey);
+    assert.equal(compacted.promptCacheKey, originalPromptCacheKey);
   } finally {
     (llm as any).chat = originalChat;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;

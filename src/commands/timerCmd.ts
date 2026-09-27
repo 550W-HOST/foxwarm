@@ -1,10 +1,10 @@
 import { ChannelContext } from '../channel';
-import { Session } from '../types';
+import type { CommandSession } from './types';
 import * as timers from '../timers';
 import { checkTimerPermission } from '../isolatedCheck';
 import { formatTimerDate, parseTimerFlags, parseTimerMessage } from './helpers';
 
-export async function handleTimerCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
+export async function handleTimerCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
   if (!sessionId || !session) return
 
   const subcommand = args[0]

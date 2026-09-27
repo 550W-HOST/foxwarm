@@ -5,7 +5,7 @@ import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from '../config';
 import * as sessionManager from '../sessionManager';
 import { checkToolPermission } from '../isolatedCheck';
-import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
+import { read, write, edit, apply_patch, apply_patch_memory, delete_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
@@ -26,7 +26,7 @@ test('vector retrieval is exposed through recall rather than a separate search_v
   assert.ok((recallDef.parameters.properties as any).vector_query);
   await assert.rejects(
     () => callTool('search_vector', { query: 'anything' }, { sessionId: 'test-session' }),
-    /Unknown tool: search_vector/,
+    /Unknown (?:builtin )?tool: search_vector/,
   );
 });
 
@@ -48,7 +48,7 @@ test('file tools resolve relative paths from session cwd', async () => {
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'hello');
 
     const readResult = await read({ filePath: 'note.txt' }, ctx as any);
-    assert.equal(readResult, 'hello');
+    assert.equal(readResult, 'hello\n---\nFile has 1 line.\nFile size: 5 bytes.\nFile has no trailing newline.');
 
     await edit({ filePath: 'note.txt', oldText: 'hello', newText: 'world' }, ctx as any);
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'world');
@@ -114,9 +114,22 @@ test('read treats startLine/endLine 0 as omitted for files and directories', asy
     await fs.writeFile(filePath, 'one\ntwo\nthree');
     await fs.writeFile(path.join(baseDir, 'item.txt'), 'item');
 
-    assert.equal(await read({ filePath, startLine: 0, endLine: 0 }, ctx as any), 'one\ntwo\nthree');
-    assert.equal(await read({ filePath, startLine: 2, endLine: 0 }, ctx as any), 'two\nthree');
-    assert.equal(await read({ filePath, startLine: 0, endLine: 2 }, ctx as any), 'one\ntwo');
+    assert.equal(
+      await read({ filePath, startLine: 0, endLine: 0 }, ctx as any),
+      'one\ntwo\nthree\n---\nFile has 3 lines.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath, startLine: 2, endLine: 0 }, ctx as any),
+      'two\nthree\n---\nSelected lines 2-3 of 3.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath, startLine: 0, endLine: 2 }, ctx as any),
+      'one\ntwo\n---\nSelected lines 1-2 of 3.\nFile size: 13 bytes.',
+    );
+    assert.equal(
+      await read({ filePath, startLine: 9, endLine: 12 }, ctx as any),
+      '(no content in requested line range 9-12)\n---\nFile has 3 lines.\nFile size: 13 bytes.',
+    );
 
     const listing = String(await read({ filePath: baseDir, startLine: 0, endLine: 0 }, ctx as any));
     assert.match(listing, /Directory listing/);
@@ -134,19 +147,21 @@ function extractWriteContentRef(error: unknown): string {
   return match[1];
 }
 
-test('write can reuse cached contentRef after existing-file refusal', async () => {
+test('write can reuse cached contentRef at a different existing destination and consumes it on success', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  const filePath = path.join(baseDir, 'note.txt');
+  const refusedPath = path.join(baseDir, 'refused.txt');
+  const destinationPath = path.join(baseDir, 'destination.txt');
   const ctx = { sessionId: `main/write_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
 
   try {
     await fs.ensureDir(baseDir);
-    await fs.writeFile(filePath, 'old');
+    await fs.writeFile(refusedPath, 'refused old');
+    await fs.writeFile(destinationPath, 'destination old');
 
     let contentRef = '';
     await assert.rejects(
-      async () => write({ filePath, content: 'new cached content' }, ctx as any),
+      async () => write({ filePath: refusedPath, content: 'new cached content' }, ctx as any),
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         assert.match(message, /File already exists/);
@@ -156,43 +171,83 @@ test('write can reuse cached contentRef after existing-file refusal', async () =
       },
     );
 
-    await write({ filePath, contentRef, overwrite: true }, ctx as any);
-    assert.equal(await fs.readFile(filePath, 'utf8'), 'new cached content');
+    await write({ filePath: destinationPath, contentRef, overwrite: true }, ctx as any);
+    assert.equal(await fs.readFile(refusedPath, 'utf8'), 'refused old');
+    assert.equal(await fs.readFile(destinationPath, 'utf8'), 'new cached content');
+    await assert.rejects(
+      () => write({ filePath: refusedPath, contentRef, overwrite: true }, ctx as any),
+      /not found or expired/,
+    );
   } finally {
     await fs.remove(baseDir);
   }
 });
 
-test('write requires existing parent directories by default and can retry missing-parent contentRef with createDirs', async () => {
+test('write existing-file refusal gives an exact executable contentRef call with escaped arguments', async () => {
+  const agentDir = getAgentDir('main');
+  const baseDir = path.join(agentDir, '.temp', `write-ref-hint-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const filePath = 'quoted "path"\\line\nnote.txt';
+  const fullPath = path.join(baseDir, filePath);
+  const ctx = {
+    sessionId: `main/write_ref_hint_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    session: { agent: 'main', cwd: baseDir },
+  };
+
+  try {
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(fullPath, 'old');
+
+    await assert.rejects(
+      () => write({ filePath, content: 'secret cached content' }, ctx as any),
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const contentRef = extractWriteContentRef(err);
+        assert.equal(message, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file. The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To confirm overwriting, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true }). The cached payload may instead be written to another authorized \`filePath\` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the desired \`filePath\` and \`overwrite: true\`. Never pass \`content\` and \`contentRef\` together. The contentRef expires in 15 minutes and can be reused with another authorized filePath in this session/agent.`);
+        assert.doesNotMatch(message, /secret cached content|resend/i);
+        return true;
+      },
+    );
+  } finally {
+    await fs.remove(baseDir);
+  }
+});
+
+test('write retains contentRef after a failed new-path retry and can create a different missing-parent destination', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-mkdir-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const missingParent = path.join(baseDir, 'missing');
+  const refusedPath = path.join(baseDir, 'refused.txt');
   const filePath = path.join(missingParent, 'child', 'note.txt');
   const ctx = { sessionId: `main/write_mkdir_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
 
   try {
     await fs.ensureDir(baseDir);
+    await fs.writeFile(refusedPath, 'refused old');
 
     let contentRef = '';
     await assert.rejects(
-      async () => write({ filePath, content: 'cached missing parent content' }, ctx as any),
+      async () => write({ filePath: refusedPath, content: 'cached missing parent content' }, ctx as any),
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        assert.match(message, /Parent directory does not exist/);
-        assert.match(message, new RegExp(missingParent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-        assert.match(message, /createDirs=true/);
-        assert.match(message, /contentRef/);
-        assert.doesNotMatch(message, /cached missing parent content/);
         contentRef = extractWriteContentRef(err);
+        assert.doesNotMatch(message, /cached missing parent content/);
         return true;
       },
     );
 
     await assert.rejects(
       () => write({ filePath, contentRef, overwrite: true }, ctx as any),
-      /Parent directory does not exist/,
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /Parent directory does not exist/);
+        assert.match(message, new RegExp(missingParent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        assert.ok(message.includes(` The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To retry and create the missing parent directories, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true, createDirs: true }). The cached payload may instead be written to another authorized \`filePath\` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the desired \`filePath\` and \`createDirs: true\`. Never pass \`content\` and \`contentRef\` together.`));
+        assert.doesNotMatch(message, /resend/i);
+        return true;
+      },
     );
     await write({ filePath, contentRef, overwrite: true, createDirs: true }, ctx as any);
+    assert.equal(await fs.readFile(refusedPath, 'utf8'), 'refused old');
     assert.equal(await fs.readFile(filePath, 'utf8'), 'cached missing parent content');
   } finally {
     await fs.remove(baseDir);
@@ -232,18 +287,17 @@ test('write accepts symlinked parent directories without createDirs', async () =
   }
 });
 
-test('write contentRef is scoped to the same session and same path', async () => {
+test('write contentRef remains scoped to the exact session and agent', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-ref-scope-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const firstPath = path.join(baseDir, 'first.txt');
-  const secondPath = path.join(baseDir, 'second.txt');
   const ctx = { sessionId: `main/write_ref_scope_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
   const otherCtx = { sessionId: `${ctx.sessionId}_other`, session: { agent: 'main' } };
+  const otherAgentCtx = { sessionId: ctx.sessionId, session: { agent: 'other-agent' } };
 
   try {
     await fs.ensureDir(baseDir);
     await fs.writeFile(firstPath, 'first old');
-    await fs.writeFile(secondPath, 'second old');
 
     let contentRef = '';
     await assert.rejects(
@@ -263,8 +317,8 @@ test('write contentRef is scoped to the same session and same path', async () =>
       /not available in this session\/agent/,
     );
     await assert.rejects(
-      () => write({ filePath: secondPath, contentRef, overwrite: true }, ctx as any),
-      /cannot be used to write a different file/,
+      () => write({ filePath: firstPath, contentRef, overwrite: true }, otherAgentCtx as any),
+      /not available in this session\/agent/,
     );
     await assert.rejects(
       () => write({ filePath: firstPath, contentRef: 'write_missing_ref', overwrite: true }, ctx as any),
@@ -330,13 +384,37 @@ test('apply_patch_memory is restricted to the current agent memory directory and
   }
 });
 
+test('delete_memory removes a symlink to a directory without removing its target', async () => {
+  const memoryDir = getAgentMemoryDir('main');
+  const unique = `delete-memory-symlink-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const relativeLink = `${unique}.link`;
+  const linkPath = path.join(memoryDir, relativeLink);
+  const targetDir = path.join(getAgentDir('main'), '.temp', `${unique}.target`);
+  const targetFile = path.join(targetDir, 'keep.txt');
+  try {
+    await fs.ensureDir(memoryDir);
+    await fs.ensureDir(targetDir);
+    await fs.writeFile(targetFile, 'keep');
+    await fs.symlink(targetDir, linkPath, 'dir');
+
+    await delete_memory({ filePath: relativeLink }, { session: { agent: 'main' } } as any);
+
+    assert.equal(await fs.pathExists(linkPath), false);
+    assert.equal(await fs.pathExists(targetDir), true);
+    assert.equal(await fs.readFile(targetFile, 'utf8'), 'keep');
+  } finally {
+    await fs.remove(linkPath);
+    await fs.remove(targetDir);
+  }
+});
+
 test('non-isolated read accepts absolute paths outside the agent directory', async () => {
   const outsidePath = path.join('/tmp', `foxwarm-read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
 
   try {
     await fs.writeFile(outsidePath, 'outside');
     const result = await read({ filePath: outsidePath }, { session: { agent: 'main' } } as any);
-    assert.equal(result, 'outside');
+    assert.equal(result, 'outside\n---\nFile has 1 line.\nFile size: 7 bytes.\nFile has no trailing newline.');
   } finally {
     await fs.remove(outsidePath);
   }
@@ -378,14 +456,14 @@ test('isolated copy_between_nodes restricts master paths but allows absolute pat
     session.agent = agentName;
     session.currentNode = boundNode;
 
-    await assert.doesNotReject(() => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
       sourceNode: boundNode,
       sourcePath: '/var/tmp/source.txt',
       targetNode: boundNode,
       targetPath: '/var/tmp/target.txt',
     }));
 
-    await assert.doesNotReject(() => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
       sourceNode: boundNode,
       sourcePath: '/var/tmp/source.txt',
       targetNode: 'master',
@@ -393,7 +471,7 @@ test('isolated copy_between_nodes restricts master paths but allows absolute pat
     }));
 
     await assert.rejects(
-      () => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+      () => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
         sourceNode: 'master',
         sourcePath: '/tmp/outside-source.txt',
         targetNode: boundNode,
@@ -403,7 +481,7 @@ test('isolated copy_between_nodes restricts master paths but allows absolute pat
     );
 
     await assert.rejects(
-      () => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+      () => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
         sourceNode: boundNode,
         sourcePath: '/var/tmp/source.txt',
         targetNode: 'master',
@@ -430,5 +508,78 @@ test('isolated read remains restricted to the current agent directory on master'
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
     await fs.remove(outsidePath);
+  }
+});
+
+test('isolated write path guard rejects contentRef reuse outside the agent directory before any write', async () => {
+  const agentName = `isolated_write_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const baseDir = path.join(getAgentDir(agentName), '.temp', 'write-ref');
+  const refusedPath = path.join(baseDir, 'refused.txt');
+  const authorizedPath = path.join(baseDir, 'authorized.txt');
+  const outsidePath = path.join('/tmp', `foxwarm-isolated-write-ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  const ctx = {
+    sessionId: `${agentName}/session`,
+    session: { agent: agentName },
+    runtimeNodeId: 'master',
+  };
+
+  try {
+    await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'sandbox-docker' } as any);
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(refusedPath, 'refused old');
+    await fs.writeFile(authorizedPath, 'authorized old');
+    await fs.writeFile(outsidePath, 'outside sentinel');
+
+    let contentRef = '';
+    await assert.rejects(
+      () => write({ filePath: refusedPath, content: 'cached isolated content' }, ctx as any),
+      (err: unknown) => {
+        contentRef = extractWriteContentRef(err);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      () => write({ filePath: outsidePath, contentRef, overwrite: true }, ctx as any),
+      new RegExp(`Isolated agent session can only access agents/${agentName}/`),
+    );
+    assert.equal(await fs.readFile(outsidePath, 'utf8'), 'outside sentinel');
+
+    await write({ filePath: authorizedPath, contentRef, overwrite: true }, ctx as any);
+    assert.equal(await fs.readFile(refusedPath, 'utf8'), 'refused old');
+    assert.equal(await fs.readFile(authorizedPath, 'utf8'), 'cached isolated content');
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
+    await fs.remove(baseDir);
+    await fs.remove(outsidePath);
+  }
+});
+
+test('isolated sessions may load visible skills for their own agent only', async () => {
+  const agentName = `isolated_skill_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const otherAgentName = `${agentName}_other`;
+  const sessionId = `${agentName}/session`;
+
+  try {
+    await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'sandbox-docker' } as any);
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = agentName;
+
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'skill' }, sessionId, 'master', { action: 'list' }));
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'skill' }, sessionId, 'master', { action: 'load', skillName: 'code-index' }));
+
+    const ownListResult = await callTool('skill', { action: 'list' }, { sessionId, session });
+    assert.match(String(ownListResult), /Found \d+ skill/);
+
+    await assert.rejects(
+      () => callTool('skill', { action: 'list', agentName: otherAgentName }, { sessionId, session }),
+      /Isolated session cannot list skills for agent/,
+    );
+    await assert.rejects(
+      () => callTool('skill', { action: 'load', skillName: 'code-index', agentName: otherAgentName }, { sessionId, session }),
+      /Isolated session cannot load skills for agent/,
+    );
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
   }
 });

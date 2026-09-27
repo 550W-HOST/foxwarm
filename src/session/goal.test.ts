@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Session } from '../types';
-import { DEFAULT_GOAL_REMIND_EVERY, maybeBuildGoalEndTurnReminderMessage, maybeBuildGoalReminderMessage, resolveSessionGoalRemindEvery, resolveSessionGoalRemindOnTurnEnd, setSessionGoal } from './goal';
+import { DEFAULT_GOAL_REMIND_EVERY, maybeBuildGoalReminderMessage, resolveSessionGoalRemindEvery, setSessionGoal } from './goal';
 
-test('goal reminder uses a system header part plus a plain text payload part', () => {
+test('goal reminder uses one foxwarm-system part wrapping the reminder payload', () => {
   const session = {
     history: [{ role: 'model', parts: [{ text: 'progress update' }], __meta: { seq: 1, timestamp: 1 } }],
     nextMessageSeq: 2,
@@ -19,33 +19,32 @@ test('goal reminder uses a system header part plus a plain text payload part', (
   const reminder = maybeBuildGoalReminderMessage(session);
   assert.ok(reminder);
   assert.deepEqual(reminder.parts, [
-    { system: 'Session goal reminder:' },
-    {
-      text: 'Ship feature without losing compacted context\nKeep this long-term goal in mind when deciding what to do next.',
-      systemPayload: true,
-    },
+    { system: '<foxwarm-system kind="goal-reminder">\nShip feature without losing compacted context\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>' },
   ]);
   assert.equal(session.goalState?.anchorSeq, 1);
 });
 
-test('setSessionGoal stores remindOnTurnEnd and end-turn reminders honor disabled setting', () => {
+test('setSessionGoal stores interval-only configuration', () => {
   const session = {
     history: [{ role: 'model', parts: [{ text: 'progress update' }], __meta: { seq: 1, timestamp: 1 } }],
     nextMessageSeq: 2,
   } as Session;
 
-  setSessionGoal(session, 'Ship feature safely', 3, false);
-  assert.equal(session.goalState?.remindOnTurnEnd, false);
-  assert.equal(maybeBuildGoalEndTurnReminderMessage(session), null);
+  setSessionGoal(session, 'Ship feature safely', 3);
+  assert.deepEqual(session.goalState, {
+    goal: 'Ship feature safely',
+    remindEvery: 3,
+    anchorSeq: 1,
+    updatedAt: session.goalState?.updatedAt,
+  });
 });
 
-test('goal remindEvery defaults to current value or 10 when omitted', () => {
+test('goal remindEvery defaults to current value or 20 when omitted', () => {
   const withExisting = {
     history: [],
     goalState: {
       goal: 'Existing goal',
       remindEvery: 4,
-      remindOnTurnEnd: true,
       anchorSeq: 0,
       updatedAt: 1,
     },
@@ -55,6 +54,4 @@ test('goal remindEvery defaults to current value or 10 when omitted', () => {
 
   assert.equal(resolveSessionGoalRemindEvery(withExisting, undefined), 4);
   assert.equal(resolveSessionGoalRemindEvery(withoutExisting, undefined), DEFAULT_GOAL_REMIND_EVERY);
-  assert.equal(resolveSessionGoalRemindOnTurnEnd(withExisting, undefined), true);
-  assert.equal(resolveSessionGoalRemindOnTurnEnd(withoutExisting, undefined), true);
 });

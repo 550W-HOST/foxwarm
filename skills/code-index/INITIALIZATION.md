@@ -1,6 +1,6 @@
 # Code Index Initialization
 
-This document describes how to create a code index for a project when `~/code-index/{project}` does not exist yet or is too incomplete to be useful.
+This document describes how to create a code index when no usable index exists. Prefer repository-local `<repo-root>/docs/code-index/` for a new index unless the project explicitly uses another convention. The `~/code-index/{project}/` fallback exists so maintenance can continue on an already existing legacy index during migration; do not create a second copy merely to satisfy the lookup order. Select one root for the run and do not split writes between both.
 
 Most day-to-day work is **not** initialization. If an index already exists, usually read `overview.md`, search existing docs, inspect source, and make targeted updates. Use this document when you need to build the initial map.
 
@@ -75,38 +75,81 @@ Use `TOP_DOWN_CHILD.md` as the prompt for a child/subagent session assigned to t
 
 ## Method 1 Details: Batch Generator
 
-The batch generator is implemented as a Foxwarm ToolScript:
+There are two supported batch runners. The standalone Python runner is:
 
 ```text
-skills/code-index/generate_code_index.py
+skills/code-index/generate_code_index_standalone.py
 ```
 
-Run it through Foxwarm's `run_script` tool. It is not a standalone Python CLI because it uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`.
+It calls models via the production `foxwarm model` CLI (no Foxwarm server process is required). Run it directly with `python3`. The existing `generate_code_index.py` remains the Foxwarm ToolScript-compatible runner for `run_script`; the standalone runner is an additional shell/background-friendly path, not a replacement for existing ToolScript automation or ordinary targeted maintenance through the skill.
+
+### Prerequisites
+
+- Build Foxwarm first with `npm run build`; the CLI reuses `lib/config.js` and `lib/llm.js` rather than maintaining a second provider stack.
+- If an installed `foxwarm` executable is not on `PATH`, the generator automatically uses the repo-local `node scripts/foxwarm.js` entry. `FOXWARM_CLI` or `--foxwarm-cli` can explicitly select another command.
+- The selected model key must be available through Foxwarm's normal model-config resolution.
 
 ### Phases
 
-1. **Scan & Plan** — list source files, get sizes, call a model to plan semantic unit groupings.
-2. **Units** — read source files for each unit group and generate `units/*.md`.
+1. **Scan & Plan** — list eligible source files, get sizes, call a model to plan semantic unit groupings, and strictly validate that the plan uses every scanned file exactly once. Results are cached to `_work/groupings.json` with a source/files/project/model/CLI/timeout fingerprint.
+2. **Units** — read allowlisted source files for each unit group and generate `units/*.md` with atomic writes. Existing non-empty docs are preserved unless `--force` is explicit.
 3. **Modules** — generate `modules/*.md` from unit summaries.
 4. **Threads** — generate `threads/*.md` from module summaries.
 5. **Overview** — generate `overview.md` from modules and threads.
 
-Design decisions are not extracted by the generator. Add decisions from actual task/user context to relevant `## Design Decisions` sections.
+Design decisions are not extracted by the generator. Add only user-confirmed decisions from actual task context, following `SKILL.md`: choose one canonical owner before writing, use a thread for cross-module contracts, and use summary links rather than copying one decision across layers.
 
 ### Running
 
-```python
-# Full generation
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project"})
+The runners retain their legacy `~/code-index/{project}/` default for existing automation. For a new repository-local index, pass `--output /path/to/project/docs/code-index` (or the equivalent ToolScript `output` argument) explicitly.
 
-# Single phase
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "phase": "units"})
+```bash
+# Full generation
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44
+
+# Single phase (resume from cached groupings)
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units
 
 # Test with specific files only
-run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "phase": "units", "files": ["src/main.ts", "src/server.ts"]})
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --phase units --files src/main.ts,src/server.ts
+
+# Override output directory
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --model gpu44 --output /custom/index/path
+
+# Explicitly regenerate existing documents (may replace manual edits/Design Decisions)
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/my-project --output /path/to/my-project/docs/code-index --model gpu44 --force
 ```
 
-The script may need multiple `continue_script` calls for large projects. Use a larger timeout, such as `timeoutSecs: 120`, for batch runs.
+Options:
+- `--project` — project name (used for `~/code-index/{project}/`; defaults to source dir name)
+- `--source` — path to project source root (defaults to current directory)
+- `--phase` — run only this phase: `plan`, `units`, `modules`, `threads`, `overview`, `all` (default: all)
+- `--files` — restrict to specific files (comma-separated, for testing)
+- `--output` — override output directory
+- `--model` — model key to use (default: foxwarm default model)
+- `--timeout` — timeout in seconds per model call (default: 120)
+- `--foxwarm-cli` — explicit Foxwarm CLI command (also configurable with `FOXWARM_CLI`)
+- `--force` — replace existing generated docs; this is explicit confirmation that manual edits and Design Decisions may be overwritten
+
+For large projects the script can take a long time (each unit ~60s). Run it in the background and check the log:
+
+```bash
+python3 skills/code-index/generate_code_index_standalone.py --project my-project --source /path/to/project --model gpu44 > /tmp/code-index.log 2>&1 &
+```
+
+The script is resumable: it reuses `_work/groupings.json` only when its fingerprint matches the current source/file selection/project/model/CLI/timeout. Existing non-empty units are resumed individually; an existing module, thread, or overview phase is retained as a whole unless `--force` is explicit, which avoids mixing a new model plan into curated docs. Empty or failed model responses are never written. Absolute paths, parent traversal, files outside the scanned allowlist, unsafe output-directory symlinks, and unsafe model-generated names are rejected. Use a separate output directory for experiments; use `--force` only after reviewing what it may replace.
+
+### ToolScript-compatible runner
+
+Existing Foxwarm automation can continue using the original ToolScript entry:
+
+```python
+run_script(filePath="skills/code-index/generate_code_index.py", args={"project": "my-project", "source": "/path/to/my-project", "output": "/path/to/my-project/docs/code-index"})
+```
+
+It uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`; do not run that compatibility entry with ordinary Python. Prefer the standalone runner when you need strict path/output validation, fingerprinted resume state, or a long-running shell/background job.
+
+The compatibility runner executes in Monty's Python subset. It deliberately avoids CPython-only path and shell modules: path normalization and shell quoting are self-contained, while every host file or process operation still crosses the normal `call_tool(...)` boundary. Keep new imports within Monty's supported module set and cover runner startup with the Monty-backed regression test; use the standalone runner instead when a change needs ordinary Python libraries.
 
 ### After Generation
 
@@ -116,7 +159,11 @@ Review and clean up generated docs:
 - add missing architectural relationships;
 - remove hallucinated claims;
 - verify important details against source;
-- add confirmed design decisions manually;
+- make all final prose public-safe English and remove secrets, credentials, local usernames/home paths, private runbooks, and agent-private memory;
+- distinguish each unit's primary files from secondary/integration references and reconcile duplicate primary ownership;
+- add confirmed design decisions manually at one canonical owner; repeated module decisions should become a thread-owned decision plus summary links;
+- move unconfirmed ideas to `Open Questions` with an `Unconfirmed` label, and remove superseded history rather than preserving an append-only changelog;
+- prefer stable symbols/sections over brittle line numbers and run available link/file/ownership/secret/CJK/terminology/similar-decision checks;
 - decide whether any area needs a top-down follow-up pass.
 
 ## Method 2 Details: Top-Down Context-Carrying Traversal
@@ -176,8 +223,8 @@ So initialization must be checkpoint-safe.
 ```text
 1. Read c1.
 2. Write/update units/a-b1-c1.md.
-3. Immediately update modules/a/b1.md with what c1 revealed.
-4. Update modules/a.md or overview.md if the new fact changes parent architecture.
+3. Immediately update modules/a/b1.md with current navigation and behavior revealed by c1.
+4. Update modules/a.md, a thread, or overview.md if the new fact changes its owned architecture or contract; link rather than copying decisions owned lower down.
 5. Mark c1 complete in _work state only after those docs are flushed.
 6. Move to c2, reloading parent docs from disk if needed.
 ```
@@ -214,14 +261,14 @@ After each micro-batch, reach a safe point:
 
 1. Unit doc is written or updated.
 2. Nearest parent module doc is updated.
-3. Important changes are propagated upward, or explicitly recorded as open questions / pending follow-up.
+3. Important navigation and current behavior are propagated upward; decisions remain at their selected canonical owner, and uncertainty is explicitly recorded as `Unconfirmed` in open questions.
 4. `_work` state is updated only after docs are flushed.
 
 If interrupted before `_work` is updated, repeat or reconcile that micro-batch later. Duplicate work is acceptable. Losing understanding is not.
 
 ## Rolling Parent Docs
 
-Do not wait for an entire directory to be complete before writing a parent module doc. Parent docs should be useful while partial.
+Do not wait for an entire directory to be complete before writing a parent module doc. Parent docs should be useful while partial, but rolling updates must not turn unit/module/thread/overview layers into duplicate decision logs.
 
 Example:
 

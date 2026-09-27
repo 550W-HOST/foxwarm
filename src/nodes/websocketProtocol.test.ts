@@ -1,0 +1,90 @@
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import test from 'node:test';
+import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
+import WebSocket from 'ws';
+import { HttpServer } from '../httpServer';
+import { nodesManager } from './manager';
+import {
+  approvePendingPairing,
+  createNodeRegistryStore,
+  createPendingPairing,
+  resetNodeRegistryForTests,
+  setNodeRegistryStoreForTests,
+} from './registry';
+import { registerNodeWebSocket } from './websocket';
+import { sessionCatalogStore } from '../session/catalogStore';
+
+function messageQueue(ws: WebSocket) {
+  const queued: any[] = [];
+  const waiters: Array<(value: any) => void> = [];
+  ws.on('message', raw => {
+    const value = JSON.parse(String(raw));
+    const waiter = waiters.shift();
+    if (waiter) waiter(value);
+    else queued.push(value);
+  });
+  return () => queued.length ? Promise.resolve(queued.shift()) : new Promise<any>(resolve => waiters.push(resolve));
+}
+
+test('authenticated unversioned legacy client registers ready and can dispatch application messages', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-protocol-ws-'));
+  setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(tempDir, 'nodes.json')));
+  resetNodeRegistryForTests();
+  await sessionCatalogStore.initialize();
+  const pending = await createPendingPairing({
+    requestedName: 'legacy-wire-node',
+    nodeType: 'cli-node',
+    capabilities: { tools: [{ name: 'exec', description: 'exec' }] },
+  });
+  const approved = await approvePendingPairing(pending.id, 'legacy-wire-node');
+  const server = new HttpServer(0, 'api-token');
+  registerNodeWebSocket(server, 'pair-token');
+  await server.start();
+  const address = (server as any).httpServer.address();
+  assert.equal(typeof address === 'object' && typeof address?.port === 'number', true);
+  const port = address.port as number;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/node_ws?id=legacy-wire-node&auth=${approved.authToken}`);
+  const nextMessage = messageQueue(ws);
+  try {
+    await once(ws, 'open');
+    ws.send(JSON.stringify({ type: 'session_list_request', requestId: 'before-register' }));
+    assert.deepEqual(await nextMessage(), {
+      type: 'error',
+      code: 'NODE_PROTOCOL_NEGOTIATION_REQUIRED',
+      requestId: 'before-register',
+      error: 'Authenticated Node must complete core protocol registration before application messages.',
+    });
+
+    ws.send(JSON.stringify({
+      type: 'node_register',
+      nodeType: 'cli-node',
+      capabilities: { tools: [{ name: 'exec', description: 'exec' }] },
+      // Deliberately omitted: old clients had no nodeProtocol field.
+    }));
+    const registered = await nextMessage();
+    assert.equal(registered.type, 'registered');
+    assert.deepEqual(registered.nodeProtocol, { negotiated: 1, master: { min: 1, max: 3 } });
+    assert.equal(ws.readyState, WebSocket.OPEN);
+    assert.equal(nodesManager.getNode('legacy-wire-node')?.protocolCompatibility.status, 'compatible');
+
+    ws.send(JSON.stringify({ type: 'session_list_request', requestId: 'after-register' }));
+    const dispatched = await nextMessage();
+    assert.equal(dispatched.type, 'cli_response');
+    assert.equal(dispatched.requestId, 'after-register');
+    assert.equal(dispatched.ok, true, JSON.stringify(dispatched));
+    assert.equal(ws.readyState, WebSocket.OPEN);
+  } finally {
+    ws.close();
+    if (ws.readyState !== WebSocket.CLOSED) await once(ws, 'close').catch((): undefined => undefined);
+    nodesManager.unregisterNode('legacy-wire-node');
+    await server.stop().catch((): undefined => undefined);
+    // Message activity persistence is intentionally best-effort/fire-and-forget.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    setNodeRegistryStoreForTests(null);
+    resetNodeRegistryForTests();
+    await fs.remove(tempDir);
+  }
+});

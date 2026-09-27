@@ -1,0 +1,83 @@
+{
+  "name": "@foxwarm/vscode-web-foxwarm-terminal",
+  "version": "0.0.0",
+  "private": true,
+  "publisher": "foxwarm",
+  "license": "MIT",
+  "browser": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onTerminalProfile:foxwarm-terminal",
+    "onCommand:foxwarm-terminal.newTerminal",
+    "onCommand:foxwarm-terminal.toggleTerminal",
+    "onCommand:foxwarm-terminal.openInEditorArea",
+    "onCommand:foxwarm-terminal.openHere"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "foxwarm-terminal.newTerminal",
+        "title": "New Terminal",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "foxwarm-terminal.toggleTerminal",
+        "title": "Toggle Terminal",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "foxwarm-terminal.openInEditorArea",
+        "title": "Open Terminal in Editor Area",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "foxwarm-terminal.openHere",
+        "title": "Open in Foxwarm Terminal",
+        "category": "Foxwarm",
+        "icon": "$(terminal)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "foxwarm-terminal.toggleTerminal",
+        "key": "ctrl+`",
+        "mac": "ctrl+`",
+        "when": "virtualWorkspace == foxwarm"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "foxwarm-terminal.openHere",
+          "when": "resourceScheme == foxwarm",
+          "group": "navigation@20"
+        }
+      ]
+    },
+    "terminal": {
+      "profiles": [
+        {
+          "id": "foxwarm-terminal",
+          "title": "Foxwarm Terminal",
+          "icon": "terminal"
+        }
+      ]
+    }
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "web"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}

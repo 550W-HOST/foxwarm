@@ -15,8 +15,8 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /session create <agent> <session>
 /session fork
 /session rename <name>
-/session move <new-session-id>
-/session move <existing-agent>/<new-session-id>
+/session move <new-session-id> [--parent <parent-session-id>]
+/session move <existing-agent>/<new-session-id> [--parent <parent-session-id>]
 /session clear
 /session delete <sessionId>
 /session archive [session-id]
@@ -48,6 +48,9 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 
 - `/session move my-project`：在当前 agent 内重命名当前 session
 - `/session move my-agent/main`：把当前 session 移动到**已存在的** agent `my-agent` 下，并改名为 `main`
+- 默认保留当前 `parentSessionId`，并自动把直接 child 的 parent 引用改成移动后的新 ID；迁移一棵 session tree 时无需逐项重建已有关系
+- `/session move my-agent/task --parent my-agent/main`：移动后明确把该 session 设为 `my-agent/main` 的 child
+- 移除 parent 关系继续使用 `/session unparent`，不通过 `/session move` 隐式完成
 - 该命令**不会创建 agent**；如果目标 agent 不存在，请先用 `/agent create`
 - 该命令也**不会重命名 agent 本身**；agent 级别变更更适合走新建/迁移/清理流程
 
@@ -55,7 +58,7 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 
 Foxwarm 主要使用以下路径保存 session 与 agent 状态：
 
-- `state/sessions.json` - session 元数据索引
+- `state/catalog.sqlite` - Main-owned session identity/topology/list catalog
 - `state/sessions/<id>.json` - session 历史、snapshot 与附加状态
 - `state/agents.json` - agent metadata
 - `state/channels.json` - channel attachment
@@ -119,12 +122,12 @@ Foxwarm 会把当前 session 可见的长期记忆预组装成 `persistentMemory
 
 动态注入的 `EARLIER CONTEXT RECALL` 会简要说明 layered context / CTX-BLOCK：长会话的早期内容会被归档并 compact 成分层摘要，可用 `recall` 逐层展开；这套机制是可追溯的会话历史，不等同于 agent memory。普通过程信息、临时进展、已完成细节不需要为了“保留上下文”写进 memory；memory 应只保存长期稳定规则、偏好、环境事实和已确认设计决策。
 
-当 agent memory / inherit / skills 变化时，相关 session snapshot 会刷新。
+当 agent memory / inherit / skills 变化时，新 session 和之后正常刷新 snapshot 的 session 会使用新内容。`set_agent_inherit` 默认不会批量刷新既有 session；显式批量刷新会跳过已超过一小时没有消息的 session，由它们在下一次普通 turn 开始时自动刷新。
 
 如果你是**从别的会话/agent 侧**修改某个 agent 的 memory，并且希望一个已存在的 session 立刻吃到新内容，手动执行一次：
 
 ```bash
-/session update-snapshot [session-id]
+/session refresh-snapshot [session-id]
 ```
 
 ## Queue

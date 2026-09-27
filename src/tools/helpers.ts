@@ -5,17 +5,26 @@ import * as sessionManager from '../sessionManager';
 import { WORKSPACE_DIR, getAgentMemoryDir } from '../config';
 import { checkPathAccess } from '../isolatedCheck';
 import { applyUpdatePatch, buildAddedFileContent, parseApplyPatchInput } from '../applyPatch';
+import { formatApplyPatchOperationSummary } from '../../packages/shared/dist/applyPatch';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 import {
     findWriteParentIssue,
+    formatWriteContentRefRetryHint,
     formatWriteParentIssueMessage,
     readFileToolPath,
     writeFileToolPath,
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
+import type { ExecRuntime } from '../execManager';
+import {
+    fileOperationPathExists,
+    nativeFileOperations,
+    readWholeFile,
+    type FileOperations,
+} from '../../packages/shared/dist/fileOperations';
 
 export { expandHomePath, resolveAgentPath };
-export { findWriteParentIssue, formatWriteParentIssueMessage, type WriteParentIssue };
+export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, type WriteParentIssue };
 
 // Tool context type
 export interface ToolContext {
@@ -24,6 +33,21 @@ export interface ToolContext {
     broadcast?: (text: string, options?: any) => Promise<void>;
     queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
     runtimeNodeId?: string;
+    /** Resolved-target file primitives; local production uses the native backend. */
+    fileOperations?: FileOperations;
+    deferSessionCwdSync?: boolean;
+    /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
+    persistCurrentSession?: () => Promise<void>;
+    /** Main-local detached read marker; permits read helpers to trust ctx.session without hydration or persistence. */
+    detachedReadOnlySession?: true;
+    /** Detached exact-owner exec invocation already persists through Session runtime settings; skip eager full-session save. */
+    skipExecPreSave?: true;
+    /** Process-local exec owner; never serialized as a tool/RPC DTO. */
+    execRuntime?: ExecRuntime;
+    /** Captured owner routing/cwd for one local parallel tool segment. */
+    toolExecutionSnapshot?: { currentNode: string; cwd?: string };
+    /** Trusted in-process placement, supplied by turn effects and never tool arguments. */
+    sessionPlacement?: 'local' | 'session-worker';
 }
 
 // Tool function type
@@ -34,8 +58,6 @@ export type PendingWriteRef = {
     id: string;
     scopeKey: string;
     agentName: string;
-    fullPath: string;
-    displayPath: string;
     content: string;
     createdAt: number;
     expiresAt: number;
@@ -76,7 +98,7 @@ export function prunePendingWriteRefs(now = Date.now()) {
     }
 }
 
-export function registerPendingWriteRef(ctx: ToolContext, agentName: string, fullPath: string, displayPath: string, content: string): PendingWriteRef | null {
+export function registerPendingWriteRef(ctx: ToolContext, agentName: string, content: string): PendingWriteRef | null {
     const sizeBytes = Buffer.byteLength(content, 'utf8');
     if (sizeBytes > PENDING_WRITE_REF_MAX_CONTENT_BYTES) {
         return null;
@@ -89,8 +111,6 @@ export function registerPendingWriteRef(ctx: ToolContext, agentName: string, ful
         id,
         scopeKey: getPendingWriteScopeKey(ctx, agentName),
         agentName,
-        fullPath,
-        displayPath,
         content,
         createdAt: now,
         expiresAt: now + PENDING_WRITE_REF_TTL_MS,
@@ -101,7 +121,7 @@ export function registerPendingWriteRef(ctx: ToolContext, agentName: string, ful
     return ref;
 }
 
-export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
+export function peekPendingWriteRefContent(ctx: ToolContext, agentName: string, refId: string): string {
     prunePendingWriteRefs();
     const ref = pendingWriteRefs.get(refId);
     if (!ref) {
@@ -109,26 +129,6 @@ export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refI
     }
     if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
         throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
-    }
-    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
-        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
-    }
-
-    pendingWriteRefs.delete(refId);
-    return ref.content;
-}
-
-export function peekPendingWriteRefContent(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
-    prunePendingWriteRefs();
-    const ref = pendingWriteRefs.get(refId);
-    if (!ref) {
-        throw new Error(`Pending write contentRef not found or expired: ${refId}. Re-run write with content, or use a fresh contentRef from the previous write error.`);
-    }
-    if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
-        throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
-    }
-    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
-        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
     }
 
     return ref.content;
@@ -171,17 +171,17 @@ export function resolveAgentMemoryPath(filePath: string, agentName: string = 'ma
     return resolved;
 }
 
-export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
-    return readFileToolPath(fullPath, displayPath, startLine, endLine);
+export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number, operations?: FileOperations) {
+    return readFileToolPath(fullPath, displayPath, startLine, endLine, operations);
 }
 
-export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }) {
+export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }, operations?: FileOperations) {
     await writeFileToolPath(fullPath, content, {
         overwrite,
         existsMessage,
         createDirs: options?.createDirs,
         parentIssueRetryHint: options?.parentIssueRetryHint,
-    });
+    }, operations);
 }
 
 export function escapeRegExp(text: string): string {
@@ -202,15 +202,15 @@ export function applyExactReplacement(content: string, searchText: string, repla
     return content.replace(regex, replaceText);
 }
 
-export async function editResolvedPath(fullPath: string, oldText: string, newText: string) {
-    const content = await fs.readFile(fullPath, 'utf8');
+export async function editResolvedPath(fullPath: string, oldText: string, newText: string, operations: FileOperations = nativeFileOperations) {
+    const content = (await readWholeFile(operations, fullPath)).toString('utf8');
 
     if (typeof oldText !== 'string' || typeof newText !== 'string') {
         throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
     }
 
     const updatedContent = applyExactReplacement(content, oldText, newText, 'oldText');
-    await fs.writeFile(fullPath, updatedContent);
+    await operations.write(fullPath, updatedContent, 'w');
 }
 
 export async function deleteResolvedPath(fullPath: string, displayPath: string) {
@@ -225,39 +225,49 @@ export async function deleteResolvedPath(fullPath: string, displayPath: string) 
 export async function applyPatchOperations(input: string, resolveOperationPath: (filePath: string) => {
     fullPath: string;
     displayPath: string;
-}): Promise<string> {
+}, fileOperations: FileOperations = nativeFileOperations): Promise<string> {
     const operations = parseApplyPatchInput(input);
     const summaries: string[] = [];
 
-    for (const operation of operations) {
+    for (let idx = 0; idx < operations.length; idx++) {
+        const operation = operations[idx];
         const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
 
-        if (operation.action === 'update') {
-            if (!await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot update missing file: ${displayPath}`);
+        try {
+            if (operation.action === 'update') {
+                if (!await fileOperationPathExists(fileOperations, fullPath)) {
+                    throw new Error(`Cannot update missing file: ${displayPath}`);
+                }
+                const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
+                const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
+                await fileOperations.write(fullPath, updatedContent, 'w');
+                summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
+                continue;
             }
-            const content = await fs.readFile(fullPath, 'utf8');
-            const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
-            await fs.writeFile(fullPath, updatedContent);
-            summaries.push(`Updated ${displayPath}`);
-            continue;
-        }
 
-        if (operation.action === 'add') {
-            if (await fs.pathExists(fullPath)) {
-                throw new Error(`Cannot add file that already exists: ${displayPath}`);
+            if (operation.action === 'add') {
+                if (await fileOperationPathExists(fileOperations, fullPath)) {
+                    throw new Error(`Cannot add file that already exists: ${displayPath}`);
+                }
+                await fileOperations.mkdir(path.dirname(fullPath));
+                await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
+                summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
+                continue;
             }
-            await fs.ensureDir(path.dirname(fullPath));
-            await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
-            summaries.push(`Added ${displayPath}`);
-            continue;
-        }
 
-        if (!await fs.pathExists(fullPath)) {
-            throw new Error(`Cannot delete missing file: ${displayPath}`);
+            if (!await fileOperationPathExists(fileOperations, fullPath)) {
+                throw new Error(`Cannot delete missing file: ${displayPath}`);
+            }
+            await fileOperations.remove(fullPath);
+            summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
+        } catch (err) {
+            const succeeded = summaries.length > 0
+                ? `\nOperations already applied (these changes are already on disk):\n${summaries.map(line => `- ${line}`).join('\n')}\n`
+                : '';
+            const remaining = operations.length - idx - 1;
+            const remainingHint = remaining > 0 ? `\n${remaining} remaining operation(s) were not applied.` : '';
+            throw new Error(`${(err as Error).message}${succeeded}${remainingHint}`);
         }
-        await fs.remove(fullPath);
-        summaries.push(`Deleted ${displayPath}`);
     }
 
     return `Patch applied successfully.\n${summaries.map(line => `- ${line}`).join('\n')}`;

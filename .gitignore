@@ -6,11 +6,15 @@ node_modules
 /agents
 /.env
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 
 # WebUI
 /packages/webui/node_modules
 /packages/webui/dist
+/packages/vscode-web/assets
+/packages/vscode-web/.cache
 
 # Shared package build output
 /packages/shared/dist

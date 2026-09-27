@@ -17,6 +17,13 @@ export type ContextMenuItem = {
   onSelect?: () => void
   disabled?: boolean
   danger?: boolean
+  checked?: boolean
+  trailingControl?: {
+    label: ReactNode
+    checked: boolean
+    onSelect: () => void
+    disabled?: boolean
+  }
 }
 
 export type ContextMenuEntry = ContextMenuItem | { key: string; type: 'separator' }
@@ -43,6 +50,7 @@ export default function ContextMenu({
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+  const [hoveredSplitKey, setHoveredSplitKey] = useState<string | null>(null)
 
   const visibleEntries = useMemo(() => entries.filter(Boolean), [entries])
 
@@ -61,24 +69,34 @@ export default function ContextMenu({
       }
     }
 
-    const handleViewportChange = () => {
+    const handleResize = () => {
       onClose()
+    }
+
+    const handleScroll = () => {
+      // A point-anchored context menu has a stable viewport position. Keep it
+      // open when unrelated content (for example, a streaming chat) scrolls
+      // underneath it. Rect-anchored menus still close because their trigger
+      // can move with the scrolled content.
+      if (preferredPlacement !== 'point') {
+        onClose()
+      }
     }
 
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('touchstart', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', handleViewportChange)
-    window.addEventListener('scroll', handleViewportChange, true)
+    window.addEventListener('resize', handleResize)
+    window.addEventListener('scroll', handleScroll, true)
 
     return () => {
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('touchstart', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', handleViewportChange)
-      window.removeEventListener('scroll', handleViewportChange, true)
+      window.removeEventListener('resize', handleResize)
+      window.removeEventListener('scroll', handleScroll, true)
     }
-  }, [open, onClose])
+  }, [open, onClose, preferredPlacement])
 
   useLayoutEffect(() => {
     if (!open || !menuRef.current) {
@@ -119,35 +137,73 @@ export default function ContextMenu({
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[80] min-w-[220px] overflow-hidden rounded-xl border border-gray-200/90 bg-white/95 py-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur dark:border-gray-700/90 dark:bg-gray-800/95"
+      className="fixed z-[80] min-w-[220px] overflow-hidden rounded-xl border border-fw-border/90 bg-fw-surface/95 py-1.5 shadow-2xl ring-1 ring-fw-focus-ring/5 backdrop-blur dark:border-fw-border/90 dark:bg-fw-surface/95"
       style={position ? { left: `${position.left}px`, top: `${position.top}px` } : { left: 0, top: 0, visibility: 'hidden' }}
       role="menu"
     >
       {visibleEntries.map((entry) => {
         if ('type' in entry) {
-          return <div key={entry.key} className="my-1 border-t border-gray-200/80 dark:border-gray-700/80" />
+          return <div key={entry.key} className="my-1 border-t border-fw-border/80 dark:border-fw-border/80" />
         }
 
         const toneClass = entry.danger
-          ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
-          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/70'
+          ? 'text-fw-danger dark:text-fw-danger hover:bg-fw-danger-surface dark:hover:bg-fw-danger-surface-strong/20'
+          : 'text-fw-text-strong hover:bg-fw-hover dark:hover:bg-fw-hover/70'
 
-        return (
+        const itemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${entry.disabled ? 'cursor-not-allowed opacity-50' : toneClass}`
+        const splitItemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm ${entry.disabled ? 'cursor-not-allowed opacity-50' : entry.danger ? 'text-fw-danger dark:text-fw-danger' : 'text-fw-text-strong'}`
+
+        const itemButton = (
           <button
             key={entry.key}
             type="button"
-            role="menuitem"
+            role={entry.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+            aria-checked={entry.checked}
             disabled={entry.disabled}
             onClick={() => {
               if (entry.disabled) return
               entry.onSelect?.()
               onClose()
             }}
-            className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${entry.disabled ? 'cursor-not-allowed opacity-50' : toneClass}`}
+            className={entry.trailingControl ? splitItemClass : `${itemClass} w-full`}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">{entry.icon}</span>
             <span className="min-w-0 flex-1 truncate">{entry.label}</span>
           </button>
+        )
+
+        if (!entry.trailingControl) {
+          return itemButton
+        }
+
+        const control = entry.trailingControl
+        return (
+          <div
+            key={entry.key}
+            className={`foxwarm-context-menu-split-row flex w-full items-stretch transition-colors ${entry.disabled ? '' : entry.danger ? 'foxwarm-context-menu-split-row-danger' : ''} ${hoveredSplitKey === entry.key ? entry.danger ? 'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised/70' : ''}`}
+            data-context-menu-split-row="true"
+            data-context-menu-split-row-hovered={hoveredSplitKey === entry.key ? 'true' : 'false'}
+            onMouseEnter={() => setHoveredSplitKey(entry.key)}
+            onMouseLeave={() => setHoveredSplitKey(current => current === entry.key ? null : current)}
+          >
+            {itemButton}
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={control.checked}
+              disabled={control.disabled}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (control.disabled) return
+                control.onSelect()
+                onClose()
+              }}
+              className={`mr-3 inline-flex shrink-0 items-center gap-1 text-sm transition-colors ${control.checked ? 'text-fw-accent dark:text-fw-accent' : 'text-fw-text hover:text-fw-accent dark:text-fw-text-strong dark:hover:text-fw-accent'} ${control.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+            >
+              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-fw-accent-border bg-fw-accent text-fw-text-inverse dark:border-fw-accent-border dark:bg-fw-accent dark:text-fw-text-strong' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}>✓</span>
+              <span>{control.label}</span>
+            </button>
+          </div>
         )
       })}
     </div>,

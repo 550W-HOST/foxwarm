@@ -10,36 +10,55 @@ import fs from 'fs-extra';
 import yaml from 'js-yaml';
 import { buildModelsConfigFromSetupForm, dumpSetupYaml, readRawAppConfigFile, readRawTextFileIfExists, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from '../setupConfig';
 import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
-import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
-import { APP_CONFIG_PATH, AppConfig, BASE_DIR, DEFAULT_MODELS_CONFIG_PATH, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, readAppConfigFile, resolveModelConfig } from '../config';
-import { HttpAuthContext, httpServer } from '../httpServer';
+import * as sessionRuntime from '../sessionRuntime';
+import { deleteSessionLifecycle } from '../sessionDeletion';
+import type { SessionRuntimeSessionDto } from '../sessionRuntime';
+import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
+import { sessionCatalogStore } from '../session/catalogStore';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from '../config';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
+import { httpServer, type HttpAuthContext } from '../httpServer';
+import { createWebUiGuestToken, verifyWebUiGuestToken } from '../webuiGuestTokens';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
 import { requestLlmOnce } from '../llm';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from '../weixin/api';
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
-import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, writeTerminalInput } from '../terminalManager';
+import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, resolveTerminalControlRequest, writeTerminalInput } from '../terminalRouter';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
+import { getSessionListSequenceMessageCounts } from '../session/archiveStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
-import { createWebUiGuestToken, verifyWebUiGuestToken } from '../webuiGuestTokens';
+import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
+import type { Message, QueueHistoryAppendPresentation, QueueItem, Session } from '../types';
+import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
+import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
+import { nodesManager } from '../nodes/manager';
+import { listApprovedNodes } from '../nodes/registry';
+import {
+  assertExactDto,
+  boundedBodyLimit,
+  boundedQueryLimit,
+  normalizeSessionListMode,
+  optionalQueryString,
+  queryArchitecture,
+  queryChildrenContinuations,
+  queryChildrenPreviews,
+  queryDescendants,
+  queryExactSessions,
+  querySessionListPage,
+  repeatedFocusIds,
+} from '../webuiSessionListQueries';
+import { normalizeWebUiMultipartFilename } from './webuiUpload';
+import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
+import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
+import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
 
-type WorkspaceNodeEntry = {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  size: number;
-  modifiedAt: number;
-};
-
-const MAX_INLINE_FILE_BYTES = 1024 * 1024;
-const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
-
 const WEBUI_GUEST_FEATURES = {
   chat: true,
   attachments: true,
@@ -53,7 +72,6 @@ const WEBUI_GUEST_FEATURES = {
   modelSelection: false,
   sidebar: false,
 };
-
 const WEBUI_ADMIN_FEATURES = {
   chat: true,
   attachments: true,
@@ -68,32 +86,281 @@ const WEBUI_ADMIN_FEATURES = {
   sidebar: true,
 };
 
+const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
+const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
+const TERMINAL_WEBSOCKET_KEEPALIVE_MS = 30_000;
+
+type TerminalStreamDependencies = {
+  checkIncomingToken: (req: http.IncomingMessage) => boolean;
+  attachClient: typeof attachTerminalClient;
+  detachClient: typeof detachTerminalClient;
+  close: typeof closeTerminal;
+  resize: typeof resizeTerminal;
+  resolveControlRequest: typeof resolveTerminalControlRequest;
+  writeInput: typeof writeTerminalInput;
+  keepaliveIntervalMs?: number;
+};
+
+export function startTerminalWebSocketKeepalive(
+  ws: WebSocket,
+  intervalMs = TERMINAL_WEBSOCKET_KEEPALIVE_MS,
+): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.ping();
+    } catch (error) {
+      logger.debug({ err: error }, 'Failed to send terminal websocket keepalive ping');
+    }
+  }, intervalMs);
+  timer.unref?.();
+
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+export async function handleTerminalStreamWebSocket(
+  ws: WebSocket,
+  req: http.IncomingMessage,
+  dependencies: TerminalStreamDependencies,
+): Promise<void> {
+  if (!dependencies.checkIncomingToken(req)) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+
+  const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
+  const terminalId = requestUrl.searchParams.get('terminalId') || '';
+  const codeControl = requestUrl.searchParams.get('control') === 'code';
+  if (!terminalId) {
+    ws.close(1008, 'Missing terminalId');
+    return;
+  }
+
+  let attachedTerminalId = '';
+  let stopKeepalive = () => {};
+  let cleanupRequested = false;
+  let detached = false;
+  const cleanup = () => {
+    cleanupRequested = true;
+    stopKeepalive();
+    if (attachedTerminalId && !detached) {
+      detached = true;
+      dependencies.detachClient(attachedTerminalId, ws);
+    }
+  };
+
+  ws.on('close', cleanup);
+  ws.on('error', (error) => {
+    logger.error({ err: error, terminalId: attachedTerminalId || terminalId }, 'Terminal websocket client error');
+    cleanup();
+  });
+
+  try {
+    const { terminal, backlog } = await dependencies.attachClient(terminalId, ws, { codeControl });
+    attachedTerminalId = terminal.id;
+    if (cleanupRequested || ws.readyState !== WebSocket.OPEN) {
+      cleanup();
+      return;
+    }
+    stopKeepalive = startTerminalWebSocketKeepalive(ws, dependencies.keepaliveIntervalMs);
+
+    ws.send(JSON.stringify({
+      type: 'ready',
+      terminal,
+      backlog,
+    }));
+  } catch (err: any) {
+    cleanup();
+    ws.close(1008, err?.message || 'Failed to attach terminal');
+    return;
+  }
+
+  ws.on('message', async (raw) => {
+    try {
+      const payload = JSON.parse(raw.toString());
+      if (payload?.type === 'input' && typeof payload.data === 'string') {
+        dependencies.writeInput(attachedTerminalId, payload.data);
+        return;
+      }
+
+      if (payload?.type === 'resize') {
+        dependencies.resize(attachedTerminalId, Number(payload.cols || 0), Number(payload.rows || 0));
+        return;
+      }
+
+      if (payload?.type === 'close') {
+        await dependencies.close(attachedTerminalId, 'ws-close-message');
+        return;
+      }
+
+      if (payload?.type === 'control-result') {
+        dependencies.resolveControlRequest(attachedTerminalId, ws, payload);
+        return;
+      }
+
+      ws.send(JSON.stringify({ type: 'error', message: 'Unsupported terminal message type' }));
+    } catch (err: any) {
+      ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Terminal stream error' }));
+    }
+  });
+}
+
+function pickWebUiNodeLaunchServices(services: Record<string, number> | undefined): Record<string, number> {
+  return Object.fromEntries(WEBUI_NODE_LAUNCH_SERVICES.flatMap((service) => {
+    const version = Number(services?.[service] || 0);
+    return Number.isInteger(version) && version > 0 ? [[service, version]] : [];
+  }));
+}
+
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
 }
 
+function getSingleQueryValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : undefined;
+  }
+  return typeof value === 'string' ? value : undefined;
+}
 
-function getModelsSetupDiagnostics() {
-  const exists = fs.existsSync(DEFAULT_MODELS_CONFIG_PATH);
-  const rawYaml = exists ? readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH) : '';
+function parseOptionalPositiveNumberQuery(value: unknown, label: string): number | undefined {
+  const raw = getSingleQueryValue(value);
+  if (raw === undefined || raw.trim() === '') {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+  return Math.floor(parsed);
+}
+
+function sanitizeWebUiTransportValue(value: any): any {
+  if (Array.isArray(value)) return value.map(sanitizeWebUiTransportValue);
+  if (!value || typeof value !== 'object') return value;
+
+  const result: Record<string, any> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'inlineData' && entry && typeof entry === 'object' && typeof (entry as any).data === 'string') {
+      const { data: _data, ...metadata } = entry as Record<string, any>;
+      result.inlineDataUnavailable = {
+        ...sanitizeWebUiTransportValue(metadata),
+        unavailable: true,
+      };
+      continue;
+    }
+    if (key === 'inlineDataItems' && Array.isArray(entry)) {
+      const retained: any[] = [];
+      const unavailable: any[] = [];
+      for (const item of entry) {
+        if (item && typeof item === 'object' && typeof item.data === 'string') {
+          const { data: _data, ...metadata } = item;
+          unavailable.push({ ...sanitizeWebUiTransportValue(metadata), unavailable: true });
+        } else {
+          retained.push(sanitizeWebUiTransportValue(item));
+        }
+      }
+      if (retained.length > 0) result.inlineDataItems = retained;
+      if (unavailable.length > 0) result.inlineDataItemsUnavailable = unavailable;
+      continue;
+    }
+    if (key === 'inlineDataRef' && entry && typeof entry === 'object') {
+      const { path: _path, apiPath: _apiPath, ...ref } = entry as Record<string, any>;
+      result.inlineDataRef = ref.blobId
+        ? { ...sanitizeWebUiTransportValue(ref), apiPath: `/blobs/${encodeURIComponent(ref.blobId)}` }
+        : { ...sanitizeWebUiTransportValue(ref), unavailable: true };
+      continue;
+    }
+    result[key] = sanitizeWebUiTransportValue(entry);
+  }
+  return result;
+}
+
+function buildWebUiMessage(message: Message): Message {
+  const projected = sanitizeWebUiTransportValue(message) as Message;
+  projected.parts = projected.parts.map(part => {
+    if (!part.functionCall || part.functionCall.argsParseError !== undefined) return part;
+    const { rawArgsText: _rawArgsText, ...functionCall } = part.functionCall;
+    return { ...part, functionCall };
+  });
+  return projected;
+}
+
+async function materializeWebUiMessages(messages: Message[]): Promise<{ messages: Message[]; canonicalMessages: Message[]; changed: boolean }> {
+  try {
+    const canonical = await externalizeMessages(messages);
+    return {
+      canonicalMessages: canonical.messages,
+      changed: canonical.changed,
+      messages: canonical.messages.map(buildWebUiMessage),
+    };
+  } catch (error) {
+    logger.warn({ err: error }, 'Failed to materialize legacy images for WebUI transport');
+    return {
+      canonicalMessages: messages,
+      changed: false,
+      messages: messages.map(buildWebUiMessage),
+    };
+  }
+}
+
+async function sanitizeWebUiDebugPayload(payload: any): Promise<any> {
+  const result = { ...payload };
+  // contextFrontier is obsolete migration input, not current Session business
+  // state. Debug transport must not make an arbitrary stale field look live.
+  delete result.contextFrontier;
+  if (Array.isArray(payload?.history)) {
+    result.history = (await materializeWebUiMessages(payload.history)).messages;
+  }
+  if (Array.isArray(payload?.queue)) {
+    let queueItems: QueueItem[] = payload.queue;
+    try {
+      queueItems = (await externalizeQueueItems(payload.queue)).items;
+    } catch (error) {
+      logger.warn({ err: error }, 'Failed to materialize legacy queue images for WebUI debug transport');
+    }
+    result.queue = queueItems.map(item => ({
+      ...item,
+      ...(Array.isArray(item.parts) ? { parts: sanitizeQueuedPreviewParts(item.parts) } : {}),
+      ...(item.message ? { message: buildWebUiMessage(item.message) } : {}),
+    }));
+  }
+  return sanitizeWebUiTransportValue(result);
+}
+
+
+
+export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsConfigPath()) {
+  const exists = fs.existsSync(modelsPath);
+  const rawYaml = exists ? readRawTextFileIfExists(modelsPath) : '';
   const raw = rawYaml ? (yaml.load(rawYaml) as any) || {} : undefined;
   const providers = raw?.providers || raw?.models || {};
-  const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
+  const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigValue>) : [];
   const providerCount = providerEntries.length;
   const defaultModel = typeof raw?.default === 'string' ? raw.default : null;
   const placeholderProviders = providerEntries
-    .filter(([, entry]) => isPlaceholderSecret((entry as ProviderConfigEntry).apiKey))
+    .filter(([, entry]) => typeof entry !== 'string' && isPlaceholderSecret(entry.apiKey))
     .map(([key]) => key);
 
   return {
-    path: DEFAULT_MODELS_CONFIG_PATH,
+    path: modelsPath,
     templatePath: MODELS_CONFIG_TEMPLATE_PATH,
     exists,
     providerCount,
     defaultModel,
     rawYaml,
     providers: providerEntries.map(([key, entry]) => {
-      const rawModels = Array.isArray(entry.models) ? entry.models : Array.isArray(entry.model) ? entry.model : (entry.model ? [entry.model] : []);
+      const normalizedEntry: ProviderConfigEntry = typeof entry === 'string'
+        ? { providerType: 'session-hash', targets: [entry.trim()] }
+        : entry;
+      const providerType = normalizedEntry.providerType || normalizedEntry.provider || 'openai-completions';
+      const isVirtual = providerType === 'session-hash' || providerType === 'failover';
+      const rawModels = Array.isArray(normalizedEntry.models) ? normalizedEntry.models : Array.isArray(normalizedEntry.model) ? normalizedEntry.model : (normalizedEntry.model ? [normalizedEntry.model] : []);
       const models = rawModels
         .map((item: any) => typeof item === 'string' ? item : item?.id)
         .filter((item: any) => typeof item === 'string' && item.trim())
@@ -101,10 +368,14 @@ function getModelsSetupDiagnostics() {
       const defaultPrefix = `${key}/`;
       return {
         id: key,
-        providerType: entry.providerType || entry.provider || 'openai-completions',
-        baseUrl: entry.baseUrl || '',
-        apiKey: entry.apiKey || '',
+        providerType,
+        isVirtual,
+        baseUrl: normalizedEntry.baseUrl || '',
+        apiKey: normalizedEntry.apiKey || '',
         models,
+        targets: Array.isArray(normalizedEntry.targets) ? normalizedEntry.targets : [],
+        failureThreshold: normalizedEntry.failureThreshold ?? (providerType === 'failover' ? 5 : null),
+        cooldownMs: normalizedEntry.cooldownMs ?? (providerType === 'failover' ? 600_000 : null),
         defaultModel: defaultModel?.startsWith(defaultPrefix) ? defaultModel.slice(defaultPrefix.length) : '',
       };
     }),
@@ -183,20 +454,125 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
-  const { defaultKey, currentKey } = resolveModelConfig(session.model);
-  const { currentKey: effectiveChildModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+function resolveWebUiAncestrySession(sessionId: string) {
+  const candidate = sessionManager.getSessionCatalog(sessionId);
+  if (!candidate) return undefined;
   return {
-    model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
-    modelKey: currentKey,
-    defaultModelKey: defaultKey,
-    childModelDefault: typeof session.childModelDefault === 'string' && session.childModelDefault.trim() ? session.childModelDefault.trim() : null,
-    effectiveChildModelKey,
+    id: candidate.id,
+    model: candidate.model,
+    effort: candidate.effort,
+    childModelDefault: candidate.childModelDefault,
+    childEffortDefault: candidate.childEffortDefault,
+    parentSessionId: candidate.parentSessionId,
   };
 }
 
-function buildWebUiModelsPayload(currentModel?: string) {
-  const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
+function buildWebUiModelStatus(session: any, resolveAncestry = resolveWebUiAncestrySession) {
+  const presentation = buildSessionModelEffortPresentation(session, undefined, resolveAncestry);
+  return {
+    model: presentation.model,
+    modelKey: presentation.modelKey,
+    defaultModelKey: presentation.defaultModelKey,
+    effort: presentation.effort.raw,
+    effectiveEffort: presentation.effort.effective,
+    effortAllowed: presentation.effort.allowed,
+    effortDefault: presentation.effort.defaultEffort,
+    childModelDefault: presentation.childModelDefault,
+    childModelPolicySource: presentation.childModelPolicySource,
+    childPolicyChain: presentation.childPolicyChain,
+    effectiveChildModelKey: presentation.effectiveChildModelKey,
+    childEffortDefault: presentation.childEffort.raw,
+    effectiveChildEffort: presentation.childEffort.effective,
+    childEffortAllowed: presentation.childEffort.allowed,
+    childModelEffortDefault: presentation.childEffort.defaultEffort,
+  };
+}
+
+function buildWebUiSessionState(session: any) {
+  return {
+    id: session.id,
+    agent: session.agent || 'main',
+    aliases: session.aliases || [],
+    busy: session.busy || false,
+    busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
+    queueLength: typeof session.queueLength === 'number' ? session.queueLength : (session.queue?.length || 0),
+    messageCount: typeof session.messageCount === 'number' ? session.messageCount : (session.meta?.messageCount ?? session.history?.length ?? 0),
+    historyVersion: typeof session.historyVersion === 'number' ? session.historyVersion : 0,
+    runtimeState: session.runtimeState || sessionManager.buildSessionRuntimeState(session),
+    displayName: session.displayName || null,
+    archived: session.archived || false,
+    currentNode: session.currentNode || 'master',
+    cwd: session.cwd || null,
+    ...buildWebUiModelStatus(session),
+    isolated: typeof session.isolated === 'boolean'
+      ? session.isolated
+      : sessionManager.isSessionEffectivelyIsolated(session),
+  };
+}
+
+export function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto, childTotal?: number, sequenceMessageCount?: number) {
+  return {
+    ...buildWebUiSessionState(session),
+    lastMessageTime: session.lastMessageTime,
+    parentSessionId: session.parentSessionId,
+    pinned: session.pinned,
+    sidebarOrder: session.sidebarOrder,
+    tokenUsage: {
+      cachedTokens: session.tokenUsage.cachedTokens,
+      inputTokens: session.tokenUsage.inputTokens,
+      outputTokens: session.tokenUsage.outputTokens,
+    },
+    ...(typeof childTotal === 'number' ? { childTotal } : {}),
+    ...(typeof sequenceMessageCount === 'number' ? { sequenceMessageCount } : {}),
+  };
+}
+
+function collectSessionListProjectionIds(value: any, ids = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) { for (const item of value) collectSessionListProjectionIds(item, ids); return ids; }
+  if (!value || typeof value !== 'object') return ids;
+  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) ids.add(value.id);
+  else for (const entry of Object.values(value)) collectSessionListProjectionIds(entry, ids);
+  return ids;
+}
+
+export function getBoundedSessionListChildTotal(childTotals: Record<string, number>, sessionId: string): number {
+  return Object.prototype.hasOwnProperty.call(childTotals, sessionId) ? childTotals[sessionId] : 0;
+}
+
+function mapSessionListQueryPayload(value: any, childTotals?: Record<string, number>, sequenceCounts?: ReadonlyMap<string, number>): any {
+  if (Array.isArray(value)) return value.map(entry => mapSessionListQueryPayload(entry, childTotals, sequenceCounts));
+  if (!value || typeof value !== 'object') return value;
+  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) {
+    return buildWebUiSessionListProjection(value,
+      childTotals ? getBoundedSessionListChildTotal(childTotals, value.id) : undefined,
+      sequenceCounts?.get(value.id));
+  }
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'rows')
+    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry, childTotals, sequenceCounts)]));
+}
+
+function mapBoundedSessionListQueryPayload(value: any, agent?: string): any {
+  const ids = [...collectSessionListProjectionIds(value)];
+  const childTotals = sessionCatalogStore.getPresentationChildCounts(ids, agent);
+  const sequenceCounts = new Map<string, number>();
+  for (let index = 0; index < ids.length; index += 200) {
+    for (const item of getSessionListSequenceMessageCounts(ids.slice(index, index + 200))) {
+      sequenceCounts.set(item.sessionId, item.sequenceMessageCount);
+    }
+  }
+  return mapSessionListQueryPayload(value, childTotals, sequenceCounts);
+}
+
+function sendSessionListQueryError(res: express.Response, error: any, logMessage: string): void {
+  const code = typeof error?.code === 'string' ? error.code : undefined;
+  const status = code === 'SESSION_NOT_FOUND' ? 404
+    : code?.includes('INVALID') || code === 'SESSION_ALIAS_AMBIGUOUS' ? 400 : 500;
+  if (status === 500) logger.error({ err: error }, logMessage);
+  res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
+}
+
+export function buildWebUiModelsPayloadFromConfig(modelsConfig: ModelsConfig, currentKey: string = modelsConfig.default) {
+  const defaultKey = modelsConfig.default;
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
   return {
     defaultKey,
@@ -208,9 +584,32 @@ function buildWebUiModelsPayload(currentModel?: string) {
         label: key,
         isDefault: key === defaultKey,
         contextLimit: entry?.contextLimit || null,
+        providerKey: entry?.providerKey || null,
+        modelId: entry?.model || null,
+        providerType: entry?.providerType || null,
+        isVirtual: !!entry?.virtualRouting,
+        targets: entry?.virtualRouting?.targets || [],
+        allowedEfforts: [...(entry?.effort?.allowed || MODEL_EFFORTS)],
+        defaultEffort: entry?.virtualRouting ? null : (entry?.effort?.default || 'high'),
       };
     }),
   };
+}
+
+export function buildWebUiModelsPayload(currentModel?: string) {
+  const { modelsConfig, currentKey } = resolveModelConfig(currentModel);
+  return buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey);
+}
+
+function normalizeWebUiEffortSelection(value: unknown): ModelEffort | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error('effort must be a canonical effort string or null.');
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || ['default', 'unset'].includes(normalized)) return undefined;
+  if (!MODEL_EFFORTS.includes(normalized as ModelEffort)) {
+    throw new Error(`effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, unset, or null.`);
+  }
+  return normalized as ModelEffort;
 }
 
 function normalizeWebUiModelSelection(value: unknown): string | undefined {
@@ -234,20 +633,6 @@ function normalizeWebUiModelSelection(value: unknown): string | undefined {
   return normalized;
 }
 
-function createWorkspaceFileTooLargeError(filePath: string, size: number, maxSize: number): Error & { code: string; path: string; size: number; maxSize: number } {
-  const error = new Error(`File too large to open in WebUI editor (${size} bytes > ${maxSize} bytes). Please download it instead.`) as Error & {
-    code: string;
-    path: string;
-    size: number;
-    maxSize: number;
-  };
-  error.code = 'FILE_TOO_LARGE';
-  error.path = filePath;
-  error.size = size;
-  error.maxSize = maxSize;
-  return error;
-}
-
 // Extend Express Request to include cookies
 declare global {
   namespace Express {
@@ -262,6 +647,7 @@ export interface WebUIChannelOptions {
   token: string;
   enableWebUI?: boolean;
   enableTrigger?: boolean;
+  loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
 }
 
 function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> {
@@ -274,7 +660,161 @@ function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> 
       childrenMap.get(session.parentSessionId)!.push(id);
     }
   }
+
+  for (const children of childrenMap.values()) {
+    children.sort((a, b) => compareWebUiSidebarSessions(
+      allSessions.get(a) || { id: a },
+      allSessions.get(b) || { id: b },
+    ));
+  }
   return childrenMap;
+}
+
+function getWebUiSidebarOrder(session: any): number | undefined {
+  const value = session?.sidebarOrder;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getSessionTreeParentId(session: any): string | null {
+  return typeof session?.parentSessionId === 'string' && session.parentSessionId.trim()
+    ? session.parentSessionId.trim()
+    : null;
+}
+
+function compareWebUiSidebarSessions(a: any, b: any): number {
+  if (!!a?.archived && !b?.archived) return 1;
+  if (!a?.archived && !!b?.archived) return -1;
+
+  const aOrder = getWebUiSidebarOrder(a);
+  const bOrder = getWebUiSidebarOrder(b);
+  if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) {
+    return aOrder - bOrder;
+  }
+  if (aOrder !== undefined && bOrder === undefined) return -1;
+  if (aOrder === undefined && bOrder !== undefined) return 1;
+
+  const aTime = typeof a?.meta?.lastMessageTime === 'number' ? a.meta.lastMessageTime : 0;
+  const bTime = typeof b?.meta?.lastMessageTime === 'number' ? b.meta.lastMessageTime : 0;
+  if (aTime !== bTime) return bTime - aTime;
+
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+function getWebUiSidebarSiblings(parentSessionId: string | null, excludeSessionId?: string): any[] {
+  return Array.from(sessionManager.getAllSessions().values())
+    .filter((candidate: any) => candidate?.id !== excludeSessionId)
+    .filter((candidate: any) => getSessionTreeParentId(candidate) === parentSessionId)
+    .sort(compareWebUiSidebarSessions);
+}
+
+function writeWebUiSidebarOrder(sessions: any[]): string[] {
+  sessions.forEach((session, index) => {
+    session.sidebarOrder = (index + 1) * 1000;
+  });
+  return sessions.map(session => session.id);
+}
+
+async function resolveOptionalSessionId(sessionId: unknown, label: string): Promise<string | null | undefined> {
+  if (sessionId === undefined) return undefined;
+  if (sessionId === null) return null;
+  if (typeof sessionId !== 'string') {
+    throw new Error(`${label} must be a string, null, or omitted.`);
+  }
+  const trimmed = sessionId.trim();
+  if (!trimmed) return null;
+  const session = sessionManager.getSessionCatalog(trimmed);
+  if (!session) {
+    const error = new Error(`${label} session "${trimmed}" was not found.`);
+    (error as any).statusCode = 404;
+    (error as any).code = `${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_NOT_FOUND`;
+    throw error;
+  }
+  return session.id;
+}
+
+async function assertNoSidebarParentCycle(childSessionId: string, targetParentSessionId: string | null): Promise<void> {
+  if (!targetParentSessionId) return;
+  if (childSessionId === targetParentSessionId) {
+    const error = new Error('A session cannot be assigned as a child of itself.');
+    (error as any).statusCode = 400;
+    (error as any).code = 'SELF_PARENT_NOT_ALLOWED';
+    throw error;
+  }
+
+  const seen = new Set<string>([childSessionId]);
+  let cursorParentId: string | null = targetParentSessionId;
+  while (cursorParentId) {
+    const cursorParent = sessionManager.getSessionCatalog(cursorParentId);
+    if (!cursorParent) break;
+    const canonicalCursorId = cursorParent.id;
+    if (seen.has(canonicalCursorId)) {
+      const error = new Error(`Session "${childSessionId}" cannot be moved under descendant "${targetParentSessionId}" because that would create a parent cycle.`);
+      (error as any).statusCode = 400;
+      (error as any).code = 'PARENT_CYCLE_NOT_ALLOWED';
+      throw error;
+    }
+    seen.add(canonicalCursorId);
+    cursorParentId = getSessionTreeParentId(cursorParent);
+  }
+}
+
+type WebUiDeleteLifecycleTestHook = (context: {
+  rootSessionId: string;
+  includeDescendants: boolean;
+  targetSessionIds: string[];
+}) => void | Promise<void>;
+
+let webUiDeleteLifecycleTestHook: WebUiDeleteLifecycleTestHook | null = null;
+
+export function setWebUiDeleteLifecycleTestHookForTests(hook: WebUiDeleteLifecycleTestHook | null): void {
+  webUiDeleteLifecycleTestHook = hook;
+}
+
+type AgentMemoryManifestEntry = {
+  path: string;
+  absolutePath: string;
+  size: number;
+  modifiedAt: number;
+};
+
+export async function readAgentMemoryManifest(agentId: string): Promise<{ memoryRoot: string; files: AgentMemoryManifestEntry[] }> {
+  sessionManager.validateAgentName(agentId);
+  const agentDir = getAgentDir(agentId);
+  if (!await fs.pathExists(agentDir)) throw new Error(`Agent "${agentId}" not found.`);
+  const memoryRoot = path.join(agentDir, 'memory');
+  const files: AgentMemoryManifestEntry[] = [];
+  const walk = async (directory: string, relativeDirectory: string, depth: number): Promise<void> => {
+    if (depth > 12 || files.length >= 2000 || !await fs.pathExists(directory)) return;
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (files.length >= 2000) break;
+      if (entry.isSymbolicLink()) continue;
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolutePath, relativePath, depth + 1);
+      } else if (entry.isFile() && entry.name.toLocaleLowerCase().endsWith('.md')) {
+        const stat = await fs.stat(absolutePath);
+        files.push({ path: relativePath, absolutePath, size: stat.size, modifiedAt: stat.mtimeMs });
+      }
+    }
+  };
+  await walk(memoryRoot, '', 0);
+  const topLevelPriority = new Map(['00_SYSTEM.md', 'MEMORY.md', 'SOUL.md', 'USER.md'].map((name, index) => [name, index]));
+  files.sort((left, right) => {
+    const leftArchive = left.path.startsWith('archive/') ? 1 : 0;
+    const rightArchive = right.path.startsWith('archive/') ? 1 : 0;
+    if (leftArchive !== rightArchive) return leftArchive - rightArchive;
+    const leftDepth = left.path.split('/').length;
+    const rightDepth = right.path.split('/').length;
+    if (leftDepth !== rightDepth) return leftDepth - rightDepth;
+    const leftPriority = topLevelPriority.get(left.path) ?? 100;
+    const rightPriority = topLevelPriority.get(right.path) ?? 100;
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+    return left.path.localeCompare(right.path);
+  });
+  return { memoryRoot, files };
 }
 
 export class WebUIChannel implements Channel {
@@ -284,8 +824,29 @@ export class WebUIChannel implements Channel {
   private token: string;
   private enableWebUI: boolean;
   private enableTrigger: boolean;
+  private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
+  private realtimeHub?: WebUiRealtimeHub;
+  private guestUploads = new Map<string, { tokenId: string; sessionId: string }>();
+  private presentationSubscriberSessions = new Set<string>();
+  private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void | Promise<void>;
+
+  /** Main→worker transient presentation subscription bridge (Session-worker placement). */
+  setPresentationSubscriptionListener(listener: ((sessionId: string, active: boolean) => void | Promise<void>) | undefined): void {
+    this.presentationSubscriptionListener = listener;
+  }
+
+  hasPresentationSubscribers(sessionId: string): boolean {
+    return (this.sseClients.get(sessionId)?.length || 0) > 0 || !!this.realtimeHub?.hasSessionSubscribers(sessionId);
+  }
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
+  private globalSseSessionIds = new WeakMap<express.Response, Set<string>>();
+  private globalSseInitialization = new WeakMap<express.Response, {
+    pending: Map<string, { sessions: any[]; deletedIds: string[] }>;
+    invalidation: string | null;
+    initializing: boolean;
+  }>();
+  private globalSseInvalidationEventId = 0;
 
   private async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
     return httpServer.getAuthContext(req);
@@ -323,192 +884,39 @@ export class WebUIChannel implements Channel {
   }
 
   private isSlashCommandText(text: string): boolean {
-    return /^\s*\/[A-Za-z_\-.]+(?:\s|$)/.test(text);
+    return /^\s*\//.test(text);
   }
 
-  private isAllowedGuestUploadTempPath(filePath: string): boolean {
-    const resolved = path.resolve(filePath);
-    const uploadRoot = path.resolve(WEBUI_UPLOAD_DIR);
-    return resolved === uploadRoot || resolved.startsWith(`${uploadRoot}${path.sep}`);
+  private async refreshPresentationSubscription(sessionId: string): Promise<void> {
+    const active = this.hasPresentationSubscribers(sessionId);
+    const wasActive = this.presentationSubscriberSessions.has(sessionId);
+    if (active === wasActive) return;
+    if (active) this.presentationSubscriberSessions.add(sessionId);
+    else this.presentationSubscriberSessions.delete(sessionId);
+    await this.presentationSubscriptionListener?.(sessionId, active);
   }
 
-  private resolveWorkspacePath(inputPath: unknown): string {
-    if (typeof inputPath !== 'string' || inputPath.trim().length === 0) {
-      throw new Error('path is required');
-    }
+  private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
+    const stat = await fs.stat(resolvedPath);
 
-    return path.resolve(inputPath.trim());
-  }
-
-  private async listWorkspaceEntries(nodeId: string, inputPath: unknown): Promise<{ nodeId: string; path: string; entries: WorkspaceNodeEntry[] }> {
-    if (nodeId !== 'master') {
-      throw new Error('Workspace file APIs currently support only master in this MVP.');
-    }
-
-    const resolvedPath = this.resolveWorkspacePath(inputPath);
-    let stat: fs.Stats | null = null;
-    try {
-      stat = await fs.stat(resolvedPath);
-    } catch {
-      stat = null;
-    }
-    if (!stat) {
-      throw new Error(`Path not found: ${resolvedPath}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`Path is not a directory: ${resolvedPath}`);
-    }
-
-    const dirents = await fs.readdir(resolvedPath, { withFileTypes: true });
-    const entries = await Promise.all(dirents.map(async (dirent) => {
-      const entryPath = path.join(resolvedPath, dirent.name);
-      let entryStat: fs.Stats | null = null;
-      try {
-        entryStat = await fs.stat(entryPath);
-      } catch {
-        entryStat = null;
-      }
-      return {
-        name: dirent.name,
-        path: entryPath,
-        isDirectory: dirent.isDirectory(),
-        size: entryStat?.size || 0,
-        modifiedAt: entryStat ? entryStat.mtimeMs : 0,
-      } as WorkspaceNodeEntry;
-    }));
-
-    entries.sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) {
-        return a.isDirectory ? -1 : 1;
-      }
-      return a.name.localeCompare(b.name);
-    });
-
-    return { nodeId, path: resolvedPath, entries };
-  }
-
-  private async readWorkspaceFile(nodeId: string, inputPath: unknown): Promise<{ nodeId: string; path: string; content: string; size: number; modifiedAt: number }> {
-    if (nodeId !== 'master') {
-      throw new Error('Workspace file APIs currently support only master in this MVP.');
-    }
-
-    const resolvedPath = this.resolveWorkspacePath(inputPath);
-    let stat: fs.Stats | null = null;
-    try {
-      stat = await fs.stat(resolvedPath);
-    } catch {
-      stat = null;
-    }
-    if (!stat) {
-      throw new Error(`Path not found: ${resolvedPath}`);
-    }
     if (!stat.isFile()) {
-      throw new Error(`Path is not a file: ${resolvedPath}`);
+      throw new Error('Path is not a file');
     }
-
-    if (stat.size > MAX_INLINE_FILE_BYTES) {
-      throw createWorkspaceFileTooLargeError(resolvedPath, stat.size, MAX_INLINE_FILE_BYTES);
-    }
-
-    const content = await fs.readFile(resolvedPath, 'utf8');
-    return {
-      nodeId,
-      path: resolvedPath,
-      content,
-      size: stat.size,
-      modifiedAt: stat.mtimeMs,
-    };
-  }
-
-  private async writeWorkspaceFile(nodeId: string, inputPath: unknown, content: unknown): Promise<{ nodeId: string; path: string; size: number; modifiedAt: number }> {
-    if (nodeId !== 'master') {
-      throw new Error('Workspace file APIs currently support only master in this MVP.');
-    }
-    if (typeof content !== 'string') {
-      throw new Error('content must be a string');
-    }
-
-    const resolvedPath = this.resolveWorkspacePath(inputPath);
-    await fs.ensureDir(path.dirname(resolvedPath));
-    await fs.writeFile(resolvedPath, content, 'utf8');
-    const stat = await fs.stat(resolvedPath);
-    return {
-      nodeId,
-      path: resolvedPath,
-      size: stat.size,
-      modifiedAt: stat.mtimeMs,
-    };
-  }
-
-  private async streamWorkspaceDownload(resolvedPath: string, res: express.Response, archiveFormat?: string): Promise<void> {
-    const stat = await fs.stat(resolvedPath);
-
-    if (stat.isFile()) {
-      await new Promise<void>((resolve, reject) => {
-        const fileName = path.basename(resolvedPath);
-        res.setHeader('Content-Type', 'application/octet-stream');
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
-
-        const stream = fs.createReadStream(resolvedPath);
-        stream.on('error', (err) => reject(err));
-        res.on('close', () => {
-          if (!res.writableEnded) {
-            stream.destroy();
-          }
-        });
-        res.on('finish', () => resolve());
-        stream.pipe(res);
-      });
-      return;
-    }
-
-    if (!stat.isDirectory()) {
-      throw new Error('Path is neither a file nor a directory');
-    }
-
-    if (archiveFormat && archiveFormat !== 'tgz' && archiveFormat !== 'tar.gz') {
-      throw new Error('Directory downloads currently support only archive=tgz');
-    }
-
-    const rawBaseName = path.basename(resolvedPath);
-    const parentDir = rawBaseName ? path.dirname(resolvedPath) : resolvedPath;
-    const archiveBaseName = rawBaseName || 'workspace';
-    const archiveName = `${archiveBaseName}.tar.gz`;
-    const tarArgs = rawBaseName
-      ? ['-czf', '-', '-C', parentDir, rawBaseName]
-      : ['-czf', '-', '-C', resolvedPath, '.'];
-
-    res.setHeader('Content-Type', 'application/gzip');
-    res.setHeader('Content-Disposition', `attachment; filename="${archiveName.replace(/"/g, '')}"`);
 
     await new Promise<void>((resolve, reject) => {
-      const tarProcess = spawn('tar', tarArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const fileName = path.basename(resolvedPath);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
 
-      let stderr = '';
-      tarProcess.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      tarProcess.on('error', (err) => {
-        reject(err);
-      });
-
+      const stream = fs.createReadStream(resolvedPath);
+      stream.on('error', (err) => reject(err));
       res.on('close', () => {
-        if (!res.writableEnded && !tarProcess.killed) {
-          tarProcess.kill('SIGTERM');
+        if (!res.writableEnded) {
+          stream.destroy();
         }
       });
-
-      tarProcess.stdout.pipe(res);
-      tarProcess.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(stderr.trim() || `tar exited with code ${code}`));
-      });
+      res.on('finish', () => resolve());
+      stream.pipe(res);
     });
   }
 
@@ -517,6 +925,7 @@ export class WebUIChannel implements Channel {
     this.token = options.token;
     this.enableWebUI = options.enableWebUI !== false;
     this.enableTrigger = options.enableTrigger !== false;
+    this.loadModelStreamSnapshot = options.loadModelStreamSnapshot;
     
     // Add routes to HTTP server
     this.setupRoutes();
@@ -531,13 +940,11 @@ export class WebUIChannel implements Channel {
       return next();
     }
     
-    httpServer.getAuthContext(req).then((auth) => {
+    httpServer.getAuthContext(req).then(auth => {
       if (!auth) {
-        // Serve login.html directly instead of redirect
         const loginPath = path.join(BASE_DIR, 'packages', 'webui', 'public', 'login.html');
         return res.sendFile(loginPath);
       }
-
       next();
     }).catch(next);
   };
@@ -545,9 +952,53 @@ export class WebUIChannel implements Channel {
   private setupRoutes() {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
-    httpServerInstance.setGuestTokenVerifier(async (token) => {
+    httpServerInstance.setGuestTokenVerifier(async token => {
       const guest = await verifyWebUiGuestToken(token);
       return guest ? { ...guest, features: WEBUI_GUEST_FEATURES } : null;
+    });
+    this.realtimeHub = new WebUiRealtimeHub({
+      checkToken: req => httpServerInstance.checkIncomingToken(req),
+      getAuthContext: req => httpServerInstance.getIncomingAuthContext(req),
+      resolveIds: ids => {
+        const resolved = sessionCatalogStore.resolveMany(ids);
+        return {
+          canonicalIds: [...new Set(ids.flatMap(id => {
+            const resolution = resolved[id];
+            return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [resolution.sessionId] : [];
+          }))],
+          missingIds: ids.filter(id => resolved[id]?.kind !== 'exact' && resolved[id]?.kind !== 'alias'),
+          requestedToCanonical: Object.fromEntries(ids.flatMap(id => {
+            const resolution = resolved[id];
+            return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [[id, resolution.sessionId]] : [];
+          })),
+        };
+      },
+      loadSessionState: async sessionId => {
+        const session = await sessionRuntime.getSession(sessionId);
+        return session
+          ? { type: 'session-state', sessionId, session: buildWebUiSessionState(session) }
+          : { type: 'session-deleted', sessionId };
+      },
+      loadModelStreamSnapshot: async sessionId => ({
+        type: 'model-stream-snapshot',
+        sessionId,
+        draft: await this.loadModelStreamSnapshot?.(sessionId) || null,
+      }),
+      loadSessionList: async requestedIds => {
+        const sessions: any[] = [];
+        const deletedIds: string[] = [];
+        for (let index = 0; index < requestedIds.length; index += 100) {
+          const exact = await queryExactSessions(requestedIds.slice(index, index + 100), false);
+          const mapped = mapBoundedSessionListQueryPayload(exact);
+          sessions.push(...mapped.results.flatMap((item: any) => item.session ? [item.session] : []));
+          deletedIds.push(...exact.results.filter(item => !item.session).map(item => item.requestedId));
+        }
+        return { type: 'session-list-delta', sessions, deletedIds };
+      },
+      onSessionSubscriptionChanged: sessionId => this.refreshPresentationSubscription(sessionId),
+    });
+    httpServerInstance.addWebSocket(WEBUI_REALTIME_PATH, async (ws, req) => {
+      await this.realtimeHub!.handleConnection(ws, req);
     });
     
     // External trigger endpoint
@@ -564,7 +1015,7 @@ export class WebUIChannel implements Channel {
 
             logger.info({ trigger: true, text, sessionId: finalSessionId }, 'External trigger received');
 
-            await sessionManager.queueSessionEvent(finalSessionId, text, 'trigger');
+            await sessionRuntime.queueEvent(finalSessionId, text, 'trigger');
             res.json({ success: true, message: 'Triggered' });
           } catch (e: any) {
             logger.error({ err: e }, 'Trigger error');
@@ -577,6 +1028,8 @@ export class WebUIChannel implements Channel {
 
     // WebUI API endpoints
     if (this.enableWebUI) {
+      registerVscodeWebRoutes(httpServerInstance);
+
       // Auth endpoint
       httpServerInstance.addRoute({
         path: '/api/auth',
@@ -584,16 +1037,10 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           const { token } = req.body;
           if (token === this.token) {
-            res.json({ success: true, ...this.authSessionPayload({ role: 'admin' }) });
-            return;
+            return res.json({ success: true, ...this.authSessionPayload({ role: 'admin' }) });
           }
-
           const guest = await verifyWebUiGuestToken(token);
-          if (guest) {
-            res.json({ success: true, ...this.authSessionPayload({ ...guest, features: WEBUI_GUEST_FEATURES }) });
-            return;
-          }
-
+          if (guest) return res.json({ success: true, ...this.authSessionPayload(guest) });
           res.status(401).json({ error: 'Invalid token' });
         },
         noAuth: true,
@@ -629,7 +1076,7 @@ export class WebUIChannel implements Channel {
 
             const missing: string[] = [];
             for (const sessionId of sessionIds) {
-              if (!await sessionManager.getExistingSession(sessionId)) {
+              if (!sessionManager.getSessionCatalog(sessionId)) {
                 missing.push(sessionId);
               }
             }
@@ -691,7 +1138,6 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/webui/settings',
         method: 'GET',
-        auth: 'webui',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
             res.json({ settings: readWebUiSettings() });
@@ -773,18 +1219,19 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            fs.ensureDirSync(path.dirname(DEFAULT_MODELS_CONFIG_PATH));
+            const modelsPath = getActiveModelsConfigPath();
+            fs.ensureDirSync(path.dirname(modelsPath));
             const hasRawYaml = Object.prototype.hasOwnProperty.call(req.body || {}, 'yaml');
             if (hasRawYaml) {
               // Raw mode is intentionally raw: validate first, then write the
               // user-provided text byte-for-byte instead of parse + dump, so
               // comments, key order, quoting, and custom formatting survive.
-              writeRawModelsConfig(String(req.body?.yaml ?? ''), DEFAULT_MODELS_CONFIG_PATH);
+              writeRawModelsConfig(String(req.body?.yaml ?? ''), modelsPath);
             } else {
-              const existingRaw = readRawTextFileIfExists(DEFAULT_MODELS_CONFIG_PATH);
+              const existingRaw = readRawTextFileIfExists(modelsPath);
               const existingConfig = existingRaw.trim() ? ((yaml.load(existingRaw) as any) || {}) : {};
               const config = buildModelsConfigFromSetupForm(req.body || {}, existingConfig);
-              fs.writeFileSync(DEFAULT_MODELS_CONFIG_PATH, dumpSetupYaml(config), 'utf8');
+              fs.writeFileSync(modelsPath, dumpSetupYaml(config), 'utf8');
             }
 
             // Validate by resolving the newly written config.
@@ -793,6 +1240,35 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to save models setup');
             res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/setup/models/list',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          let providerType = '';
+          try {
+            const request = parseProviderModelListRequest(req.body);
+            providerType = request.providerType;
+            const models = await listProviderModels(request);
+            res.json({ models });
+          } catch (error) {
+            if (error instanceof ProviderModelListError) {
+              logger.warn({
+                providerType,
+                code: error.code,
+                upstreamStatus: error.upstreamStatus,
+              }, 'Failed to list provider models');
+              res.status(error.statusCode).json({ error: error.message });
+              return;
+            }
+            logger.error({
+              providerType,
+              errorName: error instanceof Error ? error.name : typeof error,
+            }, 'Unexpected provider model list failure');
+            res.status(500).json({ error: 'Failed to list provider models.' });
           }
         },
       });
@@ -830,14 +1306,12 @@ export class WebUIChannel implements Channel {
               registerAbortController: false,
               maxRetries: 1,
               timeoutMs: 30000,
+              purpose: 'setup-test',
             });
-            if (/^\s*Error:/i.test(result.text || '')) {
-              return res.status(400).json({ success: false, error: result.text });
-            }
             res.json({ success: true, text: result.text, usage: result.usage || null });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to test models setup');
-            res.status(400).json({ error: e.message });
+            res.status(400).json({ success: false, error: e.message });
           }
         },
       });
@@ -954,7 +1428,333 @@ export class WebUIChannel implements Channel {
         },
       });
 
-      // Get all sessions
+      httpServerInstance.addRoute({
+        path: '/api/agents',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const entries = await fs.pathExists(AGENTS_DIR)
+              ? await fs.readdir(AGENTS_DIR, { withFileTypes: true })
+              : [];
+            const agents = await Promise.all(entries
+              .filter(entry => {
+                if (!entry.isDirectory()) return false;
+                try {
+                  sessionManager.validateAgentName(entry.name);
+                  return true;
+                } catch (error) {
+                  logger.warn({ err: error, entryName: entry.name }, 'Skipping invalid Agent registry directory');
+                  return false;
+                }
+              })
+              .map(async entry => {
+                const metadata = sessionManager.getAgentMetadata(entry.name);
+                const ownedSessions = sessionCatalogStore.listByAgent(entry.name);
+                const memory = await readAgentMemoryManifest(entry.name).catch(error => {
+                  logger.warn({ err: error, agentId: entry.name }, 'Failed to summarize Agent memory manifest');
+                  return { memoryRoot: path.join(getAgentDir(entry.name), 'memory'), files: [] as AgentMemoryManifestEntry[] };
+                });
+                return {
+                  id: entry.name,
+                  inherit: metadata.inherit || null,
+                  inheritanceChain: sessionManager.getAgentInheritanceChain(entry.name),
+                  isolated: !!metadata.isolated,
+                  isolatedNode: sessionManager.getAgentIsolationNode(entry.name) || null,
+                  sessionCount: ownedSessions.length,
+                  activeSessionCount: ownedSessions.filter(session => session.busy === true).length,
+                  queuedSessionCount: ownedSessions.filter(session => Number(session.queueLength || 0) > 0).length,
+                  memoryRoot: memory.memoryRoot,
+                  memoryFileCount: memory.files.length,
+                  memoryLastModified: memory.files.reduce((latest, file) => Math.max(latest, file.modifiedAt), 0) || null,
+                };
+              }));
+            agents.sort((a, b) => a.id.localeCompare(b.id));
+            res.json({ agents });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get agents');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : '';
+            const inheritAgent = typeof req.body?.inheritAgent === 'string' && req.body.inheritAgent.trim()
+              ? req.body.inheritAgent.trim()
+              : undefined;
+            if (!agentId) {
+              return res.status(400).json({ error: 'Agent ID is required.' });
+            }
+            sessionManager.validateAgentName(agentId);
+            if (inheritAgent === agentId) {
+              return res.status(400).json({ error: 'Agent cannot inherit from itself.' });
+            }
+            if (inheritAgent && sessionManager.getAgentMetadata(inheritAgent).isolated) {
+              return res.status(400).json({ error: `Agent "${inheritAgent}" is isolated and cannot be used as an inherit source.` });
+            }
+
+            const result = await sessionManager.createAgentWithMainSession({
+              agentName: agentId,
+              inherit: inheritAgent,
+              createMainSession: true,
+            });
+            const session = sessionManager.getSessionCatalog(result.mainSessionId);
+            if (session) {
+              const rootSiblings = getWebUiSidebarSiblings(null, session.id);
+              const changedIds = writeWebUiSidebarOrder([session, ...rootSiblings]);
+              await sessionManager.saveSessionCatalogEntries(changedIds);
+            }
+            this.broadcastSessionListUpdate();
+            res.status(201).json({ success: true, agentId, sessionId: result.mainSessionId });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to create agent');
+            const message = e instanceof Error ? e.message : String(e);
+            const code = typeof e?.code === 'string' ? e.code : undefined;
+            const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message, ...(code ? { code } : {}) });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents/:agentId/memory',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId;
+            res.json(await readAgentMemoryManifest(agentId));
+          } catch (e: any) {
+            const message = e instanceof Error ? e.message : String(e);
+            res.status(/not found/i.test(message) ? 404 : 400).json({ error: message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents/:agentId',
+        method: 'PUT',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId;
+            sessionManager.validateAgentName(agentId);
+            if (!await fs.pathExists(getAgentDir(agentId))) return res.status(404).json({ error: `Agent "${agentId}" not found.` });
+            const hasInherit = Object.prototype.hasOwnProperty.call(req.body || {}, 'inheritAgent');
+            const hasIsolation = Object.prototype.hasOwnProperty.call(req.body || {}, 'isolatedNode');
+            if (!hasInherit && !hasIsolation) return res.status(400).json({ error: 'Provide inheritAgent and/or isolatedNode.' });
+
+            if (hasInherit) {
+              const inheritAgent = typeof req.body?.inheritAgent === 'string' && req.body.inheritAgent.trim()
+                ? req.body.inheritAgent.trim()
+                : undefined;
+              if (inheritAgent === agentId) return res.status(400).json({ error: 'Agent cannot inherit from itself.' });
+              await sessionManager.setAgentInherit(agentId, inheritAgent);
+            }
+            if (hasIsolation) {
+              const isolatedNode = typeof req.body?.isolatedNode === 'string' && req.body.isolatedNode.trim()
+                ? req.body.isolatedNode.trim()
+                : undefined;
+              await sessionManager.setAgentIsolation(agentId, isolatedNode);
+            }
+            this.broadcastSessionListUpdate();
+            const metadata = sessionManager.getAgentMetadata(agentId);
+            res.json({ success: true, agent: {
+              id: agentId,
+              inherit: metadata.inherit || null,
+              inheritanceChain: sessionManager.getAgentInheritanceChain(agentId),
+              isolated: !!metadata.isolated,
+              isolatedNode: sessionManager.getAgentIsolationNode(agentId) || null,
+            } });
+          } catch (e: any) {
+            const message = e instanceof Error ? e.message : String(e);
+            res.status(/session-worker|mutation/i.test(message) ? 409 : 400).json({ error: message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents/:agentId',
+        method: 'DELETE',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId;
+            if (req.body?.confirmAgentId !== agentId) return res.status(400).json({ error: 'confirmAgentId must exactly match the Agent ID.' });
+            const result = await sessionManager.deleteAgent(agentId, async sessionId => {
+              const deletion = await deleteSessionLifecycle({ requestedSessionId: sessionId, includeDescendants: false });
+              if (deletion.status === 'not-found') return false;
+              if (deletion.status === 'busy') throw new Error(deletion.message);
+              return deletion.status === 'deleted';
+            });
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, agentId, deletedSessions: result.deletedSessions });
+          } catch (e: any) {
+            const message = e instanceof Error ? e.message : String(e);
+            const status = /not found/i.test(message) ? 404 : /active|busy|attached|inherited by|mutation|deletion stopped/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/sidebar', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['mode','limit','childLimit','cursor','focusSessionId'], 'sidebar query');
+            const mode = normalizeSessionListMode(req.query.mode);
+            const limit = boundedQueryLimit(req.query.limit, 50, 100);
+            const childLimit = boundedQueryLimit(req.query.childLimit, 5, 20);
+            const cursor = optionalQueryString(req.query.cursor, 'cursor', 4096);
+            const focusIds = repeatedFocusIds(req.query.focusSessionId);
+            const roots = await querySessionListPage({ mode, limit, cursor, roots: true });
+            const children = mode === 'flat-time' ? { revision: roots.revision, children: [] }
+              : await queryChildrenPreviews(roots.sessions.map(session => session.id), mode, childLimit);
+            const focus = focusIds.length ? await queryExactSessions(focusIds, true)
+              : { results: [] as any[], paths: {} as Record<string, string[]> };
+            const forcedChildren: Record<string, string[]> = {};
+            for (const pathIds of Object.values(focus.paths || {}) as string[][]) {
+              for (let index = 0; index + 1 < pathIds.length; index++) {
+                const children = (forcedChildren[pathIds[index]] ||= []);
+                if (!children.includes(pathIds[index + 1])) children.push(pathIds[index + 1]);
+              }
+            }
+            const pathContextIds = [...new Set((Object.values(focus.paths || {}) as string[][]).flat())];
+            const pathContext = { results: [] as any[] };
+            for (let index = 0; index < pathContextIds.length; index += 100) {
+              pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
+            }
+            const sidebarChildren = children.children.map(({ nextCursor: _nextCursor, ...preview }) => preview);
+            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: sidebarChildren, focus: focus.results,
+              presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list sidebar query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/children', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['mode','limit','parents','agent'], 'children request');
+            const mode = normalizeSessionListMode(req.body?.mode);
+            const limit = boundedBodyLimit(req.body?.limit, 10, 20);
+            if (req.body.agent !== undefined && (typeof req.body.agent !== 'string' || !req.body.agent || req.body.agent.length > 128)) {
+              return res.status(400).json({ error: 'agent is invalid.', code: 'SESSION_LIST_AGENT_INVALID' });
+            }
+            const agent = req.body.agent as string | undefined;
+            if (agent && mode !== 'time') return res.status(400).json({ error: 'agent-scoped children require time mode.', code: 'SESSION_LIST_MODE_INVALID' });
+            const result = await queryChildrenContinuations(req.body?.parents, mode, limit, agent);
+            res.json(mapBoundedSessionListQueryPayload(result, agent));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list children query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/by-id', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['ids','includePaths'], 'by-id request');
+            if (req.body.includePaths !== undefined && typeof req.body.includePaths !== 'boolean') {
+              return res.status(400).json({ error: 'includePaths must be boolean.', code: 'SESSION_LIST_DTO_INVALID' });
+            }
+            res.json(mapBoundedSessionListQueryPayload(await queryExactSessions(req.body.ids, req.body.includePaths === true)));
+          }
+          catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list by-id query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/architecture', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['agent','limit','childLimit','cursor'], 'architecture query');
+            const agent = optionalQueryString(req.query.agent, 'agent', 128);
+            const result = await queryArchitecture({ agent, limit: boundedQueryLimit(req.query.limit, 50, 100),
+              childLimit: boundedQueryLimit(req.query.childLimit, 10, 20), cursor: optionalQueryString(req.query.cursor, 'cursor', 4096) });
+            res.json(mapSessionListQueryPayload(result));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list architecture query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/descendant-activity', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['ids'], 'descendant activity request');
+            if (!Array.isArray(req.body?.ids) || req.body.ids.length > 100
+              || req.body.ids.some((id: unknown) => typeof id !== 'string' || !id || id.length > 512)) {
+              return res.status(400).json({ error: 'ids must contain at most 100 bounded Session IDs.', code: 'SESSION_LIST_IDS_INVALID' });
+            }
+            const requestedIds = [...new Set(req.body.ids as string[])];
+            const resolved = requestedIds.map(requestedId => ({ requestedId, resolution: sessionCatalogStore.resolveId(requestedId) }));
+            const canonicalIds = [...new Set(resolved.flatMap(item => item.resolution.kind === 'exact' || item.resolution.kind === 'alias' ? [item.resolution.sessionId] : []))];
+            const catalogBusyIds = sessionCatalogStore.listBusySessionIds();
+            const current = new Map<string, SessionRuntimeSessionDto>();
+            const batches = catalogBusyIds.length ? Array.from({ length: Math.ceil(catalogBusyIds.length / 200) }, (_, index) => catalogBusyIds.slice(index * 200, index * 200 + 200)) : [[]];
+            for (let index = 0; index < batches.length; index++) {
+              const projections = await sessionRuntime.getSessionListProjections(batches[index], index === 0, true);
+              for (const session of projections.sessions) current.set(session.id, session);
+            }
+            const currentBusyIds = [...current.values()].filter(session => session.runtimeState?.state === 'requesting-model'
+              || session.runtimeState?.state === 'running-tool' || session.busy).map(session => session.id);
+            const counts = sessionCatalogStore.getBusyDescendantCounts(canonicalIds, currentBusyIds);
+            res.json({ version: 1, results: resolved.map(item => {
+              const canonicalId = item.resolution.kind === 'exact' || item.resolution.kind === 'alias' ? item.resolution.sessionId : null;
+              return { requestedId: item.requestedId, sessionId: canonicalId, resolution: item.resolution, busy: canonicalId ? counts.get(canonicalId) || 0 : 0 };
+            }) });
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed descendant activity query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/descendants/:sessionId', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['limit'], 'descendant query');
+            if (typeof req.params.sessionId !== 'string' || !req.params.sessionId || req.params.sessionId.length > 512) {
+              return res.status(400).json({ error: 'sessionId is invalid.', code: 'SESSION_LIST_SESSION_ID_INVALID' });
+            }
+            res.json(mapSessionListQueryPayload(await queryDescendants(req.params.sessionId,
+            boundedQueryLimit(req.query.limit, 20, 100)))); }
+          catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list descendant query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/search', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['q','limit'], 'search query');
+            const query = (optionalQueryString(req.query.q, 'q', 256) || '').trim();
+            if (!query) return res.status(400).json({ error: 'q must contain 1 to 256 characters.', code: 'SESSION_LIST_SEARCH_INVALID' });
+            const limit = boundedQueryLimit(req.query.limit, 50, 100);
+            const normalized = query.toLowerCase();
+            const sessions = (await sessionRuntime.listSessions()).map(session => buildWebUiSessionListProjection(session));
+            const matches = sessions.filter((session: any) => [session.displayName,session.id,...(session.aliases || []),session.agent,
+              session.currentNode,session.cwd,session.model,session.modelKey,session.defaultModelKey,session.childModelDefault,
+              session.effectiveChildModelKey].filter(value => typeof value === 'string' && value.trim()).some(value => value.toLowerCase().includes(normalized)));
+            res.json(mapBoundedSessionListQueryPayload({ version: 1, query, sessions: matches.slice(0, limit),
+              hasMore: matches.length > limit, candidateCount: sessions.length }));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list search');
+          }
+        },
+      });
+
+      // Legacy compatibility: Get all sessions.
       httpServerInstance.addRoute({
         path: '/api/sessions',
         method: 'GET',
@@ -962,39 +1762,28 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const auth = await this.getAuthContext(req);
-            const allowedSessionIds = auth?.role === 'guest' ? new Set(auth.sessionIds) : null;
-            const allSessions = sessionManager.getAllSessions();
-            const visibleSessions = allowedSessionIds
-              ? new Map(Array.from(allSessions.entries()).filter(([id]) => allowedSessionIds.has(id)))
-              : allSessions;
-            
+            if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+            const runtimeSessions = await sessionRuntime.listSessions();
+            if (auth.role === 'guest') {
+              return res.json({ sessions: runtimeSessions.filter(session => auth.sessionIds.includes(session.id))
+                .map(session => ({ id: session.id, displayName: session.displayName || null, busy: session.busy })) });
+            }
+            const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
             // Build parent-to-children map
-            const childrenMap = buildChildrenMap(visibleSessions);
-            
-            const sessions = Array.from(visibleSessions.entries())
+            const childrenMap = buildChildrenMap(allSessions);
+            const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
-                id,
-                agent: session.agent || 'main',
-                messageCount: session.meta?.messageCount ?? session.history.length,
-                lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
-                  ? session.history[session.history.length - 1].__meta?.timestamp || 0
-                  : 0),
-                parentSessionId: session.parentSessionId && (!allowedSessionIds || allowedSessionIds.has(session.parentSessionId)) ? session.parentSessionId : null,
+                ...buildWebUiSessionState(session),
+                messageCount: session.messageCount,
+                lastMessageTime: session.lastMessageTime,
+                parentSessionId: session.parentSessionId || null,
                 childSessions: childrenMap.get(id) || [],
-                aliases: session.aliases || [],
-                busy: session.busy || false,
-                busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
-                queueLength: session.queue?.length || 0,
-                displayName: session.displayName || null,
-                archived: session.archived || false,
-                currentNode: session.currentNode || 'master',
-                cwd: session.cwd || null,
-                ...buildWebUiModelStatus(session),
-                isolated: sessionManager.isSessionEffectivelyIsolated(session),
+                pinned: session.pinned || false,
+                sidebarOrder: getWebUiSidebarOrder(session) ?? null,
                 tokenUsage: {
-                  cachedTokens: session.stats?.totalCachedTokens || 0,
-                  inputTokens: session.stats?.totalInputTokens || 0,
-                  outputTokens: session.stats?.totalOutputTokens || 0,
+                  cachedTokens: session.tokenUsage.cachedTokens,
+                  inputTokens: session.tokenUsage.inputTokens,
+                  outputTokens: session.tokenUsage.outputTokens,
                 },
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
@@ -1011,25 +1800,50 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            if (typeof req.body?.sessionId === 'string' && req.body.sessionId.trim()) {
-              return res.status(400).json({ error: 'Custom sessionId is not allowed.' });
+            const agentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
+              ? req.body.agentId.trim()
+              : 'main';
+            const requestedSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+            sessionManager.validateAgentName(agentId);
+
+            let sessionId: string;
+            if (agentId === 'main' && !requestedSessionId) {
+              const result = await sessionManager.createEmptySession();
+              if (!result.created) {
+                return res.status(409).json({ error: 'Session already exists', sessionId: result.session.id });
+              }
+              sessionId = result.session.id;
+            } else {
+              if (requestedSessionId) {
+                sessionManager.validateSessionName(requestedSessionId);
+              }
+              const result = await sessionManager.createSessionInAgent({
+                agentName: agentId,
+                ...(requestedSessionId ? { sessionName: requestedSessionId } : {}),
+              });
+              sessionId = result.sessionId;
             }
 
-            const { session, created } = await sessionManager.createEmptySession();
-
-            if (!created) {
-              return res.status(409).json({ error: 'Session already exists', sessionId: session.id });
-            }
+            const session = sessionManager.getSessionCatalog(sessionId);
+            if (!session) throw new Error(`Created session "${sessionId}" could not be loaded.`);
+            const rootSiblings = getWebUiSidebarSiblings(null, session.id);
+            const changedIds = writeWebUiSidebarOrder([session, ...rootSiblings]);
+            await sessionManager.saveSessionCatalogEntries(changedIds);
 
             this.broadcastSessionListUpdate();
 
             res.json({
               success: true,
-              sessionId: session.id,
+              sessionId,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to create session');
-            res.status(500).json({ error: e.message });
+            const message = e instanceof Error ? e.message : String(e);
+            const code = typeof e?.code === 'string' ? e.code : undefined;
+            const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message)
+              ? 409
+              : /does not exist|invalid/i.test(message) ? 400 : 500;
+            res.status(status).json({ error: message, ...(code ? { code } : {}) });
           }
         },
       });
@@ -1041,13 +1855,13 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
             const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd : undefined;
-            const result = await sessionManager.setSessionCwd(sessionId, cwd);
+            const result = await sessionRuntime.updateSettings(sessionId, { cwd: cwd || null });
             this.broadcastSessionListUpdate();
             res.json({
               success: true,
-              changed: result.changed,
-              previous: result.previous || null,
-              cwd: result.current || null,
+              changed: result.changed.includes('cwd'),
+              previous: result.previous.cwd,
+              cwd: result.current.cwd,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session cwd');
@@ -1062,21 +1876,20 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            if (model !== undefined) {
-              session.model = model;
-            } else {
-              delete session.model;
-            }
-
-            await sessionManager.saveSession(session.id);
+            const body = req.body || {};
+            const patch: Record<string, any> = {};
+            if (body.clear === true && !Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = null;
+            if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = normalizeWebUiModelSelection(body.model) || null;
+            if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.effort = normalizeWebUiEffortSelection(body.effort) || null;
+            if (Object.keys(patch).length === 0) throw new Error('model and/or effort is required.');
+            const updated = await sessionRuntime.updateSettings(session.id, patch);
             this.broadcastSessionListUpdate();
-            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(session) });
+            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(updated.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session model');
             res.status(400).json({ error: e.message });
@@ -1090,16 +1903,22 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            await sessionManager.setSessionChildModelDefault(session.id, model);
-            const updated = await sessionManager.getExistingSession(session.id) || session;
+            const body = req.body || {};
+            const patch: Record<string, any> = {};
+            if (body.clear === true && !Object.prototype.hasOwnProperty.call(body, 'childModelDefault') && !Object.prototype.hasOwnProperty.call(body, 'model')) patch.childModelDefault = null;
+            if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) patch.childModelDefault = normalizeWebUiModelSelection(body.childModelDefault) || null;
+            else if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.childModelDefault = normalizeWebUiModelSelection(body.model) || null;
+            if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) patch.childEffortDefault = normalizeWebUiEffortSelection(body.childEffortDefault) || null;
+            else if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.childEffortDefault = normalizeWebUiEffortSelection(body.effort) || null;
+            if (Object.keys(patch).length === 0) throw new Error('childModelDefault and/or childEffortDefault is required.');
+            const result = await sessionRuntime.updateSettings(session.id, patch);
             this.broadcastSessionListUpdate();
-            res.json({ success: true, sessionId: updated.id, ...buildWebUiModelStatus(updated) });
+            res.json({ success: true, sessionId: result.session.id, ...buildWebUiModelStatus(result.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session child model');
             res.status(400).json({ error: e.message });
@@ -1108,50 +1927,37 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addRoute({
-        path: '/api/fs/tree',
+        path: '/api/nodes',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const nodeId = typeof req.query.nodeId === 'string' && req.query.nodeId.trim() ? req.query.nodeId.trim() : 'master';
-            const data = await this.listWorkspaceEntries(nodeId, req.query.path);
-            res.json(data);
+            const approvedNodes = await listApprovedNodes();
+            const runtimeNodes = new Map(nodesManager.listNodeServiceSummaries().map(node => [node.id, node]));
+            const nodes = [
+              {
+                id: 'master',
+                type: 'master',
+                displayName: 'master',
+                online: true,
+                services: {},
+              },
+              ...approvedNodes.map((approved) => {
+                const runtime = runtimeNodes.get(approved.nodeId);
+                return {
+                  id: approved.nodeId,
+                  type: runtime?.type || approved.nodeType,
+                  displayName: approved.displayName || approved.requestedName || approved.nodeId,
+                  online: !!runtime,
+                  lastSeenAt: approved.lastSeenAt,
+                  services: pickWebUiNodeLaunchServices(runtime?.services || approved.capabilities?.services),
+                  protocolCompatibility: runtime?.protocolCompatibility || approved.protocolCompatibility,
+                };
+              }),
+            ];
+            res.json({ nodes });
           } catch (e: any) {
-            logger.error({ err: e }, 'Failed to list workspace entries');
-            res.status(400).json({ error: e.message });
-          }
-        },
-      });
-
-      httpServerInstance.addRoute({
-        path: '/api/fs/read',
-        method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const nodeId = typeof req.query.nodeId === 'string' && req.query.nodeId.trim() ? req.query.nodeId.trim() : 'master';
-            const data = await this.readWorkspaceFile(nodeId, req.query.path);
-            res.json(data);
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to read workspace file');
-            if (e?.code === 'FILE_TOO_LARGE') {
-              res.status(413).json({ error: e.message, code: e.code, path: e.path, size: e.size, maxSize: e.maxSize });
-              return;
-            }
-            res.status(400).json({ error: e.message });
-          }
-        },
-      });
-
-      httpServerInstance.addRoute({
-        path: '/api/fs/write',
-        method: 'POST',
-        handler: async (req: express.Request, res: express.Response) => {
-          try {
-            const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : 'master';
-            const data = await this.writeWorkspaceFile(nodeId, req.body?.path, req.body?.content);
-            res.json({ success: true, ...data });
-          } catch (e: any) {
-            logger.error({ err: e }, 'Failed to write workspace file');
-            res.status(400).json({ error: e.message });
+            logger.error({ err: e }, 'Failed to list WebUI nodes');
+            res.status(500).json({ error: e.message });
           }
         },
       });
@@ -1159,10 +1965,9 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/terminals',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim() ? req.query.sessionId.trim() : undefined;
-            const terminals = await listTerminalRecords({ sessionId });
+            const terminals = await listTerminalRecords();
             res.json({ terminals });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to list terminals');
@@ -1176,17 +1981,12 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
             const nodeId = typeof req.body?.nodeId === 'string' && req.body.nodeId.trim() ? req.body.nodeId.trim() : undefined;
-            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : undefined;
+            const cwd = typeof req.body?.cwd === 'string' && req.body.cwd.trim() ? req.body.cwd.trim() : '';
             const cols = typeof req.body?.cols === 'number' ? req.body.cols : undefined;
             const rows = typeof req.body?.rows === 'number' ? req.body.rows : undefined;
 
-            if (!sessionId) {
-              throw new Error('sessionId is required');
-            }
-
-            const terminal = await createTerminal({ sessionId, nodeId, cwd, cols, rows });
+            const terminal = await createTerminal({ nodeId, cwd, cols, rows });
             res.json({
               success: true,
               terminal,
@@ -1236,22 +2036,22 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/agents/tree',
         method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
+        handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const allSessions = sessionManager.getAllSessions();
+            const runtimeSessions = await sessionRuntime.listSessions();
+            const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
 
             const childrenMap = buildChildrenMap(allSessions);
-            
             // Build tree structure
             const agents = Array.from(allSessions.entries()).map(([id, session]) => ({
               id,
               displayName: session.displayName || id,
               busy: session.busy || false,
-              queueLength: session.queue?.length || 0,
+              queueLength: session.queueLength,
               parentSessionId: session.parentSessionId || null,
               childSessions: childrenMap.get(id) || [],
-              messageCount: session.meta?.messageCount ?? session.history.length,
-              lastMessageTime: session.meta?.lastMessageTime ?? 0,
+              messageCount: session.messageCount,
+              lastMessageTime: session.lastMessageTime,
               archived: session.archived || false
             }));
             
@@ -1269,19 +2069,121 @@ export class WebUIChannel implements Channel {
       // Get session history (must be before DELETE /:sessionId)
 
       httpServerInstance.addRoute({
+        path: '/api/blobs/:blobId',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const blobId = req.params.blobId as string;
+            const blobPath = resolveImageBlobPath(blobId);
+            const stat = await fs.stat(blobPath);
+            if (!stat.isFile()) return res.status(404).json({ error: 'Image blob not found' });
+            const safeMimeType = getSafeRasterMimeType(blobId);
+            res.setHeader('Content-Type', safeMimeType || 'application/octet-stream');
+            res.setHeader('Content-Length', String(stat.size));
+            res.setHeader('ETag', `"${blobId}"`);
+            res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            if (!safeMimeType) {
+              res.setHeader('Content-Disposition', `attachment; filename="${blobId}"`);
+            }
+            await new Promise<void>((resolve, reject) => {
+              const stream = fs.createReadStream(blobPath);
+              stream.on('error', reject);
+              res.on('finish', resolve);
+              res.on('close', resolve);
+              stream.pipe(res);
+            });
+          } catch (e: any) {
+            if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Image blob not found' });
+            if (e?.message === 'Invalid image blob id.') return res.status(400).json({ error: e.message });
+            logger.error({ err: e }, 'Failed to serve image blob');
+            if (!res.headersSent) res.status(500).json({ error: 'Failed to serve image blob' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/blobs/:blobId',
+        method: 'GET',
+        auth: 'webui',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const auth = await this.requireSessionAccess(req, res, sessionId);
+            if (!auth) return;
+            const blobId = req.params.blobId as string;
+            // A blob ID is content-derived, not a secret. Require a reference
+            // in the bound Session before serving it to a guest.
+            if (auth.role === 'guest') {
+              const snapshot = await sessionRuntime.getHistory(sessionId);
+              if (!snapshot) return res.status(404).json({ error: 'Session not found' });
+              if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
+                return res.status(403).json({ error: 'Image is not part of this guest session.' });
+              }
+            }
+            const blobPath = resolveImageBlobPath(blobId);
+            const stat = await fs.stat(blobPath);
+            if (!stat.isFile()) return res.status(404).json({ error: 'Image blob not found' });
+            const safeMimeType = getSafeRasterMimeType(blobId);
+            res.setHeader('Content-Type', safeMimeType || 'application/octet-stream');
+            res.setHeader('Content-Length', String(stat.size));
+            res.setHeader('ETag', `"${blobId}"`);
+            res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            if (!safeMimeType) {
+              res.setHeader('Content-Disposition', `attachment; filename="${blobId}"`);
+            }
+            await new Promise<void>((resolve, reject) => {
+              const stream = fs.createReadStream(blobPath);
+              stream.on('error', reject);
+              res.on('finish', resolve);
+              res.on('close', resolve);
+              stream.pipe(res);
+            });
+          } catch (e: any) {
+            if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Image blob not found' });
+            if (e?.message === 'Invalid image blob id.') return res.status(400).json({ error: e.message });
+            logger.error({ err: e }, 'Failed to serve image blob');
+            if (!res.headersSent) res.status(500).json({ error: 'Failed to serve image blob' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/debug-file',
         method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
+            if (!sessionManager.getSessionCatalog(sessionId)) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
             const resolvedPath = getSessionHistoryFilePath(sessionId);
             if (!await fs.pathExists(resolvedPath)) {
               return res.status(404).json({ error: 'Session file not found' });
             }
             const payload = await fs.readJson(resolvedPath);
-            res.json({ resolvedPath, payload });
+            res.json({ resolvedPath, payload: await sanitizeWebUiDebugPayload(payload) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to read session debug file');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/state',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const session = await sessionRuntime.getSession(sessionId);
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+            res.json({ session: buildWebUiSessionState(session) });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to get session state');
             res.status(500).json({ error: e.message });
           }
         },
@@ -1296,14 +2198,146 @@ export class WebUIChannel implements Channel {
             const sessionId = req.params.sessionId as string;
             const auth = await this.requireSessionAccess(req, res, sessionId);
             if (!auth) return;
-            const session = await sessionManager.getExistingSession(sessionId);
-            if (!session) {
+            const historyRangeKeys = ['tail', 'prefixLength', 'afterSeq', 'historyVersion'];
+            const hasHistoryRangeQuery = Object.keys(req.query).some(key => historyRangeKeys.includes(key));
+            const unknownQuery = hasHistoryRangeQuery
+              ? Object.keys(req.query).find(key => !historyRangeKeys.includes(key))
+              : undefined;
+            if (unknownQuery) return res.status(400).json({
+              error: `Unknown history query parameter with range mode: ${unknownQuery}.`,
+              code: 'HISTORY_RANGE_INVALID',
+            });
+            const scalarQuery = (name: string): string | undefined => {
+              const value = req.query[name];
+              if (value === undefined) return undefined;
+              if (typeof value !== 'string') {
+                const error = new Error(`${name} must be a single non-negative integer.`);
+                (error as any).statusCode = 400;
+                (error as any).code = 'HISTORY_RANGE_INVALID';
+                throw error;
+              }
+              return value;
+            };
+            const parseNonNegativeInteger = (name: string): number | undefined => {
+              const raw = scalarQuery(name);
+              if (raw === undefined) return undefined;
+              if (!/^(0|[1-9]\d*)$/.test(raw)) {
+                const error = new Error(`${name} must be a non-negative integer.`);
+                (error as any).statusCode = 400;
+                (error as any).code = 'HISTORY_RANGE_INVALID';
+                throw error;
+              }
+              const value = Number(raw);
+              if (!Number.isSafeInteger(value)) {
+                const error = new Error(`${name} is out of range.`);
+                (error as any).statusCode = 400;
+                (error as any).code = 'HISTORY_RANGE_INVALID';
+                throw error;
+              }
+              return value;
+            };
+            const tail = parseNonNegativeInteger('tail');
+            const prefixLength = parseNonNegativeInteger('prefixLength');
+            const afterSeq = parseNonNegativeInteger('afterSeq');
+            const expectedHistoryVersion = parseNonNegativeInteger('historyVersion');
+            const selectedModes = Number(tail !== undefined) + Number(prefixLength !== undefined) + Number(afterSeq !== undefined);
+            if (selectedModes > 1
+              || ((prefixLength !== undefined || afterSeq !== undefined) && expectedHistoryVersion === undefined)
+              || (tail !== undefined && expectedHistoryVersion !== undefined)
+              || (selectedModes === 0 && expectedHistoryVersion !== undefined)
+              || (tail !== undefined && (tail < 1 || tail > 500))) {
+              return res.status(400).json({
+                error: 'Use exactly one valid history range mode: tail, prefixLength with historyVersion, or afterSeq with historyVersion.',
+                code: 'HISTORY_RANGE_INVALID',
+              });
+            }
+            const snapshot = await sessionRuntime.getHistory(sessionId);
+            if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            res.json({ messages: session.history });
+            const historyVersion = snapshot.session.historyVersion;
+            if (expectedHistoryVersion !== undefined && expectedHistoryVersion !== historyVersion) {
+              return res.status(409).json({
+                error: 'History changed while the requested range was loading.',
+                code: 'SESSION_HISTORY_BOUNDARY_STALE',
+                retryable: true,
+                historyVersion,
+              });
+            }
+            let selectedMessages = snapshot.messages;
+            let responsePrefixLength = 0;
+            let historyComplete = true;
+            if (tail !== undefined) {
+              responsePrefixLength = Math.max(0, snapshot.messages.length - tail);
+              selectedMessages = snapshot.messages.slice(responsePrefixLength);
+              historyComplete = responsePrefixLength === 0;
+            } else if (prefixLength !== undefined) {
+              if (prefixLength > snapshot.messages.length) {
+                return res.status(409).json({
+                  error: 'History changed while the requested range was loading.',
+                  code: 'SESSION_HISTORY_BOUNDARY_STALE',
+                  retryable: true,
+                  historyVersion,
+                });
+              }
+              selectedMessages = snapshot.messages.slice(0, prefixLength);
+            } else if (afterSeq !== undefined) {
+              selectedMessages = snapshot.messages.filter(message => {
+                const seq = message.__meta?.seq;
+                return Number.isSafeInteger(seq) && (seq || 0) > afterSeq;
+              });
+            }
+            const queuedMessages = buildQueuedPreviewMessages(snapshot.queue);
+            const webUiHistory = await materializeWebUiMessages(selectedMessages);
+            res.json({
+              session: buildWebUiSessionState(snapshot.session),
+              messages: webUiHistory.messages,
+              persistentMemorySnapshot: auth.role === 'admin' ? snapshot.persistentMemorySnapshot : null,
+              queuedMessages,
+              queueLength: snapshot.session.queueLength,
+              latestSeq: snapshot.latestSeq,
+              historyVersion,
+              prefixLength: responsePrefixLength,
+              historyComplete,
+              queuedPreviewLimit: MAX_QUEUED_PREVIEW_ITEMS,
+              queuedPreviewOmittedCount: Math.max(0, snapshot.session.queueLength - queuedMessages.length),
+            });
           } catch (e: any) {
-            logger.error({ err: e }, 'Failed to get history');
-            res.status(500).json({ error: e.message });
+            const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : 500;
+            if (statusCode >= 500) logger.error({ err: e }, 'Failed to get history');
+            res.status(statusCode).json({ error: e.message, code: e?.code });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/context-blocks/:blockId/expand',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const blockId = Number(req.params.blockId);
+            if (!Number.isInteger(blockId) || blockId <= 0) {
+              return res.status(400).json({ error: 'blockId must be a positive integer.', code: 'INVALID_CONTEXT_BLOCK_ID' });
+            }
+
+            const result = await renderContextBlockExpansion({
+              sessionId,
+              blockId,
+              previewLength: parseOptionalPositiveNumberQuery(req.query.previewLength, 'previewLength'),
+            });
+            const webUiMessages = await materializeWebUiMessages(result.messages);
+            res.json({
+              ...result,
+              messages: webUiMessages.messages,
+              items: result.items.map((item, index) => ({ ...item, message: webUiMessages.messages[index] })),
+            });
+          } catch (e: any) {
+            const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : (e?.message?.includes('must be') ? 400 : 500);
+            if (statusCode >= 500) {
+              logger.error({ err: e }, 'Failed to expand context block');
+            }
+            res.status(statusCode).json({ error: e?.message || 'Failed to expand context block', code: e?.code || 'CTX_BLOCK_EXPANSION_FAILED' });
           }
         },
       });
@@ -1316,29 +2350,58 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = req.params.sessionId as string;
             const { name } = req.body;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
 
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            if (typeof name === 'string' && name.trim()) {
-              session.displayName = name.trim();
-            } else {
-              session.displayName = undefined;
-            }
-
-            await sessionManager.saveSession(session.id);
+            const result = await sessionRuntime.updateSettings(session.id, {
+              displayName: typeof name === 'string' && name.trim() ? name.trim() : null,
+            });
 
             this.broadcastSessionListUpdate();
 
             res.json({
               success: true,
               sessionId: session.id,
-              displayName: session.displayName || null,
+              displayName: result.session.displayName,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session display name');
+            res.status(500).json({ error: e.message });
+          }
+        },
+      });
+
+      // Pin/unpin a session in the WebUI list without touching per-session history.
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/pin',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const sessionId = req.params.sessionId as string;
+            const session = sessionManager.getSessionCatalog(sessionId);
+
+            if (!session) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+
+            if (typeof req.body?.pinned !== 'boolean') {
+              return res.status(400).json({ error: 'pinned must be a boolean' });
+            }
+
+            if (req.body.pinned) {
+              session.pinned = true;
+            } else {
+              delete session.pinned;
+            }
+
+            await sessionManager.saveSessionCatalogEntries([session.id]);
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, sessionId: session.id, pinned: !!session.pinned });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to update session pin state');
             res.status(500).json({ error: e.message });
           }
         },
@@ -1350,21 +2413,32 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = req.params.sessionId as string;
-            const { archived } = req.body;
-            
-            const success = await sessionManager.archiveSession(sessionId, archived !== false);
-            
-            if (success) {
-              // Broadcast session list update
-              this.broadcastSessionListUpdate();
-              res.json({ success: true, archived: archived !== false });
-            } else {
-              res.status(404).json({ error: 'Session not found' });
+            const requestedSessionId = req.params.sessionId as string;
+            const session = sessionManager.getSessionCatalog(requestedSessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+
+            const archived = req.body?.archived !== false;
+            const includeDescendants = archived && req.body?.includeDescendants === true;
+            const targetSessionIds = [session.id];
+            if (includeDescendants) {
+              targetSessionIds.push(...sessionManager.collectSessionDescendants(session.id).descendantIds);
             }
+            const result = await sessionManager.archiveSessions(targetSessionIds, archived);
+
+            this.broadcastSessionListUpdate();
+            res.json({
+              success: true,
+              archived,
+              includeDescendants,
+              matchedCount: result.matchedSessionIds.length,
+              changedCount: result.changedSessionIds.length,
+              matchedSessionIds: result.matchedSessionIds,
+              changedSessionIds: result.changedSessionIds,
+            });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to archive session');
-            res.status(500).json({ error: e.message });
+            const code = typeof e?.code === 'string' ? e.code : 'ARCHIVE_SESSION_FAILED';
+            res.status(code === 'SESSION_RELATION_CYCLE' ? 409 : 500).json({ error: e.message, code });
           }
         },
       });
@@ -1391,6 +2465,210 @@ export class WebUIChannel implements Channel {
         },
       });
 
+      // Move/reorder a session in the WebUI sidebar tree. This powers drag-and-drop:
+      // - parentSessionId: string => assign as a child of that session
+      // - parentSessionId: null   => detach to root
+      // - beforeSessionId/afterSessionId => reorder among siblings
+      // - position: first/last => insert into a target sibling group without an anchor
+      httpServerInstance.addRoute({
+        path: '/api/sessions/:sessionId/move',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          const requestedSessionId = req.params.sessionId as string;
+          const body = req.body || {};
+
+          try {
+            const movingSession = sessionManager.getSessionCatalog(requestedSessionId);
+            if (!movingSession) {
+              res.status(404).json({
+                error: `Session "${requestedSessionId}" was not found, so it cannot be moved.`,
+                code: 'SESSION_NOT_FOUND',
+                sessionId: requestedSessionId,
+              });
+              return;
+            }
+
+            const beforeSessionId = await resolveOptionalSessionId(body.beforeSessionId, 'beforeSessionId');
+            const afterSessionId = await resolveOptionalSessionId(body.afterSessionId, 'afterSessionId');
+
+            if (beforeSessionId && afterSessionId) {
+              res.status(400).json({
+                error: 'Specify either beforeSessionId or afterSessionId, not both.',
+                code: 'MULTIPLE_MOVE_ANCHORS',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            const updateOrder = body.updateOrder !== false;
+            const requestedPosition = body.position === undefined || body.position === null || body.position === ''
+              ? undefined
+              : body.position;
+            if (requestedPosition !== undefined && requestedPosition !== 'first' && requestedPosition !== 'last') {
+              res.status(400).json({
+                error: 'position must be either "first" or "last" when provided.',
+                code: 'INVALID_MOVE_POSITION',
+                sessionId: movingSession.id,
+                position: requestedPosition,
+              });
+              return;
+            }
+
+            if (requestedPosition !== undefined && (beforeSessionId || afterSessionId)) {
+              res.status(400).json({
+                error: 'position cannot be combined with beforeSessionId or afterSessionId.',
+                code: 'POSITION_WITH_ANCHOR_NOT_ALLOWED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            if (!updateOrder && (requestedPosition !== undefined || beforeSessionId || afterSessionId)) {
+              res.status(400).json({
+                error: 'updateOrder=false can only be used for parent-only moves.',
+                code: 'ORDER_ANCHOR_WITH_UPDATE_ORDER_DISABLED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            const anchorSessionId = beforeSessionId || afterSessionId || null;
+            if (anchorSessionId === movingSession.id) {
+              res.status(400).json({
+                error: 'A session cannot be reordered relative to itself.',
+                code: 'SELF_ANCHOR_NOT_ALLOWED',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            const anchorSession = anchorSessionId
+              ? sessionManager.getSessionCatalog(anchorSessionId)
+              : null;
+
+            const parentProvided = Object.prototype.hasOwnProperty.call(body, 'parentSessionId');
+            const requestedParentSessionId = parentProvided
+              ? await resolveOptionalSessionId(body.parentSessionId, 'parentSessionId')
+              : undefined;
+            const anchorParentSessionId = anchorSession ? getSessionTreeParentId(anchorSession) : null;
+            const targetParentSessionId = requestedParentSessionId !== undefined
+              ? requestedParentSessionId
+              : anchorSession
+                ? anchorParentSessionId
+                : getSessionTreeParentId(movingSession);
+
+            if (anchorSession && anchorParentSessionId !== targetParentSessionId) {
+              res.status(400).json({
+                error: `Move anchor "${anchorSession.id}" is not in the requested target parent group.`,
+                code: 'ANCHOR_PARENT_MISMATCH',
+                sessionId: movingSession.id,
+                anchorSessionId: anchorSession.id,
+                anchorParentSessionId,
+                targetParentSessionId,
+              });
+              return;
+            }
+
+            await assertNoSidebarParentCycle(movingSession.id, targetParentSessionId);
+
+            const previousParentSessionId = getSessionTreeParentId(movingSession);
+            if (previousParentSessionId !== targetParentSessionId) {
+              await sessionManager.setSessionParent(movingSession.id, targetParentSessionId || undefined);
+            }
+
+            const latestMovingSession = sessionManager.getSessionCatalog(movingSession.id);
+            if (!latestMovingSession) {
+              res.status(404).json({
+                error: `Session "${movingSession.id}" disappeared while moving.`,
+                code: 'SESSION_NOT_FOUND_AFTER_PARENT_UPDATE',
+                sessionId: movingSession.id,
+              });
+              return;
+            }
+
+            if (!updateOrder) {
+              this.broadcastSessionListUpdate();
+              res.json({
+                success: true,
+                sessionId: latestMovingSession.id,
+                parentSessionId: getSessionTreeParentId(latestMovingSession),
+                previousParentSessionId,
+                beforeSessionId: null,
+                afterSessionId: null,
+                sidebarOrder: getWebUiSidebarOrder(latestMovingSession) || null,
+              });
+              return;
+            }
+
+            const changedCatalogIds = new Set<string>([latestMovingSession.id]);
+            if (previousParentSessionId !== targetParentSessionId) {
+              for (const id of writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id))) changedCatalogIds.add(id);
+            }
+
+            const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(targetParentSessionId, latestMovingSession.id);
+            let insertIndex = requestedPosition === 'last' ? targetSiblingsWithoutMoving.length : 0;
+
+            if (beforeSessionId) {
+              const beforeIndex = targetSiblingsWithoutMoving.findIndex(session => session.id === beforeSessionId);
+              if (beforeIndex < 0) {
+                res.status(400).json({
+                  error: `beforeSessionId "${beforeSessionId}" is not a sibling in the target group.`,
+                  code: 'BEFORE_ANCHOR_NOT_IN_TARGET_GROUP',
+                  sessionId: latestMovingSession.id,
+                  beforeSessionId,
+                  targetParentSessionId,
+                });
+                return;
+              }
+              insertIndex = beforeIndex;
+            } else if (afterSessionId) {
+              const afterIndex = targetSiblingsWithoutMoving.findIndex(session => session.id === afterSessionId);
+              if (afterIndex < 0) {
+                res.status(400).json({
+                  error: `afterSessionId "${afterSessionId}" is not a sibling in the target group.`,
+                  code: 'AFTER_ANCHOR_NOT_IN_TARGET_GROUP',
+                  sessionId: latestMovingSession.id,
+                  afterSessionId,
+                  targetParentSessionId,
+                });
+                return;
+              }
+              insertIndex = afterIndex + 1;
+            }
+
+            const targetSiblings = [...targetSiblingsWithoutMoving];
+            targetSiblings.splice(Math.max(0, Math.min(insertIndex, targetSiblings.length)), 0, latestMovingSession);
+            for (const id of writeWebUiSidebarOrder(targetSiblings)) changedCatalogIds.add(id);
+
+            await sessionManager.saveSessionCatalogEntries(changedCatalogIds);
+            this.broadcastSessionListUpdate();
+
+            res.json({
+              success: true,
+              sessionId: latestMovingSession.id,
+              parentSessionId: getSessionTreeParentId(latestMovingSession),
+              previousParentSessionId,
+              beforeSessionId: beforeSessionId || null,
+              afterSessionId: afterSessionId || null,
+              sidebarOrder: getWebUiSidebarOrder(latestMovingSession) || null,
+            });
+          } catch (e: any) {
+            const statusCode = typeof e?.statusCode === 'number' ? e.statusCode : 500;
+            const code = typeof e?.code === 'string' ? e.code : 'MOVE_SESSION_FAILED';
+            if (statusCode >= 500) {
+              logger.error({ err: e, sessionId: requestedSessionId }, 'Failed to move session in WebUI sidebar');
+            } else {
+              logger.warn({ sessionId: requestedSessionId, statusCode, code, reason: e?.message }, 'Rejected WebUI sidebar session move');
+            }
+            res.status(statusCode).json({
+              error: e?.message || 'Failed to move session.',
+              code,
+              sessionId: requestedSessionId,
+            });
+          }
+        },
+      });
+
       // Promote session (move up one level or detach from parent, making it a root session)
       httpServerInstance.addRoute({
         path: '/api/sessions/:sessionId/promote',
@@ -1403,7 +2681,7 @@ export class WebUIChannel implements Channel {
           const operation = targetParentId ? 'move-up' : 'promote-to-root';
 
           try {
-            const childSession = await sessionManager.getExistingSession(sessionId);
+            const childSession = sessionManager.getSessionCatalog(sessionId);
             if (!childSession) {
               res.status(404).json({
                 error: `Session "${sessionId}" was not found, so it cannot be promoted.`,
@@ -1417,7 +2695,7 @@ export class WebUIChannel implements Channel {
 
             let targetParentBusy: boolean | undefined;
             if (targetParentId) {
-              const targetParentSession = await sessionManager.getExistingSession(targetParentId);
+              const targetParentSession = sessionManager.getSessionCatalog(targetParentId);
               if (!targetParentSession) {
                 res.status(404).json({
                   error: `Target parent session "${targetParentId}" was not found, so session "${childSession.id}" cannot be moved there.`,
@@ -1466,13 +2744,35 @@ export class WebUIChannel implements Channel {
                   return;
                 }
                 seenAncestors.add(cursorParentId);
-                const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+                const cursorParent = sessionManager.getSessionCatalog(cursorParentId);
                 if (!cursorParent) break;
                 cursorParentId = cursorParent.parentSessionId || undefined;
               }
             }
 
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
+            const movedSession = sessionManager.getSessionCatalog(result.childSessionId);
+            const changedCatalogIds = new Set<string>([result.childSessionId]);
+
+            if (movedSession) {
+              const previousParentSessionId = result.previousParentSessionId || null;
+              const nextParentSessionId = result.parentSessionId || null;
+
+              if (previousParentSessionId !== nextParentSessionId) {
+                for (const id of writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id))) changedCatalogIds.add(id);
+              }
+
+              const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(nextParentSessionId, movedSession.id);
+              const previousParentIndex = result.previousParentSessionId
+                ? targetSiblingsWithoutMoving.findIndex(session => session.id === result.previousParentSessionId)
+                : -1;
+              const insertIndex = previousParentIndex >= 0 ? previousParentIndex + 1 : 0;
+              const targetSiblings = [...targetSiblingsWithoutMoving];
+              targetSiblings.splice(insertIndex, 0, movedSession);
+              for (const id of writeWebUiSidebarOrder(targetSiblings)) changedCatalogIds.add(id);
+            }
+
+            await sessionManager.saveSessionCatalogEntries(changedCatalogIds);
 
             this.broadcastSessionListUpdate();
 
@@ -1482,7 +2782,8 @@ export class WebUIChannel implements Channel {
               sessionId: result.childSessionId,
               parentSessionId: result.parentSessionId || null,
               previousParentSessionId: result.previousParentSessionId || null,
-              targetParentId: targetParentId || null,
+              targetParentId: result.parentSessionId || null,
+              sidebarOrder: movedSession ? getWebUiSidebarOrder(movedSession) || null : null,
               sessionBusy: !!childSession.busy,
               targetParentBusy,
             });
@@ -1506,45 +2807,46 @@ export class WebUIChannel implements Channel {
         path: '/api/sessions/:sessionId',
         method: 'DELETE',
         handler: async (req: express.Request, res: express.Response) => {
+          const requestedSessionId = req.params.sessionId as string;
+          const includeDescendants = req.body?.includeDescendants === true;
           try {
-            const sessionId = req.params.sessionId as string;
-            
-            const blockingChannels = sessionManager
-              .getChannelsBySession(sessionId)
-              .filter(channel => channel.channelId !== 'webui');
-
-            if (blockingChannels.length > 0) {
-              return res.status(400).json({ error: 'Cannot delete active session. Detach channels first.' });
+            const result = await deleteSessionLifecycle({
+              requestedSessionId,
+              includeDescendants,
+              ...(webUiDeleteLifecycleTestHook ? { beforeRevalidateForTests: webUiDeleteLifecycleTestHook } : {}),
+            });
+            if (result.status === 'not-found') {
+              return res.status(404).json({ error: 'Session not found' });
             }
-
-            const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
-            if (prep.requiresRetry) {
-              const queueNote = prep.droppedQueueItems > 0
-                ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
-                : '';
-              const stopNote = prep.abortedInFlight
-                ? ' The in-flight LLM request was aborted.'
-                : ' It will stop after the current tool call completes.';
+            if (result.status === 'busy') {
               return res.status(409).json({
-                error: `Session is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`,
+                error: result.message,
+                code: 'SESSION_DELETE_BUSY',
+                includeDescendants: result.includeDescendants,
+                busySessionIds: result.busySessionIds,
+                droppedQueueItems: result.droppedQueueItems,
+                abortedInFlightCount: result.abortedInFlightCount,
               });
             }
-            
-            const deleted = await sessionManager.deleteSession(sessionId);
-            
-            if (deleted) {
-              // Broadcast session list update
-              this.broadcastSessionListUpdate();
-              res.json({ success: true });
-            } else {
-              res.status(404).json({ error: 'Session not found' });
-            }
+            this.broadcastSessionListUpdate();
+            res.json({
+              success: true,
+              includeDescendants: result.includeDescendants,
+              deletedCount: result.deletedCount,
+              deletedSessionIds: result.deletedSessionIds,
+              detachedChildSessionIds: result.detachedChildSessionIds,
+            });
           } catch (e: any) {
-            logger.error({ err: e }, 'Failed to delete session');
-            res.status(500).json({ error: e.message });
+            logger.error({ err: e, requestedSessionId, includeDescendants }, 'Failed to delete session');
+            const code = typeof e?.code === 'string' ? e.code : 'DELETE_SESSION_FAILED';
+            const status = typeof e?.statusCode === 'number'
+              ? e.statusCode
+              : code === 'SESSION_RELATION_CYCLE' ? 409 : 500;
+            if (code === 'SESSION_DELETE_DETACH_PARTIAL' || code === 'SESSION_TREE_DELETE_PARTIAL') {
+              this.broadcastSessionListUpdate();
+            }
+            res.status(status).json({ error: e.message, code, ...(e?.details || {}) });
           }
-          
-          res;
         },
       });
 
@@ -1554,10 +2856,16 @@ export class WebUIChannel implements Channel {
         method: 'GET',
         auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
-          const sessionId = req.params.sessionId as string;
-
-          const auth = await this.requireSessionAccess(req, res, sessionId);
+          const requestedSessionId = req.params.sessionId as string;
+          const auth = await this.requireSessionAccess(req, res, requestedSessionId);
           if (!auth) return;
+
+          const session = await sessionRuntime.getSession(requestedSessionId);
+          if (!session) {
+            res.status(404).json({ error: 'Session not found' });
+            return;
+          }
+          const sessionId = session.id;
           
           // Set SSE headers
           res.setHeader('Content-Type', 'text/event-stream');
@@ -1571,19 +2879,33 @@ export class WebUIChannel implements Channel {
             this.sseClients.set(sessionId, []);
           }
           this.sseClients.get(sessionId)!.push(res);
+          this.refreshPresentationSubscription(sessionId);
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
-          // Send initial ping
+          // Preserve the existing connection acknowledgement, then send a
+          // canonical state snapshot after registration. Browser Chat starts
+          // history only after this registered stream opens, so live state and
+          // post-request messages take precedence over an older snapshot.
           res.write('data: {"type":"connected"}\n\n');
+          const initialState = JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) });
+          res.write(`data: ${initialState}\n\n`);
           
           // Keep-alive ping every 30 seconds
           const keepAliveInterval = setInterval(() => {
-            try {
-              res.write(': keep-alive\n\n');
-            } catch (e) {
-              clearInterval(keepAliveInterval);
+            if (auth.role === 'guest') {
+              void this.getAuthContext(req).then(fresh => {
+                if (fresh?.role !== 'guest' || fresh.tokenId !== auth.tokenId || !this.guestCanAccessSession(fresh, sessionId)) {
+                  res.end();
+                  clearInterval(keepAliveInterval);
+                  return;
+                }
+                res.write(': keep-alive\n\n');
+              }).catch(() => { res.end(); clearInterval(keepAliveInterval); });
+              return;
             }
+            try { res.write(': keep-alive\n\n'); }
+            catch { clearInterval(keepAliveInterval); }
           }, 30000);
           
           // Remove client on disconnect
@@ -1599,6 +2921,7 @@ export class WebUIChannel implements Channel {
                 this.sseClients.delete(sessionId);
               }
             }
+            this.refreshPresentationSubscription(sessionId);
             // logger.info({ sessionId }, 'SSE client disconnected');
           });
           
@@ -1609,10 +2932,10 @@ export class WebUIChannel implements Channel {
       httpServerInstance.addRoute({
         path: '/api/sessions/stream',
         method: 'GET',
-        auth: 'webui',
         handler: async (req: express.Request, res: express.Response) => {
-          const auth = await this.getAuthContext(req);
-          if (!auth) {
+          // Check token
+          if (!httpServer.checkToken(req)) {
+            logger.warn('Global SSE token validation failed');
             res.status(401).json({ error: 'Unauthorized' });
             return;
           }
@@ -1626,27 +2949,61 @@ export class WebUIChannel implements Channel {
           
           // Add to global clients
           this.globalSseClients.push(res);
+          const rawSessionIds = req.query.sessionId;
+          const requestedSessionIds = (Array.isArray(rawSessionIds) ? rawSessionIds : rawSessionIds === undefined ? [] : [rawSessionIds])
+            .filter((value): value is string => typeof value === 'string' && !!value && value.length <= 512).slice(0, 100);
+          const subscribedIds = new Set(requestedSessionIds);
+          for (const requestedId of requestedSessionIds) {
+            const resolution = sessionCatalogStore.resolveId(requestedId);
+            if (resolution.kind === 'exact' || resolution.kind === 'alias') subscribedIds.add(resolution.sessionId);
+          }
+          this.globalSseSessionIds.set(res, subscribedIds);
+          const initialization: { pending: Map<string, { sessions: any[]; deletedIds: string[] }>; invalidation: string | null; initializing: boolean } = {
+            pending: new Map(), invalidation: null, initializing: true,
+          };
+          this.globalSseInitialization.set(res, initialization);
+          let closed = false;
+          let keepAliveInterval: NodeJS.Timeout | null = null;
+          req.on('close', () => {
+            if (closed) return;
+            closed = true;
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
+            const index = this.globalSseClients.indexOf(res);
+            if (index !== -1) this.globalSseClients.splice(index, 1);
+          });
           
           // Send initial ping
           res.write('data: {"type":"connected"}\n\n');
+          if (requestedSessionIds.length) {
+            const initial = await queryExactSessions(requestedSessionIds, false);
+            if (closed) return;
+            const mappedInitial = mapBoundedSessionListQueryPayload(initial);
+            const sessions = mappedInitial.results.flatMap((item: any) => item.session ? [item.session] : []);
+            const deletedIds = initial.results.filter(item => !item.session).map(item => item.requestedId);
+            const canonicalSubscriptions = this.globalSseSessionIds.get(res)!;
+            for (const session of sessions) if (typeof session.id === 'string') canonicalSubscriptions.add(session.id);
+            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions, deletedIds })}\n\n`);
+          }
+          initialization.initializing = false;
+          for (const [pendingSessionId, pending] of initialization.pending) {
+            if (!this.globalSseSessionIds.get(res)?.has(pendingSessionId)) continue;
+            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', ...pending })}\n\n`);
+          }
+          initialization.pending.clear();
+          if (initialization.invalidation) {
+            res.write(`data: ${initialization.invalidation}\n\n`);
+            initialization.invalidation = null;
+          }
           
           // Keep-alive ping
-          const keepAliveInterval = setInterval(() => {
+          if (closed) return;
+          keepAliveInterval = setInterval(() => {
             try {
               res.write(': keep-alive\n\n');
             } catch (e) {
-              clearInterval(keepAliveInterval);
+              if (keepAliveInterval) clearInterval(keepAliveInterval);
             }
           }, 30000);
-          
-          // Remove on disconnect
-          req.on('close', () => {
-            clearInterval(keepAliveInterval);
-            const index = this.globalSseClients.indexOf(res);
-            if (index !== -1) {
-              this.globalSseClients.splice(index, 1);
-            }
-          });
           
           res;
         },
@@ -1683,33 +3040,31 @@ export class WebUIChannel implements Channel {
                 return;
               }
 
+              const originalName = normalizeWebUiMultipartFilename(req.file.originalname);
+
               const auth = await this.getAuthContext(req);
-              if (!auth) {
+              const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+              if (!auth || (auth.role === 'guest' && (!uploadSessionId || !this.guestCanAccessSession(auth, uploadSessionId)))) {
                 await fs.remove(req.file.path).catch(() => {});
-                res.status(401).json({ error: 'Unauthorized' });
+                res.status(!auth ? 401 : uploadSessionId ? 403 : 400).json({ error: 'Guest upload requires a bound sessionId.' });
                 return;
               }
 
-              const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
-              if (auth.role === 'guest' && (!uploadSessionId || !this.guestCanAccessSession(auth, uploadSessionId))) {
-                await fs.remove(req.file.path).catch(() => {});
-                res.status(uploadSessionId ? 403 : 400).json({ error: uploadSessionId ? 'Forbidden: guest token is not bound to this session' : 'sessionId is required for guest uploads' });
-                return;
-              }
-              
               // Generate unique filename
-              const ext = path.extname(req.file.originalname);
+              const ext = path.extname(originalName);
               const filename = `${crypto.randomBytes(16).toString('hex')}${ext}`;
-              const finalPath = path.join(WEBUI_UPLOAD_DIR, filename);
+              const finalPath = path.join(os.tmpdir(), 'foxwarm-uploads', filename);
               
               // Move file to final path
               await fs.move(req.file.path, finalPath, { overwrite: true });
               
-              logger.info({ filename, originalName: req.file.originalname, size: req.file.size }, 'File uploaded');
+              logger.info({ filename, originalName, size: req.file.size }, 'File uploaded');
               
+              if (auth.role === 'guest') this.guestUploads.set(finalPath, { tokenId: auth.tokenId, sessionId: uploadSessionId });
+
               res.json({ 
                 path: finalPath,
-                filename: req.file.originalname,
+                filename: originalName,
                 mimeType: req.file.mimetype,
                 size: req.file.size
               });
@@ -1860,63 +3215,14 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addWebSocket('/api/terminals/stream', async (ws: WebSocket, req: http.IncomingMessage) => {
-        if (!httpServerInstance.checkIncomingToken(req)) {
-          ws.close(1008, 'Unauthorized');
-          return;
-        }
-
-        const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
-        const terminalId = requestUrl.searchParams.get('terminalId') || '';
-        if (!terminalId) {
-          ws.close(1008, 'Missing terminalId');
-          return;
-        }
-
-        let attachedTerminalId = '';
-        try {
-          const { terminal, backlog } = await attachTerminalClient(terminalId, ws);
-          attachedTerminalId = terminal.id;
-          ws.send(JSON.stringify({
-            type: 'ready',
-            terminal,
-            backlog,
-          }));
-        } catch (err: any) {
-          ws.close(1008, err?.message || 'Failed to attach terminal');
-          return;
-        }
-
-        ws.on('message', async (raw) => {
-          try {
-            const payload = JSON.parse(raw.toString());
-            if (payload?.type === 'input' && typeof payload.data === 'string') {
-              writeTerminalInput(attachedTerminalId, payload.data);
-              return;
-            }
-
-            if (payload?.type === 'resize') {
-              resizeTerminal(attachedTerminalId, Number(payload.cols || 0), Number(payload.rows || 0));
-              return;
-            }
-
-            if (payload?.type === 'close') {
-              await closeTerminal(attachedTerminalId, 'ws-close-message');
-              return;
-            }
-
-            ws.send(JSON.stringify({ type: 'error', message: 'Unsupported terminal message type' }));
-          } catch (err: any) {
-            ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Terminal stream error' }));
-          }
-        });
-
-        ws.on('close', () => {
-          detachTerminalClient(attachedTerminalId, ws);
-        });
-
-        ws.on('error', (error) => {
-          logger.error({ err: error, terminalId: attachedTerminalId }, 'Terminal websocket client error');
-          detachTerminalClient(attachedTerminalId, ws);
+        await handleTerminalStreamWebSocket(ws, req, {
+          checkIncomingToken: (incoming) => httpServerInstance.checkIncomingToken(incoming),
+          attachClient: attachTerminalClient,
+          detachClient: detachTerminalClient,
+          close: closeTerminal,
+          resize: resizeTerminal,
+          resolveControlRequest: resolveTerminalControlRequest,
+          writeInput: writeTerminalInput,
         });
       });
 
@@ -1931,28 +3237,27 @@ export class WebUIChannel implements Channel {
             const auth = await this.requireSessionAccess(req, res, sessionId);
             if (!auth) return;
             const { text, parts, filePaths, uploadedFiles } = req.body;
+            const clientMessageId = typeof req.body?.clientMessageId === 'string'
+              && req.body.clientMessageId.length > 0
+              && req.body.clientMessageId.length <= 160
+              ? req.body.clientMessageId
+              : undefined;
 
-            const existingSession = await sessionManager.getExistingSession(sessionId);
+            const existingSession = sessionManager.getSessionCatalog(sessionId);
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
-
             if (auth.role === 'guest') {
-              if (!Array.isArray(finalParts)) {
-                return res.status(400).json({ error: 'Invalid message parts' });
+              if (!Array.isArray(finalParts) || finalParts.some(part => !part || typeof part !== 'object'
+                || Array.isArray(part) || typeof part.text !== 'string' || Object.keys(part).some(key => key !== 'text'))) {
+                return res.status(400).json({ error: 'Guest messages may only include text parts.' });
               }
-
-              const messageText = (typeof text === 'string' ? text : finalParts.map((p: any) => p?.text || '').join('\n')).trim();
-              if (this.isSlashCommandText(messageText)) {
+              if (typeof text === 'string' && this.isSlashCommandText(text)
+                || this.isSlashCommandText(finalParts.map(part => part.text).join('\n'))) {
                 return res.status(403).json({ error: 'Guest tokens cannot use slash commands.', code: 'GUEST_COMMANDS_DISABLED' });
-              }
-
-              const invalidPart = finalParts.find((part: any) => !part || typeof part !== 'object' || Array.isArray(part) || typeof part.text !== 'string' || Object.keys(part).some(key => key !== 'text'));
-              if (invalidPart) {
-                return res.status(400).json({ error: 'Guest messages may only include text parts; attachments must be uploaded through the WebUI upload endpoint.' });
               }
             }
             
@@ -1996,12 +3301,23 @@ export class WebUIChannel implements Channel {
               parts: finalParts,
               channelUserId: sessionId, // Use sessionId as channelUserId
               conversationId: sessionId,
-              username: 'webui'
+              username: 'webui',
+              ...(clientMessageId ? { clientMessageId } : {}),
             };
 
             const uploadedEntries = Array.isArray(uploadedFiles)
               ? uploadedFiles
               : (Array.isArray(filePaths) ? filePaths.map((filePath) => ({ path: filePath })) : []);
+
+            if (auth.role === 'guest') {
+              for (const entry of uploadedEntries) {
+                const filePath = typeof entry === 'string' ? entry : entry?.path;
+                const owner = typeof filePath === 'string' ? this.guestUploads.get(filePath) : null;
+                if (!owner || owner.sessionId !== sessionId || owner.tokenId !== auth.tokenId) {
+                  return res.status(403).json({ error: 'Attachment is not bound to this guest session.' });
+                }
+              }
+            }
 
             if (uploadedEntries.length > 0) {
               for (const entry of uploadedEntries) {
@@ -2009,10 +3325,6 @@ export class WebUIChannel implements Channel {
                   ? entry
                   : (typeof entry?.path === 'string' ? entry.path : '');
                 if (!tempPath) continue;
-
-                if (auth.role === 'guest' && !this.isAllowedGuestUploadTempPath(tempPath)) {
-                  return res.status(403).json({ error: 'Guest uploads must use files returned by the WebUI upload endpoint.', code: 'GUEST_UPLOAD_PATH_FORBIDDEN' });
-                }
 
                 try {
                   const stats = await fs.stat(tempPath);
@@ -2053,6 +3365,7 @@ export class WebUIChannel implements Channel {
                 } catch (err) {
                   logger.warn({ filePath: tempPath, err }, 'Failed to process uploaded file');
                 } finally {
+                  this.guestUploads.delete(tempPath);
                   await fs.remove(tempPath).catch(() => {});
                 }
               }
@@ -2093,7 +3406,7 @@ export class WebUIChannel implements Channel {
             path: '/login.html',
             method: 'GET',
             noAuth: true,
-            handler: async (req: express.Request, res: express.Response) => {
+            handler: async (_req: express.Request, res: express.Response) => {
               res.sendFile(loginPath);
             }
           });
@@ -2141,12 +3454,10 @@ export class WebUIChannel implements Channel {
           return;
         }
 
-        const archiveFormat = typeof req.query.archive === 'string' ? req.query.archive.trim() : undefined;
-
         try {
-          await this.streamWorkspaceDownload(filePath, res, archiveFormat);
+          await this.streamPathDownload(filePath, res);
         } catch (err) {
-          logger.error({ err, filePath, archiveFormat }, 'Failed to send workspace download');
+          logger.error({ err, filePath }, 'Failed to send file download');
           if (!res.headersSent) {
             res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to send download' });
           }
@@ -2158,9 +3469,10 @@ export class WebUIChannel implements Channel {
   // Broadcast new message to SSE clients
   broadcastMessage(sessionId: string, message: any) {
     const clients = this.sseClients.get(sessionId);
+    const payload = { type: 'message', message: buildWebUiMessage(message) };
     logger.debug({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
     if (clients && clients.length > 0) {
-      const data = JSON.stringify({ type: 'message', message });
+      const data = JSON.stringify(payload);
       clients.forEach(client => {
         try {
           client.write(`data: ${data}\n\n`);
@@ -2170,12 +3482,32 @@ export class WebUIChannel implements Channel {
         }
       });
     }
+    this.realtimeHub?.broadcastSession(sessionId, payload);
+  }
+
+  broadcastQueueHistoryAppend(sessionId: string, append: QueueHistoryAppendPresentation) {
+    const clients = this.sseClients.get(sessionId);
+    for (const message of append.messages) {
+      const payload = { type: 'message', message: buildWebUiMessage(message) };
+      const data = JSON.stringify(payload);
+      (clients || []).forEach(client => {
+        try { client.write(`data: ${data}\n\n`); }
+        catch (e) { logger.error({ err: e }, 'Failed to send SSE queue history message'); }
+      });
+    }
+    this.realtimeHub?.broadcastSession(sessionId, {
+      type: 'history-append',
+      ...append,
+      messages: append.messages.map(buildWebUiMessage),
+      queuedMessages: append.queuedMessages.map(buildWebUiMessage),
+    });
   }
 
   broadcastSessionEvent(sessionId: string, event: any) {
     const clients = this.sseClients.get(sessionId);
+    const payload = { type: 'session-event', event };
     if (clients && clients.length > 0) {
-      const data = JSON.stringify({ type: 'session-event', event });
+      const data = JSON.stringify(payload);
       clients.forEach(client => {
         try {
           client.write(`data: ${data}\n\n`);
@@ -2184,24 +3516,83 @@ export class WebUIChannel implements Channel {
         }
       });
     }
+    this.realtimeHub?.broadcastSession(sessionId, payload);
+  }
+
+  broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
+    const clients = this.sseClients.get(sessionId);
+
+    // The production event bridge supplies an immutable DTO. The live-map
+    // fallback remains only for direct compatibility callers and existing
+    // route tests that invoke this method without an event payload.
+    const session = runtimeSession === undefined
+      ? sessionManager.getAllSessions().get(sessionId)
+      : runtimeSession;
+    const payload = session
+      ? { type: 'session-state', session: buildWebUiSessionState(session) }
+      : { type: 'session-deleted', sessionId };
+    const data = JSON.stringify(payload);
+
+    (clients || []).forEach(client => {
+      try {
+        client.write(`data: ${data}\n\n`);
+        if (!session) {
+          client.end();
+        }
+      } catch (e) {
+        logger.error({ err: e, sessionId }, 'Failed to send SSE session state');
+      }
+    });
+
+    if (!session) {
+      this.sseClients.delete(sessionId);
+    }
+    this.realtimeHub?.broadcastSession(sessionId, payload, !session);
+    if (!session) this.refreshPresentationSubscription(sessionId);
+
+    const listDelta = session ? [buildWebUiSessionListProjection(runtimeSession === undefined
+      ? buildSessionRuntimeSessionDto(session as Session) : session as SessionRuntimeSessionDto)] : [];
+    for (const client of this.globalSseClients) {
+      const initialization = this.globalSseInitialization.get(client);
+      if (initialization?.initializing) {
+        if (this.globalSseSessionIds.get(client)?.has(sessionId)) {
+          initialization.pending.set(sessionId, { sessions: listDelta, deletedIds: session ? [] : [sessionId] });
+        }
+        continue;
+      }
+      if (!this.globalSseSessionIds.get(client)?.has(sessionId)) continue;
+      try { client.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions: listDelta,
+        deletedIds: session ? [] : [sessionId] })}\n\n`); }
+      catch (e) { logger.error({ err: e, sessionId }, 'Failed to send bounded global Session delta'); }
+    }
+    this.realtimeHub?.broadcastSessionListDelta(sessionId, {
+      type: 'session-list-delta',
+      sessions: listDelta,
+      deletedIds: session ? [] : [sessionId],
+    });
   }
 
   // Broadcast session list update to all global SSE clients
   broadcastSessionListUpdate() {
-    if (this.globalSseClients.length > 0) {
-      const data = JSON.stringify({ type: 'sessions-updated' });
+    if (this.globalSseClients.length > 0 || (this.realtimeHub?.getConnectionCount() || 0) > 0) {
+      const payload = { type: 'sessions-updated', catalogInvalidated: true,
+        eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() };
+      const data = JSON.stringify(payload);
       this.globalSseClients.forEach(client => {
+        const initialization = this.globalSseInitialization.get(client);
+        if (initialization?.initializing) { initialization.invalidation = data; return; }
         try {
           client.write(`data: ${data}\n\n`);
         } catch (e) {
           logger.error({ err: e }, 'Failed to send session list update');
         }
       });
+      this.realtimeHub?.broadcastSessionListInvalidation(payload);
     }
   }
 
   // Channel interface implementation
-  async sendMessage(channelUserId: string, text: string, options?: any): Promise<void> {
+  async sendMessage(channelUserId: string, text: string, _options?: any): Promise<void> {
     // For WebUI, channelUserId is the sessionId
     // Use broadcastMessage for consistency (unified message system)
     logger.debug({ sessionId: channelUserId, textPreview: text.substring(0, 50) }, 'WebUI sendMessage called');
@@ -2248,9 +3639,10 @@ export class WebUIChannel implements Channel {
         }
       });
     }
+    this.realtimeHub?.broadcastSession(channelUserId, { type: 'typing' });
   }
 
-  onMessage(handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
+  onMessage(_handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
     // WebUI handles messages internally via HTTP API
     // This is a no-op for WebUI
   }

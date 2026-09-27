@@ -1,7 +1,18 @@
 import * as sessionManager from '../sessionManager';
-import { resolveModelConfig } from '../config';
-import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, resolveSessionGoalRemindOnTurnEnd, setSessionGoal } from '../session/goal';
+import * as sessionRuntime from '../sessionRuntime';
+import { MODEL_EFFORTS, type ModelEffort } from '../config';
+import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, setSessionGoal } from '../session/goal';
+import { refreshSessionSnapshotForSession } from '../session/agentMetadata';
+import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from '../session/modelEffortSettings';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
+import type { Session } from '../types';
 import { ToolArgs, ToolContext, normalizeToolModelKey } from './helpers';
+
+function getTrustedCurrentSession(targetId: string, ctx: ToolContext): Session | undefined {
+  if (!ctx.persistCurrentSession || !ctx.session || typeof ctx.session.id !== 'string') return undefined;
+  if (!ctx.sessionId || ctx.sessionId !== ctx.session.id || (ctx.session.id !== targetId && !ctx.session.aliases?.includes(targetId))) return undefined;
+  return ctx.session;
+}
 
 export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
   const targetId = ctx?.sessionId;
@@ -14,21 +25,23 @@ export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
 
   if (clear) {
     clearSessionGoal(session);
-    await sessionManager.saveSession(session.id);
+    if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
+    else await sessionManager.saveSession(session.id);
     return 'ok';
   }
 
   const goal = normalizeGoalText(args.goal);
   if (!goal) {
     clearSessionGoal(session);
-    await sessionManager.saveSession(session.id);
+    if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
+    else await sessionManager.saveSession(session.id);
     return 'ok';
   }
 
   const remindEvery = resolveSessionGoalRemindEvery(session, args.remindEvery);
-  const remindOnTurnEnd = resolveSessionGoalRemindOnTurnEnd(session, args.remindOnTurnEnd);
-  setSessionGoal(session, goal, remindEvery, remindOnTurnEnd);
-  await sessionManager.saveSession(session.id);
+  setSessionGoal(session, goal, remindEvery);
+  if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
+  else await sessionManager.saveSession(session.id);
 
   return 'ok';
 }
@@ -38,22 +51,52 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
   if (!targetId) {
     throw new Error('sessionId is required when there is no current session context.');
   }
+  const currentSession = getTrustedCurrentSession(targetId, ctx);
 
   const clear = args.clear === true;
+  if (currentSession) {
+    if (clear) {
+      const prior = typeof currentSession.compactThresholdTokens === 'number' ? currentSession.compactThresholdTokens : null;
+      delete currentSession.compactThresholdTokens;
+      if (prior !== null) await ctx.persistCurrentSession!();
+      const effective = sessionManager.getEffectiveCompactThresholdTokens(currentSession);
+      return `Session \`${currentSession.id}\` compact threshold cleared.\nNow inheriting default auto-compact threshold: ${effective} tokens.`;
+    }
+    if (typeof args.thresholdTokens !== 'number' || !Number.isFinite(args.thresholdTokens) || args.thresholdTokens <= 0) {
+      const effective = sessionManager.getEffectiveCompactThresholdTokens(currentSession);
+      const override = typeof currentSession.compactThresholdTokens === 'number'
+        ? `${currentSession.compactThresholdTokens} tokens`
+        : 'inherit global default';
+      return `Session \`${currentSession.id}\` compact threshold status:\noverride: ${override}\neffective: ${effective} tokens`;
+    }
+    const prior = typeof currentSession.compactThresholdTokens === 'number' ? currentSession.compactThresholdTokens : null;
+    const next = Math.floor(args.thresholdTokens);
+    currentSession.compactThresholdTokens = next;
+    if (prior !== next) await ctx.persistCurrentSession!();
+    const effective = sessionManager.getEffectiveCompactThresholdTokens(currentSession);
+    return `Session \`${currentSession.id}\` compact threshold updated.\noverride: ${currentSession.compactThresholdTokens} tokens\neffective: ${effective} tokens`;
+  }
   if (clear) {
-    const result = await sessionManager.setSessionCompactThreshold(targetId);
+    const result = await sessionRuntime.updateSettings(targetId, { compactThresholdTokens: null });
+    const effective = sessionManager.getEffectiveCompactThresholdTokens({
+      model: result.session.model || undefined,
+      compactThresholdTokens: undefined,
+    });
     return [
-      `Session \`${result.sessionId}\` compact threshold cleared.`,
-      `Now inheriting default auto-compact threshold: ${result.effectiveThresholdTokens} tokens.`,
+      `Session \`${result.session.id}\` compact threshold cleared.`,
+      `Now inheriting default auto-compact threshold: ${effective} tokens.`,
     ].join('\n');
   }
 
   if (typeof args.thresholdTokens !== 'number' || !Number.isFinite(args.thresholdTokens) || args.thresholdTokens <= 0) {
-    const session = await sessionManager.getExistingSession(targetId);
+    const session = await sessionRuntime.getSession(targetId);
     if (!session) {
       throw new Error(`Session \`${targetId}\` not found.`);
     }
-    const effective = sessionManager.getEffectiveCompactThresholdTokens(session);
+    const effective = sessionManager.getEffectiveCompactThresholdTokens({
+      model: session.model || undefined,
+      compactThresholdTokens: session.compactThresholdTokens || undefined,
+    });
     const override = typeof session.compactThresholdTokens === 'number'
       ? `${session.compactThresholdTokens} tokens`
       : 'inherit global default';
@@ -64,60 +107,97 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
     ].join('\n');
   }
 
-  const result = await sessionManager.setSessionCompactThreshold(targetId, args.thresholdTokens);
+  const result = await sessionRuntime.updateSettings(targetId, { compactThresholdTokens: args.thresholdTokens });
+  const effective = sessionManager.getEffectiveCompactThresholdTokens({
+    model: result.session.model || undefined,
+    compactThresholdTokens: result.current.compactThresholdTokens || undefined,
+  });
   return [
-    `Session \`${result.sessionId}\` compact threshold updated.`,
-    `override: ${result.thresholdTokens} tokens`,
-    `effective: ${result.effectiveThresholdTokens} tokens`,
+    `Session \`${result.session.id}\` compact threshold updated.`,
+    `override: ${result.current.compactThresholdTokens} tokens`,
+    `effective: ${effective} tokens`,
   ].join('\n');
+}
+
+function normalizeToolEffort(value: unknown): ModelEffort | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw new Error('effort must be a canonical effort string or null.');
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || ['default', 'unset'].includes(normalized)) return null;
+  if (!MODEL_EFFORTS.includes(normalized as ModelEffort)) throw new Error(`effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, or unset.`);
+  return normalized as ModelEffort;
+}
+
+function formatChildModelEffortStatus(session: Pick<Session, 'id' | 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault' | 'parentSessionId'>): string {
+  const view = buildSessionModelEffortPresentation(session, undefined, sessionId => {
+    const candidate = sessionManager.getSessionCatalog(sessionId);
+    if (!candidate) return undefined;
+    return {
+      id: candidate.id,
+      model: candidate.model,
+      effort: candidate.effort,
+      childModelDefault: candidate.childModelDefault,
+      childEffortDefault: candidate.childEffortDefault,
+      parentSessionId: candidate.parentSessionId,
+    };
+  });
+  const chain = [...view.childPolicyChain].reverse()
+    .map(entry => `${entry.supplies ? '*' : ''}${entry.childModelDefault || entry.modelKey || 'follow'}`)
+    .join(' → ');
+  return [
+    `Session \`${session.id}\` child model/effort defaults:`,
+    `model override: ${view.childModelDefault ? `\`${view.childModelDefault}\`` : 'follow current model'}`,
+    `policy source: ${view.childModelPolicySource}`,
+    `effective model: \`${view.effectiveChildModelKey}\``,
+    `policy chain: ${chain || 'n/a'}`,
+    `effort override: ${view.childEffort.raw || 'unset'}`,
+    `effective effort: ${view.childEffort.effective}`,
+    `allowed: ${view.childEffort.allowed.join(', ')}`,
+  ].join('\n');
+}
+
+function formatChildMutationResult(session: Pick<Session, 'id' | 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>, action: string): string {
+  return `${action}\n${formatChildModelEffortStatus(session)}`;
 }
 
 export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolContext) {
   const targetId = args.sessionId || ctx?.sessionId;
-  if (!targetId) {
-    throw new Error('sessionId is required when there is no current session context.');
+  if (!targetId) throw new Error('sessionId is required when there is no current session context.');
+  const suppliedModel = Object.prototype.hasOwnProperty.call(args, 'model');
+  if (args.clear === true && suppliedModel) throw new Error('clear=true cannot be combined with model.');
+  const hasModel = args.clear === true || suppliedModel;
+  const hasEffort = Object.prototype.hasOwnProperty.call(args, 'effort');
+  const patch: Record<string, any> = {};
+  if (hasModel) patch.childModelDefault = args.clear === true ? null : (normalizeToolModelKey(args.model) || null);
+  if (hasEffort) patch.childEffortDefault = normalizeToolEffort(args.effort);
+
+  const currentSession = getTrustedCurrentSession(targetId, ctx);
+  if (currentSession) {
+    if (Object.keys(patch).length === 0) return formatChildModelEffortStatus(currentSession);
+    const changed = applyNormalizedSessionModelEffortSettings(
+      currentSession,
+      normalizeProspectiveSessionModelEffortSettings(currentSession, patch),
+    );
+    if (changed.length > 0) await ctx.persistCurrentSession!();
+    const action = args.clear === true && !hasEffort
+      ? 'Child default model cleared.'
+      : hasModel && !hasEffort ? 'Child default model updated.' : 'Child model/effort defaults updated.';
+    return formatChildMutationResult(currentSession, action);
   }
 
-  const clear = args.clear === true;
-  if (clear) {
-    const result = await sessionManager.setSessionChildModelDefault(targetId);
-    const { currentKey } = resolveModelConfig(result.effectiveModel);
-    return [
-      `Session \`${result.sessionId}\` child default model cleared.`,
-      `Now inheriting the current session model path (effective spawn model: \`${currentKey}\`).`,
-    ].join('\n');
+  if (Object.keys(patch).length === 0) {
+    const session = await sessionRuntime.getSession(targetId);
+    if (!session) throw new Error(`Session \`${targetId}\` not found.`);
+    return formatChildModelEffortStatus(session);
   }
-
-  const normalizedModel = normalizeToolModelKey(args.model);
-  if (!normalizedModel) {
-    const session = await sessionManager.getExistingSession(targetId);
-    if (!session) {
-      throw new Error(`Session \`${targetId}\` not found.`);
-    }
-
-    const override = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
-      ? `\`${session.childModelDefault.trim()}\``
-      : 'inherit current session model';
-    const { currentKey: currentSessionModel } = resolveModelConfig(session.model);
-    const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
-    return [
-      `Session \`${session.id}\` child default model status:`,
-      `override: ${override}`,
-      `current session model: \`${currentSessionModel}\``,
-      `effective spawned-session model: \`${effectiveSpawnModel}\``,
-    ].join('\n');
-  }
-
-  const result = await sessionManager.setSessionChildModelDefault(targetId, normalizedModel);
-  const { currentKey } = resolveModelConfig(result.effectiveModel);
-  return [
-    `Session \`${result.sessionId}\` child default model updated.`,
-    `override: \`${normalizedModel}\``,
-    `effective spawned-session model: \`${currentKey}\``,
-  ].join('\n');
+  const result = await sessionRuntime.updateSettings(targetId, patch);
+  const action = args.clear === true && !hasEffort
+    ? 'Child default model cleared.'
+    : hasModel && !hasEffort ? 'Child default model updated.' : 'Child model/effort defaults updated.';
+  return formatChildMutationResult(result.session, action);
 }
 
-export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolContext) {
+export async function tool_refresh_session_snapshot(args: ToolArgs, ctx: ToolContext) {
   const { sessionId } = args;
   const targetId = sessionId || ctx?.sessionId;
 
@@ -125,6 +205,12 @@ export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolCont
     throw new Error('Session ID is required.');
   }
 
+  const currentSession = getTrustedCurrentSession(targetId, ctx);
+  if (currentSession) {
+    const result = await refreshSessionSnapshotForSession(currentSession, ctx.persistCurrentSession!);
+    return `Session \`${result.sessionId}\` snapshot refreshed.\nAgent: \`${result.agentName}\``;
+  }
+
   const result = await sessionManager.refreshSessionSnapshot(targetId);
-  return `Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``;
+  return `Session \`${result.sessionId}\` snapshot refreshed.\nAgent: \`${result.agentName}\``;
 }

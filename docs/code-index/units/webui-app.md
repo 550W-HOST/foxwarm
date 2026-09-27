@@ -1,0 +1,104 @@
+# Unit: WebUI app
+
+Files: packages/webui/src/App.tsx, packages/webui/src/GuestWebUiApp.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/package.json, packages/webui/package-lock.json, packages/webui/pnpm-lock.yaml, packages/webui/test/reactRendererAliases.mjs, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/popupWebUi.test.mjs, packages/webui/test/popupMove.e2e.mjs, packages/webui/test/nodeTargets.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
+Secondary files: packages/webui/src/realtime.ts, packages/webui/src/boundedSessionList.ts, packages/webui/src/components/CollapsedSidebarContainer.tsx, packages/webui/test/boundedSessionList.test.mjs, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
+
+## Purpose
+
+Bootstraps the browser application, routes workbench tabs, owns global list/UI preferences, selects strict embedded leaf roots, derives deployment-relative URLs, and hosts the persistent Code iframe/typed bridge.
+
+## Key exports
+
+- default `App`.
+- `API_BASE_PATH` — current pathname without trailing slash plus `/api`.
+- `makeApiUrl(relativePath)` — URL object at the current origin/API base.
+- `makeWebSocketUrl(relativePath)` — URL object with `ws:`/`wss:` protocol.
+- Embedded-target/message parsers, latest-session-list request gate, Code-target/URL helpers, and strict commit-marker helpers.
+
+## URL and message helpers
+
+- REST and compatibility EventSource callers append route fragments to `API_BASE_PATH`.
+- WebSocket callers use `makeWebSocketUrl`; the page realtime transport uses it for the shared `/webui/stream` socket.
+- `getVscodeWebPath` removes a trailing `/api` and appends `/vscode-web/`.
+- `makeVscodeWebUrl` emits new-tab folder or embedded persistent-workspace startup URLs.
+- Main WebUI and its persistent Code frame use exact source plus origin checks. For nested Foxwarm leaf views, the inner iframe sends to its parent with `'*'`; the outer extension validates exact source, channel, version, and random nonce but does not inspect `event.origin`. Outer-to-inner delivery targets the exact derived `frameOrigin`. No bridge accepts arbitrary Code command names or puts auth tokens in messages.
+
+## App behavior
+
+- `main.tsx` resolves `/api/auth/session` before mounting any browser root. Administrator tokens retain the normal app, strict Code-embedded leaves, and top-level popup leaves; guest tokens mount only `GuestWebUiApp`, irrespective of popup/embedded URL parameters. This guest root offers a bounded-Session chat selector without mounting the administrator workbench or list controller. A popup therefore does not initialize the normal workbench store. Vite resolves WebUI imports against one React 18 runtime rather than an aliased renderer; browser JSX fixtures use that same package-local runtime. The module-level contract is [D-webui-react18-runtime](../modules/webui.md#d-webui-react18-runtime).
+- Hash routing restores normal tabs plus current singleton Agents/Setup tabs; old agents/architecture/setup/oobe hash aliases remain inbound readers.
+- A tab context-menu popout opens synchronously, removes the source tab only after `window.open` returns a handle, and uses the ordinary route-fencing/fallback publication without invoking resource close. Setup and Agents require a synchronous warning confirmation. A terminal without a resolved backend ID cannot move. Code opens its current launcher node/path through the existing standalone URL helper and destroys the embedded frame only after the standalone window opens.
+- Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
+- `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
+- App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
+- `useBoundedSessionList` bootstraps Sidebar through fixed `/session-list/sidebar`, `/children`, `/by-id`, and `/search` calls. It keeps normalized rows plus root/child cursors, focus paths, open tabs, and browser-local idle watches; normal App never GETs the legacy global Session list. Independent request generations reject stale root, child, exact, and search responses.
+- Global `sessions-updated` invalidation refetches only the current root and expanded-child windows through the fixed-delay coalescing contract in [D-webui-app-global-list-gate](#d-webui-app-global-list-gate). Exact watched rows receive filtered deltas through their logical subscription. Registering a new physical socket submits the same coalesced refresh intent, closing the reconnect invalidation gap. Agent and terminal fetches are independent of Session catalog invalidation.
+- Chat per-session runtime/history remains inside Chat.
+- Desktop expanded/collapsed sidebar and mobile shell share the same current tab records. The main bounded controller remains top-level for tabs, metadata, summaries, notifications, and expanded/mobile presentation. The collapsed desktop rail owns a second 20-root controller only inside its conditionally mounted container; expanded desktop and every mobile surface create no collapsed controller, bootstrap, scheduler, or logical realtime subscription.
+- The shared theme runtime initializes before React and owns browser-local theme package/selection state. Sidebar, send-key, last-tab/session, and Code preferences also use local storage. Instance branding comes from server settings.
+- Browser auth storage reads only `foxwarm_token`. The browser E2E helper is exposed only as `window.foxwarmTest`.
+- Main launcher options consume the authenticated node summary. Code persists its standalone node/path target in browser storage; terminal defaults follow the focused session. Session-header terminal placement reuses a lower pane only for the exact normalized node/cwd target and otherwise adds the requested target there.
+- Node-target normalization preserves a connected protocol-incompatible target for diagnosis but makes it unavailable with an `upgrade required` label, so Code and Terminal launch controls cannot dispatch through it. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
+- Idle-notification settings and unread idle-completion attention are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once and retain only the latest successfully created page Notification per canonical session from that root, replacing the prior same-session handle without affecting other sessions. App supplies every actually rendered active split-pane Chat (or the one visible mobile pane). Notification clicks use a notification-origin `openChatTab` activation that preserves normal workbench/hash navigation but skips its ordinary eager row/tab acknowledgement, then rely on actual visible-session reconciliation; Code uses the existing nonce-bound `open-session` host action. Lifecycle, acknowledgement, and closed-page limitations are canonical in [webui-session-list](./webui-session-list.md#design-decisions).
+
+## Embedded leaf roots
+
+`main.tsx` parses strict nonce-bearing `foxwarmEmbed=sidebar|chat|agents|setup` before mounting normal App:
+
+- sidebar owns the same bounded list/cache/global stream contract and sends fixed open actions;
+- chat mounts exactly one Chat and logical session subscription;
+- Agents mounts Architecture, which owns its bounded summary/forest queries and logical list subscription;
+- Setup mounts SetupView and setup APIs.
+
+Embedded Chat sends `open-setup` with an allowlisted optional Models-focus field. The Code host activates the stable Setup custom editor and sends a separate nonce-bound one-shot `focus-models` message after the Setup leaf reports ready; Embedded Setup converts it to the same transient `SetupView` focus request used by normal App.
+
+These are independent roots, not CSS-hidden full App instances. Active-target messages update sidebar selection; a null target clears it. The same nonce-bound payload may include all active Code Chat editor session IDs so the embedded sidebar can apply the canonical unread visibility contract.
+
+## Top-level popup leaf roots
+
+`foxwarmPopupVersion=1` plus `foxwarmPopup=chat|terminal|agents|setup` selects a real top-level leaf at the current deployment pathname. Chat and terminal require a bounded session/terminal ID; optional titles are presentation only. The popup imports no workbench shell, tabs, panes, sidebar, or persisted workbench store. Chat session links and Configure Models navigate to another popup leaf URL rather than hydrating the normal App. Setup uses its ordinary APIs and browser settings, Agents refetches its server state, and terminal reattaches by exact terminal ID. There is no opener bridge, state transfer, close restoration, or cross-window synchronization.
+
+## Code and commit behavior
+
+- Embedded launch creates one singleton Code tab. Restoring that tab without displaying it as active in a visible workbench pane leaves the top-level iframe uncreated, including while the mobile list replaces the workbench surface; its first actual display starts it. Later tab/surface changes hide/reposition the persistent iframe rather than remounting it, while explicit tab close destroys the frame and clears pending bridge state. In the console component treatment, the full-screen scanline overlay remains above normal WebUI content but below the iframe so the Code workbench stays visually unobscured and interactive.
+- File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
+- Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
+- New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
+- Changing a main Code launcher node adds that node/path resource to the same persistent multi-root workspace; it never creates a per-node Code tab or iframe.
+
+## Dependencies
+
+Workbench store/layout, Sidebar, Chat, Architecture, Setup, terminal view, WebUI settings, and [Code integration](../threads/code-integration.md).
+
+## Compatibility
+
+- Old route hashes hydrate current singleton tabs.
+- Code preference storage keys and old extension editor-restore state are handled by their current owners.
+- Removed workspace/file tabs are normalized by [webui-workbench](./webui-workbench.md).
+- Model-settings navigation follows [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation); no direct hash-writing compatibility entry point is added.
+
+## Design decisions
+
+### D-webui-app-route-close
+
+[2026-08-14] App owns route publication for Workbench close actions. An ordinary active-tab close fences the routed tab before the synchronous store removal, then immediately publishes the store-selected fallback; when the final closable tab has no protected forced Setup fallback, the Workbench may remain empty for the rest of the current mount and App clears the hash plus last-active-tab preference. Bulk close pre-fences every closable target, runs the sequential per-tab resource and component close lifecycle with intermediate route/hash publication deferred, and publishes exactly one final store-selected fallback afterward. `Close others` therefore preserves its selected target, while `Close all` leaves an empty pane/hash/preference when no protected Setup tab remains. Reload or explicit navigation may create or restore a tab later.
+
+### D-webui-app-global-list-gate
+
+[2026-07-30; updated 2026-09-05] Global `sessions-updated` refresh intents use one non-sliding, visibility-aware delay shared by normal App and embedded Sidebar/Agents list-data roots: 1 second when the page is visible and 10 seconds otherwise. Each first idle or trailing arm samples visibility once; later intents and visibility changes do not move an already fixed deadline. Intents received while a refresh is in flight coalesce into exactly one trailing refresh, whose new delay is chosen after the current refresh settles. Scheduled refreshes never overlap, and owner disposal cancels pending timers and suppresses trailing work. Each mounted bounded controller keeps one stable scheduler whose callback dereferences the latest refresh operation, so focus or request-callback changes cannot cancel an already accepted physical-generation safety intent. Initial bounded bootstrap remains immediate. The transport identifies the physical socket generation when a logical subscription opens. Each bounded controller submits one coalesced race-closing refresh for its initial registration and one for every later physical reconnect, but remembers the last accepted generation so focus-ID or other logical subscription churn on the same socket cannot schedule a duplicate refresh. Session catalog invalidation refetches current bounded list windows only; agent/terminal lists are decoupled. Independent root/child/exact/search/badge/summary generations plus a mount-ownership epoch prevent stale StrictMode passes, replaced queries, refresh continuations, or terminal unmounts from publishing or launching follow-up work. Physical connection ownership is canonical in [D-webui-multiplexed-realtime](../threads/streaming-pipeline.md#d-webui-multiplexed-realtime).
+
+### D-webui-app-leaf-embeds
+
+Code-embedded sidebar/chat/Agents/Setup are strict leaf roots with allowlisted messages, not nested copies of the workbench shell.
+
+### D-webui-app-popup-leaves
+
+[2026-09-21] Top-level popup leaves are real same-origin pages selected by a separate versioned URL parser. They are not Code embeds and do not send or accept the nonce-bound embed-host protocol. Dynamic root imports keep the normal App/workbench store out of popup startup. Popout is intentionally reopen-and-remove rather than live DOM/React/iframe transfer: no state handoff, opener lifecycle manager, or automatic return is provided.
+
+### D-webui-app-persistent-code-frame
+
+The Code workbench tab is a launcher/slot. The portal-owned iframe starts only when Code is first visible in an active pane, persists across ordinary hiding after that first start, and is destroyed with its bridge state on explicit tab close. The full lifecycle contract is canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
+
+### D-webui-app-client-preferences
+
+Theme package/selection, layout, navigation, and Code launch choices stay browser-local unless the setting is explicitly instance-wide. Theme details are owned by [webui-theme-system](./webui-theme-system.md).

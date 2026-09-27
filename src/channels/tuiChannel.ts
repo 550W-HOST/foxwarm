@@ -5,8 +5,8 @@
 
 import blessed from 'blessed';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
-import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 
 export class TUIChannel implements Channel {
   readonly name = 'tui';
@@ -27,7 +27,6 @@ export class TUIChannel implements Channel {
   private statusUpdateInterval: NodeJS.Timeout | null = null;
   
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
-  private commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>;
 
   constructor() {    
     this.screen = blessed.screen({
@@ -239,7 +238,7 @@ export class TUIChannel implements Channel {
       
       // Show session list for selection
       this.sessionList.focus();
-      this.refreshSessionList();
+      void this.refreshSessionList();
       
       // Trigger preview for selected session
       setTimeout(() => {
@@ -254,13 +253,18 @@ export class TUIChannel implements Channel {
     this.screen.render();
   }
 
-  private refreshSessionList() {
-    const sessions = Array.from(sessionManager.getAllSessions().values());
-    const sessionIds = Array.from(sessionManager.getAllSessions().keys());
+  private async refreshSessionList() {
+    const sessions = sessionRuntime.getSessionRuntimeStatus().ready
+      ? await sessionRuntime.listSessions()
+      : Array.from(sessionManager.getAllSessions().values()).map(session => ({
+          id: session.id,
+          messageCount: session.meta?.messageCount || session.history.length,
+        }));
+    const sessionIds = sessions.map(session => session.id);
     const boundSessionId = sessionManager.getSessionByChannel('tui', 'tui');
     
     const items = sessions.map((s, idx) => {
-      const msgCount = s.history.length;
+      const msgCount = s.messageCount;
       const lastTime = 'N/A';
       // Use session ID from the keys array
       const sessionId = sessionIds[idx];
@@ -292,9 +296,9 @@ export class TUIChannel implements Channel {
     this.currentSessionId = sessionId;
     this.inChatMode = true;
     this.chatLog.setLabel(` Chat: ${sessionId} (preview) `);
-    this.loadChatHistory(sessionId);
+    void this.loadChatHistory(sessionId);
     this.inputBox.focus();
-    this.updateProcessingStatus();
+    void this.updateProcessingStatus();
     this.screen.render();
   }
 
@@ -308,15 +312,25 @@ export class TUIChannel implements Channel {
   }
 
   private async loadChatHistory(sessionId: string) {
-    const session = await sessionManager.getSession(sessionId);
+    if (!sessionRuntime.getSessionRuntimeStatus().ready) {
+      this.chatLog.setContent('{yellow-fg}Session runtime is still initializing.{/yellow-fg}');
+      this.screen.render();
+      return;
+    }
+    const history = await sessionRuntime.getHistory(sessionId).catch((_error: unknown): null => null);
+    if (!history) {
+      this.chatLog.setContent(`{red-fg}Session ${sessionId} was not found or is unavailable.{/red-fg}`);
+      this.screen.render();
+      return;
+    }
     this.chatLog.setContent('');
     
     // Show session info
     this.chatLog.log(`{cyan-fg}Loading session: ${sessionId}{/cyan-fg}`);
-    this.chatLog.log(`{cyan-fg}Message count: ${session.history.length}{/cyan-fg}`);
+    this.chatLog.log(`{cyan-fg}Message count: ${history.messages.length}{/cyan-fg}`);
     this.chatLog.log('');
     
-    for (const msg of session.history) {
+    for (const msg of history.messages) {
       // Skip tool messages for cleaner display
       if (msg.role === 'tool') continue;
       
@@ -340,12 +354,14 @@ export class TUIChannel implements Channel {
       const sessionId = itemText.replace(/^[* ]\s*/, '').split(' ')[0];
       
       try {
-        const session = await sessionManager.getSession(sessionId);
-        const recentMessages = session.history.slice(-20); // Last 20 messages
+        if (!sessionRuntime.getSessionRuntimeStatus().ready) throw new Error('Session runtime is still initializing.');
+        const history = await sessionRuntime.getHistory(sessionId);
+        if (!history) throw new Error(`Session \`${sessionId}\` not found.`);
+        const recentMessages = history.messages.slice(-20); // Last 20 messages
         
         this.chatLog.setContent('');
         this.chatLog.log(`{cyan-fg}Preview: ${sessionId}{/cyan-fg}`);
-        this.chatLog.log(`{cyan-fg}Total messages: ${session.history.length}{/cyan-fg}`);
+        this.chatLog.log(`{cyan-fg}Total messages: ${history.messages.length}{/cyan-fg}`);
         this.chatLog.log('{yellow-fg}(Showing last 20 messages){/yellow-fg}');
         this.chatLog.log('');
         
@@ -414,7 +430,7 @@ export class TUIChannel implements Channel {
     this.displayMessage('user', text);
     
     // Send message without waiting for response (like WebUI)
-    this.messageHandler(ctx, message).catch(e => {
+    this.messageHandler(ctx, message).catch(() => {
       this.displayMessage('assistant', 'Error: Failed to send message');
     });
   }
@@ -479,11 +495,12 @@ export class TUIChannel implements Channel {
     this.screen.render();
   }
 
-  private updateProcessingStatus() {
+  private async updateProcessingStatus() {
     if (!this.currentSessionId) return;
-    
-    const sessions = sessionManager.getAllSessions();
-    const session = sessions.get(this.currentSessionId);
+
+    if (!sessionRuntime.getSessionRuntimeStatus().ready) return;
+
+    const session = await sessionRuntime.getSession(this.currentSessionId).catch((_error: unknown): null => null);
     const wasProcessing = this.isProcessing;
     this.isProcessing = session?.busy || false;
     
@@ -532,7 +549,7 @@ export class TUIChannel implements Channel {
     
     // Start status update interval
     this.statusUpdateInterval = setInterval(() => {
-      this.updateProcessingStatus();
+      void this.updateProcessingStatus();
     }, 500); // Update every 500ms
     
     this.screen.render();
@@ -550,15 +567,15 @@ export class TUIChannel implements Channel {
     this.messageHandler = handler;
   }
 
-  onCommand(handler: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>): void {
-    this.commandHandler = handler;
+  onCommand(_handler: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>): void {
+    // TUI currently handles text input as normal messages; slash-command dispatch is not wired here.
   }
 
-  async sendMessage(userId: string, messageText: string, options?: any): Promise<void> {
+  async sendMessage(_userId: string, _messageText: string, _options?: any): Promise<void> {
     // Messages are displayed via reply() callback
   }
 
-  async sendTyping(userId: string): Promise<void> {
+  async sendTyping(_userId: string): Promise<void> {
     // No-op for TUI
   }
 

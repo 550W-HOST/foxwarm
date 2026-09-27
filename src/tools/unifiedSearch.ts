@@ -1,80 +1,309 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-import { checkToolPermission } from '../isolatedCheck';
-import * as mcpClient from '../mcpClient';
+import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
-import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
-import { tool_remote_node } from './nodeTools';
+import { listNodeTopology } from '../nodeExecution';
+import { buildUnifiedToolId, executeResolvedTool, resolveUnifiedTool } from './resolvedTools';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import { definitions } from './definitions';
+import { isToolVisibleForSession } from '../isolatedCheck';
+import * as sessionManager from '../sessionManager';
+import * as agentMetadata from '../session/agentMetadata';
+import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
+import { isToolAuthorizationPolicyUnavailable } from '../toolAuthorization';
 
-// Forward reference - will be set by the main tools module after definitions are created
-let _definitions: any[] = [];
-let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
-let _isMasterOnlyToolName: (toolName: string) => boolean = () => false;
-let _getToolPermissionNode: (toolName: string, executionNode: string, targetNode: string) => string = (_t, e) => e;
+const SEARCH_TOOLS_DEFAULT_LIMIT = 5;
+const SEARCH_TOOLS_SCHEMA_DETAIL_LIMIT = 10;
+export const SEARCH_TOOLS_MAX_OUTPUT_CHARS = 32_000;
+const SEARCH_TOOLS_MAX_LINE_CHARS = 3_000;
+const SEARCH_TOOLS_MAX_DESCRIPTION_CHARS = 240;
+const SEARCH_TOOLS_MAX_WARNING_CHARS = 500;
+const SEARCH_TOOLS_WARNING_RESERVE_CHARS = 4_000;
+const SEARCH_TOOLS_MAX_SCHEMA_DEPTH = 4;
+const SEARCH_TOOLS_MAX_PROPERTIES = 20;
+const SEARCH_TOOLS_MAX_REQUIRED_SCAN = 100;
+const SEARCH_TOOLS_MAX_UNION_MEMBERS = 8;
+const SEARCH_TOOLS_MAX_ENUM_VALUES = 12;
 
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, isMasterOnly: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string) {
-    _definitions = defs;
-    _isToolDirectlyExposedToModel = isExposed;
-    _isMasterOnlyToolName = isMasterOnly;
-    _getToolPermissionNode = getPermNode;
+type SearchToolResult = Record<string, any>;
+
+const UNSUPPORTED_SCHEMA_KEYWORDS = [
+    '$ref',
+    'allOf',
+    'patternProperties',
+    'propertyNames',
+    'dependentSchemas',
+    'dependentRequired',
+    'dependencies',
+    'unevaluatedProperties',
+    'minProperties',
+    'maxProperties',
+    'not',
+    'if',
+    'then',
+    'else',
+] as const;
+
+function isUnsafeTextCodePoint(codePoint: number): boolean {
+    return codePoint <= 0x1f
+        || (codePoint >= 0x7f && codePoint <= 0x9f)
+        || codePoint === 0x061c
+        || codePoint === 0x200e
+        || codePoint === 0x200f
+        || codePoint === 0x2028
+        || codePoint === 0x2029
+        || (codePoint >= 0x202a && codePoint <= 0x202e)
+        || (codePoint >= 0x2066 && codePoint <= 0x2069);
 }
 
-export function buildUnifiedToolId(source: UnifiedToolSource, name: string, options: { server?: string; nodeId?: string } = {}): string {
-    if (source === 'builtin') {
-        return `builtin:${name}`;
-    }
-
-    if (source === 'mcp') {
-        if (!options.server) {
-            throw new Error('MCP tool IDs require server.');
-        }
-        return `mcp:${options.server}/${name}`;
-    }
-
-    if (!options.nodeId) {
-        throw new Error('Node tool IDs require nodeId.');
-    }
-
-    return `node:${options.nodeId}/${name}`;
+function unicodeEscape(codePoint: number): string {
+    if (codePoint <= 0xffff) return `\\u${codePoint.toString(16).padStart(4, '0')}`;
+    const adjusted = codePoint - 0x10000;
+    const high = 0xd800 + (adjusted >> 10);
+    const low = 0xdc00 + (adjusted & 0x3ff);
+    return `\\u${high.toString(16).padStart(4, '0')}\\u${low.toString(16).padStart(4, '0')}`;
 }
 
-function parseUnifiedToolId(toolId: string): { source: UnifiedToolSource; name: string; server?: string; nodeId?: string } {
-    if (typeof toolId !== 'string' || toolId.trim().length === 0) {
-        throw new Error('toolId is required');
+function escapeUnsafeTextControls(value: string): string {
+    return Array.from(value, character => {
+        const codePoint = character.codePointAt(0)!;
+        return isUnsafeTextCodePoint(codePoint) ? unicodeEscape(codePoint) : character;
+    }).join('');
+}
+
+function quoteExactString(value: string): string {
+    return `"${Array.from(value, character => {
+        const codePoint = character.codePointAt(0)!;
+        if (isUnsafeTextCodePoint(codePoint)) return unicodeEscape(codePoint);
+        if (character === '"') return '\\"';
+        if (character === '\\') return '\\\\';
+        return character;
+    }).join('')}"`;
+}
+
+function truncateUnicode(value: string, maxChars: number): string {
+    const chars = Array.from(value);
+    if (chars.length <= maxChars) return value;
+    return `${chars.slice(0, Math.max(0, maxChars - 1)).join('')}…`;
+}
+
+function sanitizeComment(value: unknown, maxChars = SEARCH_TOOLS_MAX_DESCRIPTION_CHARS): string {
+    const collapsed = escapeUnsafeTextControls(String(value || '')).replace(/\s+/gu, ' ').trim().replace(/\*\//gu, '*\\/');
+    return truncateUnicode(collapsed, maxChars);
+}
+
+function schemaLiteral(value: unknown): string {
+    if (typeof value === 'string') return quoteExactString(truncateUnicode(value, 100));
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    if (typeof value === 'boolean' || value === null) return String(value);
+    return 'unknown';
+}
+
+function schemaType(schema: unknown, depth = 0): string {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return 'unknown';
+    const value = schema as Record<string, any>;
+    if (depth >= SEARCH_TOOLS_MAX_SCHEMA_DEPTH) return 'unknown';
+
+    if (UNSUPPORTED_SCHEMA_KEYWORDS.some(keyword => Object.prototype.hasOwnProperty.call(value, keyword))) {
+        return value.type === 'object' || value.properties || value.patternProperties ? 'Record<string, unknown>' : 'unknown';
     }
 
-    if (toolId.startsWith('builtin:')) {
-        const name = toolId.slice('builtin:'.length).trim();
-        if (!name) throw new Error(`Invalid builtin toolId: ${toolId}`);
-        return { source: 'builtin', name };
+    if (Object.prototype.hasOwnProperty.call(value, 'const')) return schemaLiteral(value.const);
+    if (Array.isArray(value.enum)) {
+        const members = value.enum.slice(0, SEARCH_TOOLS_MAX_ENUM_VALUES).map(schemaLiteral);
+        if (value.enum.length > SEARCH_TOOLS_MAX_ENUM_VALUES) members.push('unknown');
+        return members.length > 0 ? members.join(' | ') : 'unknown';
     }
 
-    if (toolId.startsWith('mcp:')) {
-        const remainder = toolId.slice('mcp:'.length);
-        const separator = remainder.indexOf('/');
-        if (separator <= 0 || separator === remainder.length - 1) {
-            throw new Error(`Invalid MCP toolId: ${toolId}`);
+    const union = Array.isArray(value.oneOf) ? value.oneOf : (Array.isArray(value.anyOf) ? value.anyOf : undefined);
+    if (union) {
+        const members = union.slice(0, SEARCH_TOOLS_MAX_UNION_MEMBERS).map(member => schemaType(member, depth + 1));
+        if (union.length > SEARCH_TOOLS_MAX_UNION_MEMBERS) members.push('unknown');
+        return Array.from(new Set(members)).join(' | ') || 'unknown';
+    }
+
+    if (Array.isArray(value.type)) {
+        const members = value.type.slice(0, SEARCH_TOOLS_MAX_UNION_MEMBERS)
+            .map(type => schemaType({ ...value, type }, depth + 1));
+        if (value.type.length > SEARCH_TOOLS_MAX_UNION_MEMBERS) members.push('unknown');
+        return Array.from(new Set(members)).join(' | ') || 'unknown';
+    }
+
+    switch (value.type) {
+        case 'string': return 'string';
+        case 'number': return 'number';
+        case 'integer': return 'number';
+        case 'boolean': return 'boolean';
+        case 'null': return 'null';
+        case 'array': return `Array<${schemaType(value.items, depth + 1)}>`;
+        case 'object': {
+            const properties = value.properties && typeof value.properties === 'object' && !Array.isArray(value.properties)
+                ? Object.entries(value.properties as Record<string, unknown>)
+                : [];
+            const propertyNames = new Set(properties.map(([name]) => name));
+            const rawRequired = Array.isArray(value.required) ? value.required : [];
+            const requiredNames = Array.from(new Set(rawRequired.slice(0, SEARCH_TOOLS_MAX_REQUIRED_SCAN).map(String)));
+            const requiredScanTruncated = rawRequired.length > SEARCH_TOOLS_MAX_REQUIRED_SCAN;
+            if (requiredScanTruncated) return 'Record<string, unknown> /* required constraints omitted */';
+            const required = new Set(requiredNames);
+            const undeclaredRequired = requiredNames.filter(name => !propertyNames.has(name));
+            if (value.additionalProperties === false && undeclaredRequired.length > 0) return 'never';
+
+            const declaredRequired = properties.filter(([name]) => required.has(name));
+            const optionalProperties = properties.filter(([name]) => !required.has(name));
+            const otherKeyType = value.additionalProperties && typeof value.additionalProperties === 'object'
+                ? schemaType(value.additionalProperties, depth + 1)
+                : 'unknown';
+            const preserveDeclaredOrder = properties.length <= SEARCH_TOOLS_MAX_PROPERTIES && undeclaredRequired.length === 0;
+            const entries: Array<{ name: string; schema: unknown; undeclaredRequired?: boolean }> = preserveDeclaredOrder
+                ? properties.map(([name, propertySchema]) => ({ name, schema: propertySchema }))
+                : [
+                    ...declaredRequired.map(([name, propertySchema]) => ({ name, schema: propertySchema })),
+                    ...undeclaredRequired.map(name => ({ name, schema: value.additionalProperties && typeof value.additionalProperties === 'object' ? value.additionalProperties : {}, undeclaredRequired: true })),
+                    ...optionalProperties.map(([name, propertySchema]) => ({ name, schema: propertySchema })),
+                ];
+            const shownEntries = entries.slice(0, SEARCH_TOOLS_MAX_PROPERTIES);
+            const parts = shownEntries.map(({ name, schema: propertySchema, undeclaredRequired: requiredFromOtherKey }) => {
+                const property = propertySchema && typeof propertySchema === 'object' && !Array.isArray(propertySchema)
+                    ? propertySchema as Record<string, unknown>
+                    : undefined;
+                const propertyName = /^[A-Za-z_$][\w$]*$/u.test(name) ? name : quoteExactString(name);
+                const optional = required.has(name) ? '' : '?';
+                const description = sanitizeComment(property?.description);
+                const requiredNote = requiredFromOtherKey
+                    ? ` /* required; ${value.additionalProperties && typeof value.additionalProperties === 'object' ? 'other-key schema' : 'other key'} */`
+                    : '';
+                return `${propertyName}${optional}: ${requiredFromOtherKey ? otherKeyType : schemaType(propertySchema, depth + 1)}${description ? ` /* ${description} */` : ''}${requiredNote};`;
+            });
+            const shownNames = new Set(shownEntries.map(entry => entry.name));
+            const omittedRequired = requiredNames.filter(name => !shownNames.has(name)).length;
+            const omittedOptional = optionalProperties.filter(([name]) => !shownNames.has(name)).length;
+            if (omittedRequired > 0) parts.push(`/* ${omittedRequired} required keys omitted; constraint unknown */`);
+            if (omittedOptional > 0) parts.push(`/* ${omittedOptional} optional properties omitted */`);
+
+            if (value.additionalProperties === true) {
+                parts.push('/* other keys: unknown */');
+            } else if (value.additionalProperties && typeof value.additionalProperties === 'object') {
+                if (properties.length === 0 && requiredNames.length === 0) return `Record<string, ${schemaType(value.additionalProperties, depth + 1)}>`;
+                parts.push(`/* other keys: ${schemaType(value.additionalProperties, depth + 1)} */`);
+            } else if (properties.length === 0 && requiredNames.length === 0 && value.additionalProperties !== false) {
+                return 'Record<string, unknown>';
+            } else if (value.additionalProperties === undefined) {
+                parts.push('/* other keys: unknown */');
+            }
+            return `{ ${parts.join(' ')} }`;
         }
-        return {
-            source: 'mcp',
-            server: remainder.slice(0, separator),
-            name: remainder.slice(separator + 1),
-        };
+        default:
+            if (value.properties || value.additionalProperties) return schemaType({ ...value, type: 'object' }, depth);
+            return 'unknown';
+    }
+}
+
+function isSafeBareToolId(toolId: string): boolean {
+    return /^(?:builtin:[A-Za-z0-9_.:-]+|(?:mcp|node):[A-Za-z0-9_.:-]+\/[A-Za-z0-9_.:-]+)$/u.test(toolId);
+}
+
+function explicitToolDescriptor(tool: SearchToolResult): string | undefined {
+    const source = tool.source;
+    const name = typeof tool.name === 'string' && tool.name.length > 0 ? tool.name : undefined;
+    if (!name) return undefined;
+    if (source === 'builtin') return `source: "builtin", name: ${quoteExactString(name)}`;
+    if (source === 'mcp' && typeof tool.server === 'string' && tool.server.length > 0) {
+        return `source: "mcp", server: ${quoteExactString(tool.server)}, name: ${quoteExactString(name)}`;
+    }
+    if (source === 'node' && typeof tool.nodeId === 'string' && tool.nodeId.length > 0) {
+        return `source: "node", nodeId: ${quoteExactString(tool.nodeId)}, name: ${quoteExactString(name)}`;
+    }
+    return undefined;
+}
+
+export function normalizeSearchToolsLimit(rawLimit: unknown): number {
+    if (rawLimit === undefined || rawLimit === null || rawLimit === '') return SEARCH_TOOLS_DEFAULT_LIMIT;
+    const numeric = Number(rawLimit);
+    if (!Number.isFinite(numeric)) return SEARCH_TOOLS_DEFAULT_LIMIT;
+    return Math.max(1, Math.min(Math.trunc(numeric), 200));
+}
+
+function toolDeclaration(tool: SearchToolResult, index: number, includeSchema: boolean): string | undefined {
+    const toolId = String(tool.toolId || '');
+    const schemaIncluded = includeSchema && index < SEARCH_TOOLS_SCHEMA_DETAIL_LIMIT;
+    const schema = schemaIncluded ? tool.inputSchema : undefined;
+    let argsText: string;
+    if (!schemaIncluded) {
+        argsText = '/* schema omitted */';
+    } else if (!schema || typeof schema !== 'object') {
+        argsText = '/* schema unavailable */';
+    } else if ((schema as Record<string, any>).type === 'object' || (schema as Record<string, any>).properties) {
+        const rendered = schemaType(schema);
+        argsText = rendered.startsWith('Record<') ? `args: ${rendered}` : rendered;
+    } else {
+        argsText = `args: ${schemaType(schema)}`;
     }
 
-    if (toolId.startsWith('node:')) {
-        const remainder = toolId.slice('node:'.length);
-        const separator = remainder.indexOf('/');
-        if (separator <= 0 || separator === remainder.length - 1) {
-            throw new Error(`Invalid node toolId: ${toolId}`);
+    const description = sanitizeComment(tool.description);
+    const suffix = description ? ` // ${description}` : '';
+    let declaration: string;
+    if (isSafeBareToolId(toolId)) {
+        declaration = `${toolId}(${argsText});${suffix}`;
+    } else {
+        const descriptor = explicitToolDescriptor(tool);
+        if (!descriptor) return undefined;
+        const descriptorArgs = argsText.startsWith('/*')
+            ? `unknown ${argsText}`
+            : (argsText.startsWith('args: ') ? argsText.slice('args: '.length) : argsText);
+        declaration = `call_tool({ ${descriptor}, args: ${descriptorArgs} });${suffix}`;
+    }
+    if (declaration.length > SEARCH_TOOLS_MAX_LINE_CHARS) return undefined;
+    return declaration;
+}
+
+export function formatSearchToolsOutput(
+    tools: SearchToolResult[],
+    totalMatched: number,
+    warnings: string[],
+    includeSchema: boolean,
+): string {
+    const candidateLines: string[] = [];
+    let invalidLineCount = 0;
+    for (let index = 0; index < tools.length; index += 1) {
+        const declaration = toolDeclaration(tools[index], index, includeSchema);
+        if (declaration) candidateLines.push(declaration);
+        else invalidLineCount += 1;
+    }
+
+    const safeWarnings = warnings.map(warning => sanitizeComment(warning, SEARCH_TOOLS_MAX_WARNING_CHARS) || 'Unknown discovery warning');
+    if (invalidLineCount > 0) safeWarnings.push(`${invalidLineCount} matching tool${invalidLineCount === 1 ? '' : 's'} omitted because an unambiguous explicit descriptor was unavailable or the declaration exceeded the per-line formatter limit.`);
+    const warningReserve = safeWarnings.length > 0 ? SEARCH_TOOLS_WARNING_RESERVE_CHARS : 0;
+    const declarationBudget = SEARCH_TOOLS_MAX_OUTPUT_CHARS - warningReserve - 200;
+    const emittedDeclarations: string[] = [];
+    let declarationChars = 0;
+    for (const declaration of candidateLines) {
+        if (declarationChars + declaration.length + 1 > declarationBudget) break;
+        emittedDeclarations.push(declaration);
+        declarationChars += declaration.length + 1;
+    }
+
+    const budgetOmitted = candidateLines.length - emittedDeclarations.length;
+    const lines = [`Showing ${emittedDeclarations.length} of ${totalMatched} matching tools.`, ...emittedDeclarations];
+    if (budgetOmitted > 0) lines.push(`[${budgetOmitted} selected tool${budgetOmitted === 1 ? '' : 's'} omitted by the global formatter budget.]`);
+
+    if (safeWarnings.length > 0) {
+        lines.push('Warnings:');
+        let emittedWarnings = 0;
+        for (const warning of safeWarnings.slice(0, 20)) {
+            const line = `- ${warning}`;
+            const omittedAfter = safeWarnings.length - emittedWarnings - 1;
+            const reserve = omittedAfter > 0 ? `\n- ${omittedAfter} additional warnings omitted.`.length : 0;
+            if (lines.join('\n').length + line.length + reserve + 1 > SEARCH_TOOLS_MAX_OUTPUT_CHARS) break;
+            lines.push(line);
+            emittedWarnings += 1;
         }
-        return {
-            source: 'node',
-            nodeId: remainder.slice(0, separator),
-            name: remainder.slice(separator + 1),
-        };
+        const omittedWarnings = safeWarnings.length - emittedWarnings;
+        if (omittedWarnings > 0) {
+            const notice = `- ${omittedWarnings} additional warnings omitted.`;
+            if (lines.join('\n').length + notice.length + 1 <= SEARCH_TOOLS_MAX_OUTPUT_CHARS) lines.push(notice);
+        }
     }
-
-    throw new Error(`Unsupported toolId source: ${toolId}`);
+    return lines.join('\n');
 }
 
 function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
@@ -97,29 +326,12 @@ function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
     return Array.from(new Set(normalized as UnifiedToolSource[]));
 }
 
-function normalizeRequestedNodeForToolCall(nodeParam: unknown, currentNode: string): string {
-    if (nodeParam === undefined || nodeParam === null) {
-        return currentNode;
-    }
-
-    if (typeof nodeParam !== 'string') {
-        return String(nodeParam) || currentNode;
-    }
-
-    const trimmed = nodeParam.trim();
-    if (!trimmed || trimmed.toLowerCase() === 'current') {
-        return currentNode;
-    }
-
-    return trimmed;
-}
-
 function normalizeUnifiedToolQueryTerms(query: string): string[] {
     const normalizedQuery = query.trim().toLowerCase();
     return normalizedQuery ? Array.from(new Set(normalizedQuery.split(/\s+/).filter(Boolean))) : [];
 }
 
-function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>): number {
+export function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>): number {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
         return 0;
@@ -172,10 +384,23 @@ function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>)
     return score;
 }
 
+export function compareUnifiedSearchResults(a: Record<string, any>, b: Record<string, any>): number {
+    const scoreCompare = Number(b._score || 0) - Number(a._score || 0);
+    if (scoreCompare !== 0) return scoreCompare;
+    const sourceCompare = String(a.source).localeCompare(String(b.source));
+    if (sourceCompare !== 0) return sourceCompare;
+    const scopeA = String(a.server || a.nodeId || '');
+    const scopeB = String(b.server || b.nodeId || '');
+    const scopeCompare = scopeA.localeCompare(scopeB);
+    if (scopeCompare !== 0) return scopeCompare;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+}
+
 async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string> {
     if (typeof ctx?.session?.currentNode === 'string' && ctx.session.currentNode.trim().length > 0) {
         return ctx.session.currentNode.trim();
     }
+    if (ctx?.session) return 'master';
 
     if (ctx?.sessionId) {
         const currentNode = await nodesManager.getCurrentNode(ctx.sessionId);
@@ -187,47 +412,17 @@ async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string
     return 'master';
 }
 
-async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolArgs, ctx: ToolContext): Promise<any> {
-    const toolDefinition = _definitions.find(def => def.name === toolName);
-    if (!toolDefinition) {
-        throw new Error(`Unknown builtin tool: ${toolName}`);
-    }
-
-    const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition.parameters?.properties || {}, 'node');
-    if (!supportsExplicitNode && rawArgs && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
-        throw new Error(`Builtin tool \`${toolName}\` does not support node selection. Use call_tool with source=\`node\` for remote-node execution.`);
-    }
-
-    const sessionId = ctx.sessionId || 'main';
-    const currentNode = ctx.sessionId
-        ? (await nodesManager.getCurrentNode(sessionId) || 'master')
-        : (ctx.session?.currentNode || 'master');
-    const targetNode = supportsExplicitNode
-        ? normalizeRequestedNodeForToolCall(rawArgs?.node, currentNode)
-        : currentNode;
-    const toolArgs = { ...(rawArgs || {}) };
-    delete toolArgs.node;
-
-    const executionNode = _isMasterOnlyToolName(toolName) ? 'master' : targetNode;
-    const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
-
-    if (ctx.sessionId) {
-        await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
-    }
-
-    if (executionNode !== 'master') {
-        return await nodesManager.executeTool(executionNode, toolName, toolArgs, sessionId);
-    }
-
-    if (toolName === 'send_file' || toolName === 'image_write_to_file') {
-        return await nodesManager.executeToolLocally(toolName, { ...toolArgs, __runtimeNodeId: targetNode }, sessionId);
-    }
-
-    return await nodesManager.executeToolLocally(toolName, toolArgs, sessionId);
+function discoverySession(ctx?: ToolContext) {
+    if (ctx?.sessionId && ctx.session?.id === ctx.sessionId) return ctx.session;
+    return ctx?.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
 }
 
-async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
-    return _definitions
+async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean, ctx?: ToolContext) {
+    const session = discoverySession(ctx);
+    return definitions
+        .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name as any))
+        .filter(def => !isPermissionNeutralBuiltinDispatcher(def.name))
+        .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name }))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
         .map(def => ({
@@ -237,19 +432,23 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
             name: def.def.name,
             description: def.def.description,
             ...(includeSchema ? { inputSchema: def.def.parameters } : {}),
-            directExposed: _isToolDirectlyExposedToModel(def.def.name),
-            hidden: !_isToolDirectlyExposedToModel(def.def.name),
+            directExposed: def.def.defaultInject === true,
+            hidden: def.def.defaultInject !== true,
         }));
 }
 
 async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext, warnings?: string[]) {
-    if (ctx?.sessionId) {
-        await checkToolPermission('search_mcp_tools', ctx.sessionId, 'master', { server: serverFilter, query });
-    }
+    if (!ctx?.sessionId) throw new Error('MCP discovery requires session context.');
 
+    const session = discoverySession(ctx);
+    const isolatedServers = session && sessionManager.isSessionEffectivelyIsolated(session)
+        ? Array.from(new Set(sessionManager.getAgentToolRules(session.agent || 'main')
+            .filter((rule): rule is Extract<typeof rule, { source: 'mcp' }> => rule.effect === 'allow' && rule.source === 'mcp')
+            .map(rule => rule.server)))
+        : undefined;
     const servers = serverFilter
         ? [serverFilter]
-        : (await mcpClient.listServers())
+        : isolatedServers || (await mcpExternal.listMcpServers(ctx.sessionId))
             .filter(server => server.enabled)
             .map(server => server.name);
 
@@ -257,8 +456,9 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
     for (const serverName of servers) {
         let tools: any;
         try {
-            tools = await mcpClient.listTools(serverName);
+            tools = await mcpExternal.listMcpTools(ctx.sessionId, serverName);
         } catch (e: any) {
+            if (isToolAuthorizationPolicyUnavailable(e)) throw e;
             warnings?.push(`MCP server ${serverName}: ${e?.message || String(e)}`);
             continue;
         }
@@ -290,13 +490,16 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
 }
 
 async function collectNodeUnifiedSearchResults(query: string, includeSchema: boolean, nodeFilter: string | undefined, ctx?: ToolContext) {
-    const effectiveNodeId = nodeFilter || await resolveDefaultNodeSearchTarget(ctx);
-    const nodeListing = await tool_remote_node({ action: 'list', nodeId: effectiveNodeId }, (ctx || ({} as ToolContext))) as any;
-    const nodes = Array.isArray(nodeListing?.nodes) ? nodeListing.nodes : [];
+    if (!ctx?.sessionId) throw new Error('Node discovery requires session context.');
+    const currentNode = await resolveDefaultNodeSearchTarget(ctx);
+    const effectiveNodeId = nodeFilter || currentNode;
+    const nodes = await listNodeTopology(ctx.sessionId, effectiveNodeId, currentNode);
 
     const results: Array<Record<string, any>> = [];
+    const session = discoverySession(ctx);
     for (const node of nodes) {
         for (const item of Array.isArray(node?.tools) ? node.tools : []) {
+            if (!isToolVisibleForSession(session, { source: 'node', node: String(node?.id || ''), tool: String(item?.name || '') }, String(node?.id || ''))) continue;
             const score = scoreUnifiedToolQuery(query, [item?.name, item?.description, node?.id, node?.type]);
             if (score < 0) {
                 continue;
@@ -319,24 +522,28 @@ async function collectNodeUnifiedSearchResults(query: string, includeSchema: boo
 }
 
 export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
+    if (ctx?.sessionPlacement === 'session-worker' && ctx.session && sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+        await agentMetadata.refreshAgentMetadata(ctx.session.agent || 'main');
+    }
     const query = typeof args?.query === 'string' ? args.query : '';
     const sources = normalizeUnifiedToolSources(args?.sources);
     const server = typeof args?.server === 'string' && args.server.trim() ? args.server.trim() : undefined;
     const nodeId = typeof args?.nodeId === 'string' && args.nodeId.trim() ? args.nodeId.trim() : undefined;
     const includeSchema = args?.includeSchema !== false;
-    const limit = Math.max(1, Math.min(Number(args?.limit) || 20, 200));
+    const limit = normalizeSearchToolsLimit(args?.limit);
     const warnings: string[] = [];
 
     const collected: Array<Record<string, any>> = [];
 
     if (sources.includes('builtin')) {
-        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema));
+        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema, ctx));
     }
 
     if (sources.includes('mcp')) {
         try {
             collected.push(...await collectMcpUnifiedSearchResults(query, includeSchema, server, ctx, warnings));
         } catch (e: any) {
+            if (isToolAuthorizationPolicyUnavailable(e)) throw e;
             warnings.push(e?.message || String(e));
         }
     }
@@ -345,24 +552,15 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         try {
             collected.push(...await collectNodeUnifiedSearchResults(query, includeSchema, nodeId, ctx));
         } catch (e: any) {
+            if (isToolAuthorizationPolicyUnavailable(e)) throw e;
             warnings.push(e?.message || String(e));
         }
     }
 
-    collected.sort((a, b) => {
-        const scoreCompare = Number(b._score || 0) - Number(a._score || 0);
-        if (scoreCompare !== 0) return scoreCompare;
-        const sourceCompare = String(a.source).localeCompare(String(b.source));
-        if (sourceCompare !== 0) return sourceCompare;
-        const scopeA = String(a.server || a.nodeId || '');
-        const scopeB = String(b.server || b.nodeId || '');
-        const scopeCompare = scopeA.localeCompare(scopeB);
-        if (scopeCompare !== 0) return scopeCompare;
-        return String(a.name || '').localeCompare(String(b.name || ''));
-    });
+    collected.sort(compareUnifiedSearchResults);
 
     const tools = collected.slice(0, limit).map(({ _score, ...tool }, index) => {
-        if (!includeSchema || index < 10) {
+        if (!includeSchema || index < SEARCH_TOOLS_SCHEMA_DETAIL_LIMIT) {
             return tool;
         }
 
@@ -370,64 +568,9 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         return summaryTool;
     });
 
-    return {
-        count: Math.min(collected.length, limit),
-        totalMatched: collected.length,
-        tools,
-        ...(warnings.length > 0 ? { warnings } : {}),
-    };
+    return { output: formatSearchToolsOutput(tools, collected.length, warnings, includeSchema) };
 }
 
 export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
-    const explicitSource = typeof args?.source === 'string' ? args.source.trim() : undefined;
-    const ref = args?.toolId
-        ? parseUnifiedToolId(String(args.toolId))
-        : {
-            source: explicitSource as UnifiedToolSource,
-            name: typeof args?.name === 'string' ? args.name : '',
-            server: typeof args?.server === 'string' ? args.server : undefined,
-            nodeId: typeof args?.nodeId === 'string' ? args.nodeId : undefined,
-        };
-
-    if (!ref?.source || !['builtin', 'mcp', 'node'].includes(ref.source)) {
-        throw new Error('call_tool requires either toolId or a valid source (builtin, mcp, node).');
-    }
-    if (!ref.name) {
-        throw new Error('call_tool requires a tool name.');
-    }
-
-    const toolArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', {
-        required: true,
-        label: 'call_tool args',
-    })!;
-
-    if (ref.source === 'builtin') {
-        return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
-    }
-
-    if (ref.source === 'mcp') {
-        if (!ref.server) {
-            throw new Error('call_tool for MCP source requires server unless toolId includes it.');
-        }
-        if (!ctx?.sessionId) {
-            throw new Error('call_tool for MCP requires session context.');
-        }
-        await checkToolPermission('call_mcp', ctx.sessionId, 'master', {
-            server: ref.server,
-            tool: ref.name,
-            args: toolArgs,
-        });
-        return await mcpClient.callTool(ref.server, ref.name, toolArgs);
-    }
-
-    if (!ref.nodeId) {
-        throw new Error('call_tool for node source requires nodeId.');
-    }
-
-    return await tool_remote_node({
-        action: 'call',
-        nodeId: ref.nodeId,
-        tool: ref.name,
-        args: toolArgs,
-    }, ctx);
+    return executeResolvedTool(await resolveUnifiedTool(args, ctx), ctx);
 }

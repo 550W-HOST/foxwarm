@@ -8,6 +8,57 @@ from typing import Mapping, Optional
 from urllib.parse import parse_qs, urlparse
 
 
+NODE_PROTOCOL_MIN = 1
+NODE_PROTOCOL_MAX = 2
+_MISSING_PROTOCOL = object()
+
+
+def normalize_node_protocol_range(value: object, label: str = 'nodeProtocol') -> dict[str, int]:
+    if type(value) is not dict or set(value.keys()) != {'min', 'max'}:
+        raise ValueError(f'{label} must contain exactly integer min and max fields.')
+    minimum = value['min']
+    maximum = value['max']
+    if (type(minimum) is not int or type(maximum) is not int
+            or minimum < 1 or maximum < minimum or maximum > 1_000_000):
+        raise ValueError(f'{label} must satisfy 1 <= min <= max <= 1000000 using integers.')
+    return {'min': minimum, 'max': maximum}
+
+
+def resolve_master_node_protocol(value: object = _MISSING_PROTOCOL) -> dict[str, object]:
+    if value is _MISSING_PROTOCOL:
+        return {'master': {'min': 1, 'max': 1}, 'negotiated': 1, 'legacy': True}
+    if type(value) is not dict or set(value.keys()) != {'master', 'negotiated'}:
+        raise ValueError('nodeProtocol must contain exactly master and negotiated fields.')
+    master = normalize_node_protocol_range(value['master'], 'nodeProtocol.master')
+    negotiated = value['negotiated']
+    if type(negotiated) is not int or negotiated < 1 or negotiated > 1_000_000:
+        raise ValueError('nodeProtocol.negotiated must be an integer between 1 and 1000000.')
+    lower = max(NODE_PROTOCOL_MIN, master['min'])
+    upper = min(NODE_PROTOCOL_MAX, master['max'])
+    if lower > upper or negotiated != upper:
+        raise ValueError('Master Node protocol selection is incompatible or not the newest shared generation.')
+    return {'master': master, 'negotiated': negotiated, 'legacy': False}
+
+
+@dataclass
+class NodeProtocolGate:
+    incompatible: bool = False
+
+    def accept_registered(self, data: Mapping[str, object]) -> dict[str, object]:
+        resolved = resolve_master_node_protocol(data['nodeProtocol']) if 'nodeProtocol' in data else resolve_master_node_protocol()
+        self.incompatible = False
+        return resolved
+
+    def mark_incompatible(self) -> None:
+        self.incompatible = True
+
+    def allows_application_work(self) -> bool:
+        return not self.incompatible
+
+    def should_reconnect(self) -> bool:
+        return not self.incompatible
+
+
 @dataclass
 class StoredNodeCredentials:
     node_id: str
@@ -25,12 +76,9 @@ class NodeConnectionConfig:
     credentials_file: Optional[str] = None
 
 
-def _env(env: Mapping[str, str], *names: str) -> Optional[str]:
-    for name in names:
-        value = env.get(name)
-        if value and value.strip():
-            return value.strip()
-    return None
+def _env(env: Mapping[str, str], name: str) -> Optional[str]:
+    value = env.get(name)
+    return value.strip() if value and value.strip() else None
 
 
 def _normalize_host(value: str) -> str:
@@ -60,13 +108,13 @@ def build_node_ws_url(host: str, pairing_token: Optional[str] = None, node_id: O
 def parse_connection_config(env: Optional[Mapping[str, str]] = None) -> Optional[NodeConnectionConfig]:
     source = env or os.environ
 
-    raw_url = _env(source, 'FOXWARM_URL', 'ALPHABOT_URL')
-    host = _env(source, 'FOXWARM_HOST', 'ALPHABOT_HOST')
-    requested_name = _env(source, 'FOXWARM_NODE_ID', 'ALPHABOT_NODE_ID')
-    pairing_token = _env(source, 'FOXWARM_NODE_TOKEN', 'ALPHABOT_NODE_TOKEN')
-    auth_token = _env(source, 'FOXWARM_NODE_AUTH_TOKEN', 'ALPHABOT_NODE_AUTH_TOKEN')
-    node_id = _env(source, 'FOXWARM_NODE_AUTH_ID', 'ALPHABOT_NODE_AUTH_ID')
-    credentials_file = _env(source, 'FOXWARM_NODE_CREDENTIALS_FILE', 'ALPHABOT_NODE_CREDENTIALS_FILE')
+    raw_url = _env(source, 'FOXWARM_URL')
+    host = _env(source, 'FOXWARM_HOST')
+    requested_name = _env(source, 'FOXWARM_NODE_ID')
+    pairing_token = _env(source, 'FOXWARM_NODE_TOKEN')
+    auth_token = _env(source, 'FOXWARM_NODE_AUTH_TOKEN')
+    node_id = _env(source, 'FOXWARM_NODE_AUTH_ID')
+    credentials_file = _env(source, 'FOXWARM_NODE_CREDENTIALS_FILE')
 
     if raw_url:
         parsed = urlparse(raw_url)

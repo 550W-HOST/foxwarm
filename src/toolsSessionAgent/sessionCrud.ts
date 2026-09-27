@@ -1,108 +1,113 @@
 import * as sessionManager from '../sessionManager';
-import { COMPACT_PERCENT } from '../config';
+import * as sessionRuntime from '../sessionRuntime';
+import { COMPACT_KEEP_PERCENT } from '../config';
 import { requireNotIsolated } from '../isolatedCheck';
+import { executeMainManagementTool } from '../mainManagementTools';
 import { ToolArgs, ToolContext } from './helpers';
+import { buildSessionListOutput, buildSessionStatusInfo, formatSessionStatus } from '../sessionStatus';
+import { deleteSessionLifecycle } from '../sessionDeletion';
 
-export async function tool_list_sessions(args: ToolArgs = {}, ctx?: ToolContext) {
-  await requireNotIsolated(ctx, 'list_sessions');
-  const sessions = sessionManager.listSessions();
+export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
+  const action = typeof args.action === 'string' && args.action.trim()
+    ? args.action.trim().toLowerCase()
+    : 'status';
 
-  if (sessions.length === 0) {
-    return 'No sessions found.';
+  if (action === 'list') {
+    // The session catalog is Main-owned; a worker reads it through the
+    // fixed main-management facade instead of its own empty module state.
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('session_list', args, ctx);
+    await requireNotIsolated(ctx, 'session list');
+    return buildSessionListOutput(args, ctx?.sessionId);
   }
 
-  const total = sessions.length;
-  const rawStart = typeof args.start === 'number' && !Number.isNaN(args.start) ? Math.trunc(args.start) : 0;
-  const rawCount = typeof args.count === 'number' && !Number.isNaN(args.count) ? Math.trunc(args.count) : 20;
-  const start = Math.max(0, Math.min(rawStart, total));
-  const count = Math.max(0, rawCount);
-  const pageSessions = sessions.slice(start, start + count);
-
-  if (pageSessions.length === 0) {
-    return `No sessions found in the requested range. Total sessions: ${total}.`;
+  if (action === 'update-display-name') {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('session_update_display_name', args, ctx);
+    return updateSessionDisplayName(args, ctx);
   }
 
-  const end = start + pageSessions.length;
-  let result = `Found ${total} session(s). Showing ${start + 1}-${end}.`;
-  if (end < total) {
-    result += ` Use \`start: ${end}\` to see the next page.`;
-  }
-  result += '\n\n';
-
-  for (const s of pageSessions) {
-    const date = s.lastMessageTime ? new Date(s.lastMessageTime).toISOString() : 'never';
-    const channel = s.hasChannel ? '📱' : '🤖';
-    const displayName = s.displayName ? ` (${s.displayName})` : '';
-    const node = s.currentNode || 'master';
-    const isolated = s.isolated ? ' isolated' : '';
-    const busy = s.busy ? ' 🔄busy' : '';
-    const queued = s.queueLength ? ` queue:${s.queueLength}` : '';
-    result += `${channel} \`${s.id}\`${displayName} - ${s.messageCount} messages - node: \`${node}\`${isolated}${busy}${queued} - Last: ${date}\n`;
+  if (action !== 'status') {
+    throw new Error('session.action must be "status", "list", or "update-display-name".');
   }
 
-  return result;
+  const targetSessionId = ctx?.sessionId;
+  if (!targetSessionId) {
+    throw new Error('Cannot show session status without current session context.');
+  }
+
+  return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, ctx?.session, ctx?.sessionPlacement === 'session-worker'));
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
-  await requireNotIsolated(ctx, 'delete_session');
-  const { sessionId } = args;
-
-  if (ctx && ctx.sessionId === sessionId) {
-    throw new Error('Cannot delete current session. Use /clear to clear history or switch to another session first.');
+  if (ctx?.sessionPlacement === 'session-worker') {
+    return executeMainManagementTool('delete_session', args, ctx);
   }
-
-  const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
-
-  if (prep.requiresRetry) {
-    const queueNote = prep.droppedQueueItems > 0
-      ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
-      : '';
-    if (prep.abortedInFlight) {
-      return `Stop signal sent to busy session \`${sessionId}\`. The in-flight LLM request was aborted.${queueNote} Retry delete after the session becomes idle.`;
-    }
-    return `Stop signal sent to busy session \`${sessionId}\`. It will stop after the current tool call completes.${queueNote} Retry delete after the session becomes idle.`;
-  }
-
-  const deleted = await sessionManager.deleteSession(sessionId);
-
-  if (deleted) {
-    return `Session \`${sessionId}\` deleted successfully.`;
-  }
-
-  return `Session \`${sessionId}\` not found.`;
+  return deleteSessionForSource(args, ctx?.sessionId);
 }
 
-export async function tool_update_session_name(args: ToolArgs, ctx: ToolContext) {
+export async function deleteSessionForSource(
+  args: ToolArgs,
+  sourceSessionId?: string,
+  assertSourceCurrent?: () => void | Promise<void>,
+) {
+  if (!sourceSessionId) throw new Error('Cannot delete a session without current session context.');
+  await requireNotIsolated(sourceSessionId, 'delete_session');
+  const requestedSessionId = typeof args.sessionId === 'string' ? args.sessionId : '';
+  const result = await deleteSessionLifecycle({ requestedSessionId, sourceSessionId, assertSourceCurrent });
+  if (result.status === 'not-found') return `Session \`${requestedSessionId}\` not found.`;
+  if (result.status === 'busy') {
+    const queueNote = result.droppedQueueItems > 0
+      ? ` Cleared ${result.droppedQueueItems} queued item(s).`
+      : '';
+    if (result.abortedInFlightCount > 0) {
+      return `Stop signal sent to busy session \`${requestedSessionId}\`. The in-flight LLM request was aborted.${queueNote} Retry delete after the session becomes idle.`;
+    }
+    return `Stop signal sent to busy session \`${requestedSessionId}\`. It will stop after the current tool call completes.${queueNote} Retry delete after the session becomes idle.`;
+  }
+  return `Session \`${result.deletedSessionIds[0]}\` deleted successfully.`;
+}
+
+function formatDisplayName(name: string | undefined): string {
+  return typeof name === 'string' ? JSON.stringify(name) : 'unset';
+}
+
+async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
   const { sessionId, name } = args;
   const targetId = sessionId || ctx?.sessionId;
 
   if (!targetId) {
     throw new Error('Session ID is required.');
   }
+  if (typeof name !== 'string') {
+    throw new Error('session.name is required for action="update-display-name".');
+  }
 
-  const session = await sessionManager.getExistingSession(targetId);
+  const session = await sessionRuntime.getSession(targetId);
   if (!session) {
     throw new Error(`Session \`${targetId}\` not found.`);
   }
 
-  if (name && name.trim()) {
-    session.displayName = name.trim();
-  } else {
-    session.displayName = undefined;
+  const previousName = session.displayName || undefined;
+  const nextName = name.trim() || undefined;
+
+  if (previousName === nextName) {
+    return `Session \`${session.id}\` display name unchanged (from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}).`;
   }
 
-  await sessionManager.saveSession(session.id);
+  await sessionRuntime.updateSettings(session.id, { displayName: nextName || null });
 
-  if (session.displayName) {
-    return `Session \`${session.id}\` renamed to "${session.displayName}".`;
-  }
-  return `Session \`${session.id}\` display name cleared.`;
+  return `Session \`${session.id}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
 }
 
-export async function tool_stop_session(args: ToolArgs) {
+export async function tool_stop_session(args: ToolArgs, ctx?: ToolContext) {
   const { sessionId } = args;
 
-  const session = await sessionManager.getSession(sessionId);
+  if (ctx?.sessionPlacement === 'session-worker' && ctx.session && (ctx.session.id === sessionId || ctx.session.aliases?.includes(sessionId)) && ctx.persistCurrentSession) {
+    ctx.session.stopping = true;
+    await ctx.persistCurrentSession();
+    return `Stop signal set for session \`${sessionId}\`. It will stop after the current tool call completes.`;
+  }
+
+  const session = await sessionRuntime.getSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
@@ -111,7 +116,7 @@ export async function tool_stop_session(args: ToolArgs) {
     return `Session \`${sessionId}\` is not currently running.`;
   }
 
-  const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId);
+  const { abortedInFlight } = await sessionRuntime.control(sessionId, 'stop');
 
   if (abortedInFlight) {
     return `Stop signal sent to session \`${sessionId}\`. The in-flight LLM request was aborted.`;
@@ -120,7 +125,7 @@ export async function tool_stop_session(args: ToolArgs) {
   return `Stop signal sent to session \`${sessionId}\`. It will stop after the current tool call completes.`;
 }
 
-function normalizeKeepPercent(value: unknown, defaultPercent = COMPACT_PERCENT): number {
+function normalizeKeepPercent(value: unknown, defaultPercent = COMPACT_KEEP_PERCENT): number {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return defaultPercent;
   }
@@ -143,8 +148,19 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
     : undefined;
   const keepPercent = normalizeKeepPercent(args.keepPercent);
 
+  if (ctx.sessionPlacement === 'session-worker') {
+    if (!ctx.session || targetSessionId !== ctx.sessionId || ctx.session.id !== ctx.sessionId) {
+      throw new Error('Session-worker compact_session may target only the exact current session.');
+    }
+    return `Compaction was not started for session \`${ctx.sessionId}\`: synchronous Session-worker placement cannot start background compaction from a busy model tool call. Request /compact when the session is idle.`;
+  }
+
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  if (sessionManager.isSessionWorkerFenced(targetSessionId)) {
+    throw new Error('Cross-session compaction is unavailable while the target Session worker is active. Request compaction from the target session when it is idle.');
   }
 
   const targetSession = await sessionManager.getExistingSession(targetSessionId);
@@ -163,18 +179,18 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
     completionMarker: isSelf
       ? 'Compaction completed. You can continue working now.'
       : 'Compaction completed.',
-    stopAfterCurrentTurn: false,
-    requestedBy: compactGuidance ? 'manual' : 'tool',
   });
 
   if (result.alreadyQueued) {
-    return `Compaction is already queued for session \`${targetSessionId}\`.`;
+    return `Compaction is already pending for session \`${targetSessionId}\`.`;
   }
 
   const mode = compactGuidance ? 'guided compaction plan' : 'automatic compaction plan';
   if (result.startedImmediately) {
-    return `Compaction requested for session \`${targetSessionId}\`. It is entering the compact planning flow now using ${mode}.`;
+    return result.runsInBackground
+      ? `Compaction requested for session \`${targetSessionId}\`. It is entering the background compact planning flow now using ${mode}.`
+      : `Compaction started for session \`${targetSessionId}\` using ${mode}. The session remains busy until awaited compaction finishes.`;
   }
 
-  return `Compaction requested for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
+  return `Compaction was not started for session \`${targetSessionId}\`: its model disables background compaction, so the session must be idle before compaction can run.`;
 }

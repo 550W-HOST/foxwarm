@@ -1,85 +1,85 @@
-import { Plus, Workflow } from 'lucide-react'
+import { Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
-import type { Session } from './SessionListCore'
+import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
+import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
+import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import AgentCreationMenu from './AgentCreationMenu'
+import type { AgentSummary } from '../agentCreation'
+import type { WebUiNodeTarget } from '../nodeTargets'
 
 interface SessionListProps {
   sessions: Session[]
+  agents: AgentSummary[]
   currentSession?: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
-  themeMode: 'auto' | 'light' | 'dark'
-  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
-  sendKeyMode: 'modEnter' | 'enter'
-  onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
-  groupTools: boolean
-  onGroupToolsChange: (enabled: boolean) => void
-  showUsageBadge: boolean
-  onShowUsageBadgeChange: (enabled: boolean) => void
-  instanceName: string
-  onInstanceNameChange: (name: string) => Promise<void> | void
-  tabIcon: string
-  onTabIconChange: (tabIcon: string) => Promise<void> | void
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
   onSelectSetup: () => void
-  onCreateWorkspaceTab: (options?: { nodeId?: string; path?: string }) => void
+  codePath: string
+  codeNodeId: string
+  codeOpenInNewWindow: boolean
+  codeActive: boolean
+  nodeTargets: readonly WebUiNodeTarget[]
+  nodeTargetsError?: string
+  onRefreshNodeTargets: () => void
+  onOpenCode: (nodeId: string, path: string) => void
+  onCodeNodeChange: (nodeId: string) => void
+  onCodePathChange: (path: string) => void
+  onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateSession: () => void
+  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
+  idleNotificationModes: Record<string, SessionIdleNotificationMode>
+  unreadSessionIds?: ReadonlySet<string>
+  onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
+  bounded?: BoundedSessionListPresentationProps
 }
 
 export default function SessionList({
   sessions,
+  agents,
   currentSession,
   currentView,
   currentSessionRecord,
-  themeMode,
-  onThemeChange,
-  sendKeyMode,
-  onSendKeyModeChange,
-  groupTools,
-  onGroupToolsChange,
-  showUsageBadge,
-  onShowUsageBadgeChange,
-  instanceName,
-  onInstanceNameChange,
-  tabIcon,
-  onTabIconChange,
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
   onSelectSetup,
-  onCreateWorkspaceTab,
+  codePath,
+  codeNodeId,
+  codeOpenInNewWindow,
+  codeActive,
+  nodeTargets,
+  nodeTargetsError,
+  onRefreshNodeTargets,
+  onOpenCode,
+  onCodeNodeChange,
+  onCodePathChange,
+  onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
+  onCreateAgent,
   onCreateSession,
+  idleNotificationModes,
+  unreadSessionIds,
+  onToggleIdleNotificationMode,
+  bounded,
 }: SessionListProps) {
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
-  const sessionLabel = currentSessionRecord?.displayName || currentSession || 'main'
 
   const agentsBtnClass = currentView === 'agents'
-    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700'
+    ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
+    : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/70 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   return (
-    <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-gray-100 dark:bg-gray-900 flex flex-col">
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+    <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-fw-canvas flex flex-col">
+      <div className="p-4 border-b border-fw-border bg-fw-surface">
         <div className="flex items-center justify-between gap-2">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
+          <h1 className="text-2xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
           <GlobalUiSettingsMenu
-            themeMode={themeMode}
-            onThemeChange={onThemeChange}
-            sendKeyMode={sendKeyMode}
-            onSendKeyModeChange={onSendKeyModeChange}
-            groupTools={groupTools}
-            onGroupToolsChange={onGroupToolsChange}
-            showUsageBadge={showUsageBadge}
-            onShowUsageBadgeChange={onShowUsageBadgeChange}
-            instanceName={instanceName}
-            onInstanceNameChange={onInstanceNameChange}
-            tabIcon={tabIcon}
-            onTabIconChange={onTabIconChange}
             onOpenSetup={onSelectSetup}
             setupActive={currentView === 'setup'}
           />
@@ -93,46 +93,57 @@ export default function SessionList({
             <Workflow className="w-4 h-4" />
             <span>Agents</span>
           </button>
-          <button
-            onClick={onCreateSession}
-            className="inline-flex items-center justify-center rounded-lg px-2 text-sm font-medium transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-700"
-            title="Create new session"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <AgentCreationMenu
+            agents={agents}
+            currentAgent={currentSessionRecord?.agent}
+            compact
+            onCreateAgent={onCreateAgent}
+            onCreateSession={onCreateSession}
+          />
         </div>
 
-        <div className="mt-2 flex items-start gap-1">
-          <div className="flex-1 min-w-0">
-            <CreateTabButton
-              kind="workspace"
-              defaultNodeId={defaultNodeId}
-              defaultPath={defaultPath}
-              sessionLabel={sessionLabel}
-              onCreate={(options) => onCreateWorkspaceTab(options)}
-            />
-          </div>
-          <div className="flex-1 min-w-0">
-            <CreateTabButton
-              kind="terminal"
-              defaultNodeId={defaultNodeId}
-              defaultPath={defaultPath}
-              sessionLabel={sessionLabel}
-              onCreate={(options) => onCreateTerminalTab(options)}
-            />
-          </div>
+        <div className="mt-2">
+          <CodeLaunchButton
+            path={codePath}
+            nodeId={codeNodeId}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
+            openInNewWindow={codeOpenInNewWindow}
+            active={codeActive}
+            onOpen={onOpenCode}
+            onNodeChange={onCodeNodeChange}
+            onPathChange={onCodePathChange}
+            onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+            onRefreshNodeTargets={onRefreshNodeTargets}
+          />
+        </div>
+
+        <div className="mt-2">
+          <CreateTabButton
+            defaultNodeId={defaultNodeId}
+            defaultPath={defaultPath}
+            onCreate={(options) => onCreateTerminalTab(options)}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
+            onRefreshNodeTargets={onRefreshNodeTargets}
+          />
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto" data-session-list-scroll-container>
-        <div className="border-t border-gray-200 dark:border-gray-700 max-w-4xl mx-auto p-4">
-          <SessionListCore 
-            sessions={sessions} 
-            currentSession={currentSession}
-            onSelectSession={onSelectSession}
-            onKeepSession={onKeepSession}
-          />
-        </div>
+      <div className="flex-1 min-h-0 border-t border-fw-border">
+        <SessionListCore
+          sessions={sessions}
+          currentSession={currentSession}
+          onSelectSession={onSelectSession}
+          onKeepSession={onKeepSession}
+          idleNotificationModes={idleNotificationModes}
+          unreadSessionIds={unreadSessionIds}
+          onToggleIdleNotificationMode={onToggleIdleNotificationMode}
+          bounded={bounded}
+          dragEnabled={false}
+          toolbarContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pb-2"
+          listContainerClassName="mx-auto w-full max-w-4xl p-2 sm:p-4 sm:pt-1"
+        />
       </div>
     </div>
   )

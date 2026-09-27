@@ -5,6 +5,7 @@ import { getOpenAIRequestApi } from './llm';
 test('getOpenAIRequestApi routes openai providers to Responses API', () => {
   assert.equal(getOpenAIRequestApi('openai'), 'responses');
   assert.equal(getOpenAIRequestApi('openai-responses'), 'responses');
+  assert.equal(getOpenAIRequestApi('openai-ws'), 'responses');
 });
 
 test('getOpenAIRequestApi routes openai-completions to chat/completions', () => {

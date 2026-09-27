@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Android Node Server for Alphabot
+Android Node Server for Foxwarm
 Provides Android automation tools via uiautomator2
 """
 
@@ -20,6 +20,7 @@ import uiautomator2 as u2
 from aiohttp import web
 import websockets
 from node_auth import (
+    NodeProtocolGate,
     build_node_ws_url,
     clear_stored_credentials,
     load_stored_credentials,
@@ -227,7 +228,7 @@ class AndroidNode:
         }
         
     async def handle_tool_call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle tool call from alphabot"""
+        """Handle tool call from Foxwarm"""
         try:
             if tool == "android_tap":
                 return await self.tap(args)
@@ -617,6 +618,7 @@ def build_registration_payload(node: AndroidNode) -> Dict[str, Any]:
     return {
         "type": "node_register",
         "nodeType": "android",
+        "nodeProtocol": {"min": 1, "max": 2},
         "capabilities": {
             "tools": TOOL_DEFINITIONS
         },
@@ -632,7 +634,7 @@ async def connect_to_foxwarm(node: AndroidNode):
     """Connect to foxwarm using pairing-based auth or stored credentials."""
     config = parse_connection_config()
     if not config:
-        raise RuntimeError("Missing FOXWARM/ALPHABOT host configuration")
+        raise RuntimeError("Missing FOXWARM host configuration")
 
     connected_node_id = config.node_id
     auth_token = config.auth_token
@@ -664,6 +666,7 @@ async def connect_to_foxwarm(node: AndroidNode):
             connected_node_id,
         )
 
+        protocol_gate = NodeProtocolGate()
         try:
             async with websockets.connect(
                 ws_url,
@@ -679,6 +682,7 @@ async def connect_to_foxwarm(node: AndroidNode):
                         "type": "pair_request",
                         "requestedName": config.requested_name,
                         "nodeType": "android",
+                        "nodeProtocol": {"min": 1, "max": 2},
                         "capabilities": {"tools": TOOL_DEFINITIONS},
                     }))
 
@@ -686,7 +690,24 @@ async def connect_to_foxwarm(node: AndroidNode):
                     data = json.loads(message)
                     message_type = data.get("type")
 
+                    if message_type == "node_incompatible":
+                        protocol_gate.mark_incompatible()
+                        logger.error("Node protocol is incompatible: %s", data.get("message") or data)
+                        continue
+
+                    if not protocol_gate.allows_application_work():
+                        if message_type == "error":
+                            logger.error("Master diagnostic while protocol-incompatible: %s", data.get("error") or data)
+                        else:
+                            logger.warning("Ignoring %s while Node protocol is incompatible", message_type)
+                        continue
+
                     if message_type == "registered":
+                        try:
+                            protocol_gate.accept_registered(data)
+                        except ValueError:
+                            logger.error("Master Node protocol is incompatible; update Master or this Android Node")
+                            return
                         connected_node_id = data.get("nodeId") or connected_node_id
                         logger.info("✅ Successfully registered as node: %s", connected_node_id)
                         continue
@@ -744,6 +765,9 @@ async def connect_to_foxwarm(node: AndroidNode):
         if pairing_rejected:
             return
 
+        if not protocol_gate.should_reconnect():
+            return
+
         await asyncio.sleep(0.25 if force_immediate_reconnect else 5)
         force_immediate_reconnect = False
 
@@ -782,7 +806,7 @@ async def main():
     device_serial = os.getenv("ANDROID_DEVICE_SERIAL")
     node = AndroidNode(device_serial)
     
-    # Check if should connect to Alphabot
+    # Check if the node should connect to Foxwarm
     connection_config = parse_connection_config()
 
     if connection_config:

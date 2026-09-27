@@ -16,11 +16,33 @@
     <script>
       (() => {
         try {
-          const saved = localStorage.getItem('themeMode')
-          const themeMode = saved === 'light' || saved === 'dark' || saved === 'auto' ? saved : 'auto'
+          let themeMode = localStorage.getItem('themeMode')
+          let themeId = localStorage.getItem('foxwarm_ui_theme_style_v1') === '550a' ? 'foxwarm.550a' : 'foxwarm.default'
+          try {
+            const selection = JSON.parse(localStorage.getItem('foxwarm_theme_selection_v1') || 'null')
+            if (selection?.version === 1 && typeof selection.themeId === 'string') themeId = selection.themeId
+            if (selection?.version === 1) themeMode = selection.colorMode
+          } catch {}
+          themeMode = themeMode === 'light' || themeMode === 'dark' || themeMode === 'auto' ? themeMode : 'auto'
           const darkMode = themeMode === 'dark' || (themeMode === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          const mode = darkMode ? 'dark' : 'light'
+          const builtinCanvas = themeId === 'foxwarm.550a'
+            ? (darkMode ? '#0c0c0c' : '#f4f3ef')
+            : (darkMode ? '#111827' : '#f3f4f6')
+          let canvas = builtinCanvas
+          if (!themeId.startsWith('foxwarm.')) {
+            try {
+              const registry = JSON.parse(localStorage.getItem('foxwarm_custom_themes_v1') || 'null')
+              const candidate = registry?.version === 1 && Array.isArray(registry.themes)
+                ? registry.themes.find(theme => theme?.id === themeId)
+                : null
+              const customCanvas = candidate?.variants?.[mode]?.colors?.canvas
+              if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(customCanvas || '')) canvas = customCanvas
+            } catch {}
+          }
           document.documentElement.classList.toggle('dark', darkMode)
-          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', darkMode ? '#111827' : '#f3f4f6')
+          document.documentElement.style.setProperty('--foxwarm-app-background', canvas)
+          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', canvas)
         } catch {
           const darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
           document.documentElement.classList.toggle('dark', darkMode)

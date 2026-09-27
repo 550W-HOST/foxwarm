@@ -2,7 +2,8 @@ import { Message, MessagePart } from './types';
 import { formatArchiveBlockContextText, type ArchiveBlockRecord } from './session/layeredContext';
 import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
 import { stringifyFunctionCallArgs } from './toolCallArgs';
-import { truncateUnicodeSafe } from './utils/unicode';
+import { truncateUnicodeSafe, truncateUnicodeSafeByCodeUnitsWithEllipsis } from './utils/unicode';
+import { isFoxwarmMessageCloseLine, parseFoxwarmOpeningTag, parseFoxwarmWrappedContent } from './utils/promptWrappers';
 
 export type ContextPreviewToolDetail = 'names' | 'snippets' | 'full';
 
@@ -12,15 +13,23 @@ export type ContextPreviewItem = {
   body: string;
   searchText?: string;
   omittedToolText?: string;
+  priorityNotices?: string[];
 };
 
 export type ContextPreviewRenderOptions = {
   previewLength?: unknown;
   defaultPreviewLength?: number;
-  query?: unknown;
+  contentFilter?: unknown;
   includeRegex?: unknown;
   excludeRegex?: unknown;
   toolDetail?: unknown;
+  contentFilterOmitHint?: string;
+};
+
+export type ContextPreviewFilterStats = {
+  contentFilterExcludedCount: number;
+  includeRegexExcludedCount: number;
+  excludeRegexExcludedCount: number;
 };
 
 export type ContextPreviewRenderResult = {
@@ -30,6 +39,7 @@ export type ContextPreviewRenderResult = {
   matchedCount: number;
   inputCount: number;
   omittedCount: number;
+  filterStats: ContextPreviewFilterStats;
 };
 
 const DEFAULT_CONTEXT_PREVIEW_BUDGET = 6000;
@@ -48,6 +58,18 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
 ];
 
 function isEphemeralSystemText(text: string): boolean {
+  if (isFoxwarmMessageCloseLine(text)) {
+    return true;
+  }
+  const tag = parseFoxwarmOpeningTag(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'time'
+      || tag.attrs.kind === 'session'
+      || tag.attrs.kind === 'channel-mode';
+  }
+  if (tag?.tagName === 'foxwarm-message' && !tag.closing) {
+    return tag.attrs.type === 'channel';
+  }
   return EPHEMERAL_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 
@@ -95,16 +117,6 @@ function normalizeFilterText(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function normalizeToolDetail(value: unknown): ContextPreviewToolDetail {
-  if (value === undefined || value === null || value === '') {
-    return DEFAULT_CONTEXT_TOOL_DETAIL;
-  }
-  if (value === 'names' || value === 'snippets' || value === 'full') {
-    return value;
-  }
-  throw new Error('toolDetail must be one of: names, snippets, full.');
-}
-
 export function normalizeContextPreviewBudget(
   value: unknown,
   defaultPreviewLength: number = DEFAULT_CONTEXT_PREVIEW_BUDGET,
@@ -139,29 +151,29 @@ export function normalizeContextPreviewBudget(
 }
 
 export type CompiledPreviewFilters = {
-  query?: string;
-  queryRegex?: RegExp;
+  contentFilter?: string;
+  contentFilterRegex?: RegExp;
   includeRegex?: RegExp;
   excludeRegex?: RegExp;
   active: boolean;
 };
 
 function compilePreviewFilters(options: ContextPreviewRenderOptions): CompiledPreviewFilters {
-  const query = normalizeFilterText(options.query);
+  const contentFilter = normalizeFilterText(options.contentFilter);
   const includeRegex = compileOptionalRegex(options.includeRegex, 'includeRegex');
   const excludeRegex = compileOptionalRegex(options.excludeRegex, 'excludeRegex');
   return {
-    query,
-    queryRegex: query ? new RegExp(escapeRegexLiteral(query), 'i') : undefined,
+    contentFilter,
+    contentFilterRegex: contentFilter ? new RegExp(escapeRegexLiteral(contentFilter), 'i') : undefined,
     includeRegex,
     excludeRegex,
-    active: Boolean(query || includeRegex || excludeRegex),
+    active: Boolean(contentFilter || includeRegex || excludeRegex),
   };
 }
 
 function itemMatchesFilters(item: ContextPreviewItem, filters: CompiledPreviewFilters): boolean {
   const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
-  if (filters.query && !haystack.toLowerCase().includes(filters.query.toLowerCase())) {
+  if (filters.contentFilter && !haystack.toLowerCase().includes(filters.contentFilter.toLowerCase())) {
     return false;
   }
   if (filters.includeRegex && !filters.includeRegex.test(haystack)) {
@@ -174,7 +186,75 @@ function itemMatchesFilters(item: ContextPreviewItem, filters: CompiledPreviewFi
 }
 
 function collectMatchRegexes(filters: CompiledPreviewFilters): RegExp[] {
-  return [filters.queryRegex, filters.includeRegex].filter((entry): entry is RegExp => Boolean(entry));
+  return [filters.contentFilterRegex, filters.includeRegex].filter((entry): entry is RegExp => Boolean(entry));
+}
+
+function filterPreviewItems(
+  items: ContextPreviewItem[],
+  filters: CompiledPreviewFilters,
+): { items: ContextPreviewItem[]; stats: ContextPreviewFilterStats } {
+  let remaining = items;
+  let contentFilterExcludedCount = 0;
+  let includeRegexExcludedCount = 0;
+  let excludeRegexExcludedCount = 0;
+
+  if (filters.contentFilter) {
+    const next = remaining.filter(item => {
+      const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
+      return haystack.toLowerCase().includes(filters.contentFilter!.toLowerCase());
+    });
+    contentFilterExcludedCount = remaining.length - next.length;
+    remaining = next;
+  }
+
+  if (filters.includeRegex) {
+    const next = remaining.filter(item => {
+      const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
+      filters.includeRegex!.lastIndex = 0;
+      return filters.includeRegex!.test(haystack);
+    });
+    includeRegexExcludedCount = remaining.length - next.length;
+    remaining = next;
+  }
+
+  if (filters.excludeRegex) {
+    const next = remaining.filter(item => {
+      const haystack = normalizeWhitespaceForSearch(item.searchText || item.body || '');
+      filters.excludeRegex!.lastIndex = 0;
+      return !filters.excludeRegex!.test(haystack);
+    });
+    excludeRegexExcludedCount = remaining.length - next.length;
+    remaining = next;
+  }
+
+  return {
+    items: remaining,
+    stats: {
+      contentFilterExcludedCount,
+      includeRegexExcludedCount,
+      excludeRegexExcludedCount,
+    },
+  };
+}
+
+function formatFilterNotices(
+  stats: ContextPreviewFilterStats,
+  options: ContextPreviewRenderOptions,
+): string[] {
+  const notices: string[] = [];
+  if (stats.contentFilterExcludedCount > 0) {
+    notices.push(`[filter] contentFilter excluded ${stats.contentFilterExcludedCount} item(s) because the literal case-insensitive content filter did not match.`);
+    if (options.contentFilterOmitHint) {
+      notices.push(`[hint] ${options.contentFilterOmitHint}`);
+    }
+  }
+  if (stats.includeRegexExcludedCount > 0) {
+    notices.push(`[filter] includeRegex excluded ${stats.includeRegexExcludedCount} additional item(s) that remained after earlier filter stages.`);
+  }
+  if (stats.excludeRegexExcludedCount > 0) {
+    notices.push(`[filter] excludeRegex excluded ${stats.excludeRegexExcludedCount} additional item(s) that remained after earlier filter stages.`);
+  }
+  return notices;
 }
 
 function firstMatchIndex(text: string, filters: CompiledPreviewFilters): { index: number; length: number } | undefined {
@@ -300,8 +380,15 @@ function formatToolNameList(message: Message): string[] {
 function formatMessageFullLines(message: Message, options: { toolDetail: ContextPreviewToolDetail; filters: CompiledPreviewFilters }): string[] {
   const lines: string[] = [];
   for (const part of message.parts || []) {
-    if (typeof part.system === 'string' && !isEphemeralSystemText(part.system)) {
-      lines.push(`[system] ${part.system}`);
+    if (typeof part.system === 'string') {
+      const wrapped = parseFoxwarmWrappedContent(part.system);
+      if (wrapped?.tagName === 'foxwarm-message' && wrapped.attrs.type === 'channel') {
+        if (wrapped.content.trim()) {
+          lines.push(wrapped.content.trim());
+        }
+      } else if (!isEphemeralSystemText(part.system)) {
+        lines.push(`[system] ${part.system}`);
+      }
     }
     if (typeof part.text === 'string' && part.text.trim() && !part.text.includes('--- RELEVANT MEMORY SNIPPETS (RAG) ---')) {
       lines.push(part.text.trim());
@@ -335,8 +422,15 @@ function formatMessageFullLines(message: Message, options: { toolDetail: Context
 function buildMessageSearchText(message: Message): string {
   const lines: string[] = [];
   for (const part of message.parts || []) {
-    if (typeof part.system === 'string' && !isEphemeralSystemText(part.system)) {
-      lines.push(`[system] ${part.system}`);
+    if (typeof part.system === 'string') {
+      const wrapped = parseFoxwarmWrappedContent(part.system);
+      if (wrapped?.tagName === 'foxwarm-message' && wrapped.attrs.type === 'channel') {
+        if (wrapped.content.trim()) {
+          lines.push(wrapped.content.trim());
+        }
+      } else if (!isEphemeralSystemText(part.system)) {
+        lines.push(`[system] ${part.system}`);
+      }
     }
     if (typeof part.text === 'string' && part.text.trim() && !part.text.includes('--- RELEVANT MEMORY SNIPPETS (RAG) ---')) {
       lines.push(part.text.trim());
@@ -453,25 +547,72 @@ function renderSingleItem(item: ContextPreviewItem, maxChars: number, filters: C
 
 export function renderContextPreviewItems(args: {
   items: ContextPreviewItem[];
-  title: string | ((info: { matchedCount: number; inputCount: number; budget: number }) => string);
+  title: string | ((info: { matchedCount: number; totalMatchedCount: number; inputCount: number; budget: number }) => string);
   emptyMessage: string;
   options?: ContextPreviewRenderOptions;
+  maxItems?: number;
+  notices?: string[];
 }): ContextPreviewRenderResult {
   const options = args.options || {};
   const { budget, warnings } = normalizeContextPreviewBudget(options.previewLength, options.defaultPreviewLength);
   const filters = compilePreviewFilters(options);
-  const filteredItems = args.items.filter(item => itemMatchesFilters(item, filters));
+  const filtered = filterPreviewItems(args.items, filters);
+  const totalMatchedCount = filtered.items.length;
+  const maxItems = typeof args.maxItems === 'number' && Number.isFinite(args.maxItems)
+    ? Math.max(0, Math.floor(args.maxItems))
+    : undefined;
+  const filteredItems = maxItems === undefined ? filtered.items : filtered.items.slice(0, maxItems);
+  const selectionOmittedCount = totalMatchedCount - filteredItems.length;
   const title = typeof args.title === 'function'
-    ? args.title({ matchedCount: filteredItems.length, inputCount: args.items.length, budget })
+    ? args.title({ matchedCount: filteredItems.length, totalMatchedCount, inputCount: args.items.length, budget })
     : args.title;
-  const prefixLines = [...warnings, title].filter(Boolean);
+  const selectionNotice = selectionOmittedCount > 0
+    ? `[selection] ${selectionOmittedCount} additional matched item(s) omitted by the requested result limit.`
+    : undefined;
+  const priorityNotices = [...(args.notices || []), ...filteredItems.flatMap(item => item.priorityNotices || [])]
+    .map(notice => String(notice || '').trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map(notice => truncateUnicodeSafeByCodeUnitsWithEllipsis(notice, 560));
+  const mediumLines = [...warnings, ...formatFilterNotices(filtered.stats, options), selectionNotice].filter(Boolean);
+
+  const buildPrefix = (reserveForBody: number): string => {
+    const available = Math.max(0, budget - reserveForBody);
+    let used = 0;
+    const sections: string[] = [];
+    const appendBounded = (text: string, maxAllowed: number) => {
+      const separatorLength = sections.length > 0 ? 1 : 0;
+      if (!text || maxAllowed <= separatorLength) return;
+      const bounded = truncateUnicodeSafeByCodeUnitsWithEllipsis(text, maxAllowed - separatorLength);
+      if (!bounded) return;
+      sections.push(bounded);
+      used += bounded.length + separatorLength;
+    };
+    const priorityText = priorityNotices.join('\n');
+    appendBounded(priorityText, Math.min(priorityText.length, Math.max(0, Math.min(700, available - used))));
+    const mediumText = mediumLines.join('\n');
+    appendBounded(mediumText, Math.min(mediumText.length, Math.max(0, available - used)));
+    appendBounded(title, Math.max(0, available - used));
+    return sections.join('\n');
+  };
 
   if (filteredItems.length === 0) {
-    const emptyText = [...prefixLines, '', args.emptyMessage].join('\n').trimEnd();
-    return { text: emptyText, budget, warnings, matchedCount: 0, inputCount: args.items.length, omittedCount: 0 };
+    const emptySuffix = `\n\n${args.emptyMessage}`;
+    const prefix = buildPrefix(emptySuffix.length);
+    const emptyText = `${prefix}${emptySuffix}`.trimStart();
+    return {
+      text: emptyText,
+      budget,
+      warnings,
+      matchedCount: 0,
+      inputCount: args.items.length,
+      omittedCount: 0,
+      filterStats: filtered.stats,
+    };
   }
 
-  let output = `${prefixLines.join('\n')}\n\n`;
+  const prefix = buildPrefix(242);
+  let output = prefix ? `${prefix}\n\n` : '';
   let omittedCount = 0;
   for (let index = 0; index < filteredItems.length; index += 1) {
     const remainingItems = filteredItems.length - index;
@@ -500,12 +641,14 @@ export function renderContextPreviewItems(args: {
 
   if (omittedCount > 0) {
     const note = `\n\n[${omittedCount} item(s) omitted due to previewLength budget ${budget}. Narrow the range/filter or raise previewLength up to ${MAX_CONTEXT_PREVIEW_BUDGET}.]`;
-    if (output.length + note.length <= budget + warnings.join('\n').length + 1) {
+    if (output.length + note.length <= budget) {
       output += note;
     } else {
-      output = `${truncateUnicodeSafe(output, Math.max(0, budget - note.length), '…')}${note}`;
+      output = `${truncateUnicodeSafeByCodeUnitsWithEllipsis(output, Math.max(0, budget - note.length))}${note}`;
     }
   }
+
+  output = truncateUnicodeSafeByCodeUnitsWithEllipsis(output, budget);
 
   return {
     text: output.trimEnd(),
@@ -514,6 +657,7 @@ export function renderContextPreviewItems(args: {
     matchedCount: filteredItems.length,
     inputCount: args.items.length,
     omittedCount,
+    filterStats: filtered.stats,
   };
 }
 

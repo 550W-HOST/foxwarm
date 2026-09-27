@@ -1,21 +1,19 @@
 # ToolScript examples
 
-Canonical examples live here so agents can inspect a small, stable starting point instead of grepping tests.
-
-These examples assume you have already explored the relevant tools in the normal agent loop and now want to encode a known tool flow into a reusable script.
+These examples provide small starting points for reusable tool automation.
+Explore the required tools in the normal agent loop first, then encode the verified flow in a ToolScript.
 
 Files:
 
-- `examples/toolscript/automation_basic.py`
-- `examples/toolscript/managed_controller_basic.py`
+- `examples/toolscript/automation_basic.py` reads a directory and a text file, pauses for agent input, and returns structured data.
+- `examples/toolscript/managed_controller_basic.py` waits for one managed-session event, processes it, and releases the session.
 
-These examples intentionally stay small and avoid product-specific business logic.
-They focus on the common case where you already know the tool flow you want to encode into a reusable script.
-
-Each example uses the current explicit ToolScript entrypoint shape:
+Every ToolScript defines an explicit entrypoint and returns its result:
 
 ```python
 def main(args):
     ...
     return {...}
 ```
+
+Nested relative paths resolve from the owner session's working directory, not from the directory containing the script file. Pass an explicit base path in `args` when the working directory is not guaranteed.

@@ -2,13 +2,29 @@ import { logger } from './common';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
 import { WebUIChannel } from './channels/webuiChannel';
+import { composeQueuedPreviewProjection } from './channels/webuiQueuePreview';
 import { TUIChannel } from './channels/tuiChannel';
 import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import { initializeChannelRuntime, startManagedChannel } from './channelRuntime';
 import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
+import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { teardownSessionWorkerForDelete } from './sessionWorkerDelete';
+import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
+import { performSessionWorkerHandback } from './sessionWorkerHandback';
+import { SessionWorkerStore } from './sessionWorkerStore';
+import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import { getModelStreamDraft } from './modelStreamDraft';
+import * as mainManagementTools from './mainManagementTools';
+import * as nodeExecution from './nodeExecution';
+import { nodeProviderRegistry } from './nodes/providers';
+import * as mcpExternal from './mcpExternalService';
+import { McpInboundHttpService } from './mcpInboundHttp';
+import { McpInboundMcpCatalog } from './mcpInboundCatalog';
 import * as vector from './vector';
+import { shutdownToolScriptRuntime } from './toolscript';
 import { registerChannel } from './channel';
 import fs from 'fs-extra';
 import crypto from 'crypto';
@@ -20,20 +36,22 @@ import {
     BOT_NAME,
     BASE_DIR,
     DATA_ROOT_DIR,
+    DB_WORKERS_ENABLED,
     ENABLE_TUI,
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
     HTTP_PORT,
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
-    MATRIX_CONFIG,
     MAIN_AGENT_MEMORY_DIR,
+    MCP_INBOUND_CONFIG,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
+    SESSION_WORKERS_CONFIG,
+    SESSION_WORKERS_ENABLED,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
-    WEIXIN_CONFIG,
-    WEWORK_CONFIG,
+    VECTOR_ENABLED,
 } from './config';
 import type { TelegramConfig } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
@@ -44,6 +62,12 @@ import { scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
 import { initializeExecManager } from './execManager';
+import { setFoxwarmProcessTitle } from './processTitle';
+import { isQueueItem } from './types';
+
+setFoxwarmProcessTitle('main');
+
+let mcpInboundHttp: McpInboundHttpService | undefined;
 
 // Global error handlers
 process.on('unhandledRejection', (reason: any, promise) => {
@@ -120,6 +144,11 @@ async function ensureNodeToken(): Promise<string> {
     }
 }
 
+let sessionWorkerStore: SessionWorkerStore | undefined;
+let sessionWorkerSupervisor: SessionWorkerSupervisor | undefined;
+let sessionWorkerIngress: SessionWorkerIngressCoordinator | undefined;
+let shutdownSessionWorkers: (() => Promise<void>) | undefined;
+
 async function start() {
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
     const legacyMainSystemPromptPath = path.join(MAIN_AGENT_MEMORY_DIR, '00_SYSTEM.md');
@@ -185,17 +214,136 @@ async function start() {
         }) as any;
     }
 
-    // Initialize vector database
-    await vector.init();
-
-    // Load sessions
+    // Complete authoritative SQLite/data migrations before a vector child is
+    // allowed to open archive checkpoints or LanceDB.
     await sessionManager.loadSessions();
+
+    let webuiChannel: WebUIChannel | null = null;
+
+    // Session-worker placement: assemble the durable ownership/mailbox store,
+    // supervisor, and closed ingress coordinator before any consumer starts.
+    if (SESSION_WORKERS_ENABLED) {
+        sessionWorkerStore = new SessionWorkerStore();
+        sessionWorkerStore.open();
+        sessionWorkerSupervisor = new SessionWorkerSupervisor({
+            store: sessionWorkerStore,
+            getCatalogStub: sessionId => {
+                const session = sessionManager.getAllSessions().get(sessionId);
+                if (!session) return undefined;
+                return {
+                    agent: session.agent,
+                    aliases: session.aliases,
+                    parentSessionId: session.parentSessionId,
+                    displayName: session.displayName,
+                };
+            },
+            getAgentMetadataSnapshot: sessionId => {
+                const session = sessionManager.getAllSessions().get(sessionId);
+                return session ? sessionManager.getAgentMetadata(session.agent || 'main') : undefined;
+            },
+            idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
+            shouldRestart: () => true,
+            readSessionHistory: sessionId => sessionRuntime.getHistory(sessionId),
+            // Transient presentation channel: pure pass-through into the WebUI
+            // SSE fan-out and the stream-event bus; never writes semantic state.
+            presentationSink: {
+                broadcastMessage: (sessionId, message) => webuiChannel?.broadcastMessage(sessionId, message),
+                broadcastQueueHistoryAppend: (sessionId, append) => {
+                    const pending = sessionWorkerStore!.listMailboxIntentsAfter(sessionId, append.lastAppliedMailboxId, 4096)
+                        .flatMap(intent => intent.kind === 'enqueue' && isQueueItem(intent.payload) ? [structuredClone(intent.payload)] : []);
+                    const projection = composeQueuedPreviewProjection({ hotQueuedMessages: append.queuedMessages, hotQueueLength: append.hotQueueLength, pendingQueue: pending });
+                    webuiChannel?.broadcastQueueHistoryAppend(sessionId, {
+                        messages: append.messages,
+                        ...projection,
+                        messageCount: append.messageCount,
+                        historyVersion: append.historyVersion,
+                        latestSeq: append.latestSeq,
+                    });
+                },
+                notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
+            },
+            onWorkerReady: sessionId => {
+                if (webuiChannel?.hasPresentationSubscribers(sessionId)) {
+                    void sessionWorkerSupervisor!.setPresentationSubscription(sessionId, true);
+                }
+            },
+            handbackWorker: identity => performSessionWorkerHandback({
+                store: sessionWorkerStore!,
+                getCatalogSession: id => sessionManager.getAllSessions().get(id),
+                upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
+                saveCatalog: sessionId => sessionManager.saveSessionCatalogProjectionStrict(sessionId),
+            }, identity),
+        });
+        await sessionWorkerSupervisor.reconcileStartupOwnerships();
+        sessionWorkerIngress = new SessionWorkerIngressCoordinator(
+            sessionWorkerStore,
+            sessionWorkerSupervisor,
+            (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
+            (sessionId) => !!sessionManager.getSessionCatalog(sessionId),
+            (sessionId, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([sessionId], operation, admit),
+        );
+        sessionManager.setSessionWorkerEnqueueSink(
+            (sessionId, item, assertAdmissionActive) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item, assertAdmissionActive).then(() => {}),
+        );
+        sessionManager.setSessionWorkerDeleteHandler(
+            sessionId => teardownSessionWorkerForDelete({ store: sessionWorkerStore!, supervisor: sessionWorkerSupervisor! }, sessionId),
+        );
+        sessionManager.setSessionWorkerForkSourceProvider(async sessionId => {
+            const catalog = sessionManager.getAllSessions().get(sessionId);
+            // Fork is a Main-owned lifecycle read, but it must never hydrate a
+            // full authority into Main merely because this session is idle and
+            // has not spawned its first Worker yet.
+            if (!catalog) return undefined;
+            // fork/createChild already hold SessionManager's non-reentrant
+            // identity lock; use the exact lifecycle-only admission variant.
+            await sessionWorkerIngress!.ensureWorkerOwnerWithinExistingAdmission(sessionId);
+            return readDetachedWorkerSession(sessionId, catalog);
+        });
+        sessionManager.setSessionWorkerFenceChecker(sessionId => {
+            const ownership = sessionWorkerStore!.findOwnership(sessionId);
+            return !!ownership && ownership.state !== 'inactive';
+        });
+        sessionManager.setSessionWorkerCatalogFieldsUpdater(
+            (sessionId, patch) => sessionWorkerIngress!.updateCatalogFieldsWithinExistingAdmission(sessionId, patch),
+        );
+        shutdownSessionWorkers = async () => {
+            sessionManager.setSessionWorkerEnqueueSink(undefined);
+            sessionManager.setSessionWorkerDeleteHandler(undefined);
+            sessionManager.setSessionWorkerForkSourceProvider(undefined);
+            sessionManager.setSessionWorkerFenceChecker(undefined);
+            sessionManager.setSessionWorkerCatalogFieldsUpdater(undefined);
+            await sessionWorkerSupervisor!.shutdown();
+            sessionWorkerStore!.close();
+        };
+    }
+
+    // Session consumers use the placement-neutral DTO service regardless of
+    // whether sessions execute locally or in supervised child workers.
+    await sessionRuntime.initializeSessionRuntime(
+        sessionWorkerStore && sessionWorkerSupervisor && sessionWorkerIngress
+            ? { worker: { store: sessionWorkerStore, registry: sessionWorkerSupervisor.projectionRegistry, ingress: sessionWorkerIngress, supervisor: sessionWorkerSupervisor } }
+            : undefined,
+    );
+    await mainManagementTools.initializeMainManagementTools({
+        workerStore: sessionWorkerStore,
+        readSessionHistory: sessionWorkerStore ? sessionId => sessionRuntime.getHistory(sessionId) : undefined,
+    });
+    await nodeProviderRegistry.initialize();
+    await nodeExecution.initializeNodeExecution();
+    await mcpExternal.initializeMcpExternalService();
+
+    // Initialize the vector owner locally or in its configured child process.
+    // Startup readiness means the table is open; archive backfill continues in
+    // the background in either placement.
+    await vector.init({ enabled: VECTOR_ENABLED, useWorker: DB_WORKERS_ENABLED });
 
     await initializeExecManager();
 
     // Ensure "main" session exists
     await sessionManager.getSession('main');
     logger.info('Main session initialized');
+
+    await sessionRuntime.startEvents();
 
     // Create message router with authorized users
     const authorizedUsers: Array<{ platform: string; userId: string }> = [];
@@ -228,34 +376,39 @@ async function start() {
     authorizedUsers.push({ platform: 'webui', userId: 'webui' });
     authorizedUsers.push({ platform: 'tui', userId: 'tui' });
     
-    const router = new MessageRouter(authorizedUsers);
+    const router = new MessageRouter(
+        authorizedUsers,
+        SESSION_WORKERS_ENABLED
+            ? (sessionId, item) => sessionRuntime.submitAndRun(sessionId, item)
+            : undefined,
+    );
     const commandHandler = new CommandHandler(router);
     initializeChannelRuntime(
         (ctx, message) => router.handleMessage(ctx, message),
-        (ctx, command, args) => commandHandler.handleCommand(ctx, command, args),
+        (ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs),
     );
     
     // Set command handler in router and give commandHandler access to router
-    router.setCommandHandler((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+    router.setCommandHandler((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
 
     // Set up TUI channel handlers
     if (tuiChannel) {
         tuiChannel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-        tuiChannel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+        tuiChannel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
     }
 
     // Set up session event callbacks (for background processes, child sessions, etc.)
     sessionManager.setSessionTriggerCallback(
-        (sessionId) => {
-            router.processSessionQueue(sessionId);
-        }
+        (sessionId) => router.processSessionQueue(sessionId)
+    );
+    sessionManager.setSessionRetryCallback(
+        (sessionId) => router.processSessionRetry(sessionId)
     );
 
     await initializeTimers();
 
-    // Start unified HTTP server (WebUI + Trigger + Nodes)
-    let webuiChannel: WebUIChannel | null = null;
-    if (ENABLE_WEBUI || ENABLE_TRIGGER) {
+    // The Node HTTP/WebSocket surface also serves headless inbound MCP deployments.
+    if (ENABLE_WEBUI || ENABLE_TRIGGER || MCP_INBOUND_CONFIG.enabled) {
         const token = await ensureToken();
         const nodeToken = await ensureNodeToken();
         await initializeNodeRegistry();
@@ -267,35 +420,54 @@ async function start() {
         // Add nodes WebSocket handler to HTTP server
         registerNodeWebSocket(httpServerInstance, nodeToken);
         registerNodeHttpRoutes(httpServerInstance);
+        if (MCP_INBOUND_CONFIG.enabled) {
+            mcpInboundHttp = new McpInboundHttpService(MCP_INBOUND_CONFIG, new McpInboundMcpCatalog());
+            mcpInboundHttp.register(httpServerInstance);
+        }
         
         // Start HTTP server
         await httpServerInstance.start();
-        
-        webuiChannel = new WebUIChannel({
-            router,
-            token,
-            enableWebUI: ENABLE_WEBUI,
-            enableTrigger: ENABLE_TRIGGER
-        });
-        
-        await webuiChannel.start();
-        registerChannel('webui', webuiChannel);
-        
-        // Set up history update callback for SSE
-        sessionManager.setOnHistoryUpdated((sessionId, message) => {
-            webuiChannel!.broadcastMessage(sessionId, message);
-        });
 
-        sessionManager.setOnSessionEventUpdated((sessionId, event) => {
-            webuiChannel!.broadcastSessionEvent(sessionId, event);
-        });
+        if (ENABLE_WEBUI || ENABLE_TRIGGER) {
+            webuiChannel = new WebUIChannel({
+                router,
+                token,
+                enableWebUI: ENABLE_WEBUI,
+                enableTrigger: ENABLE_TRIGGER,
+                loadModelStreamSnapshot: async sessionId => {
+                    const ownership = sessionWorkerStore?.findOwnership(sessionId);
+                    if (ownership && ownership.state !== 'inactive') {
+                        return sessionWorkerSupervisor?.loadModelStreamDraft(sessionId) || null;
+                    }
+                    return getModelStreamDraft(sessionId);
+                },
+            });
         
-        // Set up session list update callback for SSE
-        sessionManager.setOnSessionListUpdated(() => {
-            webuiChannel!.broadcastSessionListUpdate();
-        });
+            await webuiChannel.start();
+            registerChannel('webui', webuiChannel);
+            // Session-worker transient presentation subscription bridge: combined
+            // WebUI subscriber 0↔1 transitions gate worker-side forwarding.
+            webuiChannel.setPresentationSubscriptionListener((sessionId, active) => {
+                return sessionWorkerSupervisor?.setPresentationSubscription(sessionId, active);
+            });
+        
+            // Bridge transport-neutral SessionRuntime events into WebUI SSE.
+            sessionRuntime.subscribe((eventName, payload: any) => {
+                if (eventName === 'history') {
+                    webuiChannel!.broadcastMessage(payload.sessionId, payload.message);
+                } else if (eventName === 'queueHistoryAppend') {
+                    webuiChannel!.broadcastQueueHistoryAppend(payload.sessionId, payload.append);
+                } else if (eventName === 'stream') {
+                    webuiChannel!.broadcastSessionEvent(payload.sessionId, payload.event);
+                } else if (eventName === 'listChanged') {
+                    webuiChannel!.broadcastSessionListUpdate();
+                } else if (eventName === 'stateChanged') {
+                    webuiChannel!.broadcastSessionStateUpdate(payload.sessionId, payload.session);
+                }
+            });
+        }
     } else {
-        logger.info('HTTP server disabled (both WebUI and Trigger are disabled)');
+        logger.info('HTTP server disabled (WebUI, Trigger, and MCP inbound are disabled)');
     }
 
     const defaultTelegramEntry = getDefaultChannelConfigByType<TelegramConfig>('telegram');
@@ -303,7 +475,7 @@ async function start() {
         ? startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
             const channel = new TelegramChannel(defaultTelegramEntry.config, defaultTelegramEntry.id);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-            channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+            channel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
             await channel.start();
             registerChannel(defaultTelegramEntry.id, channel);
             logger.info({ channelId: defaultTelegramEntry.id }, 'Telegram channel initialized');
@@ -324,7 +496,7 @@ async function start() {
             void startWithRetry(`telegram:${entry.id}`, async () => {
                 const channel = new TelegramChannel(config, entry.id);
                 channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
-                channel.onCommand((ctx, command, args) => commandHandler.handleCommand(ctx, command, args));
+                channel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
                 await channel.start();
                 registerChannel(entry.id, channel);
                 logger.info({ channelId: entry.id }, 'Telegram channel initialized');
@@ -374,13 +546,38 @@ async function start() {
             } else if (config.baseUrl || config.enabled) {
                 logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
             }
+            continue;
+        }
+
+        if (entry.type === 'qqbot') {
+            if (config.enabled === false) continue;
+            if (config.appId?.trim() && config.clientSecret?.trim()) {
+                void startWithRetry(`qqbot:${entry.id}`, async () => {
+                    const result = await startManagedChannel(entry.id);
+                    logger.info({ channelId: entry.id }, 'QQ Bot channel initialized');
+                    return result.status;
+                }, { retries: 1, delayMs: 3000 });
+            } else if (config.appId || config.enabled) {
+                logger.info({ channelId: entry.id }, 'QQ Bot channel configured without appId/clientSecret; use /channel status after adding official QQ Bot credentials');
+            }
         }
     }
 
     logger.info('Foxwarm started successfully');
 
-    // Resume busy sessions after restart (must be after callback is set)
-    await sessionManager.resumeBusySessions();
+    // Resume busy sessions after restart (must be after callback is set). A
+    // worker-enabled process must never execute Main-local residual state;
+    // the exact Worker owns stale-busy recovery and durable mailbox replay.
+    if (!SESSION_WORKERS_ENABLED) {
+        await sessionManager.resumeBusySessions();
+    }
+
+    // Durable Worker mailbox intents survive restarts; ensure their owners and
+    // run the pending prefix. Per-session failures keep the work retryable.
+    if (SESSION_WORKERS_ENABLED && sessionWorkerStore && sessionWorkerSupervisor) {
+        void resumeSessionWorkerPendingIntents(sessionWorkerStore, sessionWorkerSupervisor,
+          () => [...sessionManager.getAllSessions().keys()]);
+    }
 
     // Schedule log rotation (start immediately and every 10 hours)
     scheduleLogRotation();
@@ -426,6 +623,34 @@ async function handleOnboot(telegramChannelPromise: Promise<TelegramChannel | nu
     } catch (e) {
         logger.error(e, 'Error processing ONBOOT.md');
     }
+}
+
+let shutdownStarted = false;
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+        if (shutdownStarted) return;
+        shutdownStarted = true;
+        void Promise.resolve()
+            .then(() => mcpInboundHttp?.stop())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP inbound cleanly'))
+            .then(() => shutdownToolScriptRuntime())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
+            .then(() => nodeExecution.shutdownNodeExecution())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node execution cleanly'))
+            .then(() => nodeProviderRegistry.shutdown())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node providers cleanly'))
+            .then(() => shutdownSessionWorkers?.())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session workers cleanly'))
+            .then(() => mcpExternal.shutdownMcpExternalService())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down MCP external service cleanly'))
+            .then(() => mainManagementTools.shutdownMainManagementTools())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down main management tools cleanly'))
+            .then(() => sessionRuntime.shutdownSessionRuntime())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session runtime cleanly'))
+            .then(() => vector.shutdown())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down vector service cleanly'))
+            .finally(() => process.exit(0));
+    });
 }
 
 start().catch((err: Error) => {

@@ -1,13 +1,13 @@
-import fs from 'fs-extra';
-import path from 'path';
-import { createHash } from 'crypto';
-import { Message, MessagePart, Session } from '../types';
-import { getSessionArchiveImagesDir, getSessionArchiveLogPath } from '../config';
+import { Message, Session } from '../types';
+import { externalizeMessageImages } from '../imageBlobs';
 import {
+  ArchiveMessageStats,
   ensureSessionBranch,
-  refreshSessionArchiveImportState,
+  getEffectiveArchiveMessageStats,
+  getLocalArchiveMessageStats as getLocalArchiveMessageStatsFromStore,
   readEffectiveArchiveMessages,
   readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
+  rollbackUncommittedArchiveMessages,
   writeArchiveMessages,
 } from './archiveStore';
 
@@ -22,6 +22,22 @@ export interface ArchiveMessageRecord {
   message: Message;
   sourceSessionId?: string;
   inherited?: boolean;
+}
+
+type ArchiveWritePhase = 'before-sqlite-write' | 'after-jsonl-append';
+let archiveWriteFaultInjector: ((phase: ArchiveWritePhase, sessionId: string) => void) | null = null;
+
+export function setArchiveWriteFaultInjectorForTests(injector: ((phase: ArchiveWritePhase, sessionId: string) => void) | null): void {
+  archiveWriteFaultInjector = injector;
+}
+
+export class SessionArchiveCommitError extends Error {
+  readonly code = 'SESSION_ARCHIVE_COMMIT_FAILED';
+  constructor(message: string, readonly cause?: unknown) { super(message); this.name = 'SessionArchiveCommitError'; }
+}
+
+export function isSessionArchiveCommitError(error: unknown): boolean {
+  return String((error as any)?.code || '') === 'SESSION_ARCHIVE_COMMIT_FAILED';
 }
 
 export function getMessageTimestamp(message: Message): number {
@@ -62,66 +78,10 @@ export function ensureMessageSeq(session: Session, message: Message): number {
   return seq;
 }
 
-function getInlineDataMimeType(part: MessagePart): string {
-  return part.inlineData?.mimeType || part.inlineData?.mime_type || 'application/octet-stream';
-}
-
-function getArchiveFileExtension(mimeType: string): string {
-  const lower = mimeType.toLowerCase();
-
-  if (lower === 'image/jpeg') return 'jpg';
-  if (lower === 'image/svg+xml') return 'svg';
-  if (lower.startsWith('image/')) return lower.slice('image/'.length) || 'bin';
-
-  const slashIndex = lower.indexOf('/');
-  if (slashIndex !== -1 && slashIndex + 1 < lower.length) {
-    return lower.slice(slashIndex + 1).replace(/[^a-z0-9]+/g, '-') || 'bin';
-  }
-
-  return 'bin';
-}
-
 export async function buildArchiveRecord(session: Session, message: Message): Promise<any> {
   const seq = ensureMessageSeq(session, message);
   const timestamp = getMessageTimestamp(message);
-  const archiveParts = [];
-
-  for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
-    const part = message.parts[partIndex];
-    const existingImageMeta = part.imageMeta;
-
-    if (!part.inlineData?.data) {
-      archiveParts.push(part);
-      continue;
-    }
-
-    const mimeType = getInlineDataMimeType(part);
-    const extension = getArchiveFileExtension(mimeType);
-    const imageId = existingImageMeta?.imageId || `msg${String(seq).padStart(8, '0')}_part${partIndex + 1}`;
-    const imageDir = getSessionArchiveImagesDir(session.id);
-    const fileName = `${imageId}.${extension}`;
-    const filePath = path.join(imageDir, fileName);
-    const binary = Buffer.from(part.inlineData.data, 'base64');
-    const sha256 = createHash('sha256').update(binary).digest('hex');
-
-    await fs.ensureDir(imageDir);
-    await fs.writeFile(filePath, binary);
-
-    const { inlineData, ...rest } = part;
-    archiveParts.push({
-      ...rest,
-      inlineDataRef: {
-        imageId,
-        format: extension,
-        path: path.relative(path.join(__dirname, '..'), filePath),
-        mimeType,
-        byteLength: binary.length,
-        sha256,
-        width: existingImageMeta?.width,
-        height: existingImageMeta?.height,
-      },
-    });
-  }
+  const canonical = (await externalizeMessageImages(message)).message;
 
   return {
     v: 1,
@@ -132,37 +92,39 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
     timestamp,
     role: message.role,
     message: {
-      ...message,
+      ...canonical,
       __meta: {
         ...(message.__meta || {}),
         timestamp,
         seq,
       },
-      parts: archiveParts,
+      parts: canonical.parts,
     },
   };
 }
 
-export async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<void> {
+export async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<ArchiveMessageRecord[]> {
   if (messages.length === 0) {
-    return;
+    return [];
   }
 
-  const archiveLogPath = getSessionArchiveLogPath(session.id);
-  await fs.ensureDir(path.dirname(archiveLogPath));
   await ensureSessionBranch(session.id);
 
   const records: ArchiveMessageRecord[] = [];
-  const lines: string[] = [];
   for (const message of messages) {
     const record = await buildArchiveRecord(session, message);
     records.push(record as ArchiveMessageRecord);
-    lines.push(JSON.stringify(record));
   }
 
-  await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
-  await writeArchiveMessages(records);
-  await refreshSessionArchiveImportState(session.id, 'messages');
+  try {
+    archiveWriteFaultInjector?.('before-sqlite-write', session.id);
+    return await writeArchiveMessages(records);
+  }
+  catch (error) { throw new SessionArchiveCommitError(`Required archive commit failed for Session ${session.id}: ${(error as any)?.message || error}`, error); }
+}
+
+export async function rollbackUncommittedMessages(records: ArchiveMessageRecord[]): Promise<void> {
+  await rollbackUncommittedArchiveMessages(records);
 }
 
 export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
@@ -171,6 +133,14 @@ export async function readArchiveMessages(sessionId: string): Promise<ArchiveMes
 
 export async function readLocalArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
   return readLocalArchiveMessagesFromStore(sessionId);
+}
+
+export async function getArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  return getEffectiveArchiveMessageStats(sessionId, startSeq, endSeq);
+}
+
+export async function getLocalArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  return getLocalArchiveMessageStatsFromStore(sessionId, startSeq, endSeq);
 }
 
 export function stripMessageSeq(message: Message): Message {

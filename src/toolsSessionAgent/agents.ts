@@ -2,15 +2,26 @@ import fs from 'fs-extra';
 import * as llm from '../llm';
 import * as sessionManager from '../sessionManager';
 import { AGENTS_DIR } from '../config';
-import { resolveModelConfig } from '../config';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { requireNotIsolated } from '../isolatedCheck';
+import { executeMainManagementTool } from '../mainManagementTools';
+import { RpcError } from '../rpc';
 import {
   ToolArgs,
   ToolContext,
-  normalizeToolModelKey,
+  normalizeCreateSessionArgs,
+  normalizeForceModel,
 } from './helpers';
 
 export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
+  if (ctx?.sessionPlacement === 'session-worker') {
+    if (args.convertSession === true) throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'create_agent source conversion is unavailable in Session-worker placement.', true);
+    if (args.sourceSessionId && ctx.session
+      && args.sourceSessionId !== ctx.session.id && !ctx.session.aliases?.includes(args.sourceSessionId)) {
+      throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'create_agent from another source session is unavailable in Session-worker placement.', true);
+    }
+    return executeMainManagementTool('create_agent', args, ctx);
+  }
   await requireNotIsolated(ctx, 'create_agent');
   const {
     agentName,
@@ -20,6 +31,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     createMainSession = true,
     inherit,
     isolatedNode,
+    toolRules,
   } = args;
 
   if (!agentName || typeof agentName !== 'string') {
@@ -34,12 +46,14 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     agentName,
     inheritMemory,
     sourceSessionId: sourceId,
+    sourceSessionOverride: ctx.session && (sourceId === ctx.session.id || ctx.session.aliases?.includes(sourceId)) ? ctx.session : undefined,
     convertSessionId: convertSession ? sourceId : undefined,
     currentNode: ctx.session?.currentNode,
     model: ctx.session?.model,
     createMainSession,
     inherit: normalizedInherit,
     isolatedNode,
+    toolRules,
   });
 
   if (result.convertedFromSessionId) {
@@ -53,6 +67,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     if (result.updatedChildren.length > 0) {
       message += `\nUpdated ${result.updatedChildren.length} child session parent reference(s).`;
     }
+    message += `\nTool rules: ${sessionManager.getAgentToolRules(agentName).length}`;
     return message;
   }
 
@@ -63,6 +78,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
   if (isolatedNode) {
     message += `\nIsolation: enabled on node ${isolatedNode}`;
   }
+  message += `\nTool rules: ${sessionManager.getAgentToolRules(agentName).length}`;
   if (result.createdMainSession) {
     message += `\nMain session: ${result.mainSessionId}`;
   } else {
@@ -71,7 +87,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
   return message;
 }
 
-export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
+export async function tool_list_agents(_args: ToolArgs = {}, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'list_agents');
   const agentsDir = AGENTS_DIR;
 
@@ -80,7 +96,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   const entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = [];
+  const agents: Array<{name: string, hasSessions: boolean, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string, toolRuleCount: number}> = [];
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
@@ -95,6 +111,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
         inherit: sessionManager.getAgentMetadata(agentName).inherit,
         isolated: sessionManager.getAgentMetadata(agentName).isolated,
         isolatedNode: sessionManager.getAgentIsolationNode(agentName),
+        toolRuleCount: sessionManager.getAgentToolRules(agentName).length,
       });
     }
   }
@@ -115,6 +132,7 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
     if (agent.isolated) {
       result += ` [isolated${agent.isolatedNode ? `:${agent.isolatedNode}` : ''}]`;
     }
+    result += ` [tool rules:${agent.toolRuleCount}]`;
     result += '\n';
   }
 
@@ -123,17 +141,23 @@ export async function tool_list_agents(args: ToolArgs = {}, ctx?: ToolContext) {
 
 export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'set_agent_inherit');
-  const { agentName, inheritAgentName } = args;
+  if (Object.prototype.hasOwnProperty.call(args, 'updateSnapshots')) {
+    throw new Error('updateSnapshots is no longer supported. Use refreshSnapshots.');
+  }
+  const { agentName, inheritAgentName, refreshSnapshots = false } = args;
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
+  }
+  if (typeof refreshSnapshots !== 'boolean') {
+    throw new Error('refreshSnapshots must be a boolean when provided');
   }
 
   const normalizedInherit = inheritAgentName && String(inheritAgentName).trim()
     ? String(inheritAgentName).trim()
     : undefined;
 
-  const result = await sessionManager.setAgentInherit(agentName, normalizedInherit);
+  const result = await sessionManager.setAgentInherit(agentName, normalizedInherit, refreshSnapshots);
   const chain = sessionManager.getAgentInheritanceChain(agentName);
 
   let message = normalizedInherit
@@ -150,7 +174,7 @@ export async function tool_set_agent_inherit(args: ToolArgs, ctx?: ToolContext) 
 
 export async function tool_set_agent_isolated(args: ToolArgs, ctx?: ToolContext) {
   await requireNotIsolated(ctx, 'set_agent_isolated');
-  const { agentName, nodeId } = args;
+  const { agentName, nodeId, toolRules } = args;
 
   if (!agentName || typeof agentName !== 'string') {
     throw new Error('agentName is required');
@@ -158,7 +182,10 @@ export async function tool_set_agent_isolated(args: ToolArgs, ctx?: ToolContext)
 
   const result = await sessionManager.setAgentIsolation(
     agentName,
-    typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined,
+    toolRules !== undefined && nodeId === undefined
+      ? sessionManager.getAgentIsolationNode(agentName)
+      : typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined,
+    toolRules,
   );
 
   let message = result.isolated
@@ -167,6 +194,7 @@ export async function tool_set_agent_isolated(args: ToolArgs, ctx?: ToolContext)
   if (result.affectedSessions.length > 0) {
     message += `\nUpdated ${result.affectedSessions.length} session(s).`;
   }
+  message += `\nTool rules: ${result.toolRuleCount}.`;
   return message;
 }
 
@@ -177,6 +205,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
     createAgent = false,
     newAgentName,
     createAgentInheritMemory,
+    parentSessionId,
   } = args;
 
   const sourceId = sessionId || ctx.sessionId;
@@ -192,6 +221,9 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
   if (sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
     throw new Error('Isolated session cannot use move_session tool.');
   }
+  if (parentSessionId !== undefined && (typeof parentSessionId !== 'string' || !parentSessionId.trim())) {
+    throw new Error('parentSessionId must be a non-empty session ID when provided.');
+  }
 
   const result = await sessionManager.moveSessionToTarget({
     sourceSessionId: sourceId,
@@ -199,6 +231,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
     createAgent,
     newAgentName,
     createAgentInheritMemory,
+    ...(parentSessionId !== undefined ? { parentSessionId: parentSessionId.trim() } : {}),
   });
 
   let message = `Session "${sourceId}" moved to "${result.targetSessionId}".`;
@@ -211,19 +244,27 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
   if (result.updatedChildren.length > 0) {
     message += `\nUpdated ${result.updatedChildren.length} child session parent reference(s).`;
   }
+  message += `\nPrevious parent: ${result.previousParentSessionId || '(none)'}.`;
+  message += `\nResulting parent: ${result.parentSessionId || '(none)'}.`;
+  if (result.parentUpdateError) {
+    message += `\nWARNING: The identity move committed, but the requested parent update was not confirmed: ${result.parentUpdateError}`;
+    message += `\nRequested parent: ${result.requestedParentSessionId || '(none)'}.`;
+  }
 
   return message;
 }
 
 export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
+  if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('create_session', args, ctx);
   await requireNotIsolated(ctx, 'create_session');
-  const { agentName, sessionName, displayName, parentSessionId } = args;
-  const requestedModel = normalizeToolModelKey(args.model);
-  const systemPromptFiles = args.systemPromptFiles === undefined
+  const normalizedArgs = normalizeCreateSessionArgs(args);
+  const { agentName, sessionName, displayName, parentSessionId, node } = normalizedArgs;
+  const forced = normalizeForceModel(normalizedArgs, 'create_session');
+  const systemPromptFiles = normalizedArgs.systemPromptFiles === undefined
     ? undefined
-    : llm.normalizeSystemPromptFiles(args.systemPromptFiles);
+    : llm.normalizeSystemPromptFiles(normalizedArgs.systemPromptFiles);
 
-  if (args.systemPromptFiles !== undefined && !Array.isArray(args.systemPromptFiles)) {
+  if (normalizedArgs.systemPromptFiles !== undefined && !Array.isArray(normalizedArgs.systemPromptFiles)) {
     throw new Error('systemPromptFiles must be an array of strings');
   }
 
@@ -234,14 +275,21 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionName is required');
   }
 
+  const spawnedSettings = sessionManager.resolveSpawnedSessionModelEffort(
+    ctx.session,
+    forced.model,
+    forced.effort,
+  );
+
   const result = await sessionManager.createSessionInAgent({
     agentName,
     sessionName,
     displayName,
     parentSessionId,
     systemPromptFiles,
-    currentNode: ctx.session?.currentNode,
-    model: sessionManager.resolveSpawnedSessionModel(ctx.session, requestedModel),
+    currentNode: node ?? ctx.session?.currentNode,
+    model: spawnedSettings.model,
+    effort: spawnedSettings.effort,
   });
 
   let message = `Session "${result.sessionId}" created under agent "${agentName}".`;
@@ -255,7 +303,8 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     message += `\nSystem prompt files: ${systemPromptFiles.length > 0 ? systemPromptFiles.join(', ') : '(none)'}`;
   }
   const createdSession = await sessionManager.getSession(result.sessionId);
-  const { currentKey } = resolveModelConfig(createdSession.model);
-  message += `\nModel: ${currentKey}`;
+  const presentation = buildSessionModelEffortPresentation(createdSession);
+  message += `\nModel: ${presentation.modelKey}`;
+  message += `\nEffort: raw=${presentation.effort.raw || 'unset'}, effective=${presentation.effort.effective}`;
   return message;
 }

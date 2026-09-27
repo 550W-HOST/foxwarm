@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Message } from '../types';
-import { formatMessagePreviewText } from './messageFormat';
+import { formatMessagePreviewText, formatSubstantiveMessageSearchText } from './messageFormat';
 import { formatMessagePreviewLine, getMessagePreview } from './messagePreview';
 import { containsLoneSurrogate } from './unicode';
+import { redactDisplayOnlyMessageForModel } from '../session/messageVisibility';
 
 function makeMessage(parts: Message['parts']): Message {
   return {
@@ -37,6 +38,13 @@ test('formatMessagePreviewLine does not duplicate continuation prefixes', () => 
   assert.doesNotMatch(line, /> > /);
 });
 
+test('non-context previews retain content while model redaction remains explicit', () => {
+  const message = { ...makeMessage([{ text: 'provider detail' }]), modelVisible: false };
+
+  assert.match(formatMessagePreviewLine(message, 8, 200), /model \[non-context\]: provider detail/);
+  assert.equal(getMessagePreview(redactDisplayOnlyMessageForModel(message), 200), '[display-only message hidden]');
+});
+
 test('formatMessagePreviewText does not split surrogate pairs when truncating previews', () => {
   const message = makeMessage([{ text: `${'x'.repeat(10)}🦊 trailing` }]);
   const preview = formatMessagePreviewText(message, 11);
@@ -61,4 +69,25 @@ test('tool response preview truncation does not split surrogate pairs', () => {
 
   assert.equal(containsLoneSurrogate(preview), false);
   assert.doesNotMatch(JSON.stringify(preview), /\\ud83e(?!\\udd8a)/i);
+});
+
+test('substantive search formatting preserves canonical channel precedence and dual fields', () => {
+  const channelWrapped = makeMessage([{
+    text: 'ignored sibling AlphaNode_42',
+    system: '<foxwarm-message type="channel">\nwrapped channel authority\n</foxwarm-message>',
+    functionCall: { id: 'call-1', name: 'search', args: { query: 'ignored tool AlphaNode_42' } },
+  }]);
+  assert.equal(formatSubstantiveMessageSearchText(channelWrapped), 'wrapped channel authority');
+
+  const dual = makeMessage([{ text: 'ordinary text', system: 'ordinary system ÄÖÜß_名' }]);
+  const dualText = formatSubstantiveMessageSearchText(dual);
+  assert.match(dualText, /ordinary text/);
+  assert.match(dualText, /ordinary system ÄÖÜß_名/);
+
+  assert.equal(formatSubstantiveMessageSearchText({ ...dual, modelVisible: false }), '');
+  assert.equal(formatSubstantiveMessageSearchText(makeMessage([{
+    text: '--- RELEVANT MEMORY SNIPPETS (RAG) --- hidden',
+    thinking: 'hidden',
+    functionCall: { id: 'call-2', name: 'search', args: { query: 'hidden' } },
+  }])), '');
 });

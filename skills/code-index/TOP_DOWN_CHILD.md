@@ -1,6 +1,6 @@
 # Code Index Top-Down Child Guide
 
-You are a child/subagent session assigned to create or improve a project **code index** by reading source code and writing durable documentation under `~/code-index/{project}`.
+You are a child/subagent session assigned to create or improve a project **code index** by reading source code and writing durable documentation under the assigned index root. During migration, repository-local `docs/code-index/` is preferred and `~/code-index/{project}/` is the fallback.
 
 This guide is for the **agent-guided top-down traversal** method. It is different from the simpler bottom-up worker flow in `WORKER.md`.
 
@@ -19,7 +19,7 @@ The goal is not just to list functions. A good unit doc explains how the unit fi
 ## Terms
 
 - **source root**: project repository or source tree being indexed.
-- **index root**: usually `~/code-index/{project}`.
+- **index root**: the single root selected for this task; prefer `<repo-root>/docs/code-index/`, then fall back to `~/code-index/{project}/`.
 - **overview doc**: `overview.md`, the project-wide navigation and architecture summary.
 - **module doc**: `modules/...md`, a parent or subtree summary.
 - **unit doc**: `units/...md`, a bottom-level semantic unit summary.
@@ -38,6 +38,16 @@ The goal is not just to list functions. A good unit doc explains how the unit fi
 - Prefer concise docs with practical coding guidance over exhaustive prose.
 - Verify important facts against source paths. Mark uncertainty clearly.
 - Keep the parent informed with a focused final report.
+- Follow `SKILL.md` governance: public-safe English only, one primary-owning unit per source file, and exactly one canonical owner for each Design Decision.
+
+## Governance While Traversing
+
+- Never write secrets, real credentials, local usernames/home paths, private deployment/runbooks, or agent-private collaboration memory. If an environment-specific source-code literal is genuinely required, keep it minimal and label it `source-code literal`.
+- Prefer source-relative paths, stable symbols, and section names over brittle line numbers.
+- Separate files the unit owns from secondary/integration files it only references; do not let multiple units claim primary ownership of the same source file.
+- Treat the index as a current map, not a changelog. Remove or replace superseded content; put unconfirmed ideas in `Open Questions` labeled `Unconfirmed`.
+- Before recording a user-confirmed decision, choose one canonical owner: unit (one semantic unit), module (several units in one module), thread (cross-module end-to-end contract), or overview (project-wide principle). Write the full English decision/rationale/date only there. Other layers get one short summary and a canonical link.
+- If several modules start repeating a decision, create or use a thread. Only critical security, data-integrity, persisted-data, or external-contract invariants may be repeated; use the same short sentence verbatim with the canonical link or ID.
 
 ## Why This Method Exists
 
@@ -189,12 +199,12 @@ For each micro-batch:
    - a tiny related group;
    - a test plus the source it validates;
    - one section/class/export of a very large file.
-5. **Write/update unit doc** under `units/`.
-6. **Update nearest parent module doc** immediately.
+5. **Write/update unit doc** under `units/`, including current primary ownership, behavior, and stable-symbol function index as applicable.
+6. **Update nearest parent module doc** immediately for current navigation and behavior, without copying a unit-owned decision.
 7. **Propagate upward** if needed:
    - update a higher ancestor module if responsibility/boundary/interface changed;
    - update `overview.md` if the new fact changes project-level navigation;
-   - create/update a `threads/` doc only when a cross-module flow is clear enough.
+   - create/update a `threads/` doc when a cross-module flow is clear enough or several modules would otherwise repeat one decision.
 8. **Record uncertainty** in `Open Questions` or `Incomplete Areas` rather than pretending the subtree is fully understood.
 9. **Update `_work` state last**:
    - remove `in progress`;
@@ -241,9 +251,10 @@ Later, revise this doc as uncertainty becomes confirmed.
 For each `units/{unitName}.md`, include:
 
 - source files / sections covered;
+- primary source files owned and secondary/integration files referenced;
 - purpose in one or two sentences;
 - how it fits the parent module;
-- key exports / types / classes / functions;
+- key exports / types / classes / functions, indexed by stable symbol or section;
 - important internal functions when useful;
 - inputs, outputs, side effects, state changes;
 - dependencies on project modules;
@@ -265,7 +276,7 @@ Files: a/b1/c1.ts
 
 ## Key Exports
 
-## Function Index
+## Function Index (stable symbols/sections; line numbers optional)
 
 ## Dependencies and Callers
 
@@ -289,7 +300,7 @@ For each `modules/{modulePath}.md`, include:
 - related tests / validation strategy;
 - pitfalls / historical context;
 - open questions / incomplete areas;
-- design decisions.
+- canonical design decisions owned by this module, plus summary links to decisions owned elsewhere.
 
 Suggested structure:
 
@@ -317,7 +328,7 @@ Suggested structure:
 
 ## When to Update Higher Ancestors
 
-Always update the nearest parent module after each micro-batch.
+Always update the nearest parent module after each micro-batch, but update its navigation and current behavior rather than duplicating a lower-level decision.
 
 Update higher ancestors (`modules/a.md`, `overview.md`, threads) when the micro-batch reveals or changes:
 
@@ -326,7 +337,7 @@ Update higher ancestors (`modules/a.md`, `overview.md`, threads) when the micro-
 - cross-module data/control flow;
 - important invariants;
 - naming conventions;
-- user-confirmed design decisions;
+- user-confirmed design decisions whose selected canonical owner is that ancestor;
 - warnings that future agents need before editing.
 
 If the fact is local and does not change parent understanding, keep it in the nearest module and unit docs.

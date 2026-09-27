@@ -17,8 +17,47 @@ Args:
 """
 
 import json
-import os
-import shlex
+
+
+def shell_quote(value):
+    """Quote one value for the POSIX shell commands dispatched through call_tool."""
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def absolute_path(value):
+    """Expand ~/ and resolve a POSIX path without importing host filesystem modules."""
+    path = str(value)
+    if path == "~" or path.startswith("~/"):
+        home = call_tool("exec", {"command": "printf '%s\\n' \"$HOME\""}).strip()
+        if not home.startswith("/"):
+            raise ValueError("Could not resolve the ToolScript host home directory")
+        path = home + path[1:]
+    elif path.startswith("~"):
+        raise ValueError("Only ~/ home-relative paths are supported")
+
+    if not path.startswith("/"):
+        cwd = call_tool("exec", {"command": "pwd -P"}).strip()
+        if not cwd.startswith("/"):
+            raise ValueError("Could not resolve the ToolScript host working directory")
+        path = cwd.rstrip("/") + "/" + path
+
+    parts = []
+    for part in path.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/" + "/".join(parts)
+
+
+def path_basename(value):
+    path = str(value).rstrip("/")
+    if not path:
+        return ""
+    return path.rsplit("/", 1)[-1]
 
 
 INCLUDE_EXTENSIONS = [
@@ -40,6 +79,17 @@ EXCLUDE_EXTENSIONS = [
     ".map", ".d.ts", ".min.js", ".bundle.js", ".lock",
 ]
 
+CODE_INDEX_GOVERNANCE_PROMPT = """Code-index governance:
+- Write concise, public-safe English only.
+- Never copy secrets, real credentials, local usernames/home-directory paths, private deployment/runbook details, or agent-private collaboration memory.
+- Use source-relative paths. If an environment-specific source-code literal is essential to explain behavior, keep it minimal and label it explicitly as a source-code literal; never copy a real secret value.
+- Prefer stable symbols and section names over brittle line numbers.
+- Each source file has one primary-owning unit; mention other files only as secondary/integration references.
+- Treat the index as a current map, not an append-only changelog. Do not invent Design Decisions; put uncertainty in Open Questions labeled Unconfirmed.
+- A decision has one canonical owner: unit for one semantic unit, module for several units in one module, thread for a cross-module contract, or overview for a project-wide principle. Other layers use only a short summary and canonical link.
+- Repeated decisions across modules signal a thread. A repeated critical security/data-integrity/persisted-data/external-contract invariant must be the same short sentence verbatim and include its canonical link or ID.
+"""
+
 
 def scan_files(source, files_filter, include_extensions):
     """Scan source tree and return list of {path, lines} dicts."""
@@ -48,7 +98,7 @@ def scan_files(source, files_filter, include_extensions):
         for f in files_filter:
             full_path = f if f.startswith("/") else source + "/" + f
             rel_path = f if not f.startswith("/") else f.replace(source + "/", "")
-            wc = call_tool("exec", {"command": f"wc -l < {shlex.quote(full_path)} 2>/dev/null || echo 0"})
+            wc = call_tool("exec", {"command": f"wc -l < {shell_quote(full_path)} 2>/dev/null || echo 0"})
             lines_str = wc.strip()
             lines = int(lines_str) if lines_str.isdigit() else 0
             result.append({"path": rel_path, "lines": lines})
@@ -56,7 +106,7 @@ def scan_files(source, files_filter, include_extensions):
 
     # Prefer git-tracked files; fall back to find for non-git projects.
     cmd = (
-        f"cd {shlex.quote(source)} && "
+        f"cd {shell_quote(source)} && "
         "(git ls-files 2>/dev/null || find . -type f | sed 's#^./##')"
     )
     raw = call_tool("exec", {"command": cmd})
@@ -86,7 +136,7 @@ def scan_files(source, files_filter, include_extensions):
         return []
 
     # Batch wc -l
-    files_arg = " ".join([shlex.quote(source + "/" + f) for f in filtered[:200]])
+    files_arg = " ".join([shell_quote(source + "/" + f) for f in filtered[:200]])
     wc_out = call_tool("exec", {"command": f"wc -l {files_arg} 2>/dev/null | grep -v ' total$'"})
 
     result = []
@@ -123,6 +173,7 @@ Rules:
 - Large files (> 500 lines) should be their own unit
 - Medium files (200-500 lines) are typically their own unit
 - Test files (*.test.ts) should be grouped with their corresponding source file's unit
+- Group assignment means primary ownership; later integration references do not own the file
 - Each unit gets a short kebab-case name for its output filename
 
 Output a JSON array where each item is:
@@ -131,7 +182,9 @@ Output a JSON array where each item is:
 Source files:
 {file_summary}
 
-Return ONLY the JSON array, no markdown fences, no other text."""
+Return ONLY the JSON array, no markdown fences, no other text.
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
 
     response = request_model_without_context(prompt)
     text = response["text"].strip()
@@ -201,17 +254,25 @@ Files: {', '.join(files)}
 
 Analyze the source code and produce a concise unit summary in markdown.
 
+Treat the listed files as this unit's primary-owned files. Mention any other file only as a secondary/integration reference.
+
 Include these sections:
 ## Purpose
 What this unit does (1-3 sentences)
+
+## Primary Files
+Source-relative files this unit owns
+
+## Secondary / Integration Files
+Files referenced for integration context but not owned (omit if none)
 
 ## Key Exports
 Main types, classes, functions exported (bullet list)
 
 ## Function Index
 A markdown table of ALL named functions/methods in this unit (exported AND internal helpers).
-Columns: Function | Lines (approximate) | Description (one phrase)
-Example row: | `advanceExecution(args)` | ~150 | Main interpreter loop, dispatches host calls |
+Columns: Function | Stable location (symbol/section; line optional) | Description (one phrase)
+Example row: | `advanceExecution(args)` | `advanceExecution` | Main interpreter loop, dispatches host calls |
 Include every function that is 5+ lines. Order by appearance in file.
 
 ## Dependencies
@@ -227,6 +288,8 @@ Keep it concise and factual. Do NOT include source code.
 
 Source:{files_text}
 
+{CODE_INDEX_GOVERNANCE_PROMPT}
+
 Write the markdown summary now (start with ## Purpose):"""
 
         response = request_model_without_context(prompt)
@@ -234,7 +297,7 @@ Write the markdown summary now (start with ## Purpose):"""
 
         # Write unit file
         unit_path = output_dir + "/units/" + name + ".md"
-        header = f"# Unit: {name}\n\nFiles: {', '.join(files)}\n\n"
+        header = f"# Unit: {name}\n\nPrimary files: {', '.join(files)}\n\n"
         call_tool("write", {"filePath": unit_path, "content": header + summary, "overwrite": True})
         results.append({"name": name, "path": unit_path, "files": files})
 
@@ -243,7 +306,7 @@ Write the markdown summary now (start with ## Purpose):"""
 
 def generate_modules(output_dir):
     """Generate module-level summaries from unit docs (two-step: plan then generate)."""
-    units_raw = call_tool("exec", {"command": f"ls '{output_dir}/units/' 2>/dev/null"})
+    units_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/units/')} 2>/dev/null"})
     unit_files = [f.strip() for f in units_raw.strip().split("\n") if f.strip().endswith(".md")]
 
     if not unit_files:
@@ -275,7 +338,9 @@ Output a JSON array where each item is:
 Unit briefs:
 {briefs_text}
 
-Return ONLY the JSON array, no markdown fences, no other text."""
+Return ONLY the JSON array, no markdown fences, no other text.
+
+{CODE_INDEX_GOVERNANCE_PROMPT}"""
 
     response = request_model_without_context(plan_prompt)
     text = response["text"].strip()
@@ -345,11 +410,18 @@ How other modules interact with this one (key functions, events, data flows)
 ## Invariants
 Important constraints and rules
 
+## Open Questions
+Unconfirmed items only, each labeled Unconfirmed
+
 ## Design Decisions
 (leave empty for now - will be filled from user decision history)
 
 Unit summaries:
 {relevant_content}
+
+Do not copy unit-owned decisions; add only summary links if the input already provides a canonical decision reference.
+
+{CODE_INDEX_GOVERNANCE_PROMPT}
 
 Write the module document now (start with ## Responsibility):"""
 
@@ -366,7 +438,7 @@ Write the module document now (start with ## Responsibility):"""
 
 def generate_threads(output_dir):
     """Generate cross-module thread docs from module summaries."""
-    modules_raw = call_tool("exec", {"command": f"ls '{output_dir}/modules/' 2>/dev/null"})
+    modules_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
     module_files = [f.strip() for f in modules_raw.strip().split("\n") if f.strip().endswith(".md")]
 
     if not module_files:
@@ -383,7 +455,7 @@ def generate_threads(output_dir):
 
     prompt = f"""You are generating cross-module feature flow documentation.
 
-Based on the module summaries below, identify 4-6 key cross-module flows and document each.
+Based on the module summaries below, identify 4-6 key cross-module flows and document each. Repeated cross-module contracts or decisions are strong signals for thread selection.
 
 A thread describes an end-to-end feature spanning multiple modules. Good threads might include:
 - Request lifecycle (input → orchestration → execution → response)
@@ -401,6 +473,8 @@ Each thread should have: ## Overview, ## Steps (numbered), ## Modules Involved, 
 
 Module summaries:
 {module_contents}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}
 
 Generate the thread documents now:"""
 
@@ -434,13 +508,13 @@ def generate_overview(output_dir, project):
     """Generate top-level overview from modules and threads."""
     all_content = ""
 
-    modules_raw = call_tool("exec", {"command": f"ls '{output_dir}/modules/' 2>/dev/null"})
+    modules_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
     for mf in [f.strip() for f in modules_raw.strip().split("\n") if f.strip().endswith(".md")]:
         content = call_tool("read", {"filePath": output_dir + "/modules/" + mf})
         if isinstance(content, str):
             all_content += f"\n---\nModule: {mf}\n{content[:2000]}\n"
 
-    threads_raw = call_tool("exec", {"command": f"ls '{output_dir}/threads/' 2>/dev/null"})
+    threads_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/threads/')} 2>/dev/null"})
     for tf in [f.strip() for f in threads_raw.strip().split("\n") if f.strip().endswith(".md")]:
         content = call_tool("read", {"filePath": output_dir + "/threads/" + tf})
         if isinstance(content, str):
@@ -457,9 +531,12 @@ Write a concise overview covering:
 6. **Thread Index** - list with one-line descriptions
 
 Keep it navigational and concise.
+Do not copy module/thread decisions into the overview; use short links unless a principle is genuinely project-wide and overview-owned.
 
 Source material:
 {all_content}
+
+{CODE_INDEX_GOVERNANCE_PROMPT}
 
 Write the overview markdown now:"""
 
@@ -474,13 +551,13 @@ def main(args):
     source = args.get("source")
     if not source:
         source = call_tool("exec", {"command": "pwd"}).strip()
-    source = os.path.abspath(os.path.expanduser(source))
+    source = absolute_path(source)
 
-    project = args.get("project") or os.path.basename(source.rstrip("/")) or "project"
+    project = args.get("project") or path_basename(source) or "project"
     phase = args.get("phase", None)
     files_filter = args.get("files", None)
     include_extensions = args.get("extensions", INCLUDE_EXTENSIONS)
-    output_dir = os.path.abspath(os.path.expanduser(args.get("output", "~/code-index/" + project)))
+    output_dir = absolute_path(args.get("output", "~/code-index/" + project))
 
     print(f"Code Index Generator")
     print(f"  project: {project}")
@@ -491,7 +568,7 @@ def main(args):
         print(f"  files filter: {files_filter}")
 
     # Ensure output directories exist
-    call_tool("exec", {"command": f"mkdir -p {shlex.quote(output_dir + '/units')} {shlex.quote(output_dir + '/modules')} {shlex.quote(output_dir + '/threads')}"})
+    call_tool("exec", {"command": f"mkdir -p {shell_quote(output_dir + '/units')} {shell_quote(output_dir + '/modules')} {shell_quote(output_dir + '/threads')}"})
 
     # Phase 1: Scan & Plan
     if phase is None or phase == "plan" or phase == "units":

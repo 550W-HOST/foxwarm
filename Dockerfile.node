@@ -1,5 +1,5 @@
 # Node client for Foxwarm distributed execution
-FROM node:22-bookworm-slim
+FROM node:24.17.0-bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -31,14 +31,26 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Copy source and dependencies
-COPY package.json package-lock.json tsconfig.json ./
+# Install dependency layers before copying changing source files.
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
+COPY packages/cli-node/package.json packages/cli-node/package-lock.json ./packages/cli-node/
+COPY packages/cli-node-runtime/package.json packages/cli-node-runtime/package-lock.json ./packages/cli-node-runtime/
+RUN npm ci \
+    && npm --prefix packages/cli-node ci \
+    && npm --prefix packages/cli-node-runtime ci --omit=dev \
+    && npm cache clean --force
+
+# Copy source and build the shared, CLI-node, and root runtime outputs.
+COPY tsconfig.json ./
 COPY src ./src
 COPY templates ./templates
 COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
+COPY packages/shared ./packages/shared
+COPY packages/cli-node ./packages/cli-node
+COPY packages/cli-node-runtime ./packages/cli-node-runtime
 
-# Install and build
-RUN npm ci && npm run build
+RUN npm run build
 
 RUN chmod +x /app/scripts/start-sandbox-node.sh
 

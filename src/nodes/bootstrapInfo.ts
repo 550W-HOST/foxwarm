@@ -37,6 +37,8 @@ export interface NodeBootstrapInfo {
   examples: {
     chooseBaseUrl: string;
     bareMetal: string;
+    bareMetalBackground: string;
+    bareMetalInstall: string;
     docker: string;
     interactive: string;
     explicitHostOverride: string;
@@ -86,8 +88,19 @@ export function buildNodeBootstrapInfo(options: NodeBootstrapInfoOptions): NodeB
     examples: {
       chooseBaseUrl: `BASE_URL=http://YOUR_MASTER:${HTTP_PORT}`,
       bareMetal: `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \\
+  --dir=/opt/foxwarm-node \\
   --pairing=${options.pairingToken} \\
   --node-id=my-node`,
+      bareMetalBackground: `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \\
+  --dir=/opt/foxwarm-node \\
+  --pairing=${options.pairingToken} \\
+  --node-id=my-node \\
+  -d`,
+      bareMetalInstall: `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \\
+  --dir=/opt/foxwarm-node \\
+  --pairing=${options.pairingToken} \\
+  --node-id=my-node \\
+  --install`,
       docker: `curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \\
   --pairing=${options.pairingToken} \\
   --node-id=my-node`,
@@ -95,6 +108,7 @@ export function buildNodeBootstrapInfo(options: NodeBootstrapInfoOptions): NodeB
   --pairing=${options.pairingToken} \\
   --node-id=my-cli-node`,
       explicitHostOverride: `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \\
+  --dir=/opt/foxwarm-node \\
   --host="$BASE_URL" \\
   --pairing=${options.pairingToken} \\
   --node-id=my-node`,

@@ -44,6 +44,10 @@ export function parseFunctionCallArgs(rawArgsText: unknown): {
     };
   }
 
+  if (rawArgsText === '') {
+    return { args: {} };
+  }
+
   try {
     const parsed = JSON.parse(rawArgsText);
     if (!isPlainObject(parsed)) {

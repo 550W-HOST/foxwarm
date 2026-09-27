@@ -1,21 +1,24 @@
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
-import { approvePendingPairing, rejectPendingPairing } from './nodes/registry';
+import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import * as skills from './skills';
 import * as tools from './tools';
-import { estimateSessionSummary } from './tokenCount';
-import { CONTEXT_LIMIT, resolveModelConfig, APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
+import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
-import { BTW_USAGE, runBtwRequest } from './btw';
+import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
+import { BTW_USAGE } from './btw';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api';
 import { ensureNodePairingToken } from './nodes/bootstrapInfo';
+import { validateNodeSelection } from './nodeExecution';
 import { getChannelRuntimeStatus, restartManagedChannel } from './channelRuntime';
+import { buildSessionModelEffortPresentation } from './session/modelEffortPresentation';
 
 // Re-export types
 export { CommandDef, CommandAutocompleteNode, CommandAutocomplete, literalNode, placeholderNode } from './commands/types';
-import { CommandDef } from './commands/types';
+import { commandSessionMessageCount, CommandDef } from './commands/types';
 import { placeholderNode } from './commands/types';
 
 // Import autocomplete trees
@@ -32,7 +35,7 @@ import { handleTimerCommand } from './commands/timerCmd';
 import { handleChannelCommand } from './commands/channelCmd';
 
 // Import helpers
-import { handleCompactCommand, getDisplayModelKeys, resolveCommandModelSelection, buildNodePairHelp, buildNodeListReply } from './commands/helpers';
+import { handleCompactCommand, getDisplayModelKeys, resolveCommandModelSelection, buildNodePairHelp, buildNodeListReply, parseEffortFlag } from './commands/helpers';
 
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
@@ -78,7 +81,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply(BTW_USAGE)
         return
       }
-      void runBtwRequest(sessionId, message).catch((err: any) => {
+      void sessionRuntime.runBtw(sessionId, message).catch((err: any) => {
         logger.error({ err, sessionId }, 'BTW background request failed')
       })
       ctx.reply('📝 BTW request started. I’ll post the result here when it finishes.')
@@ -95,30 +98,8 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      const historyLen = session.history.length
-      const sessionSummary = estimateSessionSummary(session)
-      const tokenCount = sessionSummary.tokens
-      const imageCount = sessionSummary.imageCount
-      const { currentKey } = resolveModelConfig(session.model)
-      const node = session.currentNode || 'master'
-      const isolated = sessionManager.isSessionEffectivelyIsolated(session) ? ' (isolated)' : ''
-      const parent = session.parentSessionId ? `\n- parent: \`${session.parentSessionId}\`` : ''
-      const displayName = session.displayName ? `\n- name: ${session.displayName}` : ''
-      const agent = session.agent || 'main'
-      const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session)
-      const archived = session.archived ? '\n- 📦 archived' : ''
-
-      let resp = `📊 *Session Status*\n\n`
-      resp += `- id: \`${sessionId}\`${displayName}\n`
-      resp += `- agent: \`${agent}\`${parent}${archived}\n`
-      resp += `- model: \`${currentKey}\`\n`
-      resp += `- messages: ${historyLen}\n`
-      resp += `- tokens: ~${tokenCount.toLocaleString()} / ${CONTEXT_LIMIT.toLocaleString()}`
-      if (imageCount > 0) resp += ` (${imageCount} image${imageCount > 1 ? 's' : ''})`
-      resp += `\n`
-      resp += `- auto-compact threshold: ~${compactThreshold.toLocaleString()} tokens\n`
-      resp += `- node: \`${node}\`${isolated}\n`
-      ctx.reply(resp)
+      const history = await sessionRuntime.getHistory(sessionId)
+      ctx.reply(formatSessionStatus(await buildSessionStatusInfo(sessionId, session, false, history?.messages)))
     }
   },
   '/session': {
@@ -126,6 +107,35 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: false,
     autocomplete: { children: SESSION_AUTOCOMPLETE },
     handler: handleSessionCommand,
+  },
+  '/fork': {
+    description: 'Fork current session. `args: [suffix] [message]`',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId, session, rawArgs) => {
+      if (!sessionId || !session) return;
+
+      const parsed = (rawArgs ?? _args.join(' ')).match(/^(\S+)(?:\s+([\s\S]*))?$/);
+      const suffix = parsed?.[1] || sessionManager.generateSessionId();
+      const initialMessage = parsed?.[2] === '' || parsed?.[2] === undefined ? undefined : parsed[2];
+
+      try {
+        sessionManager.validateChildSessionSuffix(suffix);
+        const requestedSessionId = sessionManager.buildChildSessionId(sessionId, suffix);
+        if (sessionManager.getSessionCatalog(requestedSessionId)) {
+          ctx.reply(`❌ Session \`${requestedSessionId}\` already exists.`);
+          return;
+        }
+
+        const childSessionId = await sessionManager.createChildSession(sessionId, suffix, true);
+        if (initialMessage !== undefined) {
+          await sessionManager.sendToSession(childSessionId, initialMessage, sessionId);
+        }
+        await sessionRuntime.notifyManualForkCreated(sessionId, childSessionId, initialMessage);
+        ctx.reply(`✅ Forked session \`${sessionId}\` → \`${childSessionId}\`${initialMessage === undefined ? '' : '\nInitial message sent.'}`);
+      } catch (e: any) {
+        ctx.reply(`❌ Fork failed: ${e.message}`);
+      }
+    },
   },
   '/attach': {
     description: 'Attach to session. `args: <sessionId>`',
@@ -139,13 +149,13 @@ export const COMMANDS: Record<string, CommandDef> = {
         return
       }
       const targetSessionId = args[0]
-      const targetSession = await sessionManager.getExistingSession(targetSessionId)
+      const targetSession = sessionManager.getSessionCatalog(targetSessionId)
       if (!targetSession) {
         ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
         return
       }
       sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
-      sessionManager.attachChannel(getChannelId(ctx), getConversationId(ctx), targetSessionId)
+      await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), targetSessionId)
       const displayName = targetSession.displayName ? ` (${targetSession.displayName})` : ''
       ctx.reply(`✅ Attached to session \`${targetSessionId}\`${displayName}`)
     },
@@ -189,7 +199,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         }
         case 'attach':
         case 'detach':
-          ctx.reply('❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or the `load_skill` tool to load full instructions on demand.')
+          ctx.reply('❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or `skill({ action: "load", skillName: "<skill>" })` to load full instructions on demand.')
           break
         case 'show': {
           if (subArgs.length < 1) { ctx.reply('Usage: /skill show <skill>'); return }
@@ -199,7 +209,14 @@ export const COMMANDS: Record<string, CommandDef> = {
             let resp = `🧩 *Skill:* \`${info.name}\``
             if (info.description) resp += `\n${info.description}`
             resp += `\nSource: \`${skills.formatSkillSourceLabel(info)}\`\nMetadata: \`${info.metadataPath}\``
-            if (documents.length === 0) { resp += '\n\n(No skill memory documents found.)' }
+            resp += `\nSkill directory: \`${info.dir}\``
+            resp += '\nRelative paths in this skill are relative to the skill directory.'
+            if (info.resourceFiles.length > 0) {
+              resp += '\n\nResources (supporting files, not eagerly loaded):'
+              for (const file of info.resourceFiles) resp += `\n- \`${file}\``
+              if (info.resourceFilesTruncated) resp += '\n- ... (resource listing truncated)'
+            }
+            if (documents.length === 0) { resp += '\n\n(No skill documents found.)' }
             else { for (const doc of documents) { resp += `\n\nFILE: \`${doc.filePath}\`\n\n${doc.content}` } }
             ctx.reply(resp)
           } catch (e: any) { ctx.reply(`❌ Skill show failed: ${e.message}`) }
@@ -211,32 +228,91 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/stop': {
-    description: 'Stop current run',
+    description: 'Stop current run, or use `/stop compact` to cancel compaction only',
+    usage: '[compact]',
     requiresSession: true,
-    handler: async (ctx, _args, sessionId, session) => {
+    autocomplete: { children: [{ value: 'compact', kind: 'literal', description: 'Cancel active or pending compaction without stopping the current run', usage: '/stop compact' }] },
+    handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      if (!session.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
+      if (args.length > 0) {
+        if (args.length !== 1 || args[0] !== 'compact') {
+          ctx.reply('Usage: `/stop` or `/stop compact`')
+          return
+        }
+        try {
+          const result = await sessionRuntime.cancelCompaction(sessionId)
+          if (result.outcome === 'none') ctx.reply('⚠️ No active compaction to cancel.')
+          else if (result.outcome === 'completed') ctx.reply('⚠️ Compaction had already committed; cancellation was too late.')
+          else ctx.reply('🛑 Compaction cancelled. The current Session run was not stopped.')
+        } catch (e: any) { ctx.reply(`❌ Compaction cancellation failed: ${e.message}`) }
+        return
+      }
+      // Use the placement-neutral runtime view: under Session-worker placement
+      // the raw catalog stub's busy flag is only refreshed at handback, so it
+      // would falsely report "not running" mid-turn.
+      const runtime = await sessionRuntime.getSession(sessionId)
+      if (!runtime?.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
       try {
-        const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId)
-        ctx.reply(abortedInFlight ? '🛑 Stop signal sent. The in-flight LLM request was aborted.' : '🛑 Stop signal sent. The session will stop after the current tool call completes.')
+        const { abortedInFlight, stoppedCurrent } = await sessionRuntime.control(sessionId, 'stop')
+        if (stoppedCurrent === false) {
+          ctx.reply('⚠️ No main Session run was stopped. Compaction continues; use `/stop compact` to cancel it.')
+          return
+        }
+        const queuedNote = (runtime.queueLength ?? 0) > 0
+          ? ' Queued inputs will be added to history without being run.'
+          : ''
+        ctx.reply(abortedInFlight
+          ? `🛑 Stop signal sent. The in-flight LLM request was aborted.${queuedNote}`
+          : `🛑 Stop signal sent. The session will stop after the current tool call completes.${queuedNote}`)
       } catch (e: any) { ctx.reply(`❌ Stop failed: ${e.message}`) }
     }
   },
-  '/retry': {
-    description: 'Retry last request (reactivate session without adding new message)',
+  '/dequeue': {
+    description: 'Run queued items, stopping the current run first if needed',
+    requiresSession: true,
+    handler: async (ctx, _args, sessionId) => {
+      if (!sessionId) return
+      try {
+        const { queuedItems = 0, stoppedCurrent, abortedInFlight } = await sessionRuntime.control(sessionId, 'dequeue')
+        if (queuedItems === 0) { ctx.reply('⚠️ No queued items to run.'); return }
+        if (stoppedCurrent) {
+          ctx.reply(abortedInFlight
+            ? `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}. The in-flight LLM request was aborted first.`
+            : `▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''} after the current tool call stops.`)
+          return
+        }
+        ctx.reply(`▶️ Running ${queuedItems} queued item${queuedItems > 1 ? 's' : ''}.`)
+      } catch (e: any) { ctx.reply(`❌ Dequeue failed: ${e.message}`) }
+    }
+  },
+  '/continue': {
+    description: 'Continue an interrupted turn without adding a new message',
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      if (session.busy) { ctx.reply('⚠️ Session is already running.'); return }
-      if (session.history.length === 0) { ctx.reply('⚠️ No history to retry.'); return }
       try {
-        ctx.reply('🔄 Retrying last request...')
-        await sessionManager.retrySession(sessionId)
-      } catch (e: any) { ctx.reply(`❌ Retry failed: ${e.message}`) }
+        const runtime = await sessionRuntime.getSession(sessionId)
+        if (!runtime) { ctx.reply('⚠️ No active session to continue.'); return }
+        if (runtime.busy) { ctx.reply('⚠️ Session is already running.'); return }
+        if (runtime.runtimeState?.state === 'waiting') {
+          ctx.reply('⚠️ Session is waiting and cannot be continued manually.')
+          return
+        }
+        ctx.reply('▶️ Continuing interrupted turn...')
+        await sessionRuntime.control(sessionId, 'retry')
+      } catch (e: any) {
+        if (e?.code === 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN') {
+          ctx.reply('⚠️ Continue outcome is unknown: it may already be committed or delivered. Inspect session history before continuing again.')
+        } else if (e?.code === 'SESSION_CONTINUATION_NOT_AVAILABLE') {
+          ctx.reply(`⚠️ ${e.message}`)
+        } else {
+          ctx.reply(`❌ Continue failed: ${e.message}`)
+        }
+      }
     }
   },
   '/node': {
-    description: 'List nodes/pending approvals, approve/reject pairings, show pair-help, or switch node with `/node <node-id>`.',
+    description: 'Manage nodes: list, approve/reject pairings, remove/move approved nodes, pair-help, or switch with `/node <node-id>`.',
     requiresSession: true,
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
@@ -273,21 +349,53 @@ export const COMMANDS: Record<string, CommandDef> = {
         } catch (e: any) { ctx.reply(`❌ Failed to reject pairing: ${e.message}`) }
         return
       }
+      if (args[0] === 'remove') {
+        const nodeId = args[1]
+        if (!nodeId) { ctx.reply('Usage: `/node remove <node-id>`'); return }
+        try {
+          const removed = await removeApprovedNode(nodeId)
+          const disconnected = nodesManager.disconnectNode(removed.nodeId, 'Node credentials removed by /node remove')
+          ctx.reply([
+            `✅ Removed approved node \`${removed.nodeId}\`.`,
+            `Runtime connection: \`${disconnected ? 'closed' : 'not online'}\`.`,
+            'The old node credentials are no longer valid; the node must be paired again before it can reconnect.',
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to remove node: ${e.message}`) }
+        return
+      }
+      if (args[0] === 'move') {
+        const oldNodeId = args[1]
+        const newNodeId = args[2]
+        if (!oldNodeId || !newNodeId) { ctx.reply('Usage: `/node move <old-id> <new-id>`'); return }
+        try {
+          const onlineConflict = nodesManager.getNode(newNodeId)
+          if (isReservedNodeId(newNodeId)) {
+            throw new Error(`Node id \`${newNodeId}\` is reserved`)
+          }
+          if (onlineConflict && newNodeId !== oldNodeId) {
+            throw new Error(`Node id \`${newNodeId}\` is currently online/registered`)
+          }
+          const moved = await moveApprovedNode(oldNodeId, newNodeId)
+          const disconnected = nodesManager.disconnectNode(moved.oldNodeId, 'Node id moved by /node move; reconnect with the new node id')
+          ctx.reply([
+            `✅ Moved approved node \`${moved.oldNodeId}\` → \`${moved.newNodeId}\`.`,
+            'Auth token hash and metadata were preserved server-side.',
+            `Runtime connection: \`${disconnected ? 'old connection closed' : 'old node not online'}\`.`,
+            `Node-side credentials still store the old node id. Update the node credentials file to use nodeId \`${moved.newNodeId}\` with the existing authToken, then restart the node so it reconnects with the new id.`,
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to move node: ${e.message}`) }
+        return
+      }
       // Switch node
       const nodeId = args[0]
       if (boundNode) {
         ctx.reply(`🔒 Current session belongs to an isolated agent bound to node \`${boundNode}\`. Changing \`currentNode\` here would not affect runtime execution. Use \`/agent isolated <agent> off\` first if you really want to unbind it.`)
         return
       }
-      if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
-        ctx.reply(`❌ Node \`${nodeId}\` not found.\n\nUse \`/node\` to list available nodes.`)
-        return
-      }
       try {
-        nodesManager.setCurrentNode(sessionId, nodeId)
-        session.currentNode = nodeId
-        await sessionManager.saveSession(sessionId)
-        ctx.reply(`✅ Switched to node \`${nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
+        const validated = await validateNodeSelection(sessionId, nodeId)
+        await sessionRuntime.updateSettings(sessionId, { currentNode: validated.nodeId })
+        ctx.reply(`✅ Switched to node \`${validated.nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
       } catch (e: any) { ctx.reply(`❌ Failed to switch node: ${e.message}`) }
     }
   },
@@ -309,7 +417,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       const query = queryParts.join(' ').trim()
       if (!query) { ctx.reply('Usage: /search [--session <session-id>] [--agent <agent-name>] [--limit <n>] <query>'); return }
       try {
-        const result = await tools.recall({ vector_query: query, limit, sessionId: targetSessionId, agentName: targetAgentName }, { sessionId, session })
+        const result = await tools.recall({ vector_query: query, limit, sessionId: targetSessionId, agentName: targetAgentName }, { sessionId })
         ctx.reply(result)
       } catch (e: any) { ctx.reply(`❌ Search failed: ${e.message}`) }
     }
@@ -321,7 +429,8 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: MESSAGES_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const totalMessages = session.history.length
+      const history = await sessionRuntime.getHistory(sessionId)
+      const totalMessages = history?.messages.length ?? commandSessionMessageCount(session)
       const previewLength = 100
       let start: number | undefined; let end: number | undefined
       if (args.length === 0) { ctx.reply(messagesUsage); return }
@@ -340,43 +449,50 @@ export const COMMANDS: Record<string, CommandDef> = {
         end = Math.max(0, Math.min(end, totalMessages))
       }
       if (end === undefined || start === undefined || end < start) { ctx.reply('No messages found in the specified range.'); return }
-      const messages = await sessionManager.getSessionMessages(sessionId, start, end - start)
+      const messages = (history?.messages || []).slice(start, end)
       const preview = formatSessionMessagesPreview(sessionId, messages, start, totalMessages, previewLength)
       ctx.reply(preview)
     }
   },
   '/model': {
-    description: 'List or switch model. `args: [name|default]`',
+    description: 'Inspect or switch model and effort. `args: [name|default] [--effort <level|default|unset>]`',
     requiresSession: true,
     autocomplete: { children: MODEL_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const { defaultKey, currentKey } = resolveModelConfig(session.model)
-      const modelKeys = getDisplayModelKeys(session.model)
-      if (args.length === 0) {
-        let resp = `🤖 *Models*\n\n`
-        resp += modelKeys.map(k => {
-          const tags: string[] = []
-          if (k === defaultKey) tags.push('default')
-          if (k === currentKey) tags.push('current')
-          const suffix = tags.length ? ` (${tags.join(', ')})` : ''
-          return `- \`${k}\`${suffix}`
-        }).join('\n')
-        ctx.reply(resp)
-        return
+      const inspectOnly = args.length === 0
+      const parsed = parseEffortFlag(args)
+      if (parsed.error) { ctx.reply(`❌ ${parsed.error}`); return }
+      if (parsed.remaining.length > 1) { ctx.reply('Usage: /model [name|default] [--effort <level|default|unset>]'); return }
+      const patch: Record<string, any> = {}
+      if (parsed.present) patch.effort = parsed.effort ?? null
+      const target = parsed.remaining[0]
+      if (target) {
+        if (target === 'default') patch.model = null
+        else {
+          const resolved = resolveCommandModelSelection(target, session.model)
+          if (resolved.error) { ctx.reply(resolved.error); return }
+          patch.model = resolved.key
+        }
       }
-      const target = args[0]
-      if (target === 'default') {
-        session.model = undefined
-        await sessionManager.saveSession(sessionId)
-        ctx.reply('✅ Model reset to default.')
-        return
+      if (Object.keys(patch).length > 0) await sessionRuntime.updateSettings(sessionId, patch)
+      const current = await sessionRuntime.getSession(sessionId)
+      if (!current) return
+      const view = buildSessionModelEffortPresentation(current)
+      const lines = [
+        '🤖 *Model / Effort*',
+        `- model: \`${view.modelKey}\` (raw: ${view.model ? `\`${view.model}\`` : 'default'})`,
+        `- effort: raw=${view.effort.raw || 'unset'}, effective=${view.effort.effective}`,
+        `- allowed: ${view.effort.allowed.join(', ')}`,
+        `- model default: ${view.effort.defaultEffort || 'per-leaf default'}`,
+      ]
+      if (inspectOnly) {
+        lines.push('', '*Models*', ...getDisplayModelKeys(current.model).map(key => {
+          const tags = [key === view.defaultModelKey ? 'default' : '', key === view.modelKey ? 'current' : ''].filter(Boolean)
+          return `- \`${key}\`${tags.length ? ` (${tags.join(', ')})` : ''}`
+        }))
       }
-      const resolved = resolveCommandModelSelection(target, session.model)
-      if (resolved.error) { ctx.reply(resolved.error); return }
-      session.model = resolved.key
-      await sessionManager.saveSession(sessionId)
-      ctx.reply(`✅ Model switched to \`${resolved.key}\`.`)
+      ctx.reply(lines.join('\n'))
     }
   },
   '/delete-messages': {
@@ -389,7 +505,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (args.length === 0) { ctx.reply(deleteMessagesUsage); return }
       const num = parseInt(args[0], 10)
       if (isNaN(num) || num === 0) { ctx.reply(deleteMessagesUsage); return }
-      const result = await sessionManager.deleteMessages(sessionId, num)
+      const result = await sessionRuntime.deleteMessages(sessionId, num)
       ctx.reply(`✅ Deleted ${result.deleted} messages. Remaining: ${result.remaining}.`)
     }
   },
@@ -399,11 +515,12 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: VERBOSE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId) => {
       if (!sessionId) return
-      const session = await sessionManager.getSession(sessionId)
+      const session = await sessionRuntime.getSession(sessionId)
+      if (!session) { ctx.reply('❌ No active session.'); return }
       if (args.length === 0) { ctx.reply(`Verbose mode is currently *${session.verbose ? 'on' : 'off'}*.`); return }
       const target = args[0].toLowerCase()
-      if (target === 'on') { session.verbose = true; await sessionManager.saveSession(sessionId); ctx.reply('✅ Verbose mode enabled. Tool calls will be shown.') }
-      else if (target === 'off') { session.verbose = false; await sessionManager.saveSession(sessionId); ctx.reply('✅ Verbose mode disabled. Tool calls will be hidden.') }
+      if (target === 'on') { await sessionRuntime.updateSettings(sessionId, { verbose: true }); ctx.reply('✅ Verbose mode enabled. Tool calls will be shown.') }
+      else if (target === 'off') { await sessionRuntime.updateSettings(sessionId, { verbose: false }); ctx.reply('✅ Verbose mode disabled. Tool calls will be hidden.') }
       else { ctx.reply('Usage: /verbose [on|off]') }
     }
   },

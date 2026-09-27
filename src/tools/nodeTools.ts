@@ -3,11 +3,19 @@ import {
     ToolContext,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { checkToolPermission } from '../isolatedCheck';
 import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
-import { logger } from '../common';
-import { getAgentDir } from '../config';
+import {
+    copyBetweenNodes,
+    executeNodeLifecycle,
+    listNodeLifecycleProviders,
+    listNodeTopology,
+    validateNodeSelection,
+} from '../nodeExecution';
+import { executeMainManagementTool } from '../mainManagementTools';
+import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
@@ -20,7 +28,15 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         throw new Error('copy_between_nodes requires sourceNode, sourcePath, targetNode, and targetPath.');
     }
 
-    await checkToolPermission('copy_between_nodes', ctx.sessionId, 'master', {
+    if (ctx.sessionPlacement === 'session-worker') {
+        const result = await copyBetweenNodes(ctx.sessionId, { sourceNode, sourcePath, targetNode, targetPath, overwrite: overwrite === true });
+        const lines = [`Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
+            `Size: ${result.sizeBytes} B`, `SHA256: ${result.sha256}`, `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`];
+        if (result.absolutePath) lines.push(`Target absolute path: ${result.absolutePath}`);
+        return lines.join('\n');
+    }
+
+    await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, ctx.sessionId, 'master', {
         sourceNode,
         sourcePath,
         targetNode,
@@ -43,105 +59,37 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
     return lines.join('\n');
 }
 
-export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
-    const { action, nodeId, tool, args: toolArgs } = args;
-    
-    // Get session for isolated check
-    const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
-    
-    // Isolated sessions can only call tools on their bound node
-    const isolatedAllowedRemoteNodes = sessionManager.isSessionEffectivelyIsolated(session)
-        ? Array.from(new Set([
-            sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master',
-            session?.currentNode,
-        ].filter((value): value is string => typeof value === 'string' && value.length > 0)))
-        : [];
+async function resolveCurrentNodeForList(ctx?: ToolContext): Promise<string> {
+    if (typeof ctx?.session?.currentNode === 'string' && ctx.session.currentNode.trim()) {
+        return ctx.session.currentNode.trim();
+    }
 
-    if (sessionManager.isSessionEffectivelyIsolated(session) && action === 'call') {
-        if (!isolatedAllowedRemoteNodes.includes(String(nodeId || ''))) {
-            throw new Error(`Isolated session can only call tools on its bound/current node (${isolatedAllowedRemoteNodes.join(', ')}).`);
-        }
+    if (ctx?.sessionId) {
+        return await nodesManager.getCurrentNode(ctx.sessionId) || 'master';
     }
-    
-    if (action === 'list') {
-        // List visible nodes and their tools, with optional node filter
-        const nodes = nodesManager.listNodesWithTools();
-        const visibleNodes = sessionManager.isSessionEffectivelyIsolated(session)
-            ? nodes.filter((n: any) => isolatedAllowedRemoteNodes.includes(n.id))
-            : nodes;
-        const filteredNodes = typeof nodeId === 'string' && nodeId.trim().length > 0
-            ? visibleNodes.filter((n: any) => n.id === nodeId)
-            : visibleNodes;
-        return {
-            nodes: filteredNodes.map((n: any) => ({
-                id: n.id,
-                type: n.type,
-                tools: n.tools.map((t: any) => ({
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters
-                }))
-            }))
-        };
-    }
-    
-    if (action === 'call') {
-        // Call a specific tool on a node
-        if (!nodeId || !tool) {
-            throw new Error('nodeId and tool are required for call action');
-        }
-        
-        const result = await nodesManager.executeNodeTool(
-            nodeId,
-            tool,
-            toolArgs || {},
-            ctx.sessionId
-        );
-        
-        return result;
-    }
-    
-    throw new Error(`Unknown action: ${action}`);
+
+    return 'master';
 }
 
-export const tool_list_nodes = async (args: ToolArgs) => {
-    const nodes = nodesManager.listNodes();
-    
-    if (nodes.length === 0) {
-        return 'No nodes registered.';
-    }
-    
-    let result = `Found ${nodes.length} node(s):\n\n`;
-    for (const node of nodes) {
-        const isMaster = node.id === 'master';
-        const label = isMaster ? ' (local)' : ' (remote)';
-        result += `- \`${node.id}\`${label} - Last activity: ${new Date(node.lastActivity).toISOString()}\n`;
-    }
-    
-    return result;
+export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) => {
+    if (!ctx?.sessionId) throw new Error('Node listing requires session context.');
+    if (ctx.sessionPlacement === 'session-worker' && ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
+    const currentNode = await resolveCurrentNodeForList(ctx);
+    const nodes = await listNodeTopology(ctx.sessionId, undefined, currentNode);
+    const lifecycleProviders = await listNodeLifecycleProviders(ctx.sessionId);
+    const providerBody = lifecycleProviders.length > 0
+        ? `\nLifecycle providers:\n${lifecycleProviders.map(provider => `- \`${provider.id}\` (${provider.actions.join(', ')})`).join('\n')}\n`
+        : '';
+    if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.${providerBody}`;
+    const body = nodes.map(node => {
+        const label = node.kind === 'master' ? 'local' : node.kind;
+        return `- \`${node.id}\` (${label})${node.id === currentNode ? ' ✅ current' : ''}`
+            + (node.availability !== 'ready' ? ` ⚠️ ${node.unavailable?.message || node.availability}` : '')
+            + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '');
+    }).join('\n');
+    return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
+        + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`);
 };
-
-async function resolveDefaultCwdForNode(nodeId: string, sessionId: string, agentName: string): Promise<string> {
-    if (nodeId === 'master') {
-        return getAgentDir(agentName);
-    }
-
-    const node = nodesManager.getNode(nodeId);
-    if (node?.tools?.has('get_default_cwd')) {
-        try {
-            const result = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sessionId);
-            const text = typeof result === 'string'
-                ? result
-                : (typeof (result as any)?.output === 'string' ? (result as any).output : String(result ?? ''));
-            const cwd = text.trim();
-            if (cwd) return cwd;
-        } catch (e) {
-            logger.warn({ err: e, nodeId, sessionId }, 'Failed to query node default cwd after current node change');
-        }
-    }
-
-    return 'node process cwd (run `pwd` to inspect)';
-}
 
 export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
     const { nodeId } = args;
@@ -150,37 +98,99 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
         throw new Error('Cannot change node: missing context');
     }
 
+    if (ctx.sessionPlacement === 'session-worker') {
+        const session = ctx.session;
+        if (!session || session.id !== ctx.sessionId || !ctx.persistCurrentSession) throw new Error('Node selection requires exact session context.');
+        if (sessionManager.isSessionEffectivelyIsolated(session)) {
+            throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
+        }
+        const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+        session.currentNode = validated.nodeId; delete session.cwd;
+        await ctx.persistCurrentSession();
+        return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
+    }
+
     const session = await sessionManager.getSession(ctx.sessionId);
     if (sessionManager.isSessionEffectivelyIsolated(session)) {
         throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
     }
     
-    nodesManager.setCurrentNode(ctx.sessionId, nodeId);
-    
-    // Also update session's currentNode
-    session.currentNode = nodeId;
-    delete session.cwd;
-    await sessionManager.saveSession(ctx.sessionId);
-    const defaultCwd = await resolveDefaultCwdForNode(nodeId, ctx.sessionId, session.agent || 'main');
-    
-    return `Current node changed to \`${nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${defaultCwd}\`.`;
+    const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+    await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: nodeId, cwd: null });
+    return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
 
-export const tool_node_bootstrap_info = async (args: ToolArgs = {}) => {
+function assertNodeActionKeys(args: ToolArgs, action: string, allowed: readonly string[]): void {
+    const accepted = new Set(['action', ...allowed]);
+    const unexpected = Object.keys(args || {}).find(key => !accepted.has(key));
+    if (unexpected) throw new Error(`node action="${action}" does not accept ${unexpected}.`);
+}
+
+export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> {
+    const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
+    if (action === 'list') {
+        assertNodeActionKeys(args, action, []);
+        return tool_list_nodes(args, ctx);
+    }
+    if (action === 'select') {
+        assertNodeActionKeys(args, action, ['nodeId']);
+        if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
+            throw new Error('node.nodeId is required for action="select".');
+        }
+        return tool_change_current_node({ ...args, nodeId: args.nodeId.trim() }, ctx);
+    }
+    if (['create', 'ensure', 'inspect', 'destroy'].includes(action)) {
+        if (!ctx?.sessionId) throw new Error(`node ${action} requires session context.`);
+        assertNodeActionKeys(args, action, action === 'create' || action === 'ensure'
+            ? ['providerId', 'nodeId', 'parameters', 'parametersJson']
+            : action === 'inspect'
+                ? ['nodeId', 'parameters', 'parametersJson']
+                : ['nodeId', 'parameters', 'parametersJson', 'confirmation']);
+        const parameters = resolveObjectArgWithJsonFallback(args, 'parameters', 'parametersJson', {
+            label: `node ${action} parameters`,
+        }) || {};
+        if (action === 'create' || action === 'ensure') {
+            if (typeof args.providerId !== 'string' || !args.providerId.trim()) {
+                throw new Error(`node.providerId is required for action="${action}".`);
+            }
+            return executeNodeLifecycle(ctx.sessionId, {
+                action,
+                providerId: args.providerId.trim(),
+                ...(args.nodeId === undefined ? {} : { nodeId: args.nodeId }),
+                parameters,
+            });
+        }
+        if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
+            throw new Error(`node.nodeId is required for action="${action}".`);
+        }
+        return executeNodeLifecycle(ctx.sessionId, {
+            action: action as 'inspect' | 'destroy',
+            nodeId: args.nodeId.trim(),
+            parameters,
+            ...(action === 'destroy' ? { confirmation: args.confirmation } : {}),
+        });
+    }
+    throw new Error('node.action must be "list", "select", "create", "ensure", "inspect", or "destroy".');
+}
+
+export const tool_node_bootstrap_info = async (args: ToolArgs = {}, ctx?: ToolContext) => {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_bootstrap_info', args, ctx);
     const token = await ensureNodePairingToken();
     return buildNodeBootstrapInfo({ pairingToken: token });
 };
 
-export const tool_node_pair_approve = async (args: ToolArgs) => {
+export const tool_node_pair_approve = async (args: ToolArgs, ctx?: ToolContext, assertBeforeApproval?: () => void) => {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_pair_approve', args, ctx);
     const { pendingId, nodeId: requestedNodeId } = args;
     if (!pendingId) throw new Error('Missing required parameter: pendingId');
 
     const { approvePendingPairing } = await import('../nodes/registry');
-    const result = await approvePendingPairing(pendingId, requestedNodeId || undefined);
+    const result = await approvePendingPairing(pendingId, requestedNodeId || undefined, assertBeforeApproval);
     return `✅ Approved node \`${result.nodeId}\` (delivered live: ${result.deliveredLive})`;
 };
 
-export const tool_node_pair_list = async () => {
+export const tool_node_pair_list = async (args: ToolArgs = {}, ctx?: ToolContext) => {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_pair_list', args, ctx);
     const { listPendingPairings } = await import('../nodes/registry');
     const pendings = await listPendingPairings();
     if (pendings.length === 0) return 'No pending pairing requests.';

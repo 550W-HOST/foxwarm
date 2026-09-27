@@ -42,6 +42,7 @@ function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, raw
 test('vector search filters, block boost, and recall vector_query source rendering respect lineage', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-search-filters-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  await fs.outputFile(path.join(tempRoot, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n');
 
   const originalFetch = global.fetch;
   global.fetch = (async (_input: any, init?: any) => {
@@ -51,6 +52,7 @@ test('vector search filters, block boost, and recall vector_query source renderi
     if (text.includes('alpha')) vector[0] = 1;
     if (text.includes('child')) vector[1] = 1;
     if (text.includes('forbidden')) vector[2] = 1;
+    if (text.includes('factlineage')) vector[3] = 1;
     return new Response(JSON.stringify({ data: [{ embedding: vector }] }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -98,10 +100,16 @@ test('vector search filters, block boost, and recall vector_query source renderi
         child: { id: 'child', agent: 'test-agent', parentSessionId: 'parent', meta: { lastMessageTime: 5000 } },
       },
     }, { spaces: 2 });
+    await fs.outputJson(path.join(config.SESSIONS_DIR, 'parent.json'), {
+      id: 'parent', agent: 'test-agent', history: [], queue: [], meta: {}, stats: {}, sessionStateVersion: 1, lastAppliedMailboxId: 0,
+    });
+    await fs.outputJson(path.join(config.SESSIONS_DIR, 'child.json'), {
+      id: 'child', agent: 'test-agent', parentSessionId: 'parent', history: [], queue: [], meta: {}, stats: {}, sessionStateVersion: 1, lastAppliedMailboxId: 0,
+    });
 
     await archiveStore.initArchiveStore();
     await sessionManager.loadSessions();
-    await vector.init();
+    await vector.init({ enabled: true });
     await vector.waitForStartupArchiveVectorBackfill();
 
     const lineage = await archiveStore.getVectorSearchLineage('child');
@@ -110,7 +118,6 @@ test('vector search filters, block boost, and recall vector_query source renderi
       maxMessageSeq: entry.maxMessageSeq,
       maxBlockId: entry.maxBlockId,
     }));
-
     const filtered = await vector.search('alpha', 10, false, {
       lineageSessions,
       excludeRegex: 'send_to_session|create_child_session',
@@ -145,7 +152,7 @@ test('vector search filters, block boost, and recall vector_query source renderi
       sessionId: 'child',
       scope: 'current-session',
       limit: 5,
-      query: 'useful',
+      contentFilter: 'useful',
       previewLength: 2000,
     }, { sessionId: 'child', session: { id: 'child', agent: 'test-agent' } } as any));
     assert.match(recallVector, /Recall vector search for `alpha`/);
@@ -154,6 +161,28 @@ test('vector search filters, block boost, and recall vector_query source renderi
     assert.match(recallVector, /useful alpha detail/);
     assert.doesNotMatch(recallVector, /\[chunk /, 'recall(vector_query) should render original archived messages, not vector chunks');
     assert.doesNotMatch(recallVector, /send_to_session alpha noise/);
+
+    await vector.indexMemoryFactsFromCompaction({
+      sessionId: 'parent', agent: 'test-agent', sourceStartSeq: 1, sourceEndSeq: 3, blockId: 1, blockLevel: 1,
+      facts: [{ kind: 'decision', text: 'factlineage allowed inherited fact' }],
+    });
+    await vector.indexMemoryFactsFromCompaction({
+      sessionId: 'parent', agent: 'test-agent', sourceStartSeq: 1, sourceEndSeq: 4, blockId: 2, blockLevel: 1,
+      facts: [{ kind: 'decision', text: 'factlineage forbidden crossing block fact' }],
+    });
+    await vector.indexMemoryFactsFromCompaction({
+      sessionId: 'parent', agent: 'test-agent', sourceStartSeq: 1, sourceEndSeq: 4, blockId: null, blockLevel: null,
+      facts: [{ kind: 'decision', text: 'factlineage forbidden legacy crossing fact' }],
+    } as any);
+
+    const allowedFactHits = await vector.search('factlineage', 10, false, { lineageSessions }) as any[];
+    assert.deepEqual(allowedFactHits.filter(hit => hit.kind === 'fact').map(hit => ({ blockId: hit.block_id, end: hit.raw_end_seq })), [{ blockId: 1, end: 3 }],
+      'child lineage search must allow the pre-fork block fact but exclude crossing block and legacy facts');
+    const crossingRecall = String(await toolsSessionAgent.tool_recall({
+      vector_query: 'forbidden', sessionId: 'child', scope: 'current-session', limit: 5, previewLength: 2000,
+    }, { sessionId: 'child', session: { id: 'child', agent: 'test-agent' } } as any));
+    assert.doesNotMatch(crossingRecall, /crossing (?:block|legacy) fact/,
+      'semantic recall must not reload source messages for rejected crossing fact hits');
 
     await assert.rejects(
       () => vector.search('alpha', 5, false, { lineageSessions, includeRegex: '[' }),

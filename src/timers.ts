@@ -1,11 +1,15 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import schedule, { Job } from 'node-schedule';
-import { TIMERS_FILE, getAgentDir } from './config';
+import { TIMERS_FILE, getAgentDir, loadModelsConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
+import type { Session } from './types';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
+import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystem } from './utils/promptWrappers';
+import { normalizeProspectiveSessionModelEffortSettings } from './session/modelEffortSettings';
 
 export interface SessionTimer {
   id: string;
@@ -17,6 +21,7 @@ export interface SessionTimer {
   agentName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
   at?: number;
   cron?: string;
   lastTriggeredAt?: number;
@@ -66,6 +71,7 @@ export function resetTimersForTests(): void {
   cancelAllJobs();
   timers.clear();
   initialized = false;
+  triggeredSessionNameFactory = buildTriggeredSessionName;
 }
 
 function generateTimerId(): string {
@@ -84,7 +90,13 @@ function buildTriggeredSessionName(prefix: string): string {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
 }
 
-function isCronTimer(timer: SessionTimer): boolean {
+let triggeredSessionNameFactory = buildTriggeredSessionName;
+
+export function setTriggeredSessionNameFactoryForTests(factory?: (prefix: string) => string): void {
+  triggeredSessionNameFactory = factory || buildTriggeredSessionName;
+}
+
+export function isCronTimer(timer: SessionTimer): boolean {
   return typeof timer.cron === 'string' && timer.cron.trim().length > 0;
 }
 
@@ -120,17 +132,28 @@ function getNextRunAt(timer: SessionTimer): number | null {
 
 export function buildTimerTriggeredMessage(timer: SessionTimer, firedAt: Date = new Date()): string {
   const label = isCronTimer(timer) ? 'Scheduled timer fired' : 'Timer fired';
-  const currentTimeLine = `Current time: ${formatLocalTimestamp(firedAt)}`;
+  const openTag = formatFoxwarmMessageOpen({
+    type: 'timer',
+    timerId: timer.id,
+    mode: getTimerMode(timer),
+    firedAt: firedAt.toISOString(),
+    time: formatLocalTimestamp(firedAt),
+    hint: label,
+  });
   return timer.message
-    ? `${label} (id: ${timer.id})\n${currentTimeLine}\n${timer.message}`
-    : `${label} (id: ${timer.id})\n${currentTimeLine}`;
+    ? `${openTag}\n${timer.message}\n${formatFoxwarmMessageClose()}`
+    : `${openTag}\n${formatFoxwarmMessageClose()}`;
 }
 
 export function buildWaitTimeoutMessage(timer: Pick<SessionTimer, 'waitTimeoutSeconds'>): string {
   const seconds = typeof timer.waitTimeoutSeconds === 'number' && Number.isFinite(timer.waitTimeoutSeconds)
     ? timer.waitTimeoutSeconds
     : 0;
-  return `[SYSTEM: wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.]`;
+  return formatFoxwarmSystem({
+    kind: 'event',
+    type: 'wait-timeout',
+    seconds,
+  }, `wait timeout reached after ${seconds}s. No newer message or event triggered this session during the wait.`);
 }
 
 function toTimerView(timer: SessionTimer): TimerView {
@@ -159,7 +182,7 @@ function cancelAllJobs(): void {
   }
 }
 
-async function fireTimer(timerId: string): Promise<void> {
+async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): Promise<void> {
   const timer = timers.get(timerId);
   if (!timer) {
     return;
@@ -168,7 +191,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
   if (timer.waitTimeoutId) {
     try {
-      const targetSession = await sessionManager.getExistingSession(timer.sessionId);
+      const targetSession = sessionManager.getSessionCatalog(timer.sessionId);
       if (!targetSession) {
         throw new Error(`Target session "${timer.sessionId}" not found.`);
       }
@@ -192,19 +215,25 @@ async function fireTimer(timerId: string): Promise<void> {
 
   try {
     if (timer.newSession) {
-      const ownerSession = await sessionManager.getExistingSession(timer.sessionId);
+      const ownerSession = sessionManager.getSessionCatalog(timer.sessionId);
       const agentName = timer.agentName || ownerSession?.agent || 'main';
       if (!await fs.pathExists(getAgentDir(agentName))) {
         throw new Error(`Target agent "${agentName}" not found.`);
       }
 
-      const sessionName = buildTriggeredSessionName(normalizeSessionPrefix(timer.sessionPrefix));
-      const { sessionId } = await sessionManager.createSessionInAgent({
-        agentName,
-        sessionName,
-        currentNode: timer.currentNode,
+      const modelsConfig = modelsConfigOverride || loadModelsConfig();
+      const modelEffort = normalizeProspectiveSessionModelEffortSettings({
         model: timer.model,
-      });
+        effort: timer.effort,
+      }, {}, modelsConfig);
+      const prefix = normalizeSessionPrefix(timer.sessionPrefix);
+      const { sessionId } = await sessionManager.createSessionInAgentWithAutomaticName({
+        agentName,
+        currentNode: timer.currentNode,
+        model: modelEffort.model,
+        effort: modelEffort.effort,
+        modelsConfig,
+      }, () => triggeredSessionNameFactory(prefix));
 
       await sessionManager.queueSessionSystemEvent(
         sessionId,
@@ -212,7 +241,7 @@ async function fireTimer(timerId: string): Promise<void> {
         'background'
       );
     } else {
-      const targetSession = await sessionManager.getExistingSession(timer.sessionId);
+      const targetSession = sessionManager.getSessionCatalog(timer.sessionId);
       if (!targetSession) {
         throw new Error(`Target session "${timer.sessionId}" not found.`);
       }
@@ -246,6 +275,10 @@ async function fireTimer(timerId: string): Promise<void> {
   await saveTimers();
 }
 
+export async function fireTimerForTests(timerId: string, modelsConfigOverride?: ModelsConfig): Promise<void> {
+  await fireTimer(timerId, modelsConfigOverride);
+}
+
 function scheduleTimer(timer: SessionTimer): void {
   cancelTimerJob(timer.id);
 
@@ -266,10 +299,13 @@ function scheduleTimer(timer: SessionTimer): void {
     throw new Error('One-time timer is missing `at`.');
   }
 
-  if (timer.at <= Date.now()) {
+  const fireDueTimer = () => {
     setImmediate(() => {
       void fireTimer(timer.id);
     });
+  };
+  if (timer.at <= Date.now()) {
+    fireDueTimer();
     return;
   }
 
@@ -278,6 +314,10 @@ function scheduleTimer(timer: SessionTimer): void {
   });
 
   if (!job) {
+    if (timer.at <= Date.now()) {
+      fireDueTimer();
+      return;
+    }
     throw new Error(`Invalid timer date: ${timer.at}`);
   }
 
@@ -299,17 +339,24 @@ function parseAbsoluteTime(at: unknown): number {
   throw new Error('`at` must be a valid absolute time (ISO string or epoch milliseconds).');
 }
 
-function normalizeCreateArgs(args: {
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function hasOwn(object: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function normalizeTimerScheduleArgs(args: {
   at?: unknown;
   afterSeconds?: unknown;
   cron?: unknown;
-  message?: unknown;
-  newSession?: unknown;
-  sessionPrefix?: unknown;
-  agentName?: unknown;
-  currentNode?: unknown;
-  model?: unknown;
-}) {
+}, options: { required: boolean }): { at?: number; cron?: string; scheduleProvided: boolean } {
   const hasAt = args.at !== undefined && args.at !== null && args.at !== '';
   const rawAfter = args.afterSeconds;
   const hasRawAfter = rawAfter !== undefined && rawAfter !== null && rawAfter !== '';
@@ -319,19 +366,23 @@ function normalizeCreateArgs(args: {
 
   // Some tool-calling paths may inject placeholder values like afterSeconds=0
   // or at='' for omitted optional fields. Treat those placeholders as absent when
-  // another real timer mode is present, but still validate them when they are the
-  // only provided trigger field.
-  if (!hasAfter && !hasAt && !hasCron && hasRawAfter) {
-    throw new Error('`afterSeconds` must be a positive number.');
+  // another real timer mode is present, but still validate genuinely bad values.
+  if (hasRawAfter && !hasAfter) {
+    if (parsedAfterSeconds !== 0 || (options.required && !hasAt && !hasCron)) {
+      throw new Error('`afterSeconds` must be a positive number.');
+    }
   }
 
   const specifiedCount = [hasAt, hasAfter, hasCron].filter(Boolean).length;
-  if (specifiedCount !== 1) {
+  if (options.required && specifiedCount !== 1) {
     throw new Error('Exactly one of `at`, `afterSeconds`, or `cron` is required.');
   }
+  if (!options.required && specifiedCount > 1) {
+    throw new Error('At most one of `at`, `afterSeconds`, or `cron` may be updated at a time.');
+  }
 
-  if (typeof args.message !== 'string' || !args.message.trim()) {
-    throw new Error('`message` is required.');
+  if (specifiedCount === 0) {
+    return { scheduleProvided: false };
   }
 
   let at: number | undefined;
@@ -346,9 +397,6 @@ function normalizeCreateArgs(args: {
 
   if (hasAfter) {
     const afterSeconds = parsedAfterSeconds!;
-    if (!Number.isFinite(afterSeconds) || afterSeconds <= 0) {
-      throw new Error('`afterSeconds` must be a positive number.');
-    }
     at = Date.now() + (afterSeconds * 1000);
   }
 
@@ -356,22 +404,118 @@ function normalizeCreateArgs(args: {
     cron = String(args.cron).trim();
   }
 
+  return { at, cron, scheduleProvided: true };
+}
+
+function normalizeCreateArgs(args: {
+  at?: unknown;
+  afterSeconds?: unknown;
+  cron?: unknown;
+  message?: unknown;
+  newSession?: unknown;
+  sessionPrefix?: unknown;
+  agentName?: unknown;
+  currentNode?: unknown;
+  model?: unknown;
+}) {
+  if (typeof args.message !== 'string' || !args.message.trim()) {
+    throw new Error('`message` is required.');
+  }
+
+  const schedule = normalizeTimerScheduleArgs(args, { required: true });
+
   return {
-    at,
-    cron,
+    at: schedule.at,
+    cron: schedule.cron,
     message: args.message.trim(),
     newSession: args.newSession === true,
     sessionPrefix: args.sessionPrefix === undefined ? undefined : normalizeSessionPrefix(String(args.sessionPrefix)),
-    agentName: args.agentName === undefined || args.agentName === null || args.agentName === ''
-      ? undefined
-      : String(args.agentName).trim(),
-    currentNode: args.currentNode === undefined || args.currentNode === null || args.currentNode === ''
-      ? undefined
-      : String(args.currentNode).trim(),
-    model: args.model === undefined || args.model === null || args.model === ''
-      ? undefined
-      : String(args.model).trim(),
+    agentName: normalizeOptionalString(args.agentName),
+    currentNode: normalizeOptionalString(args.currentNode),
+    model: normalizeOptionalString(args.model),
   };
+}
+
+function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session, 'agent' | 'currentNode' | 'model' | 'effort'> | null, args: {
+  message?: unknown;
+  at?: unknown;
+  afterSeconds?: unknown;
+  cron?: unknown;
+  newSession?: unknown;
+  sessionPrefix?: unknown;
+  agentName?: unknown;
+  currentNode?: unknown;
+  model?: unknown;
+}): SessionTimer {
+  const schedule = normalizeTimerScheduleArgs(args, { required: false });
+  const hasMessageUpdate = hasOwn(args as Record<string, unknown>, 'message') && args.message !== undefined;
+  const newSessionProvided = hasOwn(args as Record<string, unknown>, 'newSession')
+    && args.newSession !== undefined
+    && args.newSession !== null;
+  const hasNewSessionFieldUpdate = ['sessionPrefix', 'agentName', 'currentNode', 'model']
+    .some(key => normalizeOptionalString((args as Record<string, unknown>)[key]) !== undefined);
+
+  if (!schedule.scheduleProvided && !hasMessageUpdate && !newSessionProvided && !hasNewSessionFieldUpdate) {
+    throw new Error('At least one timer field must be supplied to update.');
+  }
+
+  const updated: SessionTimer = { ...existing };
+  if (schedule.scheduleProvided) {
+    updated.at = schedule.at;
+    updated.cron = schedule.cron;
+    // Changing a timer's schedule starts a fresh schedule window. For cron
+    // timers, clear lastTriggeredAt so list/update summaries describe the new
+    // recurrence rather than implying the old schedule just fired.
+    updated.lastTriggeredAt = undefined;
+  }
+
+  if (hasMessageUpdate) {
+    if (typeof args.message !== 'string' || !args.message.trim()) {
+      throw new Error('`message` must be a non-empty string when supplied.');
+    }
+    updated.message = args.message.trim();
+  }
+
+  const finalNewSession = newSessionProvided ? args.newSession === true : existing.newSession === true;
+  updated.newSession = finalNewSession;
+
+  const newSessionOnlyFields = ['sessionPrefix', 'agentName', 'currentNode', 'model'];
+  if (!finalNewSession) {
+    const unexpected = newSessionOnlyFields.filter(key => normalizeOptionalString((args as Record<string, unknown>)[key]) !== undefined);
+    if (unexpected.length > 0) {
+      throw new Error(`${unexpected.join(', ')} may only be supplied when newSession=true.`);
+    }
+    updated.sessionPrefix = undefined;
+    updated.agentName = undefined;
+    updated.currentNode = undefined;
+    updated.model = undefined;
+    updated.effort = undefined;
+    return updated;
+  }
+
+  const updatedSessionPrefix = normalizeOptionalString(args.sessionPrefix);
+  updated.sessionPrefix = updatedSessionPrefix !== undefined
+    ? normalizeSessionPrefix(updatedSessionPrefix)
+    : (existing.sessionPrefix || 'timer');
+
+  updated.agentName = normalizeOptionalString(args.agentName)
+    || existing.agentName
+    || ownerSession?.agent
+    || 'main';
+  updated.currentNode = normalizeOptionalString(args.currentNode)
+    || existing.currentNode
+    || ownerSession?.currentNode;
+  updated.model = normalizeOptionalString(args.model)
+    || existing.model
+    || ownerSession?.model;
+  const modelEffort = normalizeProspectiveSessionModelEffortSettings({
+    model: updated.model,
+    effort: existing.effort ?? ownerSession?.effort,
+  }, {});
+  updated.model = modelEffort.model;
+  updated.effort = modelEffort.effort;
+
+  return updated;
 }
 
 function validatePersistedTimer(raw: any): SessionTimer | null {
@@ -393,6 +537,9 @@ function validatePersistedTimer(raw: any): SessionTimer | null {
     agentName: typeof raw.agentName === 'string' ? raw.agentName : undefined,
     currentNode: typeof raw.currentNode === 'string' ? raw.currentNode : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
+    effort: typeof raw.effort === 'string' && MODEL_EFFORTS.includes(raw.effort as ModelEffort)
+      ? raw.effort as ModelEffort
+      : undefined,
     lastTriggeredAt: typeof raw.lastTriggeredAt === 'number' ? raw.lastTriggeredAt : undefined,
     waitTimeoutId: typeof raw.waitTimeoutId === 'string' ? raw.waitTimeoutId : undefined,
     waitTimeoutSeconds: typeof raw.waitTimeoutSeconds === 'number' ? raw.waitTimeoutSeconds : undefined,
@@ -463,13 +610,11 @@ export async function createTimer(args: {
   agentName?: unknown;
   currentNode?: string;
   model?: string;
-}): Promise<TimerView> {
-  const targetSession = await sessionManager.getExistingSession(args.sessionId);
+}, modelsConfigOverride?: ModelsConfig): Promise<TimerView> {
+  const targetSession = await sessionRuntime.getSession(args.sessionId);
   if (!targetSession) {
     throw new Error(`Session \`${args.sessionId}\` not found.`);
   }
-
-  await sessionManager.saveSession(args.sessionId);
 
   const normalized = normalizeCreateArgs(args);
   const agentName = normalized.newSession
@@ -479,6 +624,10 @@ export async function createTimer(args: {
   if (normalized.newSession && !await fs.pathExists(getAgentDir(agentName!))) {
     throw new Error(`Agent \`${agentName}\` not found.`);
   }
+  const modelEffort = normalizeProspectiveSessionModelEffortSettings({
+    model: normalized.newSession ? (normalized.model || targetSession.model || undefined) : undefined,
+    effort: normalized.newSession ? (targetSession.effort || undefined) : undefined,
+  }, {}, modelsConfigOverride || loadModelsConfig());
 
   const timer: SessionTimer = {
     id: generateTimerId(),
@@ -489,7 +638,8 @@ export async function createTimer(args: {
     sessionPrefix: normalized.newSession ? (normalized.sessionPrefix || 'timer') : undefined,
     agentName,
     currentNode: normalized.newSession ? (args.currentNode || targetSession.currentNode) : undefined,
-    model: normalized.newSession ? (args.model || targetSession.model) : undefined,
+    model: normalized.newSession ? modelEffort.model : undefined,
+    effort: normalized.newSession ? modelEffort.effort : undefined,
     at: normalized.at,
     cron: normalized.cron,
   };
@@ -507,12 +657,66 @@ export async function createTimer(args: {
   return toTimerView(timer);
 }
 
+export async function updateTimer(args: {
+  timerId: string;
+  sessionId?: string;
+  message?: unknown;
+  at?: unknown;
+  afterSeconds?: unknown;
+  cron?: unknown;
+  newSession?: unknown;
+  sessionPrefix?: unknown;
+  agentName?: unknown;
+  currentNode?: unknown;
+  model?: unknown;
+}): Promise<TimerView> {
+  if (typeof args.timerId !== 'string' || !args.timerId.trim()) {
+    throw new Error('timerId is required.');
+  }
+
+  const timerId = args.timerId.trim();
+  const existing = timers.get(timerId);
+  if (!existing || existing.waitTimeoutId) {
+    throw new Error(`Timer \`${timerId}\` not found.`);
+  }
+
+  if (args.sessionId && existing.sessionId !== args.sessionId) {
+    throw new Error(`Timer \`${timerId}\` does not belong to session \`${args.sessionId}\`.`);
+  }
+
+  const ownerSession = await sessionRuntime.getSession(existing.sessionId);
+  if (!ownerSession) {
+    throw new Error(`Session \`${existing.sessionId}\` not found.`);
+  }
+
+  const updated = normalizeTimerUpdate(existing, ownerSession, args);
+  if (updated.newSession) {
+    const agentName = updated.agentName || ownerSession.agent || 'main';
+    if (!await fs.pathExists(getAgentDir(agentName))) {
+      throw new Error(`Agent \`${agentName}\` not found.`);
+    }
+  }
+
+  timers.set(timerId, updated);
+  try {
+    scheduleTimer(updated);
+    await saveTimers();
+  } catch (err) {
+    timers.set(timerId, existing);
+    cancelTimerJob(timerId);
+    scheduleTimer(existing);
+    throw err;
+  }
+
+  return toTimerView(updated);
+}
+
 export async function createWaitTimeoutTimer(args: {
   sessionId: string;
   waitId: string;
   timeoutSeconds: number;
 }): Promise<TimerView> {
-  const targetSession = await sessionManager.getExistingSession(args.sessionId);
+  const targetSession = sessionManager.getSessionCatalog(args.sessionId);
   if (!targetSession) {
     throw new Error(`Session \`${args.sessionId}\` not found.`);
   }

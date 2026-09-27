@@ -1,13 +1,17 @@
 import fs from 'fs-extra';
 import path from 'path';
+import crypto from 'crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { createInterface } from 'node:readline';
-import { ARCHIVE_DB_PATH, SESSION_LOGS_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
+import { ARCHIVE_DB_PATH, SESSION_ID_RESERVATIONS_LOG_PATH, SESSION_LOGS_DIR, STATE_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
+import { streamUtf8JsonlLines } from '../jsonl';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
+import type { ExtractedMemoryFact } from './compactPlan';
 import { loadSessionsMetadataSnapshot } from './metadataStore';
+import { syncDirectoryDurably } from '../utils/diskJsonData';
+import { formatSubstantiveMessageSearchText } from '../utils/messageFormat';
 
 export type ArchiveBranchRecord = {
   sessionId: string;
@@ -44,6 +48,17 @@ export type ArchiveVectorBackfillCandidate = {
   checkpointLastIndexedBlockId: number;
 };
 
+export type ArchiveMessageStats = {
+  count: number;
+  minSeq?: number;
+  maxSeq?: number;
+};
+
+export type SessionListSequenceMessageCount = {
+  sessionId: string;
+  sequenceMessageCount: number;
+};
+
 type LineageEntry = {
   sessionId: string;
   inherited: boolean;
@@ -53,7 +68,16 @@ type LineageEntry = {
 
 let db: DatabaseSync | null = null;
 const importedSessions = new Set<string>();
+const uncertainPayloadImportOwners = new Map<string, boolean>();
 let bootstrapPromise: Promise<void> | null = null;
+let reservationLedgerLoadPromise: Promise<Map<string, string>> | null = null;
+
+type SessionIdReservationRecord = {
+  v: 1;
+  sessionId: string;
+  canonicalSessionId: string;
+  timestamp: number;
+};
 
 const ARCHIVE_IMPORT_BATCH_SIZE = Math.max(1, Number(process.env.FOXWARM_ARCHIVE_IMPORT_BATCH_SIZE || 200));
 const MISSING_IMPORT_FILE_SIZE = -1;
@@ -84,7 +108,7 @@ function getDb(): DatabaseSync {
 
 function runInTransaction(fn: () => void): void {
   const database = getDb();
-  database.exec('BEGIN');
+  database.exec('BEGIN IMMEDIATE');
   try {
     fn();
     database.exec('COMMIT');
@@ -98,12 +122,6 @@ function runInTransaction(fn: () => void): void {
 
 async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
-}
-
-function getImportSourcePath(sessionId: string, kind: ArchiveImportSourceKind): string {
-  return kind === 'messages'
-    ? getSessionArchiveLogPath(sessionId)
-    : getSessionBlockArchiveLogPath(sessionId);
 }
 
 async function getImportSourceState(filePath: string): Promise<ArchiveImportSourceState> {
@@ -200,37 +218,207 @@ function setImportStateSync(
   return merged;
 }
 
-async function refreshImportStateFromFile(sessionId: string, kind: ArchiveImportSourceKind): Promise<void> {
-  await initArchiveStore();
-  const fileState = await getImportSourceState(getImportSourcePath(sessionId, kind));
-  if (kind === 'messages') {
-    setImportStateSync(sessionId, {
-      messagesFileSize: fileState.size,
-      messagesFileMtimeMs: fileState.mtimeMs,
+async function streamJsonlLines(filePath: string, onLine: (line: string) => Promise<void> | void): Promise<void> {
+  await streamUtf8JsonlLines(fs.createReadStream(filePath), onLine);
+}
+
+function upsertSessionIdReservationSync(sessionId: string, canonicalSessionId: string, timestamp: number): void {
+  getDb().prepare(`
+    INSERT INTO archive_session_id_reservations (
+      session_id, canonical_session_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET
+      canonical_session_id = excluded.canonical_session_id,
+      updated_at = excluded.updated_at
+  `).run(sessionId, canonicalSessionId, timestamp, timestamp);
+}
+
+async function loadSessionIdReservationLedger(): Promise<Map<string, string>> {
+  if (!reservationLedgerLoadPromise) {
+    reservationLedgerLoadPromise = (async () => {
+      const reservations = new Map<string, string>();
+      let ledgerNeedsRewrite = !await fs.pathExists(SESSION_ID_RESERVATIONS_LOG_PATH);
+      if (!ledgerNeedsRewrite) {
+        const content = await fs.readFile(SESSION_ID_RESERVATIONS_LOG_PATH, 'utf8');
+        for (const rawLine of content.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line) {
+            continue;
+          }
+          let record: Partial<SessionIdReservationRecord>;
+          try {
+            record = JSON.parse(line) as Partial<SessionIdReservationRecord>;
+          } catch {
+            ledgerNeedsRewrite = true;
+            continue;
+          }
+          if (record.v !== 1
+            || typeof record.sessionId !== 'string'
+            || record.sessionId.length === 0
+            || typeof record.canonicalSessionId !== 'string'
+            || record.canonicalSessionId.length === 0) {
+            ledgerNeedsRewrite = true;
+            continue;
+          }
+          const existing = reservations.get(record.sessionId);
+          if (existing !== undefined && existing !== record.canonicalSessionId) {
+            throw new Error(`Session ID reservation ledger has conflicting mappings for "${record.sessionId}".`);
+          }
+          reservations.set(record.sessionId, record.canonicalSessionId);
+        }
+      }
+
+      const sqliteRows = getDb().prepare(`
+        SELECT session_id, canonical_session_id, updated_at
+        FROM archive_session_id_reservations
+      `).all() as Array<{ session_id: string; canonical_session_id: string; updated_at: number }>;
+      for (const row of sqliteRows) {
+        const existing = reservations.get(row.session_id);
+        if (existing !== undefined && existing !== row.canonical_session_id) {
+          throw new Error(`Session ID reservation state conflicts for "${row.session_id}" between ledger and SQLite.`);
+        }
+        if (existing === undefined) {
+          reservations.set(row.session_id, row.canonical_session_id);
+          ledgerNeedsRewrite = true;
+        }
+      }
+
+      assertValidReservationGraph(reservations);
+
+      if (ledgerNeedsRewrite) {
+        logger.warn({ reservationCount: reservations.size }, 'Repairing session ID reservation ledger from durable state');
+        await writeSessionIdReservationLedger(reservations);
+      }
+
+      const now = Date.now();
+      for (const [sessionId, canonicalSessionId] of reservations) {
+        upsertSessionIdReservationSync(sessionId, canonicalSessionId, now);
+      }
+      return reservations;
+    })().catch(error => {
+      reservationLedgerLoadPromise = null;
+      throw error;
     });
-  } else {
-    setImportStateSync(sessionId, {
-      blocksFileSize: fileState.size,
-      blocksFileMtimeMs: fileState.mtimeMs,
-    });
+  }
+  return reservationLedgerLoadPromise;
+}
+
+async function writeSessionIdReservationLedger(reservations: Map<string, string>): Promise<void> {
+  const timestamp = Date.now();
+  const content = [...reservations.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([sessionId, canonicalSessionId]) => JSON.stringify({
+      v: 1,
+      sessionId,
+      canonicalSessionId,
+      timestamp,
+    } satisfies SessionIdReservationRecord))
+    .join('\n');
+  await fs.ensureDir(path.dirname(SESSION_ID_RESERVATIONS_LOG_PATH));
+  const temporaryPath = `${SESSION_ID_RESERVATIONS_LOG_PATH}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, content ? `${content}\n` : '');
+  await fs.move(temporaryPath, SESSION_ID_RESERVATIONS_LOG_PATH, { overwrite: true });
+}
+
+function assertValidReservationGraph(reservations: Map<string, string>): void {
+  for (const start of reservations.keys()) {
+    let current = start;
+    const seen = new Set<string>();
+    while (true) {
+      const next = reservations.get(current);
+      if (!next || next === current) break;
+      if (seen.has(current)) {
+        throw new Error(`Session ID reservation ledger contains an alias cycle involving "${current}".`);
+      }
+      seen.add(current);
+      current = next;
+    }
   }
 }
 
-async function streamJsonlLines(filePath: string, onLine: (line: string) => Promise<void> | void): Promise<void> {
-  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const rawLine of rl) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      await onLine(line);
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
+function resolveCanonicalReservation(reservations: Map<string, string>, sessionId: string): string {
+  let current = sessionId;
+  while (true) {
+    const next = reservations.get(current);
+    if (!next || next === current) break;
+    current = next;
   }
+  return current;
+}
+
+async function persistSessionIdReservation(sessionId: string, canonicalSessionId: string): Promise<void> {
+  if (!sessionId || !canonicalSessionId) {
+    return;
+  }
+
+  const reservations = await loadSessionIdReservationLedger();
+  const currentCanonical = reservations.get(sessionId);
+  if (currentCanonical !== undefined && currentCanonical !== canonicalSessionId) {
+    if (resolveCanonicalReservation(reservations, sessionId) === canonicalSessionId) return;
+    throw new Error(`Session ID reservation "${sessionId}" already maps to "${currentCanonical}", not "${canonicalSessionId}".`);
+  }
+  if (currentCanonical !== canonicalSessionId) {
+    const previousRow = getDb().prepare(`
+      SELECT canonical_session_id, created_at, updated_at
+      FROM archive_session_id_reservations
+      WHERE session_id = ?
+    `).get(sessionId) as { canonical_session_id: string; created_at: number; updated_at: number } | undefined;
+    reservations.set(sessionId, canonicalSessionId);
+    try {
+      assertValidReservationGraph(reservations);
+      upsertSessionIdReservationSync(sessionId, canonicalSessionId, Date.now());
+      await writeSessionIdReservationLedger(reservations);
+    } catch (error) {
+      if (currentCanonical === undefined) reservations.delete(sessionId);
+      else reservations.set(sessionId, currentCanonical);
+      if (previousRow) {
+        getDb().prepare(`
+          UPDATE archive_session_id_reservations
+          SET canonical_session_id = ?, created_at = ?, updated_at = ?
+          WHERE session_id = ?
+        `).run(previousRow.canonical_session_id, previousRow.created_at, previousRow.updated_at, sessionId);
+      } else {
+        getDb().prepare(`DELETE FROM archive_session_id_reservations WHERE session_id = ?`).run(sessionId);
+      }
+      throw error;
+    }
+    return;
+  }
+
+  upsertSessionIdReservationSync(sessionId, canonicalSessionId, Date.now());
+}
+
+async function resolveArchivedRecordSessionId(sessionId: string): Promise<string> {
+  const reservations = await loadSessionIdReservationLedger();
+  return resolveCanonicalReservation(reservations, sessionId);
+}
+
+function resolveArchivedRecordSessionIdReadOnly(sessionId: string): string {
+  let current = sessionId;
+  const seen = new Set<string>();
+  const select = getDb().prepare(`
+    SELECT canonical_session_id
+    FROM archive_session_id_reservations
+    WHERE session_id = ?
+  `);
+  while (!seen.has(current)) {
+    seen.add(current);
+    const row = select.get(current) as { canonical_session_id?: string } | undefined;
+    const next = row?.canonical_session_id;
+    if (!next || next === current) return current;
+    current = next;
+  }
+  throw new Error(`Session ID reservation state contains an alias cycle involving "${current}".`);
+}
+
+export function resolveArchiveSessionIdReadOnly(sessionId: string): string {
+  initArchiveStoreSync();
+  return resolveArchivedRecordSessionIdReadOnly(sessionId);
+}
+
+export async function resolveArchivedSessionId(sessionId: string): Promise<string> {
+  initArchiveStoreSync();
+  return resolveArchivedRecordSessionIdReadOnly(sessionId);
 }
 
 function openArchiveStore(): void {
@@ -241,9 +429,14 @@ function openArchiveStore(): void {
   fs.ensureDirSync(path.dirname(ARCHIVE_DB_PATH));
   db = new DatabaseSync(ARCHIVE_DB_PATH);
   db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA synchronous = NORMAL');
+  db.exec('PRAGMA synchronous = FULL');
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(`
+    CREATE TABLE IF NOT EXISTS archive_store_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS archive_branches (
       session_id TEXT PRIMARY KEY,
       parent_session_id TEXT,
@@ -253,6 +446,15 @@ function openArchiveStore(): void {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_archive_branches_parent ON archive_branches(parent_session_id);
+
+    CREATE TABLE IF NOT EXISTS archive_session_id_reservations (
+      session_id TEXT PRIMARY KEY,
+      canonical_session_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_archive_session_id_reservations_canonical
+      ON archive_session_id_reservations(canonical_session_id);
 
     CREATE TABLE IF NOT EXISTS archive_messages (
       session_id TEXT NOT NULL,
@@ -278,6 +480,7 @@ function openArchiveStore(): void {
       raw_start_timestamp INTEGER,
       raw_end_timestamp INTEGER,
       summary TEXT NOT NULL,
+      memory_facts_json TEXT,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, id)
     );
@@ -314,6 +517,9 @@ function openArchiveStore(): void {
   try {
     db.exec(`ALTER TABLE archive_blocks ADD COLUMN source_block_ids_json TEXT`);
   } catch {}
+  try {
+    db.exec(`ALTER TABLE archive_blocks ADD COLUMN memory_facts_json TEXT`);
+  } catch {}
 }
 
 function normalizeBranch(row: any): ArchiveBranchRecord | null {
@@ -333,19 +539,121 @@ function normalizeBranch(row: any): ArchiveBranchRecord | null {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function isCanonicalMessage(value: unknown): boolean {
+  if (!isRecord(value) || !['user', 'model', 'tool'].includes(value.role) || !Array.isArray(value.parts)) return false;
+  if (value.modelVisible !== undefined && typeof value.modelVisible !== 'boolean') return false;
+  if (value.__meta !== undefined && !isRecord(value.__meta)) return false;
+  if (value.providerMeta !== undefined && (!isRecord(value.providerMeta) || !isRecord(value.providerMeta.providerSpecificFields) || (value.providerMeta.sourceModelId !== undefined && typeof value.providerMeta.sourceModelId !== 'string'))) return false;
+  return value.parts.every((part: unknown) => {
+    if (!isRecord(part)) return false;
+    for (const key of ['text', 'system', 'thinking', 'toolUseId'] as const) if (part[key] !== undefined && typeof part[key] !== 'string') return false;
+    if (part.phase !== undefined && part.phase !== 'commentary' && part.phase !== 'final_answer') return false;
+    if (part.systemPayload !== undefined && typeof part.systemPayload !== 'boolean') return false;
+    if (part.functionCall !== undefined && (!isRecord(part.functionCall) || typeof part.functionCall.id !== 'string' || typeof part.functionCall.name !== 'string' || !isRecord(part.functionCall.args))) return false;
+    if (part.functionResponse !== undefined && (!isRecord(part.functionResponse) || typeof part.functionResponse.tool_use_id !== 'string' || typeof part.functionResponse.name !== 'string' || part.functionResponse.response === undefined)) return false;
+    if (part.inlineData !== undefined && (!isRecord(part.inlineData) || typeof part.inlineData.data !== 'string')) return false;
+    if (part.inlineDataRef !== undefined && (!isRecord(part.inlineDataRef) || typeof part.inlineDataRef.imageId !== 'string' || typeof part.inlineDataRef.mimeType !== 'string'
+      || !isFiniteNumber(part.inlineDataRef.byteLength) || typeof part.inlineDataRef.sha256 !== 'string')) return false;
+    if (part.imageMeta !== undefined && (!isRecord(part.imageMeta) || typeof part.imageMeta.imageId !== 'string')) return false;
+    if (part.providerMeta !== undefined && !isRecord(part.providerMeta)) return false;
+    return true;
+  });
+}
+
+function isCanonicalMessageRecord(value: unknown): value is ArchiveMessageRecord {
+  if (!isRecord(value) || value.v !== 1 || value.kind !== 'message' || typeof value.sessionId !== 'string' || !value.sessionId
+    || typeof value.agent !== 'string' || !value.agent || !isPositiveInteger(value.seq) || !isFiniteNumber(value.timestamp)
+    || !['user', 'model', 'tool'].includes(value.role) || !isCanonicalMessage(value.message)) return false;
+  return value.role === value.message.role;
+}
+
+function isCanonicalBlockRecord(value: unknown): value is ArchiveBlockRecord {
+  if (!isRecord(value) || value.v !== 1 || value.kind !== 'block' || typeof value.sessionId !== 'string' || !value.sessionId
+    || typeof value.agent !== 'string' || !value.agent || !isPositiveInteger(value.id) || !isPositiveInteger(value.level)
+    || !['message', 'block'].includes(value.sourceKind) || !isPositiveInteger(value.sourceStart) || !isPositiveInteger(value.sourceEnd)
+    || !isPositiveInteger(value.rawStartSeq) || !isPositiveInteger(value.rawEndSeq) || value.rawStartSeq > value.rawEndSeq
+    || typeof value.summary !== 'string' || !isFiniteNumber(value.createdAt)) return false;
+  if (value.sourceBlockIds !== undefined && (!Array.isArray(value.sourceBlockIds) || !value.sourceBlockIds.every(isPositiveInteger))) return false;
+  if (value.sourceKind === 'message') {
+    if (value.sourceStart > value.sourceEnd || value.sourceBlockIds !== undefined) return false;
+  } else if (value.sourceBlockIds !== undefined) {
+    if (value.sourceBlockIds.length === 0 || value.sourceBlockIds[0] !== value.sourceStart
+      || value.sourceBlockIds[value.sourceBlockIds.length - 1] !== value.sourceEnd
+      || new Set(value.sourceBlockIds).size !== value.sourceBlockIds.length) return false;
+  } else if (value.sourceStart > value.sourceEnd) return false;
+  if (value.rawStartTimestamp !== undefined && !isFiniteNumber(value.rawStartTimestamp)) return false;
+  if (value.rawEndTimestamp !== undefined && !isFiniteNumber(value.rawEndTimestamp)) return false;
+  if (value.memoryFacts !== undefined && (!Array.isArray(value.memoryFacts) || !value.memoryFacts.every((fact: unknown) => isRecord(fact)
+    && ['decision', 'preference', 'fact', 'convention', 'environment'].includes(fact.kind) && typeof fact.text === 'string'
+    && (fact.context === undefined || typeof fact.context === 'string') && (fact.attributedTo === undefined || ['user', 'assistant', 'both'].includes(fact.attributedTo))))) return false;
+  return true;
+}
+
+type ParsedLegacyMessageLine = {
+  record: ArchiveMessageRecord;
+  recoveredTornPrefix: boolean;
+};
+
+const LEGACY_MESSAGE_SIGNATURE = '{"v":1,"kind":"message"';
+const LEGACY_MESSAGE_HEADER = /^\{"v":1,"kind":"message","sessionId":("(?:\\.|[^"\\])*"),"agent":("(?:\\.|[^"\\])*"),"seq":([1-9]\d*),/;
+
+function parseLegacyMessageLine(line: string): ParsedLegacyMessageLine | null {
+  try {
+    const record = JSON.parse(line);
+    return isCanonicalMessageRecord(record) ? { record, recoveredTornPrefix: false } : null;
+  } catch {}
+
+  // Narrow migration-only recovery for the historical append-after-torn
+  // physical line shape. The raw line remains untouched and is later moved
+  // verbatim to migration backup.
+  const header = LEGACY_MESSAGE_HEADER.exec(line);
+  if (!header) return null;
+  let prefixSessionId: string;
+  try { prefixSessionId = JSON.parse(header[1]); } catch { return null; }
+  const prefixSeq = Number(header[3]);
+  const candidates: Array<{ index: number; record: ArchiveMessageRecord }> = [];
+  let searchFrom = 1;
+  while (true) {
+    const index = line.indexOf(LEGACY_MESSAGE_SIGNATURE, searchFrom);
+    if (index < 0) break;
+    searchFrom = index + 1;
+    try {
+      const record = JSON.parse(line.slice(index));
+      if (isCanonicalMessageRecord(record)) candidates.push({ index, record });
+    } catch {}
+  }
+  if (candidates.length !== 1) return null;
+  const candidate = candidates[0];
+  try {
+    JSON.parse(line.slice(0, candidate.index));
+    return null; // Two complete concatenated objects are not the torn shape.
+  } catch (error) {
+    // All supported historical evidence is a prefix torn inside a JSON
+    // string. Other invalid-prefix grammars stay fail-closed.
+    if (!String((error as Error)?.message || error).includes('Unterminated string')) return null;
+  }
+  if (candidate.record.sessionId !== prefixSessionId || candidate.record.seq !== prefixSeq) return null;
+  return { record: candidate.record, recoveredTornPrefix: true };
+}
+
 function parseMessageRecord(line: string): ArchiveMessageRecord | null {
   try {
     const record = JSON.parse(line);
-    if (
-      record?.kind === 'message'
-      && typeof record.sessionId === 'string'
-      && typeof record.seq === 'number'
-      && record.message
-    ) {
-      return record as ArchiveMessageRecord;
-    }
-  } catch (e) {
-    logger.warn({ err: e }, 'Skipping malformed archive-store message import line');
+    if (isCanonicalMessageRecord(record)) return record;
+  } catch (error) {
+    logger.warn({ err: error }, 'Skipping malformed archive-store message import line');
   }
   return null;
 }
@@ -353,9 +661,7 @@ function parseMessageRecord(line: string): ArchiveMessageRecord | null {
 function parseBlockRecord(line: string): ArchiveBlockRecord | null {
   try {
     const record = JSON.parse(line);
-    if (record?.kind === 'block' && typeof record.sessionId === 'string' && typeof record.id === 'number') {
-      return record as ArchiveBlockRecord;
-    }
+    if (isCanonicalBlockRecord(record)) return record;
   } catch (e) {
     logger.warn({ err: e }, 'Skipping malformed archive-store block import line');
   }
@@ -385,6 +691,7 @@ function parseSourceBlockIdsJson(value: unknown): number[] | undefined {
 type BootstrapSessionCandidate = {
   sessionId: string;
   parentSessionId?: string;
+  aliases?: string[];
 };
 
 async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCandidate[]> {
@@ -395,14 +702,17 @@ async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCand
     const sessionsData = data?.sessions && typeof data.sessions === 'object' ? data.sessions : data;
     if (sessionsData && typeof sessionsData === 'object') {
       for (const [sessionId, sessionMeta] of Object.entries(sessionsData)) {
-        if (typeof sessionId !== 'string' || !sessionId.trim()) {
+        if (typeof sessionId !== 'string' || sessionId.length === 0) {
           continue;
         }
         const meta = (sessionMeta && typeof sessionMeta === 'object') ? sessionMeta as Record<string, any> : {};
         candidates.set(sessionId, {
           sessionId,
-          parentSessionId: typeof meta.parentSessionId === 'string' && meta.parentSessionId.trim().length > 0
-            ? meta.parentSessionId.trim()
+          parentSessionId: typeof meta.parentSessionId === 'string' && meta.parentSessionId.length > 0
+            ? meta.parentSessionId
+            : undefined,
+          aliases: Array.isArray(meta.aliases)
+            ? meta.aliases.filter((alias): alias is string => typeof alias === 'string' && alias.length > 0)
             : undefined,
         });
       }
@@ -449,7 +759,7 @@ async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCand
   return [...candidates.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
-async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: string): Promise<number> {
+async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: string, allowRecoveredMessageLineage = false): Promise<number> {
   const archivePath = getSessionArchiveLogPath(sessionId);
   const fileState = await getImportSourceState(archivePath);
   if (!fileState.exists) {
@@ -459,11 +769,15 @@ async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: str
   let maxSeq = 0;
   let minLocalSeq = Number.POSITIVE_INFINITY;
   await streamJsonlLines(archivePath, async (line) => {
-    const record = parseMessageRecord(line);
-    if (record?.sessionId === parentSessionId && record.seq > maxSeq) {
+    const record = allowRecoveredMessageLineage ? parseLegacyMessageLine(line)?.record : parseMessageRecord(line);
+    if (!record) {
+      return;
+    }
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId === parentSessionId && record.seq > maxSeq) {
       maxSeq = record.seq;
     }
-    if (record?.sessionId === sessionId && record.seq < minLocalSeq) {
+    if (canonicalSessionId === sessionId && record.seq < minLocalSeq) {
       minLocalSeq = record.seq;
     }
   });
@@ -486,10 +800,14 @@ async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string
   let minLocalId = Number.POSITIVE_INFINITY;
   await streamJsonlLines(archivePath, async (line) => {
     const record = parseBlockRecord(line);
-    if (record?.sessionId === parentSessionId && record.id > maxId) {
+    if (!record) {
+      return;
+    }
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId === parentSessionId && record.id > maxId) {
       maxId = record.id;
     }
-    if (record?.sessionId === sessionId && record.id < minLocalId) {
+    if (canonicalSessionId === sessionId && record.id < minLocalId) {
       minLocalId = record.id;
     }
   });
@@ -501,23 +819,61 @@ async function inferLegacyForkBlockId(sessionId: string, parentSessionId: string
   return maxId;
 }
 
-async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
-  const candidates = await collectBootstrapSessionCandidates();
-  if (candidates.length === 0) {
-    return;
+async function findMismatchedHistoricalPayloadId(sessionId: string): Promise<string | undefined> {
+  let lastRecordSessionId: string | undefined;
+  let sawCurrentSessionId = false;
+  const inspect = async (filePath: string, parse: (line: string) => { sessionId: string } | null): Promise<void> => {
+    if (!await fs.pathExists(filePath)) return;
+    await streamJsonlLines(filePath, line => {
+      const record = parse(line);
+      if (!record) return;
+      lastRecordSessionId = record.sessionId;
+      if (record.sessionId === sessionId) sawCurrentSessionId = true;
+    });
+  };
+  await inspect(getSessionArchiveLogPath(sessionId), parseMessageRecord);
+  if (!lastRecordSessionId) {
+    await inspect(getSessionBlockArchiveLogPath(sessionId), parseBlockRecord);
   }
+  return !sawCurrentSessionId && lastRecordSessionId && lastRecordSessionId !== sessionId
+    ? lastRecordSessionId
+    : undefined;
+}
+
+async function bootstrapArchiveStoreFromLegacy(options: { allowRecoveredMessageLineage?: boolean } = {}): Promise<void> {
+  await loadSessionIdReservationLedger();
+
+  const candidates = await collectBootstrapSessionCandidates();
+  const discoveredSessionIds = new Set(candidates.map(candidate => candidate.sessionId));
+  const existingBranchRows = getDb().prepare(`SELECT session_id FROM archive_branches`).all() as Array<{ session_id: string }>;
+  for (const row of existingBranchRows) discoveredSessionIds.add(row.session_id);
 
   for (const candidate of candidates) {
     const existingBranch = getBranchInternal(candidate.sessionId);
+    for (const alias of [...(candidate.aliases || [])].reverse()) {
+      await persistSessionIdReservation(alias, candidate.sessionId);
+    }
+    if (!existingBranch) {
+      const mismatchedPayloadId = await findMismatchedHistoricalPayloadId(candidate.sessionId);
+      if (mismatchedPayloadId) {
+        // A path/payload mismatch is not proof of a move: legacy forks copied
+        // parent records into child logs. Reserve the payload identity as its
+        // own lifetime without redirecting or merging either archive.
+        uncertainPayloadImportOwners.set(`${candidate.sessionId}\0${mismatchedPayloadId}`, !discoveredSessionIds.has(mismatchedPayloadId));
+        await ensureSessionBranch(mismatchedPayloadId);
+      }
+    }
+
     if (existingBranch) {
       continue;
     }
 
     if (candidate.parentSessionId) {
-      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, candidate.parentSessionId);
-      const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, candidate.parentSessionId);
+      const parentSessionId = await resolveArchivedRecordSessionId(candidate.parentSessionId);
+      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, parentSessionId, options.allowRecoveredMessageLineage === true);
+      const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, parentSessionId);
       await ensureSessionBranch(candidate.sessionId, {
-        parentSessionId: candidate.parentSessionId,
+        parentSessionId,
         forkMessageSeq,
         forkBlockId,
       });
@@ -536,9 +892,9 @@ async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
   }
 }
 
-async function ensureBootstrapped(): Promise<void> {
+async function ensureBootstrapped(options: { allowRecoveredMessageLineage?: boolean } = {}): Promise<void> {
   if (!bootstrapPromise) {
-    bootstrapPromise = bootstrapArchiveStoreFromLegacy().catch((err) => {
+    bootstrapPromise = bootstrapArchiveStoreFromLegacy(options).catch((err) => {
       bootstrapPromise = null;
       throw err;
     });
@@ -599,7 +955,12 @@ async function importSessionMessagesFromJsonl(sessionId: string): Promise<void> 
       return;
     }
 
-    batch.push(record);
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId !== sessionId) {
+      await ensureSessionBranch(canonicalSessionId);
+      if (!uncertainPayloadImportOwners.get(`${sessionId}\0${canonicalSessionId}`)) return;
+    }
+    batch.push(canonicalSessionId === record.sessionId ? record : { ...record, sessionId: canonicalSessionId });
     if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
       await flushBatch();
     }
@@ -632,8 +993,8 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   const insert = database.prepare(`
     INSERT OR IGNORE INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let batch: ArchiveBlockRecord[] = [];
@@ -660,6 +1021,7 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
           record.rawStartTimestamp ?? null,
           record.rawEndTimestamp ?? null,
           record.summary,
+          record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
           record.createdAt,
         );
       }
@@ -673,7 +1035,12 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
       return;
     }
 
-    batch.push(record);
+    const canonicalSessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    if (canonicalSessionId !== sessionId) {
+      await ensureSessionBranch(canonicalSessionId);
+      if (!uncertainPayloadImportOwners.get(`${sessionId}\0${canonicalSessionId}`)) return;
+    }
+    batch.push(canonicalSessionId === record.sessionId ? record : { ...record, sessionId: canonicalSessionId });
     if (batch.length >= ARCHIVE_IMPORT_BATCH_SIZE) {
       await flushBatch();
     }
@@ -686,18 +1053,29 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   });
 }
 
-async function ensureImported(sessionId: string): Promise<void> {
-  if (!sessionId || importedSessions.has(sessionId)) {
-    return;
+function parseMemoryFactsJson(value: unknown): ExtractedMemoryFact[] | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return undefined;
+    const facts = parsed.filter((fact): fact is ExtractedMemoryFact => (
+      !!fact && typeof fact === 'object'
+      && ['decision', 'preference', 'fact', 'convention', 'environment'].includes((fact as any).kind)
+      && typeof (fact as any).text === 'string' && (fact as any).text.trim().length > 0
+    )).map((fact: any) => ({
+      kind: fact.kind,
+      text: fact.text,
+      ...(typeof fact.context === 'string' && fact.context.trim() ? { context: fact.context } : {}),
+      ...(['user', 'assistant', 'both'].includes(fact.attributedTo) ? { attributedTo: fact.attributedTo } : {}),
+    }));
+    return facts.length ? facts : undefined;
+  } catch {
+    return undefined;
   }
-
-  await ensureSessionBranch(sessionId);
-  await importSessionMessagesFromJsonl(sessionId);
-  await importSessionBlocksFromJsonl(sessionId);
-  importedSessions.add(sessionId);
 }
 
 function getBranchInternal(sessionId: string): ArchiveBranchRecord | null {
+  archiveBranchReadObserverForTests?.(sessionId);
   const row = getDb().prepare(`
     SELECT session_id, parent_session_id, fork_message_seq, fork_block_id, created_at, updated_at
     FROM archive_branches
@@ -706,7 +1084,13 @@ function getBranchInternal(sessionId: string): ArchiveBranchRecord | null {
   return normalizeBranch(row);
 }
 
-function buildLineage(sessionId: string): LineageEntry[] {
+let archiveBranchReadObserverForTests: ((sessionId: string) => void) | undefined;
+
+export function setArchiveBranchReadObserverForTests(observer?: (sessionId: string) => void): void {
+  archiveBranchReadObserverForTests = observer;
+}
+
+function buildLineage(sessionId: string, maxEntries: number = Number.MAX_SAFE_INTEGER): LineageEntry[] {
   const lineage: LineageEntry[] = [];
   let currentSessionId: string | undefined = sessionId;
   let currentMaxMessageSeq: number | undefined = undefined;
@@ -714,7 +1098,8 @@ function buildLineage(sessionId: string): LineageEntry[] {
   let inherited = false;
   const seen = new Set<string>();
 
-  while (currentSessionId && !seen.has(currentSessionId)) {
+  const boundedMaxEntries = Math.max(1, Math.floor(maxEntries));
+  while (currentSessionId && !seen.has(currentSessionId) && lineage.length < boundedMaxEntries) {
     seen.add(currentSessionId);
     lineage.push({
       sessionId: currentSessionId,
@@ -722,6 +1107,8 @@ function buildLineage(sessionId: string): LineageEntry[] {
       maxMessageSeq: currentMaxMessageSeq,
       maxBlockId: currentMaxBlockId,
     });
+
+    if (lineage.length >= boundedMaxEntries) break;
 
     const branch = getBranchInternal(currentSessionId);
     if (!branch?.parentSessionId) {
@@ -747,11 +1134,32 @@ function buildLineage(sessionId: string): LineageEntry[] {
 
 export async function initArchiveStore(): Promise<void> {
   openArchiveStore();
-  await ensureBootstrapped();
+  await loadSessionIdReservationLedger();
 }
 
 export function initArchiveStoreSync(): void {
   openArchiveStore();
+}
+
+/**
+ * Return whether a session id has ever been registered in the durable archive.
+ *
+ * Deleted live sessions intentionally keep their append-only archive records.
+ * Callers that allocate new session ids must therefore treat an archived id as
+ * reserved even when it no longer exists in catalog.sqlite or state/sessions/.
+ */
+export async function hasArchivedSessionId(sessionId: string): Promise<boolean> {
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    return false;
+  }
+
+  initArchiveStoreSync();
+  const reservation = getDb().prepare(`
+    SELECT 1
+    FROM archive_session_id_reservations
+    WHERE session_id = ? OR canonical_session_id = ?
+  `).get(sessionId, sessionId);
+  return reservation !== undefined || getBranchInternal(sessionId) !== null;
 }
 
 export async function ensureSessionBranch(
@@ -803,83 +1211,154 @@ export async function ensureSessionBranch(
 }
 
 export async function getSessionBranch(sessionId: string): Promise<ArchiveBranchRecord | null> {
-  await initArchiveStore();
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
   return getBranchInternal(sessionId);
 }
 
-export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Promise<void> {
+export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Promise<ArchiveMessageRecord[]> {
   if (records.length === 0) {
-    return;
+    return [];
+  }
+  if (records.some(record => record.sessionId !== records[0].sessionId)) {
+    throw new Error('Archive message batches must contain exactly one session ID.');
   }
 
   await initArchiveStore();
   await ensureSessionBranch(records[0].sessionId);
   const database = getDb();
+  const select = database.prepare(`SELECT agent,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?`);
   const insert = database.prepare(`
-    INSERT OR REPLACE INTO archive_messages (
+    INSERT INTO archive_messages (
       session_id, agent, seq, timestamp, role, message_json
     ) VALUES (?, ?, ?, ?, ?, ?)
   `);
+  const inserted: ArchiveMessageRecord[] = [];
   runInTransaction(() => {
     for (const record of records) {
+      const values = [record.agent || 'main', record.timestamp, record.role, JSON.stringify(record.message)] as const;
+      const existing = select.get(record.sessionId, record.seq) as any;
+      if (existing) {
+        if (existing.agent === values[0] && existing.timestamp === values[1] && existing.role === values[2] && existing.message_json === values[3]) continue;
+        throw new Error(`Immutable archive message conflict for ${record.sessionId}#${record.seq}.`);
+      }
       insert.run(
         record.sessionId,
-        record.agent || 'main',
+        values[0],
         record.seq,
-        record.timestamp,
-        record.role,
-        JSON.stringify(record.message),
+        values[1],
+        values[2],
+        values[3],
       );
+      inserted.push(record);
     }
   });
   importedSessions.add(records[0].sessionId);
+  return inserted;
 }
 
-export async function refreshSessionArchiveImportState(sessionId: string, kind: ArchiveImportSourceKind): Promise<void> {
-  await refreshImportStateFromFile(sessionId, kind);
-}
-
-export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise<void> {
+export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise<ArchiveBlockRecord[]> {
   if (records.length === 0) {
-    return;
+    return [];
+  }
+  if (records.some(record => record.sessionId !== records[0].sessionId)) {
+    throw new Error('Archive block batches must contain exactly one session ID.');
   }
 
   await initArchiveStore();
   await ensureSessionBranch(records[0].sessionId);
   const database = getDb();
+  const select = database.prepare(`SELECT agent,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
   const insert = database.prepare(`
-    INSERT OR REPLACE INTO archive_blocks (
+    INSERT INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
-      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const inserted: ArchiveBlockRecord[] = [];
   runInTransaction(() => {
     for (const record of records) {
+      const values = {
+        agent: record.agent || 'main', source_kind: record.sourceKind,
+        source_block_ids_json: record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
+        raw_start_timestamp: record.rawStartTimestamp ?? null, raw_end_timestamp: record.rawEndTimestamp ?? null,
+        memory_facts_json: record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
+      };
+      const existing = select.get(record.sessionId, record.id) as any;
+      if (existing) {
+        const identical = existing.agent === values.agent && existing.level === record.level && existing.source_kind === values.source_kind
+          && existing.source_start === record.sourceStart && existing.source_end === record.sourceEnd
+          && existing.source_block_ids_json === values.source_block_ids_json && existing.raw_start_seq === record.rawStartSeq
+          && existing.raw_end_seq === record.rawEndSeq && existing.raw_start_timestamp === values.raw_start_timestamp
+          && existing.raw_end_timestamp === values.raw_end_timestamp && existing.summary === record.summary
+          && existing.memory_facts_json === values.memory_facts_json && existing.created_at === record.createdAt;
+        if (identical) continue;
+        throw new Error(`Immutable archive block conflict for ${record.sessionId} B#${record.id}.`);
+      }
       insert.run(
         record.sessionId,
-        record.agent || 'main',
+        values.agent,
         record.id,
         record.level,
         record.sourceKind,
         record.sourceStart,
         record.sourceEnd,
-        record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
+        values.source_block_ids_json,
         record.rawStartSeq,
         record.rawEndSeq,
-        record.rawStartTimestamp ?? null,
-        record.rawEndTimestamp ?? null,
+        values.raw_start_timestamp,
+        values.raw_end_timestamp,
         record.summary,
+        values.memory_facts_json,
         record.createdAt,
       );
+      inserted.push(record);
     }
   });
   importedSessions.add(records[0].sessionId);
+  return inserted;
+}
+
+/** Delete only rows newly inserted by a larger active-authority commit that
+ * failed before publication. Existing identical immutable rows are never
+ * returned by writeArchiveMessages/writeArchiveBlocks and are not eligible. */
+export async function rollbackUncommittedArchiveMessages(records: ArchiveMessageRecord[]): Promise<void> {
+  if (!records.length) return;
+  await initArchiveStore();
+  const remove = getDb().prepare(`DELETE FROM archive_messages
+    WHERE session_id=? AND seq=? AND agent=? AND timestamp=? AND role=? AND message_json=?`);
+  runInTransaction(() => {
+    for (const record of records) {
+      const result = remove.run(record.sessionId, record.seq, record.agent || 'main', record.timestamp, record.role, JSON.stringify(record.message));
+      if (Number(result.changes) !== 1) throw new Error(`Unable to roll back uncommitted archive message ${record.sessionId}#${record.seq}.`);
+    }
+  });
+}
+
+export async function rollbackUncommittedArchiveBlocks(records: ArchiveBlockRecord[]): Promise<void> {
+  if (!records.length) return;
+  await initArchiveStore();
+  const remove = getDb().prepare(`DELETE FROM archive_blocks WHERE
+    session_id=? AND id=? AND agent=? AND level=? AND source_kind=? AND source_start=? AND source_end=?
+    AND source_block_ids_json IS ? AND raw_start_seq=? AND raw_end_seq=?
+    AND raw_start_timestamp IS ? AND raw_end_timestamp IS ? AND summary=? AND memory_facts_json IS ? AND created_at=?`);
+  runInTransaction(() => {
+    for (const record of records) {
+      const result = remove.run(
+        record.sessionId, record.id, record.agent || 'main', record.level, record.sourceKind,
+        record.sourceStart, record.sourceEnd,
+        record.sourceKind === 'block' && record.sourceBlockIds?.length ? JSON.stringify(record.sourceBlockIds) : null,
+        record.rawStartSeq, record.rawEndSeq, record.rawStartTimestamp ?? null, record.rawEndTimestamp ?? null,
+        record.summary, record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null, record.createdAt,
+      );
+      if (Number(result.changes) !== 1) throw new Error(`Unable to roll back uncommitted archive block ${record.sessionId} B#${record.id}.`);
+    }
+  });
 }
 
 export async function readLocalArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {
-  await initArchiveStore();
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const rows = getDb().prepare(`
     SELECT agent, seq, timestamp, role, message_json
@@ -902,15 +1381,95 @@ export async function readLocalArchiveMessages(sessionId: string, startSeq?: num
   }));
 }
 
+export async function readLocalArchiveMessageBatch(sessionId: string, afterSeq: number, limit: number): Promise<ArchiveMessageRecord[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const boundedLimit = Math.max(1, Math.min(1000, Math.floor(limit) || 500));
+  const rows = getDb().prepare(`
+    SELECT agent, seq, timestamp, role, message_json
+    FROM archive_messages WHERE session_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?
+  `).all(sessionId, Math.max(0, Math.floor(afterSeq)), boundedLimit) as any[];
+  return rows.map(row => ({
+    v: 1, kind: 'message' as const, sessionId, agent: row.agent || 'main', seq: Number(row.seq),
+    timestamp: Number(row.timestamp), role: row.role, message: JSON.parse(row.message_json) as Message,
+  }));
+}
+
+function readLocalArchiveMessageStatsByCanonicalId(sessionId: string, startSeq?: number, endSeq?: number): ArchiveMessageStats {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS count, MIN(seq) AS min_seq, MAX(seq) AS max_seq
+    FROM archive_messages
+    WHERE session_id = ?
+      AND (? IS NULL OR seq >= ?)
+      AND (? IS NULL OR seq <= ?)
+  `).get(sessionId, startSeq ?? null, startSeq ?? null, endSeq ?? null, endSeq ?? null) as any;
+
+  const count = Number(row?.count) || 0;
+  return {
+    count,
+    ...(count > 0 ? { minSeq: Number(row.min_seq), maxSeq: Number(row.max_seq) } : {}),
+  };
+}
+
+export async function getLocalArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  return readLocalArchiveMessageStatsByCanonicalId(sessionId, startSeq, endSeq);
+}
+
+/**
+ * Return the append-only message counter used only by bounded Session-list
+ * presentation. Ordinary Sessions display their local maximum message seq.
+ * An actual archive fork displays the branch-local distance from its recorded
+ * fork point; Session-tree parent metadata is intentionally irrelevant.
+ */
+export function getSessionListSequenceMessageCounts(sessionIds: readonly string[]): SessionListSequenceMessageCount[] {
+  if (sessionIds.length === 0) return [];
+  if (sessionIds.length > 200 || sessionIds.some(sessionId => typeof sessionId !== 'string' || !sessionId || sessionId.length > 512)) {
+    throw new Error('Session-list sequence counts require at most 200 bounded Session IDs.');
+  }
+
+  initArchiveStoreSync();
+  const uniqueIds = [...new Set(sessionIds)];
+  const requestedValues = uniqueIds.map(() => '(?)').join(',');
+  const rows = getDb().prepare(`
+    WITH requested(session_id) AS (VALUES ${requestedValues}),
+    local_max AS (
+      SELECT messages.session_id, MAX(messages.seq) AS max_seq
+      FROM archive_messages AS messages
+      INNER JOIN requested ON requested.session_id = messages.session_id
+      GROUP BY messages.session_id
+    )
+    SELECT requested.session_id, COALESCE(local_max.max_seq, 0) AS max_seq,
+      branches.parent_session_id, branches.fork_message_seq
+    FROM requested
+    LEFT JOIN local_max ON local_max.session_id = requested.session_id
+    LEFT JOIN archive_branches AS branches ON branches.session_id = requested.session_id
+  `).all(...uniqueIds) as Array<{
+    session_id: string;
+    max_seq: number;
+    parent_session_id: string | null;
+    fork_message_seq: number | null;
+  }>;
+
+  const byId = new Map(rows.map(row => {
+    const maxSeq = Math.max(0, Number(row.max_seq) || 0);
+    const forkMessageSeq = Math.max(0, Number(row.fork_message_seq) || 0);
+    return [row.session_id, row.parent_session_id === null
+      ? maxSeq
+      : Math.max(0, maxSeq - forkMessageSeq)] as const;
+  }));
+  return uniqueIds.map(sessionId => ({ sessionId, sequenceMessageCount: byId.get(sessionId) || 0 }));
+}
+
 export async function readEffectiveArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<EffectiveArchiveMessageRecord[]> {
-  await initArchiveStore();
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const lineage = buildLineage(sessionId);
   const results: EffectiveArchiveMessageRecord[] = [];
 
   for (const entry of lineage) {
-    await ensureImported(entry.sessionId);
     const effectiveStart = typeof startSeq === 'number' ? startSeq : undefined;
     const cappedEnd = typeof entry.maxMessageSeq === 'number'
       ? (typeof endSeq === 'number' ? Math.min(endSeq, entry.maxMessageSeq) : entry.maxMessageSeq)
@@ -934,12 +1493,40 @@ export async function readEffectiveArchiveMessages(sessionId: string, startSeq?:
   return results.sort((a, b) => a.seq - b.seq || Number(a.timestamp) - Number(b.timestamp));
 }
 
+export async function getEffectiveArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+
+  let count = 0;
+  let minSeq: number | undefined;
+  let maxSeq: number | undefined;
+  for (const entry of buildLineage(sessionId)) {
+    const cappedEnd = typeof entry.maxMessageSeq === 'number'
+      ? (typeof endSeq === 'number' ? Math.min(endSeq, entry.maxMessageSeq) : entry.maxMessageSeq)
+      : endSeq;
+    if (typeof entry.maxMessageSeq === 'number' && entry.maxMessageSeq <= 0) continue;
+    if (typeof startSeq === 'number' && typeof cappedEnd === 'number' && startSeq > cappedEnd) continue;
+
+    const canonicalEntryId = resolveArchivedRecordSessionIdReadOnly(entry.sessionId);
+    const local = readLocalArchiveMessageStatsByCanonicalId(canonicalEntryId, startSeq, cappedEnd);
+    count += local.count;
+    if (typeof local.minSeq === 'number') minSeq = typeof minSeq === 'number' ? Math.min(minSeq, local.minSeq) : local.minSeq;
+    if (typeof local.maxSeq === 'number') maxSeq = typeof maxSeq === 'number' ? Math.max(maxSeq, local.maxSeq) : local.maxSeq;
+  }
+
+  return {
+    count,
+    ...(typeof minSeq === 'number' ? { minSeq } : {}),
+    ...(typeof maxSeq === 'number' ? { maxSeq } : {}),
+  };
+}
+
 export async function readLocalArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
-  await initArchiveStore();
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const rows = getDb().prepare(`
-    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, created_at
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
     FROM archive_blocks
     WHERE session_id = ?
       AND (? IS NULL OR id >= ?)
@@ -963,19 +1550,39 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
     rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
     rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
     summary: String(row.summary || ''),
+    ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+    createdAt: Number(row.created_at),
+  }));
+}
+
+export async function readLocalArchiveBlockBatch(sessionId: string, afterId: number, limit: number): Promise<ArchiveBlockRecord[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit) || 100));
+  const rows = getDb().prepare(`
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    FROM archive_blocks WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?
+  `).all(sessionId, Math.max(0, Math.floor(afterId)), boundedLimit) as any[];
+  return rows.map(row => ({
+    v: 1, kind: 'block' as const, sessionId, agent: row.agent || 'main', id: Number(row.id), level: Number(row.level),
+    sourceKind: row.source_kind, sourceStart: Number(row.source_start), sourceEnd: Number(row.source_end),
+    sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json), rawStartSeq: Number(row.raw_start_seq),
+    rawEndSeq: Number(row.raw_end_seq), rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
+    rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp), summary: String(row.summary || ''),
+    ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
     createdAt: Number(row.created_at),
   }));
 }
 
 export async function readEffectiveArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<EffectiveArchiveBlockRecord[]> {
-  await initArchiveStore();
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const lineage = buildLineage(sessionId);
   const results: EffectiveArchiveBlockRecord[] = [];
 
   for (const entry of lineage) {
-    await ensureImported(entry.sessionId);
     const effectiveStart = typeof startId === 'number' ? startId : undefined;
     const cappedEnd = typeof entry.maxBlockId === 'number'
       ? (typeof endId === 'number' ? Math.min(endId, entry.maxBlockId) : entry.maxBlockId)
@@ -997,6 +1604,156 @@ export async function readEffectiveArchiveBlocks(sessionId: string, startId?: nu
   }
 
   return results.sort((a, b) => a.id - b.id || Number(a.createdAt) - Number(b.createdAt));
+}
+
+export type ArchiveLexicalCandidate =
+  | { kind: 'message'; sourceSessionId: string; inherited: boolean; record: ArchiveMessageRecord }
+  | { kind: 'block'; sourceSessionId: string; inherited: boolean; record: ArchiveBlockRecord };
+
+const ARCHIVE_LEXICAL_LINEAGE_LIMIT = 16;
+const ARCHIVE_LEXICAL_MESSAGE_SCAN_LIMIT = 2000;
+const ARCHIVE_LEXICAL_BLOCK_SCAN_LIMIT = 1000;
+const ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT = 64;
+const ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT = 256;
+
+function normalizeArchiveLexicalText(value: unknown): string {
+  return String(value || '').normalize('NFKC').toLowerCase();
+}
+
+/**
+ * Bounded exact-lineage lexical candidate lookup over existing Archive rows.
+ * Locators are always bound SQL parameters; no query/user content enters SQL text.
+ */
+export async function locateEffectiveArchiveCandidatesBySubstring(
+  sessionId: string,
+  locators: readonly string[],
+): Promise<ArchiveLexicalCandidate[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const normalizedLocators = [...new Set(locators
+    .filter(locator => typeof locator === 'string')
+    .map(locator => locator.trim())
+    .filter(locator => locator.length >= 2 && locator.length <= 160))].slice(0, 4);
+  if (normalizedLocators.length === 0) return [];
+
+  const asciiLocators = normalizedLocators.filter(locator => /^[\x00-\x7F]+$/.test(locator));
+  const unicodeLocators = normalizedLocators.filter(locator => !/^[\x00-\x7F]+$/.test(locator));
+  const normalizedMessageLocators = normalizedLocators.map(normalizeArchiveLexicalText);
+  const asciiBlockPredicate = asciiLocators.map(() => 'instr(lower(search_text), lower(?)) > 0').join(' OR ');
+  const messageWindowStatement = getDb().prepare(`
+    SELECT agent, seq, timestamp, role, message_json
+    FROM archive_messages
+    WHERE session_id = ? AND (? IS NULL OR seq <= ?)
+      AND role IN ('user', 'model')
+      AND COALESCE(json_extract(message_json, '$.modelVisible'), 1) != 0
+    ORDER BY seq DESC
+    LIMIT ?
+  `);
+  const blockWindowSql = `
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    FROM (
+      SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
+        raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, summary AS search_text,
+        memory_facts_json, created_at
+      FROM archive_blocks
+      WHERE session_id = ? AND (? IS NULL OR id <= ?)
+      ORDER BY id DESC
+      LIMIT ?
+    )
+  `;
+  const blockWindowStatement = getDb().prepare(`${blockWindowSql} ORDER BY id DESC`);
+  const blockAsciiStatement = asciiLocators.length > 0 ? getDb().prepare(`
+    ${blockWindowSql}
+    WHERE (${asciiBlockPredicate})
+    ORDER BY id DESC
+    LIMIT ?
+  `) : undefined;
+
+  const results: ArchiveLexicalCandidate[] = [];
+  for (const entry of buildLineage(sessionId, ARCHIVE_LEXICAL_LINEAGE_LIMIT)) {
+    if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+    if (entry.maxMessageSeq === undefined || entry.maxMessageSeq > 0) {
+      const rowsBySeq = new Map<number, any>();
+      const rows = messageWindowStatement.all(
+        entry.sessionId, entry.maxMessageSeq ?? null, entry.maxMessageSeq ?? null, ARCHIVE_LEXICAL_MESSAGE_SCAN_LIMIT,
+      ) as any[];
+      for (const row of rows) {
+        const message = JSON.parse(row.message_json) as Message;
+        const normalizedText = normalizeArchiveLexicalText(formatSubstantiveMessageSearchText(message));
+        if (normalizedMessageLocators.some(locator => normalizedText.includes(locator))) rowsBySeq.set(Number(row.seq), row);
+      }
+      const matchingRows = [...rowsBySeq.values()].sort((a, b) => Number(b.seq) - Number(a.seq)).slice(0, ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT);
+      for (const row of matchingRows) {
+        if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+        results.push({
+          kind: 'message',
+          sourceSessionId: entry.sessionId,
+          inherited: entry.inherited,
+          record: {
+            v: 1,
+            kind: 'message',
+            sessionId: entry.sessionId,
+            agent: row.agent || 'main',
+            seq: Number(row.seq),
+            timestamp: Number(row.timestamp),
+            role: row.role,
+            message: JSON.parse(row.message_json) as Message,
+          },
+        });
+      }
+    }
+    if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+    if (entry.maxBlockId === undefined || entry.maxBlockId > 0) {
+      const rowsById = new Map<number, any>();
+      if (blockAsciiStatement) {
+        const rows = blockAsciiStatement.all(
+          entry.sessionId, entry.maxBlockId ?? null, entry.maxBlockId ?? null,
+          ARCHIVE_LEXICAL_BLOCK_SCAN_LIMIT, ...asciiLocators, ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT,
+        ) as any[];
+        rows.forEach(row => rowsById.set(Number(row.id), row));
+      }
+      if (unicodeLocators.length > 0) {
+        const normalizedUnicodeLocators = unicodeLocators.map(normalizeArchiveLexicalText);
+        const rows = blockWindowStatement.all(
+          entry.sessionId, entry.maxBlockId ?? null, entry.maxBlockId ?? null, ARCHIVE_LEXICAL_BLOCK_SCAN_LIMIT,
+        ) as any[];
+        for (const row of rows) {
+          const normalizedText = normalizeArchiveLexicalText(row.summary);
+          if (normalizedUnicodeLocators.some(locator => normalizedText.includes(locator))) rowsById.set(Number(row.id), row);
+        }
+      }
+      const rows = [...rowsById.values()].sort((a, b) => Number(b.id) - Number(a.id)).slice(0, ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT);
+      for (const row of rows) {
+        if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+        results.push({
+          kind: 'block',
+          sourceSessionId: entry.sessionId,
+          inherited: entry.inherited,
+          record: {
+            v: 1,
+            kind: 'block',
+            sessionId: entry.sessionId,
+            agent: row.agent || 'main',
+            id: Number(row.id),
+            level: Number(row.level),
+            sourceKind: row.source_kind,
+            sourceStart: Number(row.source_start),
+            sourceEnd: Number(row.source_end),
+            sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json),
+            rawStartSeq: Number(row.raw_start_seq),
+            rawEndSeq: Number(row.raw_end_seq),
+            rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
+            rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
+            summary: String(row.summary || ''),
+            ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+            createdAt: Number(row.created_at),
+          },
+        });
+      }
+    }
+  }
+  return results;
 }
 
 export async function getVectorCheckpoint(sessionId: string): Promise<ArchiveVectorCheckpoint> {
@@ -1059,6 +1816,10 @@ export function setVectorCheckpointSync(
 
 export async function renameSessionArchiveStore(oldSessionId: string, newSessionId: string): Promise<void> {
   await initArchiveStore();
+  renameSessionArchiveStoreRows(oldSessionId, newSessionId);
+}
+
+function renameSessionArchiveStoreRows(oldSessionId: string, newSessionId: string): void {
   const database = getDb();
   runInTransaction(() => {
     database.prepare(`UPDATE archive_branches SET session_id = ?, updated_at = ? WHERE session_id = ?`).run(newSessionId, Date.now(), oldSessionId);
@@ -1074,10 +1835,369 @@ export async function renameSessionArchiveStore(oldSessionId: string, newSession
   }
 }
 
-export async function getVectorSearchLineage(sessionId: string): Promise<LineageEntry[]> {
+export function renameSessionArchiveStoreForRecovery(oldSessionId: string, newSessionId: string): void {
+  initArchiveStoreSync();
+  renameSessionArchiveStoreRows(oldSessionId, newSessionId);
+}
+
+export async function commitSessionIdRename(oldSessionId: string, newSessionId: string): Promise<void> {
   await initArchiveStore();
-  await ensureImported(sessionId);
+  await persistSessionIdReservation(oldSessionId, newSessionId);
+}
+
+export async function rollbackUncommittedSessionArchive(sessionId: string): Promise<void> {
+  await initArchiveStore();
+  runInTransaction(() => {
+    getDb().prepare(`DELETE FROM archive_messages WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_blocks WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_checkpoints WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_import_state WHERE session_id = ?`).run(sessionId);
+    getDb().prepare(`DELETE FROM archive_branches WHERE session_id = ?`).run(sessionId);
+  });
+  importedSessions.delete(sessionId);
+}
+
+export type LegacyArchiveMigrationSource = {
+  filePath: string;
+  relativeStatePath: string;
+  kind: 'messages' | 'blocks';
+  sha256: string;
+  recordCount: number;
+  recoveredRecords: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }>;
+  tornPrefixCount: number;
+};
+
+export function markArchiveStoreSqliteAuthority(migrationId: string): void {
+  openArchiveStore();
+  getDb().prepare('INSERT OR REPLACE INTO archive_store_metadata(key,value) VALUES(?,?)').run('sqlite_authority_migration', migrationId);
+}
+
+export function hasArchiveStoreSqliteAuthority(migrationId: string): boolean {
+  openArchiveStore();
+  const row: any = getDb().prepare('SELECT value FROM archive_store_metadata WHERE key=?').get('sqlite_authority_migration');
+  return row?.value === migrationId;
+}
+
+function canonicalJson(value: any): string {
+  const normalize = (item: any): any => {
+    if (Array.isArray(item)) return item.map(normalize);
+    if (!item || typeof item !== 'object') return item;
+    return Object.fromEntries(Object.keys(item).sort().filter(key => item[key] !== undefined).map(key => [key, normalize(item[key])]));
+  };
+  return JSON.stringify(normalize(value));
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  const stream = fs.createReadStream(filePath);
+  for await (const chunk of stream) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
+async function validateLegacyFileStructure(
+  filePath: string,
+  kind: 'messages' | 'blocks',
+  recoveredPayloads: Map<string, string>,
+): Promise<{ recordCount: number; recoveredRecords: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }>; tornPrefixCount: number }> {
+  let count = 0;
+  const recoveredRecords: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }> = [];
+  let tornPrefixCount = 0;
+  await streamJsonlLines(filePath, async line => {
+    if (kind === 'messages') {
+      const parsed = parseLegacyMessageLine(line);
+      if (!parsed) {
+        try { JSON.parse(line); } catch { throw new Error(`Malformed legacy session archive line in ${filePath}`); }
+        throw new Error(`Invalid legacy session message record in ${filePath}`);
+      }
+      if (parsed.recoveredTornPrefix) {
+        const identity = `${parsed.record.sessionId}\0${parsed.record.seq}`;
+        const payload = canonicalJson(parsed.record);
+        const priorPayload = recoveredPayloads.get(identity);
+        if (priorPayload !== undefined && priorPayload !== payload) throw new Error(`Divergent recovered legacy session message ${parsed.record.sessionId}#${parsed.record.seq}`);
+        recoveredPayloads.set(identity, payload);
+        recoveredRecords.push({
+          sessionId: parsed.record.sessionId,
+          seq: parsed.record.seq,
+          payloadSha256: crypto.createHash('sha256').update(payload).digest('hex'),
+          insertedIntoSqlite: false,
+        });
+        tornPrefixCount += 1;
+      }
+    } else {
+      let parsed: unknown;
+      try { parsed = JSON.parse(line); } catch { throw new Error(`Malformed legacy block archive line in ${filePath}`); }
+      if (!isCanonicalBlockRecord(parsed)) throw new Error(`Invalid legacy session block record in ${filePath}`);
+    }
+    count += 1;
+  });
+  return { recordCount: count, recoveredRecords, tornPrefixCount };
+}
+
+async function verifyLegacyMessageFile(filePath: string, preexistingKeys: Set<string>): Promise<number> {
+  let count = 0;
+  await streamJsonlLines(filePath, async line => {
+    const record = parseLegacyMessageLine(line)?.record;
+    if (!record) throw new Error(`Invalid legacy session message record in ${filePath}`);
+    const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    let rowSessionId = sessionId;
+    let row: any = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(rowSessionId, record.seq);
+    if (!row && rowSessionId !== record.sessionId) {
+      rowSessionId = record.sessionId;
+      row = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(rowSessionId, record.seq);
+    }
+    if (!row) throw new Error(`Legacy session message ${record.sessionId}#${record.seq} is missing from SQLite`);
+    const expected = { agent: record.agent || 'main', seq: record.seq, timestamp: record.timestamp, role: record.role, message: record.message };
+    const actual = { agent: row.agent || 'main', seq: Number(row.seq), timestamp: Number(row.timestamp), role: row.role, message: JSON.parse(row.message_json) };
+    if (!preexistingKeys.has(`${rowSessionId}\0${record.seq}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session message ${record.sessionId}#${record.seq}`);
+    count += 1;
+  });
+  return count;
+}
+
+async function verifyLegacyBlockFile(filePath: string, preexistingKeys: Set<string>): Promise<number> {
+  let count = 0;
+  await streamJsonlLines(filePath, async line => {
+    try { JSON.parse(line); } catch { throw new Error(`Malformed legacy block archive line in ${filePath}`); }
+    const record = parseBlockRecord(line);
+    if (!record) throw new Error(`Invalid legacy session block record in ${filePath}`);
+    const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    const select = getDb().prepare(`SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
+      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
+    let rowSessionId = sessionId;
+    let row: any = select.get(rowSessionId, record.id);
+    if (!row && rowSessionId !== record.sessionId) {
+      rowSessionId = record.sessionId;
+      row = select.get(rowSessionId, record.id);
+    }
+    if (!row) throw new Error(`Legacy session block ${record.sessionId}#${record.id} is missing from SQLite`);
+    const expected = {
+      agent: record.agent || 'main', id: record.id, level: record.level, sourceKind: record.sourceKind, sourceStart: record.sourceStart,
+      sourceEnd: record.sourceEnd, sourceBlockIds: record.sourceKind === 'block' ? record.sourceBlockIds : undefined,
+      rawStartSeq: record.rawStartSeq, rawEndSeq: record.rawEndSeq, rawStartTimestamp: record.rawStartTimestamp,
+      rawEndTimestamp: record.rawEndTimestamp, summary: record.summary, memoryFacts: record.memoryFacts, createdAt: record.createdAt,
+    };
+    const actual = {
+      agent: row.agent || 'main', id: Number(row.id), level: Number(row.level), sourceKind: row.source_kind, sourceStart: Number(row.source_start),
+      sourceEnd: Number(row.source_end), sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json), rawStartSeq: Number(row.raw_start_seq),
+      rawEndSeq: Number(row.raw_end_seq), rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
+      rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp), summary: row.summary,
+      memoryFacts: parseMemoryFactsJson(row.memory_facts_json), createdAt: Number(row.created_at),
+    };
+    if (!preexistingKeys.has(`${rowSessionId}\0${record.id}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session block ${record.sessionId}#${record.id}`);
+    count += 1;
+  });
+  return count;
+}
+
+/** Migration-only: import and strictly verify every active legacy session archive JSONL. */
+export async function migrateLegacySessionArchivesToSqlite(): Promise<LegacyArchiveMigrationSource[]> {
+  openArchiveStore();
+  const candidates = await collectBootstrapSessionCandidates();
+  const inventory: LegacyArchiveMigrationSource[] = [];
+  const recoveredPayloads = new Map<string, string>();
+  // Validate complete canonical structures before bootstrap can create rows,
+  // branches, or reservations. A repaired source therefore retries from the
+  // same pre-migration authority state.
+  for (const { sessionId } of candidates) {
+    for (const [kind, filePath] of [
+      ['messages', getSessionArchiveLogPath(sessionId)],
+      ['blocks', getSessionBlockArchiveLogPath(sessionId)],
+    ] as const) {
+      if (!await fs.pathExists(filePath)) continue;
+      const validation = await validateLegacyFileStructure(filePath, kind, recoveredPayloads);
+      inventory.push({ filePath, relativeStatePath: path.relative(STATE_DIR, filePath), kind, sha256: await hashFile(filePath), ...validation });
+    }
+  }
+  const preexistingMessageKeys = new Set((getDb().prepare('SELECT session_id,seq FROM archive_messages').all() as Array<{ session_id: string; seq: number }>).map(row => `${row.session_id}\0${row.seq}`));
+  const preexistingBlockKeys = new Set((getDb().prepare('SELECT session_id,id FROM archive_blocks').all() as Array<{ session_id: string; id: number }>).map(row => `${row.session_id}\0${row.id}`));
+  await ensureBootstrapped({ allowRecoveredMessageLineage: true });
+  const insertedRecoveredIdentities = new Set<string>();
+  const recoveredInsert = getDb().prepare(`INSERT INTO archive_messages(session_id,agent,seq,timestamp,role,message_json) VALUES(?,?,?,?,?,?)`);
+  for (const [identity, payload] of recoveredPayloads) {
+    const record = JSON.parse(payload) as ArchiveMessageRecord;
+    const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    await ensureSessionBranch(sessionId);
+    const targetPreexisted = preexistingMessageKeys.has(`${sessionId}\0${record.seq}`);
+    const markerKey = `migration_recovered_torn_message:${crypto.createHash('sha256').update(identity).digest('hex')}`;
+    const markerValue = canonicalJson({ sessionId: record.sessionId, seq: record.seq, payloadSha256: crypto.createHash('sha256').update(payload).digest('hex') });
+    runInTransaction(() => {
+      const marker: any = getDb().prepare('SELECT value FROM archive_store_metadata WHERE key=?').get(markerKey);
+      if (marker && marker.value !== markerValue) throw new Error(`Conflicting durable torn-message recovery marker for ${record.sessionId}#${record.seq}`);
+      const existing: any = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(sessionId, record.seq);
+      const expected = { agent: record.agent, seq: record.seq, timestamp: record.timestamp, role: record.role, message: record.message };
+      const actual = existing ? { agent: existing.agent, seq: Number(existing.seq), timestamp: Number(existing.timestamp), role: existing.role, message: JSON.parse(existing.message_json) } : null;
+      const rowMatches = actual !== null && canonicalJson(expected) === canonicalJson(actual);
+      if (marker && !rowMatches) throw new Error(`Recovered torn-message row no longer matches its durable marker for ${record.sessionId}#${record.seq}`);
+      if (!existing && targetPreexisted) throw new Error(`Preexisting SQLite row disappeared during torn-message recovery for ${record.sessionId}#${record.seq}`);
+      if (!existing) {
+        recoveredInsert.run(sessionId, record.agent, record.seq, record.timestamp, record.role, JSON.stringify(record.message));
+        getDb().prepare('INSERT INTO archive_store_metadata(key,value) VALUES(?,?)').run(markerKey, markerValue);
+        insertedRecoveredIdentities.add(identity);
+      } else if (marker) {
+        insertedRecoveredIdentities.add(identity);
+      } else if (!targetPreexisted) {
+        if (!rowMatches) throw new Error(`Bootstrap recovered torn-message row does not match ${record.sessionId}#${record.seq}`);
+        getDb().prepare('INSERT INTO archive_store_metadata(key,value) VALUES(?,?)').run(markerKey, markerValue);
+        insertedRecoveredIdentities.add(identity);
+      }
+    });
+  }
+  // Mark one deterministic source occurrence for each inserted logical row;
+  // copied fork logs retain their own physical recovery audit without
+  // inflating the inserted logical-row count.
+  for (const source of inventory) {
+    for (const recovered of source.recoveredRecords) {
+      const identity = `${recovered.sessionId}\0${recovered.seq}`;
+      if (insertedRecoveredIdentities.delete(identity)) recovered.insertedIntoSqlite = true;
+    }
+  }
+  const branches = getDb().prepare('SELECT session_id,parent_session_id,fork_message_seq,fork_block_id FROM archive_branches').all() as Array<{
+    session_id: string; parent_session_id: string | null; fork_message_seq: number; fork_block_id: number;
+  }>;
+  const parentBySession = new Map(branches.map(branch => [branch.session_id, branch.parent_session_id || undefined]));
+  for (const branch of branches) {
+    if (!Number.isInteger(branch.fork_message_seq) || branch.fork_message_seq < 0 || !Number.isInteger(branch.fork_block_id) || branch.fork_block_id < 0) {
+      throw new Error(`Invalid archive lineage caps for ${branch.session_id}`);
+    }
+    const seen = new Set<string>();
+    let current: string | undefined = branch.session_id;
+    while (current) {
+      if (seen.has(current)) throw new Error(`Archive lineage cycle involving ${current}`);
+      seen.add(current);
+      current = parentBySession.get(current);
+    }
+  }
+  const sources: LegacyArchiveMigrationSource[] = [];
+  for (const source of inventory) {
+    const recordCount = source.kind === 'messages' ? await verifyLegacyMessageFile(source.filePath, preexistingMessageKeys) : await verifyLegacyBlockFile(source.filePath, preexistingBlockKeys);
+    const sha256 = await hashFile(source.filePath);
+    if (recordCount !== source.recordCount || sha256 !== source.sha256) throw new Error(`Legacy archive changed during verification: ${source.relativeStatePath}`);
+    sources.push(source);
+  }
+  const integrity: any = getDb().prepare('PRAGMA integrity_check').get();
+  if (!integrity || Object.values(integrity)[0] !== 'ok') throw new Error(`archive-store.sqlite integrity_check failed: ${JSON.stringify(integrity)}`);
+  if ((getDb().prepare('PRAGMA foreign_key_check').all() as any[]).length) throw new Error('archive-store.sqlite foreign_key_check failed');
+  return sources.sort((a, b) => a.filePath.localeCompare(b.filePath));
+}
+
+/** Export the SQLite-authoritative session archive as compatibility JSONL files. */
+export async function exportSessionArchivesJsonl(outputRoot: string): Promise<{ files: number; records: number }> {
+  await initArchiveStore();
+  const resolvedOutputRoot = path.resolve(outputRoot);
+  if (resolvedOutputRoot === path.parse(resolvedOutputRoot).root) throw new Error('Archive export output cannot be a filesystem root');
+  const temporaryRoot = `${resolvedOutputRoot}.${process.pid}.${Date.now()}.tmp`;
+  await fs.remove(temporaryRoot);
+  await fs.ensureDir(temporaryRoot);
+  const exportPath = (relativePath: string): string => {
+    const resolved = path.resolve(temporaryRoot, relativePath);
+    if (resolved !== temporaryRoot && !resolved.startsWith(`${temporaryRoot}${path.sep}`)) throw new Error(`Unsafe session ID in archive export path: ${relativePath}`);
+    return resolved;
+  };
+  const exportDb = new DatabaseSync(ARCHIVE_DB_PATH, { readOnly: true });
+  let files = 0;
+  let records = 0;
+  const writeRows = (filePath: string, rows: Iterable<any>, toRecord: (row: any) => unknown): void => {
+    fs.ensureDirSync(path.dirname(filePath));
+    const descriptor = fs.openSync(filePath, 'w', 0o600);
+    let count = 0;
+    let buffered = '';
+    try {
+      for (const row of rows) {
+        buffered += `${JSON.stringify(toRecord(row))}\n`;
+        count += 1;
+        if (buffered.length >= 256 * 1024) { fs.writeSync(descriptor, buffered); buffered = ''; }
+      }
+      if (buffered) fs.writeSync(descriptor, buffered);
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    if (count === 0) fs.removeSync(filePath);
+    else { files += 1; records += count; }
+  };
+  try {
+    exportDb.exec('PRAGMA query_only = ON; BEGIN');
+    const branches = exportDb.prepare('SELECT session_id FROM archive_branches ORDER BY session_id').iterate() as Iterable<{ session_id: string }>;
+    for (const branch of branches) {
+      writeRows(
+        exportPath(`${branch.session_id}.jsonl`),
+        exportDb.prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? ORDER BY seq').iterate(branch.session_id) as Iterable<any>,
+        row => ({ v: 1, kind: 'message', sessionId: branch.session_id, agent: row.agent || 'main', seq: Number(row.seq), timestamp: Number(row.timestamp), role: row.role, message: JSON.parse(row.message_json) }),
+      );
+      writeRows(
+        exportPath(`${branch.session_id}.blocks.jsonl`),
+        exportDb.prepare(`SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
+          raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? ORDER BY id`).iterate(branch.session_id) as Iterable<any>,
+        row => ({
+          v: 1, kind: 'block', sessionId: branch.session_id, agent: row.agent || 'main', id: Number(row.id), level: Number(row.level),
+          sourceKind: row.source_kind, sourceStart: Number(row.source_start), sourceEnd: Number(row.source_end),
+          ...(parseSourceBlockIdsJson(row.source_block_ids_json) ? { sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json) } : {}),
+          rawStartSeq: Number(row.raw_start_seq), rawEndSeq: Number(row.raw_end_seq),
+          ...(row.raw_start_timestamp == null ? {} : { rawStartTimestamp: Number(row.raw_start_timestamp) }),
+          ...(row.raw_end_timestamp == null ? {} : { rawEndTimestamp: Number(row.raw_end_timestamp) }),
+          summary: String(row.summary || ''), ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+          createdAt: Number(row.created_at),
+        }),
+      );
+    }
+    exportDb.exec('COMMIT');
+    exportDb.close();
+  } catch (error) {
+    try { exportDb.exec('ROLLBACK'); } catch {}
+    try { exportDb.close(); } catch {}
+    await fs.remove(temporaryRoot);
+    throw error;
+  }
+  const previousRoot = `${resolvedOutputRoot}.${process.pid}.${Date.now()}.previous`;
+  await fs.remove(previousRoot);
+  if (await fs.pathExists(resolvedOutputRoot)) await fs.move(resolvedOutputRoot, previousRoot);
+  try {
+    await fs.move(temporaryRoot, resolvedOutputRoot);
+    await fs.remove(previousRoot);
+  } catch (error) {
+    await fs.remove(resolvedOutputRoot).catch((): void => {});
+    if (await fs.pathExists(previousRoot)) await fs.move(previousRoot, resolvedOutputRoot);
+    throw error;
+  }
+  await syncDirectoryDurably(path.dirname(resolvedOutputRoot));
+  return { files, records };
+}
+
+export async function getVectorSearchLineage(sessionId: string): Promise<LineageEntry[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
   return buildLineage(sessionId);
+}
+
+export function getLocalArchiveVectorMaximaSync(sessionId: string): { latestLocalMessageSeq: number; latestLocalBlockId: number } {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const messageRow = getDb().prepare('SELECT MAX(seq) AS latest_seq FROM archive_messages WHERE session_id = ?').get(sessionId) as any;
+  const blockRow = getDb().prepare('SELECT MAX(id) AS latest_id FROM archive_blocks WHERE session_id = ?').get(sessionId) as any;
+  return {
+    latestLocalMessageSeq: Number(messageRow?.latest_seq) || 0,
+    latestLocalBlockId: Number(blockRow?.latest_id) || 0,
+  };
+}
+
+export async function listLocalArchiveSessionMaxima(): Promise<Array<{ sessionId: string; agent: string; latestLocalMessageSeq: number; latestLocalBlockId: number }>> {
+  await initArchiveStore();
+  const rows = getDb().prepare(`
+    WITH message_max AS (SELECT session_id, MAX(agent) AS agent, MAX(seq) AS max_seq FROM archive_messages GROUP BY session_id),
+    block_max AS (SELECT session_id, MAX(agent) AS agent, MAX(id) AS max_id FROM archive_blocks GROUP BY session_id)
+    SELECT b.session_id, COALESCE(m.agent, bl.agent, 'main') AS agent,
+      COALESCE(m.max_seq, 0) AS max_seq, COALESCE(bl.max_id, 0) AS max_id
+    FROM archive_branches b
+    LEFT JOIN message_max m ON m.session_id = b.session_id
+    LEFT JOIN block_max bl ON bl.session_id = b.session_id
+    ORDER BY b.session_id
+  `).all() as any[];
+  return rows.map(row => ({
+    sessionId: String(row.session_id),
+    agent: String(row.agent || 'main'),
+    latestLocalMessageSeq: Number(row.max_seq) || 0,
+    latestLocalBlockId: Number(row.max_id) || 0,
+  }));
 }
 
 export async function listSessionsNeedingVectorBackfill(): Promise<ArchiveVectorBackfillCandidate[]> {

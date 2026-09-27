@@ -1,0 +1,434 @@
+import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import test from 'node:test';
+import { registerChannel, unregisterChannel } from './channel';
+import { SESSIONS_FILE } from './config';
+import { shutdownSessionRuntime, initializeSessionRuntime, requestCompaction, submitAndRun } from './sessionRuntime';
+import { createSessionRuntimeServiceHandler, sessionRuntimeServiceDescriptor } from './sessionRuntimeService';
+import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
+import { createChannelsStore, attachChannel, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
+import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
+import * as sessionManager from './sessionManager';
+import { normalizeSessionWorkerIngressRequest, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
+import { SessionWorkerStore } from './sessionWorkerStore';
+import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import type { QueueSource, Session } from './types';
+
+function baseSession(id: string): Session {
+  return {
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'worker ingress prompt',
+    systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
+  } as Session;
+}
+
+const itemFor = (text: string, source: QueueSource, clientMessageId: string) => ({
+  type: 'user' as const, source, clientMessageId,
+  parts: [{ text, imageMeta: { imageId: `image-${clientMessageId}`, mimeType: 'image/png', width: 2, height: 3 } }],
+});
+
+test('all Worker ingress variants use external event identity while ordinary ingress remains random', async () => {
+  const sessionId = 'worker-ingress-identity';
+  const identities: string[] = [];
+  const rows = new Map<string, { id: number }>();
+  let nextId = 1;
+  const store = {
+    findOwnership: () => ({ sessionId, generation: 1, incarnationId: 'incarnation', state: 'ready' }),
+    enqueueIntent: (_sessionId: string, identity: string) => {
+      identities.push(identity);
+      const existing = rows.get(identity);
+      if (existing) return existing;
+      const row = { id: nextId++ };
+      rows.set(identity, row);
+      return row;
+    },
+  } as any;
+  const supervisor = {
+    assertActivatedOwnership: () => {},
+    runPendingActivated: async () => ({ lastAppliedMailboxId: 999, messageCount: 0, busy: false }),
+  } as any;
+  const ingress = new SessionWorkerIngressCoordinator(
+    store,
+    supervisor,
+    id => id,
+    id => id === sessionId,
+  );
+  const externalEventId = 'remote-exec-completion:exec_ingress_identity';
+  const external = { type: 'background' as const, externalEventId, parts: [{ system: 'done' }] };
+  await ingress.submitQueuedInput(sessionId, external);
+  await ingress.submitEnsuringWorker(sessionId, external);
+  await ingress.enqueueEnsuringWorker(sessionId, external);
+  assert.deepEqual(identities.slice(0, 3), [externalEventId, externalEventId, externalEventId]);
+  assert.equal(rows.size, 1);
+
+  const ordinary = { type: 'background' as const, parts: [{ system: 'ordinary' }] };
+  await ingress.submitQueuedInput(sessionId, ordinary);
+  await ingress.submitEnsuringWorker(sessionId, ordinary);
+  await ingress.enqueueEnsuringWorker(sessionId, ordinary);
+  const ordinaryIdentities = identities.slice(3);
+  assert.equal(new Set(ordinaryIdentities).size, 3);
+  assert.equal(ordinaryIdentities.some(identity => identity === externalEventId), false);
+});
+
+test('Worker admission that starts before a delete claim cannot spawn or append after the claim', async () => {
+  await sessionManager.loadSessions();
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-claim-crossing-'));
+  const sessionId = `worker-claim-crossing-${Date.now()}`;
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root },
+  });
+  let releaseAdmission!: () => void;
+  const admissionGate = new Promise<void>(resolve => { releaseAdmission = resolve; });
+  let reachedAdmission!: () => void;
+  const admissionReached = new Promise<void>(resolve => { reachedAdmission = resolve; });
+  const ingress = new SessionWorkerIngressCoordinator(
+    store,
+    supervisor,
+    id => id,
+    id => id === sessionId,
+    async (id, operation, admit) => {
+      reachedAdmission();
+      await admissionGate;
+      return sessionManager.withSessionDestructiveMutationAdmission([id], operation, admit);
+    },
+  );
+  const session = baseSession(sessionId);
+  sessionManager.getAllSessions().set(sessionId, session);
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(session));
+  const authorityBefore = await fs.readFile(statePath);
+  let claimId: string | undefined;
+  try {
+    await supervisor.reconcileStartupOwnerships();
+    const pending = ingress.enqueueEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'crossing ingress' }] });
+    await admissionReached;
+    claimId = (await sessionManager.claimSessionsForDestructiveLifecycle([sessionId])).claimId;
+    releaseAdmission();
+    await assert.rejects(
+      pending,
+      (error: any) => error?.code === 'SESSION_DELETE_IN_PROGRESS' && error?.retryable === true,
+    );
+    assert.equal(store.findOwnership(sessionId), undefined);
+    assert.equal(store.countMailboxIntents(), 0);
+    assert.equal(supervisor.getStatus(sessionId), undefined);
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore);
+
+    let forkSourceCalls = 0;
+    sessionManager.setSessionWorkerForkSourceProvider(async id => {
+      forkSourceCalls += 1;
+      const catalog = sessionManager.getSessionCatalog(id);
+      if (!catalog) return undefined;
+      await ingress.ensureWorkerOwnerWithinExistingAdmission(id);
+      await fs.copy(statePath, getSessionHistoryFilePath(id));
+      return readDetachedWorkerSession(id, catalog);
+    });
+    await assert.rejects(
+      () => sessionManager.forkSession(sessionId, 'claimed-source-regression'),
+      (error: any) => error?.code === 'SESSION_DELETE_IN_PROGRESS' && error?.retryable === true,
+    );
+    assert.equal(forkSourceCalls, 0, 'claimed source rejects before lifecycle-only Worker admission');
+    assert.equal(store.findOwnership(sessionId), undefined);
+
+    sessionManager.releaseSessionsForDestructiveLifecycle(claimId);
+    claimId = undefined;
+    const forkedId = await Promise.race([
+      sessionManager.forkSession(sessionId, 'identity-lock-regression'),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('fork source admission deadlocked')), 2_000)),
+    ]);
+    assert.equal(forkSourceCalls, 1);
+    assert.ok(sessionManager.getAllSessions().has(forkedId));
+    await sessionManager.deleteSession(forkedId);
+  } finally {
+    releaseAdmission();
+    sessionManager.setSessionWorkerForkSourceProvider(undefined);
+    if (claimId) sessionManager.releaseSessionsForDestructiveLifecycle(claimId);
+    await supervisor.shutdown(5_000).catch(() => {});
+    store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(getSessionHistoryFilePath(sessionId)).catch(() => {});
+    await fs.remove(root);
+  }
+});
+
+test('idle Main runtime compacts a real Worker archive through the canonical awaited plan engine', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-compact-')); const sessionId = 'worker-compact-real';
+  const initial = baseSession(sessionId); initial.historyVersion = 3; initial.promptCacheKey = '11111111-2222-4333-8444-555555555555';
+  initial.history = Array.from({ length: 12 }, (_, index) => ({
+    role: 'user' as const, parts: [{ text: `message-${index + 1} ${'payload '.repeat(180)}` }],
+    __meta: { seq: index + 1, timestamp: 1_700_000_000_000 + index },
+  }));
+  initial.nextMessageSeq = 13; initial.nextBlockId = 1; initial.meta.messageCount = 12;
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`); await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const plan = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 8,
+    summary: 'Canonical compacted summary.' }] };
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_SEED_ARCHIVE: '1', FOXWARM_TEST_COMPACT_PLAN: JSON.stringify(plan) },
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  const catalog = sessionManager.getAllSessions(); catalog.set(sessionId, { ...initial, history: [] });
+  const sessionsBefore = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
+  const originals = { getExistingSession: sessionManager.getExistingSession, saveSession: sessionManager.saveSession,
+    enqueueSessionItem: sessionManager.enqueueSessionItem };
+  let mainSemanticCalls = 0;
+  (sessionManager as any).getExistingSession = async () => { mainSemanticCalls += 1; throw new Error('Main hydration forbidden'); };
+  (sessionManager as any).saveSession = async () => { mainSemanticCalls += 1; throw new Error('Main save forbidden'); };
+  (sessionManager as any).enqueueSessionItem = async () => { mainSemanticCalls += 1; throw new Error('Main enqueue forbidden'); };
+  try {
+    await supervisor.reconcileStartupOwnerships(); const activated = await supervisor.ensureWorker(sessionId);
+    await supervisor.runPendingActivated(sessionId, { generation: activated.generation, incarnationId: activated.incarnationId });
+    await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
+    const result = await requestCompaction(sessionId, 0.3);
+    assert.deepEqual(result, { kind: 'worker', completed: true, compacted: true, messageCount: 6 });
+    const authority = await fs.readJson(statePath);
+    assert.equal(authority.historyVersion, 4); assert.equal(authority.promptCacheKey, '11111111-2222-4333-8444-555555555555');
+    assert.equal(authority.history[0].__meta.contextBlock.rawStartSeq, 1); assert.equal(authority.history[0].__meta.contextBlock.rawEndSeq, 8);
+    assert.match(JSON.stringify(authority.history.at(-1)?.parts), /compact-completed/);
+    assert.equal(authority.queue.some((item: any) => item.type === 'compact-commit'), false); assert.equal(store.countMailboxIntents(), 0);
+    const projection = supervisor.projectionRegistry.get(sessionId)!;
+    assert.equal(projection.generation, activated.generation); assert.equal(projection.projection?.messageCount, authority.history.length);
+    const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'));
+    const block = archive.prepare('SELECT id, raw_start_seq, raw_end_seq, summary, memory_facts_json FROM archive_blocks WHERE session_id=?').get(sessionId) as any;
+    archive.close(); assert.equal(block.raw_start_seq, 1); assert.equal(block.raw_end_seq, 8); assert.match(block.summary, /Canonical compacted summary/);
+    const liveEntry = (supervisor as any).entries.get(sessionId); liveEntry.activeCalls = 1;
+    await assert.rejects(() => requestCompaction(sessionId, 0.3), (error: any) => error?.code === 'SESSION_WORKER_COMPACTION_BUSY');
+    liveEntry.activeCalls = 0;
+    const toolNoise = await requestCompaction(sessionId, 0.3, true);
+    assert.equal(toolNoise.kind, 'tool-noise');
+    assert.equal(toolNoise.kind === 'tool-noise' ? toolNoise.result.replacedFunctionCalls : -1, 0);
+    assert.equal(toolNoise.kind === 'tool-noise' ? toolNoise.result.replacedFunctionResponses : -1, 0);
+    assert.equal(mainSemanticCalls, 0);
+    const sessionsAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null; assert.deepEqual(sessionsAfter, sessionsBefore);
+  } finally {
+    (sessionManager as any).getExistingSession = originals.getExistingSession; (sessionManager as any).saveSession = originals.saveSession;
+    (sessionManager as any).enqueueSessionItem = originals.enqueueSessionItem;
+    await shutdownSessionRuntime().catch(() => {}); await supervisor.shutdown(5_000).catch(() => {}); store.close(); catalog.delete(sessionId); await fs.remove(root);
+  }
+});
+
+test('Main submitAndRun ensures, spawns, and owns exact worker ingress without Main semantic fallback', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-ingress-'));
+  const sessionId = 'worker-ingress-real';
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root },
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  await fs.ensureFile(SESSIONS_FILE); const sessionsBefore = await fs.readFile(SESSIONS_FILE);
+  const originals = {
+    getExistingSession: sessionManager.getExistingSession, enqueueSessionItem: sessionManager.enqueueSessionItem,
+    saveSession: sessionManager.saveSession,
+  };
+  let mainSemanticCalls = 0;
+  (sessionManager as any).getExistingSession = async () => { mainSemanticCalls += 1; throw new Error('Main hydration forbidden'); };
+  (sessionManager as any).enqueueSessionItem = async () => { mainSemanticCalls += 1; throw new Error('Main enqueue forbidden'); };
+  (sessionManager as any).saveSession = async () => { mainSemanticCalls += 1; throw new Error('Main save forbidden'); };
+  const attachmentSends: any[] = [];
+  let observeAttachmentSend: (() => Promise<void>) | undefined;
+  setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
+  registerChannel('telegram-stage3', {
+    name: 'telegram-stage3', platform: 'telegram', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (conversationId, text, options) => {
+      attachmentSends.push({ conversationId, text, options });
+      await observeAttachmentSend?.();
+    },
+  });
+  try {
+    await supervisor.reconcileStartupOwnerships();
+    let invalidRunCalls = 0; let invalidOwnershipLookups = 0; let invalidEnqueueCalls = 0;
+    const originalPrecheckRun = supervisor.runPendingActivated.bind(supervisor);
+    const originalFindOwnership = store.findOwnership.bind(store); const originalEnqueueIntent = store.enqueueIntent.bind(store);
+    (supervisor as any).runPendingActivated = async (...args: any[]) => { invalidRunCalls += 1; return originalPrecheckRun(args[0], args[1], args[2]); };
+    (store as any).findOwnership = (...args: any[]) => { invalidOwnershipLookups += 1; return originalFindOwnership(args[0]); };
+    (store as any).enqueueIntent = (...args: any[]) => { invalidEnqueueCalls += 1; return originalEnqueueIntent(args[0], args[1], args[2], args[3]); };
+    const validRef = { imageId: 'image-ref', blobId: 'blob-ref', mimeType: 'image/png', byteLength: 12, sha256: 'a'.repeat(64), width: 2, height: 3 };
+    const validMeta = { imageId: 'image-ref', mimeType: 'image/png', width: 2, height: 3, sizeBytes: 12, sha256: 'a'.repeat(64) };
+    const validPartsItem = itemFor('valid normalized parts', {
+      platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'room', conversationId: 'room',
+      username: 'name', senderId: 'sender', weworkStreamId: 'stream', qqbotMessageId: 'message', preferDirectReply: true,
+    } as any, 'valid-client');
+    (validPartsItem.parts[0] as any).inlineDataRef = validRef; validPartsItem.parts[0].imageMeta = validMeta;
+    const {
+      preferDirectReply: _legacyDirectReply,
+      weworkStreamId: _legacyStreamId,
+      qqbotMessageId: _legacyMessageId,
+      ...currentSource
+    } = validPartsItem.source as any;
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validPartsItem }), {
+      sessionId,
+      item: { ...validPartsItem, source: currentSource },
+    });
+    const validMessageItem = { type: 'intersession' as const, sourceSessionId: 'origin', sourceSessionRelation: 'parent' as const, message: {
+      role: 'user' as const, parts: [{ system: 'canonical message' }], modelVisible: true, __meta: { timestamp: 1, seq: 2 },
+    } };
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validMessageItem }), { sessionId, item: validMessageItem });
+    const validSystemPayloadItem = { type: 'intersession' as const, message: {
+      role: 'user' as const, parts: [{ text: 'payload', systemPayload: true }, { system: 'ordinary system', systemPayload: false, phase: 'commentary' as const }],
+    } };
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validSystemPayloadItem }), { sessionId, item: validSystemPayloadItem });
+    const validExternalEventItem = {
+      type: 'background' as const,
+      externalEventId: 'remote-exec-completion:exec_12345678',
+      parts: [{ system: 'remote completion' }],
+    };
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validExternalEventItem }), { sessionId, item: validExternalEventItem });
+
+    const accessorPart: any = {}; Object.defineProperty(accessorPart, 'text', { enumerable: true, get() { throw new Error('accessor executed'); } });
+    const cyclicRef: any = { ...validRef }; cyclicRef.path = cyclicRef;
+    const symbolItem: any = itemFor('symbol', { platform: 'test', channelUserId: 'room' }, 'symbol'); symbolItem[Symbol('extra')] = true;
+    const invalidItems: any[] = [
+      { ...itemFor('extra', { platform: 'test', channelUserId: 'room' }, 'extra'), extra: true },
+      { type: 'user', parts: [{}] }, { type: 'intersession', message: {} },
+      { type: 'intersession', message: { role: 'user', parts: [{ text: 'x' }], extra: true } },
+      { type: 'intersession', message: { role: 'user', parts: [{ system: 'inverted payload', systemPayload: true }] } },
+      { type: 'intersession', message: { role: 'model', parts: [{ text: 'invalid phase', phase: 'analysis' }] } },
+      { type: 'user', parts: [{ text: 'x' }], message: { role: 'user', parts: [{ text: 'x' }] } },
+      { type: 'user', parts: [{ text: 'x' }], clientMessageId: 7 },
+      { type: 'user', parts: [{ text: 'x' }], clientMessageId: 'x'.repeat(513) },
+      { type: 'user', parts: [{ text: 'x' }], source: { platform: 'test', channelUserId: 7 } },
+      { type: 'user', parts: [{ text: 'x' }], source: { platform: 'test', channelUserId: 'x'.repeat(513) } },
+      { type: 'intersession', parts: [{ system: 'x' }], sourceSessionId: 7 },
+      { type: 'intersession', parts: [{ system: 'x' }], sourceSessionRelation: 'unknown' },
+      { type: 'background', parts: [{ system: 'x' }], sourceSessionRelation: 'parent' },
+      { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 7 },
+      { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 'x'.repeat(257) },
+      { type: 'background', parts: [{ system: 'x' }], externalEventId: 7 },
+      { type: 'background', parts: [{ system: 'x' }], externalEventId: 'x'.repeat(513) },
+      { type: 'user', parts: [{ text: 'x', inlineDataRef: { ...validRef, sha256: 'bad' } }] },
+      { type: 'user', parts: [{ text: 'x', imageMeta: { ...validMeta, width: Number.POSITIVE_INFINITY } }] },
+      { type: 'user', parts: [accessorPart] },
+      { type: 'user', parts: [{ text: 'x', inlineDataRef: cyclicRef }] },
+      { type: 'user', parts: [{ text: () => 'x' }] }, symbolItem,
+      { type: 'user', parts: [{ text: 'x'.repeat(1024 * 1024 + 1) }] },
+    ];
+    for (const invalidItem of invalidItems) {
+      await assert.rejects(() => submitAndRun(sessionId, invalidItem), (error: any) => ['SESSION_WORKER_INGRESS_INVALID', 'SESSION_WORKER_INGRESS_TOO_LARGE'].includes(error?.code));
+    }
+    await assert.rejects(() => submitAndRun('x'.repeat(257), validPartsItem), (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID');
+    await assert.rejects(() => submitAndRun(` ${sessionId}`, validPartsItem), (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID');
+
+    let sourceGetterCalls = 0;
+    const getterSource: any = { channelUserId: 'room' };
+    Object.defineProperty(getterSource, 'platform', { enumerable: true, get() { sourceGetterCalls += 1; return 'test'; } });
+    const symbolSource: any = { platform: 'test', channelUserId: 'room' }; symbolSource[Symbol('extra')] = true;
+    const nonEnumerableSource: any = { platform: 'test', channelUserId: 'room' };
+    Object.defineProperty(nonEnumerableSource, 'hidden', { enumerable: false, value: true });
+    for (const source of [getterSource, symbolSource, nonEnumerableSource]) {
+      await assert.rejects(
+        () => submitAndRun(sessionId, { type: 'user', parts: [{ text: 'source probe' }], source } as any),
+        (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID',
+      );
+    }
+    assert.equal(sourceGetterCalls, 0);
+    const requestRegistry = new RpcServiceRegistry();
+    requestRegistry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry: supervisor.projectionRegistry, ingress } }));
+    const requestTransport = new LocalRpcTransport(requestRegistry); const requestClient = new RpcClient(sessionRuntimeServiceDescriptor, requestTransport);
+    try {
+      await assert.rejects(
+        () => requestClient.call('submitAndRun', { sessionId, item: validPartsItem, extra: true } as any),
+        (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID',
+      );
+    } finally { requestTransport.close(); }
+    assert.equal(store.countMailboxIntents(), 0);
+    assert.equal(invalidRunCalls, 0); assert.equal(invalidOwnershipLookups, 0); assert.equal(invalidEnqueueCalls, 0);
+    assert.equal(mainSemanticCalls, 0);
+    (supervisor as any).runPendingActivated = originalPrecheckRun;
+    (store as any).findOwnership = originalFindOwnership; (store as any).enqueueIntent = originalEnqueueIntent;
+    await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
+    await assert.rejects(
+      () => submitAndRun(sessionId, { type: 'compact-commit', parts: [{ text: 'compact' }] } as any),
+      (error: any) => error?.code === 'SESSION_WORKER_QUEUE_UNSUPPORTED',
+    );
+    assert.equal(store.countMailboxIntents(), 0); assert.equal(mainSemanticCalls, 0);
+    attachChannel('telegram-stage3', 'room', sessionId); await saveChannels();
+    const qqSource: any = {
+      platform: 'qqbot', channelId: 'qq-main', channelType: 'qqbot', channelUserId: 'c2c:user', conversationId: 'c2c:user',
+      senderId: 'sender-qq', qqbotMessageId: 'qq-inbound-1',
+    };
+    let firstDeliveryObservation: any;
+    observeAttachmentSend = async () => {
+      firstDeliveryObservation = {
+        authority: await fs.readJson(statePath), ownership: store.getOwnership(sessionId),
+        projection: supervisor.projectionRegistry.get(sessionId)?.projection,
+      };
+    };
+    // The first ordinary submission ensures and spawns the inactive exact Worker itself.
+    const first = await submitAndRun(sessionId, itemFor('first ingress', qqSource, 'client-1'));
+    observeAttachmentSend = undefined;
+    const activated = supervisor.getStatus(sessionId)!;
+    assert.equal(activated.ready, true); assert.equal(store.getOwnership(sessionId).state, 'ready');
+    assert.equal(first.generation, activated.generation); assert.equal(first.busy, false); assert.equal(first.messageCount, 2);
+    assert.equal(store.countMailboxIntents(), 1); assert.equal(store.listPendingIntents(sessionId).length, 0);
+    assert.equal(attachmentSends.length, 1); assert.equal(attachmentSends[0].text, 'deterministic child answer');
+    assert.equal(attachmentSends[0].options.turnFinal, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(attachmentSends[0].options, 'qqbotMessageId'), false);
+    const firstAuthority = await fs.readJson(statePath);
+    assert.equal(firstAuthority.lastAppliedMailboxId, first.mailboxIntentId);
+    assert.equal(firstAuthority.history[0].__meta.clientMessageId, 'client-1');
+    assert.equal(firstAuthority.history[0].parts.find((part: any) => part.imageMeta)?.imageMeta.imageId, 'image-client-1');
+    assert.equal(store.getOwnership(sessionId).mailboxCursor, first.mailboxIntentId);
+    assert.equal(supervisor.projectionRegistry.get(sessionId)?.projection?.messageCount, 2);
+    assert.equal(firstDeliveryObservation.authority.lastAppliedMailboxId, first.mailboxIntentId);
+    assert.equal(firstDeliveryObservation.ownership.mailboxCursor, first.mailboxIntentId);
+    assert.equal(firstDeliveryObservation.projection.messageCount, 2);
+    assert.equal(firstDeliveryObservation.projection.busy, true, 'final delivery precedes existing busy release');
+    assert.equal(mainSemanticCalls, 0);
+    assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
+
+    const sourceA: QueueSource = { platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'a', conversationId: 'a', senderId: 'a' };
+    const sourceB: any = { platform: 'wework', channelId: 'wework', channelType: 'wework', channelUserId: 'b', conversationId: 'b', senderId: 'b', weworkStreamId: 'stream-b' };
+    const [concurrentA, concurrentB] = await Promise.all([
+      submitAndRun(sessionId, itemFor('concurrent a', sourceA, 'client-a')),
+      submitAndRun(sessionId, itemFor('concurrent b', sourceB, 'client-b')),
+    ]);
+    assert.equal(concurrentA.generation, activated.generation); assert.equal(concurrentB.generation, activated.generation);
+    assert.equal(supervisor.listStatuses().length, 1); assert.equal(supervisor.getStatus(sessionId)?.pid, activated.pid);
+    assert.equal(store.countMailboxIntents(), 3); assert.equal((await fs.readJson(statePath)).history.length, 5);
+    assert.equal(attachmentSends.length, 2, 'different ingress sources share one ordinary Worker provider turn');
+
+    const fallbackSource: QueueSource = { platform: 'telegram', channelId: 'telegram-stage3', channelType: 'telegram', channelUserId: 'room', conversationId: 'room', senderId: 'fallback' };
+    await submitAndRun(sessionId, itemFor('attachment ingress', fallbackSource, 'client-attachment'));
+    assert.equal(attachmentSends.length, 3); assert.equal(attachmentSends.at(-1).text, 'deterministic child answer');
+
+    const ambiguousSource: QueueSource = { ...sourceA, channelUserId: 'ambiguous', conversationId: 'ambiguous', senderId: 'ambiguous' };
+    const originalRun = supervisor.runPendingActivated.bind(supervisor);
+    (supervisor as any).runPendingActivated = async (...args: any[]) => {
+      await originalRun(args[0], args[1], args[2]);
+      throw new Error('injected ambiguous reply loss');
+    };
+    const sendsBeforeAmbiguity = attachmentSends.length; const cursorBeforeAmbiguity = store.getOwnership(sessionId).mailboxCursor;
+    await assert.rejects(() => submitAndRun(sessionId, itemFor('ambiguous ingress', ambiguousSource, 'client-ambiguous')), /ambiguous reply loss/);
+    (supervisor as any).runPendingActivated = originalRun;
+    const afterAmbiguity = await fs.readJson(statePath);
+    assert.ok(afterAmbiguity.lastAppliedMailboxId > cursorBeforeAmbiguity);
+    assert.equal(store.getOwnership(sessionId).mailboxCursor, afterAmbiguity.lastAppliedMailboxId);
+    assert.equal(attachmentSends.length, sendsBeforeAmbiguity + 1);
+    assert.equal(mainSemanticCalls, 0);
+    assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
+
+    const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
+    try {
+      const count = Number((archive.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);
+      assert.equal(count, afterAmbiguity.history.length);
+    } finally { archive.close(); }
+  } finally {
+    (sessionManager as any).getExistingSession = originals.getExistingSession;
+    (sessionManager as any).enqueueSessionItem = originals.enqueueSessionItem;
+    (sessionManager as any).saveSession = originals.saveSession;
+    await shutdownSessionRuntime().catch(() => {});
+    await supervisor.shutdown(5_000).catch(() => {}); store.close();
+    unregisterChannel('telegram-stage3'); resetChannelsForTests(); setChannelsStoreForTests(null);
+    await fs.remove(root);
+  }
+});

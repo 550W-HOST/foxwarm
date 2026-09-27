@@ -1,0 +1,123 @@
+# Thread: node communication
+
+## Overview
+
+This thread owns the authenticated remote transport contract among the master [nodes module](../modules/nodes.md), full [CLI node](../modules/cli-node.md), and lightweight [browser node](../modules/browser-node.md). The authenticated WebSocket transport is one implementation behind the generic Node provider boundary; it is not the definition of every Node.
+
+## Pairing and authentication
+
+1. A new client connects to `/node_ws` in pairing mode and sends `pair_request` with its supported core Node-protocol range.
+2. The master creates a pending record; an operator lists and approves/rejects it.
+3. The approved client claims `nodeId` plus plaintext `authToken` once and stores it locally.
+4. The master persists only the token hash.
+5. The client reconnects in authenticated mode and sends `node_register` with the same core protocol range, tool definitions, and optional versioned service capabilities.
+6. The master negotiates the newest intersecting core protocol generation before registering the live connection in `nodesManager`. A missing range is legacy generation 1.
+7. A compatible Node becomes ready. An authenticated incompatible Node stays connected in an `upgrade-required` quarantine for heartbeat and diagnostics, but advertises no executable tools/services and cannot be selected or dispatched.
+
+## Model-tool flow
+
+1. Main's generic Node registry resolves the exact selected Node to the authenticated remote provider after current-node/isolation permission evaluation.
+2. Master dispatch sends `tool_call` with call/session IDs.
+3. CLI node resolves shared `nodeTools` and optionally asks its TUI interceptor.
+4. Browser node resolves only its advertised `browser_*` handlers and applies extension tab policy.
+5. `tool_call_response` or `tool_call_error` resolves the master request. Current nodes write canonical structured image fields. The master applies the isolated old-node result reader described in [D-node-thread-tool-result-compatibility](#d-node-thread-tool-result-compatibility) only at this remote response ingress.
+
+The browser extension's `browser_*` tools and shared Puppeteer `browse_*` tools are distinct current surfaces.
+
+## File transfer and backend services
+
+- CLI node supports bidirectional whole-file transfer as one base64 payload plus SHA-256 metadata in a JSON request/response. Browser node does not implement file transfer.
+- Nodes may advertise fixed versioned backend services separately from model tools.
+- Code filesystem/Git use correlated `node_service_request` responses.
+- Optional remote PTY lifecycle uses requests; latency-sensitive input/resize/helper acknowledgements use `node_service_command`; output/exit/helper-open use `node_service_event`.
+- Backend service calls do not pass through model-tool approval and reject absent/old capability versions instead of falling back to master paths.
+- Terminal `code` helper uses node-local capability IPC and existing authenticated transports; it receives no master/browser credential and targets one explicit Code-capable terminal attachment.
+
+## Session events
+
+CLI node's local loopback trigger and other authenticated node senders use `session_event`. Master permits delivery only when the target session currently selects that node or belongs to an isolated agent bound to it. The authenticated connection's node ID, not a payload claim, is the authorization input.
+
+Remote background exec completion is a narrower protocol exception, not a generic session-event grant. Before dispatch, Master reserves the generated exec ID across the source canonical Session and its bounded aliases, then signs a capability scoped to the authenticated node, original source ID, and exec. A Main-side reservation collision allocates another ID before either Node can start a process. Only after the CLI node's exec crosses the timeout boundary does it send the optional structured `remote_exec_background` notice before the ordinary tool response; Master verifies the authenticated socket/capability and transitions that exact reservation to active rather than creating liveness from an unsolicited notice. Foreground success and definite pre-start rejection release the reservation; ambiguous transport outcomes retain it without claiming completion. The CLI node persists the exec/capability, submits one deterministic completion event through correlated request/ACK transport, and retains an unexpired entry for retry until Master durably accepts it. The shared manager instead drops a background tracking record strictly after 24 hours without inspecting process state or sending a completion event. Main applies the same TTL to transient remote reservations/claims from activation when available, otherwise reservation, so Node-side expiry does not leave wait liveness accepted indefinitely. Durable completion admission clears unexpired reservation or active state. Disconnect does not clear unexpired active/outcome-unknown state or imply completion. Local Session rename keeps the original capability ID while current canonical/alias ownership remains valid for waits; deletion clears all matching transient state. The registry is not persisted or reconstructed after Main restart. Master derives authorization from the signed start-time grant rather than mutable `currentNode`. The deterministic mailbox identity suppresses an exact retry while its row remains retained; the exact Session owner separately bounds its authoritative receipt field to the newest 32 accepted IDs.
+
+## Heartbeat
+
+- Master and CLI node both send WebSocket protocol ping frames every 30 seconds and require liveness within 10 seconds.
+- Browser WebSocket automatically answers master's protocol ping.
+- The browser extension also sends JSON `ping` and expects JSON `pong`; the master currently has no matching handler. This known mismatch can force extension reconnects and is not documented as a working symmetric heartbeat.
+
+## Approved-node administration
+
+- Remove deletes the approved hash, invalidates an unclaimed handoff, and closes the online runtime.
+- Move preserves approved metadata/hash under a new ID and closes the old runtime. The client must update/restart or re-pair because no protocol rewrites local credentials.
+
+## Tool-result compatibility
+
+- Current CLI and browser-extension screenshot writers emit `inlineData` with `mimeType`; they never write text markers or source-specific base64 fields.
+- `src/nodes/legacyToolResultCompatibility.ts` is the one read-old boundary for remote node results. It recognizes prior `{image, encoding, format}`, `{screenshot, mimeType}`, `__IMAGE__`, and `__SCREENSHOT__` wire shapes and converts them to the current structured form before generic tool-result processing.
+- The generic image pipeline does not recognize those old node shapes. Identical text from master tools or MCP remains ordinary tool output.
+- The compatibility file, its test, and its single `NodesManager.handleToolResponse` call form one deletable unit. They can be removed together after supported nodes and extensions have all upgraded to structured writers.
+
+## Bootstrap and setup
+
+The master serves current launch scripts, compose, PowerShell, and a minimal dynamic source archive. The `skills/node-setup/SKILL.md` source skill is the single operator-facing pairing/bootstrap workflow. Agent-isolated worker creation begins only after an approved node is online.
+
+## Units
+
+- [src-nodes-manager](../units/src-nodes-manager.md)
+- [src-node-providers](../units/src-node-providers.md)
+- [src-nodes-misc](../units/src-nodes-misc.md)
+- [src-nodes-registry](../units/src-nodes-registry.md)
+- [CLI node client](../units/cli-node-client.md)
+- [CLI node proxy](../units/cli-node-master-proxy.md)
+- [CLI node TUI](../units/cli-node-tui.md)
+- [browser node extension](../units/browser-node-extension.md)
+- [shared node tools](../units/shared-node-tools.md)
+- [shared Node protocol](../units/shared-node-protocol.md)
+- [terminal router](../units/src-terminal-router.md)
+
+## Design decisions
+
+### D-node-thread-tool-service-split
+
+Model tools are agent-callable and may pass client approval. Backend services are fixed capability-versioned protocols for trusted master features.
+
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](./tool-dispatch.md#d-dispatch-generic-node-providers).
+
+### D-node-thread-authenticated-identity
+
+Master authorization binds to the authenticated WebSocket node identity. Node IDs in event/tool payloads are data, not authority.
+
+### D-node-thread-core-protocol-compatibility
+
+[2026-09-19] Current Master and CLI Node offer core range 1-3; current peers negotiate 3 and authenticated older peers retain their exact v1/v2 internal Session paths. Authentication alone is not compatibility: malformed or disjoint offers remain connected but quarantine executable capabilities until upgraded. A negotiated-v3 authenticated CLI additionally advertises `externalToolOwner:1` only when it can execute without a Session-only interceptor. Main rejects absent capability, older negotiated v1/v2, unavailable/unadvertised tools and mixed or malformed Session/external owners before effect. The disjoint `{kind:'external',externalId,contextId}` request has no invented Agent, Session or filesystem sandbox. The authenticated remote wire supports first-party CLI read/write/edit/apply_patch/exec and Node default cwd, but not browser tabs or master/executable-provider external effects. Already-ready resident Docker-worktree Nodes use separate Main-local primitive ownership without this remote wire; see [inbound Node execution](../units/src-mcp-inbound-node-service.md).
+
+External command ownership uses a separate signed capability binding authenticated Node ID, actual external identity, live context UUID and exec ID. Main reserves before dispatch, retains at most 20 bounded records per context, and accepts background/final receipts only from that authenticated Node with the matching signature. The 20-record bound is retention, not a lifetime execution quota: reserving another command evicts the oldest completed record, while 20 unresolved records reject another dispatch before effect. An evicted ID is unavailable for query; context release still notifies Nodes used by earlier evicted commands. Query rechecks the original concrete `node:.../exec` rule and scoped ID; disconnecting one HTTP POST or selecting another Node does not kill an already-started process or grant its output to a different context. Node-reported final cwd updates the selected context only if its selection generation has not changed. DELETE, idle expiry and shutdown synchronously fence the context before releasing its result authority; authorization and provider-resolution awaits recheck that fence, and the authenticated Node transport checks it immediately before its WebSocket send, so neither a late reservation nor an unsent effect can escape disposal. A command already sent is not killed; best-effort Node cleanup removes local artifacts only after confirmed process exit and retains artifacts whose tracking expires without confirmed exit. Main restart does not restore result authority; unsupported providers and unknown outcomes never fall back to master or retry effects. This is process-local ownership, not OS isolation or durable command recovery.
+
+Core protocol compatibility spans request IDs, results, execution IDs, session events and service framing; backend service versions remain subordinate feature metadata.
+
+Generation 1 uses the official pre-generation-2 transport/completion contract. Persistent exec is its only current compatibility bridge: Master first sends the ordinary one-hyphen petname, falls back to a newly allocated `exec_<petname>` only after the exact legacy pre-start validation error `Persistent exec ID is invalid.`, and retries a legacy allocation only after the exact pre-start duplicate message for that attempted ID. Structured collision retry remains the generation-2 contract. Timeouts, transport ambiguity, generic errors, and any response that could follow process start never retry. Each actual exec, capability, ACK, mailbox event, receipt, recovery record, timeout result, and returned ID therefore uses one exact successful identity without an alias.
+
+### D-node-thread-remote-exec-completion
+
+Remote exec completion uses an acknowledged, retryable, start-authorized protocol. The authenticated socket identity and a Master-signed capability bind one node, source session, and exec ID; changing `currentNode` after start does not revoke that completion route. Master acknowledges only after the deterministic external event is durably accepted. The deterministic external event ID is the mailbox intent identity, so an exact retained mailbox row suppresses its retry before or after application. The exact Session owner also retains the newest 32 accepted IDs, guaranteeing suppression after mailbox cleanup while an ID remains in that authoritative field. Eviction from Session receipts does not promise that an older retry will be re-admitted because its exact mailbox row may still exist. Generic node-originated session events retain the ordinary current-node or isolated-agent ownership rule.
+
+[2026-09-02] Main reserves each remote exec identity before dispatch across the source canonical Session and bounded aliases. The signed capability binds authenticated node, original Session ID, and exact exec; the record separately retains Main-derived Agent ownership. The official Node's post-timeout notice may only transition that exact reservation to active, so cross-Node generator collisions cannot start duplicate IDs and a late registration after completion cannot recreate state. Foreground success from a Node advertising structured background registration, synchronous send failure, and definite pre-start rejection release reserved state; disconnect/timeout ambiguity retains outcome-unknown state; durable completion clears any state only after admission. A current Main conservatively retains an old Node's structurally ambiguous successful exec response until completion, deletion, or Main restart, preventing identity reuse during rolling upgrade without parsing model-visible text. Local rename rebinds Agent ownership while validation includes the current canonical ID and aliases, and Session deletion clears matching reservations/claims. Local and Worker wait validation consult only active records after exact-owner local active-exec and queued-completion checks. This adds optional capability/fields/messages that old peers ignore, so the bounded core range remains 1-2.
+
+[2026-09-06] Background exec tracking has a strict 24-hour TTL without a new protocol message. The Node removes any `notifyOnCompletion` registry record whose age from `startedAt` is greater than 24 hours before status/liveness inspection, does not kill the process, and can no longer emit its completion event. Main opportunistically prunes transient remote exec state on existing reserve/activate/validate/clear access paths using `activatedAt` when present and otherwise `reservedAt`, with the same strict boundary. There is no timer, persistence, or core protocol generation change. During rolling upgrade, a newer Node may drop its record while an older Main can retain its process-local claim until completion, deletion, or Main restart; a newer Main bounds claims from older Nodes even if they continue tracking longer.
+
+### D-node-thread-rename
+
+Approved-node rename is registry move plus disconnect, not live protocol migration; local client credentials remain an operator concern.
+
+### D-node-thread-helper-ipc
+
+The terminal helper has only local capability IPC. Path resolution and remote routing stay inside trusted node/master processes and one Code control owner.
+
+### D-node-thread-tool-result-compatibility
+
+Official node and browser-extension tool writers use the current structured `inlineData` / `inlineDataItems` result fields with camel-case `mimeType`. Old source-specific image payloads are read only by one pure compatibility adapter at the master remote-node response ingress. Generic tool processing accepts only the current structured fields. Keep the adapter isolated so deleting its file, tests, and one ingress call is the complete migration from read-old/write-new compatibility to a strict current-node requirement.
+
+## Open questions
+
+- Should the master add a JSON ping/pong compatibility message for browser clients, or should the extension remove its client-side JSON wait and rely on server protocol heartbeat plus normal socket close/error signals?
+- Should a future API intentionally unify extension `browser_*` and shared `browse_*` tools, and if so which persisted/tool-schema compatibility contract is required?

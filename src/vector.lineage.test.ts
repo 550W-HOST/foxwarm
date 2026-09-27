@@ -42,6 +42,7 @@ function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, raw
 test('mixed vector search works after bootstrapping legacy archive data into sqlite store', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-lineage-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  await fs.outputFile(path.join(tempRoot, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n');
   let embeddingRequestCount = 0;
 
   const makeEmbedding = (text: string): number[] => {
@@ -67,6 +68,7 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
 
   try {
     const config = await import('./config');
+    const migrations = await import('./migrations');
     const archiveStore = await import('./session/archiveStore');
     const vector = await import('./vector');
 
@@ -97,14 +99,15 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
       },
     }, { spaces: 2 });
 
+    await migrations.runStartupMigrations();
     await archiveStore.initArchiveStore();
-    await vector.init();
+    await vector.init({ enabled: true });
     await vector.waitForStartupArchiveVectorBackfill();
 
     assert.ok(embeddingRequestCount > 0, 'startup bootstrap import should automatically backfill vector rows');
 
     const embeddingRequestCountAfterFirstInit = embeddingRequestCount;
-    await vector.init();
+    await vector.init({ enabled: true });
     assert.equal(
       embeddingRequestCount,
       embeddingRequestCountAfterFirstInit,
@@ -126,11 +129,11 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
     assert(alphaResults.every(result => !String(result.text || '').includes('alpha forbidden future')),
       'child current-session lineage search must not leak parent post-fork rows after bootstrap import');
 
-    const status = vector.getArchiveIndexStatus('child');
+    const status = await vector.getArchiveIndexStatus('child');
     assert.equal(status.lastIndexedBlockId, 1, 'child should inherit imported parent block checkpoint');
     assert.equal(status.lastIndexedSeq, 4, 'child checkpoint should advance on imported local child messages');
 
-    const parentStatus = vector.getArchiveIndexStatus('parent');
+    const parentStatus = await vector.getArchiveIndexStatus('parent');
     assert.equal(parentStatus.lastIndexedSeq, 3, 'parent startup backfill should advance raw checkpoint');
     assert.equal(parentStatus.lastIndexedBlockId, 1, 'parent startup backfill should advance block checkpoint');
   } finally {

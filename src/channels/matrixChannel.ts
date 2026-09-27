@@ -146,7 +146,7 @@ export class MatrixChannel implements Channel {
     });
 
     // Auto-accept invites
-    this.client.on('RoomMember.membership', async (event: any, member: any) => {
+    this.client.on('RoomMember.membership', async (_event: any, member: any) => {
       if (member.userId === this.userId && member.membership === 'invite') {
         try {
           await this.client.joinRoom(member.roomId);

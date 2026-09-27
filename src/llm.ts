@@ -8,12 +8,14 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH } from './config';
-import { nodesManager } from './nodes/manager';
+import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkToolPermission, checkPathAccess } from './isolatedCheck';
+import { checkGenericToolAuthorizationForSession, checkPathAccess } from './isolatedCheck';
+import type { ResolvedTool } from './tools/resolvedTools';
+import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -21,13 +23,59 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
+import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
+import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
+import {
+    buildOpenAIImageGenerationTool,
+    externalizeGeneratedImageItems,
+    formatGeneratedImageFailureNote,
+    formatGeneratedImageModelPlaceholder,
+    GeneratedImageReplayError,
+    isImageGenerationCallItem,
+    isCompletedImageGenerationItem,
+} from './llmProviders/openaiImages';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
+import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
+import { formatLocalTimestamp } from './utils/localTime';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
+import { deduplicateProviderRequestImages } from './providerImageDedup';
 import { guardToolOutputForModel } from './toolOutputGuard';
-import { sanitizeLoneSurrogatesInPayload } from './utils/unicode';
+import { isToolAuthorizationPolicyUnavailable, TOOL_AUTH_POLICY_UNAVAILABLE } from './toolAuthorization';
+import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
+import {
+    getToolCancellationArgumentError,
+    isSingleToolCancellationRequested,
+    isWholeBatchCancellationRequested,
+    stripToolCancellationArguments,
+    validateInterAgentHandoffConfirmationForMode,
+} from './toolCallControls';
+import {
+    beginVirtualRoutingRequest,
+    clearVirtualRoutingState,
+    recordVirtualTargetFailure,
+    recordVirtualTargetSuccess,
+    selectVirtualTarget,
+    VirtualRoutingRequest,
+    VirtualTargetSelection,
+} from './modelRouting';
+import {
+    appendLlmAttemptResult,
+    appendLlmAttemptStart,
+    beginLlmRequestJournal,
+    LlmRequestPurpose,
+} from './llmRequestJournal';
+import { toPersistedLlmRequestTiming } from './llmRequestTiming';
+import {
+    buildCurrentModelSnapshot,
+    filterConditionalMemorySource,
+    readCurrentModelSnapshotId,
+} from './conditionalMemory';
+import { isSessionAuthorityPostCommitError } from './session/stateFile';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -121,20 +169,196 @@ function getPromptCacheKeyForSessionId(sessionId?: string): string {
     return generatePromptCacheKey();
 }
 
+/**
+ * Recursively replace `${VAR_NAME}` placeholders in strings within an object.
+ * Only string values are processed; non-string values are left as-is.
+ * Supported variables are defined in the `vars` map (key = variable name without `${}`).
+ */
+function expandTemplateVariables<T>(obj: T, vars: Record<string, string>): T {
+    if (typeof obj === 'string') {
+        return obj.replace(/\$\{(\w+)\}/g, (match, varName: string) => {
+            return Object.prototype.hasOwnProperty.call(vars, varName) ? vars[varName] : match;
+        }) as unknown as T;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(item => expandTemplateVariables(item, vars)) as unknown as T;
+    }
+    if (obj !== null && typeof obj === 'object') {
+        const result: Record<string, any> = {};
+        for (const [key, value] of Object.entries(obj)) {
+            result[key] = expandTemplateVariables(value, vars);
+        }
+        return result as unknown as T;
+    }
+    return obj;
+}
+
 type RequestLlmOnceOptions = {
     contents: Message[];
     systemPrompt: string;
     model?: string;
+    effort?: ModelEffort;
     modelEntryOverride?: ModelConfigEntry;
+    modelsConfigOverride?: ModelsConfig;
     sessionId?: string;
     promptCacheKey?: string;
+    turnId?: string;
     iteration?: number;
     toolDefinitions?: ToolDefinition[];
     notifySessionEvents?: boolean;
     registerAbortController?: boolean;
+    abortSignal?: AbortSignal;
     maxRetries?: number;
     timeoutMs?: number;
+    onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+    purpose?: LlmRequestPurpose;
+    compactPlanBackground?: boolean;
+    currentSessionEffects?: CurrentSessionEffects;
+    resolveSystemPromptForModel?: (modelId: string) => Promise<string>;
 };
+
+function resolveProviderPromptCacheKey(
+    providerType: string,
+    request: Pick<RequestLlmOnceOptions, 'sessionId' | 'purpose' | 'compactPlanBackground'>,
+    promptCacheKey: string,
+): string {
+    if (providerType !== 'openai-ws' || !request.sessionId) return promptCacheKey;
+
+    let source = request.sessionId;
+    if (request.purpose === 'btw') source += '--btw';
+    else if (request.purpose === 'compact-plan' && request.compactPlanBackground) source += '--compact-plan';
+    return crypto.createHash('sha256').update(source).digest('hex');
+}
+
+type InternalLlmResult = {
+    result: ChatResult;
+    /**
+     * Provider-local completion held outside the reusable pool until the
+     * exact assistant Message has crossed the canonical history boundary.
+     * This callback is an optimization finalizer only: its failure must never
+     * turn an already committed assistant Message into a failed model turn.
+     */
+    finalizeHistoryAppend?: OpenAIWsHistoryAppendFinalizer;
+};
+
+function settleHistoryAppendFinalizer(
+    finalizer: OpenAIWsHistoryAppendFinalizer | undefined,
+    outcome: OpenAIWsHistoryAppendOutcome,
+    context: string,
+): void {
+    if (!finalizer) return;
+    try {
+        finalizer(outcome);
+    } catch (error) {
+        logger.warn({ err: error }, context);
+    }
+}
+
+/** In-process current-session effects used by the normal turn path. Not an RPC contract. */
+export interface CurrentSessionEffects {
+    placement: 'local' | 'session-worker';
+    appendMessage(session: Session, message: Message): Promise<void>;
+    persistSession(session: Session): Promise<void>;
+    persistSessionStrict?(session: Session): Promise<void>;
+    notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
+    registerAbortController(sessionId: string, controller: AbortController): void;
+    clearAbortController(sessionId: string, controller: AbortController): void;
+    clearWaitById(sessionId: string | undefined, waitId: string): Promise<boolean>;
+    execRuntime?: import('./execManager').ExecRuntime;
+}
+
+export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
+    appendMessages(session: Session, messages: Message[]): Promise<void>;
+    appendQueuedMessages(session: Session, messages: Message[]): Promise<void>;
+    updateBusy(session: Session, busy: boolean): Promise<void>;
+    startWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
+    notifyHistoryUpdate(sessionId: string, message: Message): void;
+    setRuntimeState: typeof sessionManager.setActiveSessionRuntimeState;
+    clearRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
+}
+
+export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects {
+    const clearRuntimeState = (sessionId: string) => sessionManager.clearActiveSessionRuntimeState(sessionId);
+    const persistSession = async (session: Session) => {
+        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+            await sessionManager.saveSession(session);
+        }
+    };
+    const persistSessionStrict = async (session: Session) => {
+        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+            await sessionManager.saveSessionForSessionCritical(session);
+        }
+    };
+    return {
+        placement: 'local',
+        appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
+        appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
+        appendQueuedMessages: (session, messages) => sessionManager.appendQueuedSessionMessages(session, messages),
+        persistSession,
+        persistSessionStrict,
+        updateBusy: (session, busy) => {
+            if (busy) sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'start new work');
+            return sessionManager.updateSessionBusyStateForSession(
+                session, busy, () => persistSession(session), clearRuntimeState,
+            );
+        },
+        startWait: (session, options) => sessionManager.startSessionWaitForSession(session, options, () => persistSession(session)),
+        notifyHistoryUpdate: (sessionId, message) => sessionManager.notifyHistoryUpdate(sessionId, message),
+        notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
+        setRuntimeState: (sessionId, state) => sessionManager.setActiveSessionRuntimeState(sessionId, state),
+        clearRuntimeState,
+        registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
+        clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
+        clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),
+        execRuntime: require('./execManager').getDefaultExecRuntime(),
+    };
+}
+
+export type LlmRetryEvent = {
+    attempt: number;
+    maxRetries: number;
+    nextAttempt?: number;
+    delayMs?: number;
+    final?: boolean;
+    kind: 'http-error' | 'request-error' | 'response-error';
+    reason: string;
+    status?: string;
+    modelId?: string;
+    virtualModelKey?: string;
+};
+
+export type LlmRequestErrorDetails = {
+    modelId?: string;
+    attempt?: number;
+    maxRetries?: number;
+    kind?: LlmRetryEvent['kind'];
+    status?: string;
+    attempts?: unknown[];
+};
+
+export class LlmRequestError extends Error {
+    readonly modelId?: string;
+    readonly attempt?: number;
+    readonly maxRetries?: number;
+    readonly kind?: LlmRetryEvent['kind'];
+    readonly status?: string;
+    readonly attempts?: unknown[];
+
+    constructor(message: string, details: LlmRequestErrorDetails = {}) {
+        super(message);
+        this.name = 'LlmRequestError';
+        this.modelId = details.modelId;
+        this.attempt = details.attempt;
+        this.maxRetries = details.maxRetries;
+        this.kind = details.kind;
+        this.status = details.status;
+        this.attempts = details.attempts;
+    }
+}
+
+export function isLlmRequestError(error: unknown): error is LlmRequestError {
+    return error instanceof LlmRequestError || (typeof error === 'object' && error !== null && (error as any).name === 'LlmRequestError');
+}
 
 type ModelStreamProgressSnapshot = {
     reasoning?: string;
@@ -143,7 +367,158 @@ type ModelStreamProgressSnapshot = {
 };
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
+const MODEL_STREAM_TOOL_ARGS_THROTTLE_MS = 1_000;
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_LLM_MAX_ATTEMPTS = 6;
+// Compatibility alias: maxRetries has always meant total attempts, not retries
+// after an initial request. Keep the public name while making the semantics
+// explicit internally.
+export const DEFAULT_LLM_MAX_RETRIES = DEFAULT_LLM_MAX_ATTEMPTS;
+const LLM_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000];
+const MAX_RAW_STREAM_LOG_CHARS = 5 * 1024 * 1024;
+
+export function getLlmRetryDelayMs(failedAttempt: number): number {
+    const index = Math.max(0, failedAttempt - 1);
+    if (index < LLM_RETRY_DELAYS_MS.length) {
+        return LLM_RETRY_DELAYS_MS[index];
+    }
+
+    const lastDelay = LLM_RETRY_DELAYS_MS[LLM_RETRY_DELAYS_MS.length - 1];
+    const multiplier = 2 ** (index - LLM_RETRY_DELAYS_MS.length + 1);
+    return Math.min(60_000, lastDelay * multiplier);
+}
+
+function summarizeRetryReason(value: unknown, maxGraphemes = 240): string {
+    const text = typeof value === 'string'
+        ? value
+        : value instanceof Error
+        ? value.message
+        : String(value || 'Unknown error');
+    return truncateUnicodeSafeWithEllipsis(text.replace(/\s+/g, ' ').trim(), maxGraphemes);
+}
+
+type RawStreamCapture = {
+    appendChunk(text: string): void;
+    appendSseBlock(block: string): void;
+    snapshot(): any;
+};
+
+function createRawStreamLogCapture(maxChars = MAX_RAW_STREAM_LOG_CHARS): RawStreamCapture {
+    let rawBody = '';
+    let rawBodyChars = 0;
+    let rawBodyTruncated = false;
+    const sseBlocks: string[] = [];
+    let sseBlocksChars = 0;
+    let sseBlocksTruncated = false;
+
+    const appendText = (current: string, currentChars: number, text: string) => {
+        if (!text || currentChars >= maxChars) {
+            return {
+                next: current,
+                chars: currentChars,
+                truncated: !!text,
+            };
+        }
+
+        const remaining = maxChars - currentChars;
+        if (text.length <= remaining) {
+            return {
+                next: `${current}${text}`,
+                chars: currentChars + text.length,
+                truncated: false,
+            };
+        }
+
+        return {
+            next: `${current}${text.slice(0, remaining)}`,
+            chars: maxChars,
+            truncated: true,
+        };
+    };
+
+    return {
+        appendChunk(text: string) {
+            const appended = appendText(rawBody, rawBodyChars, text);
+            rawBody = appended.next;
+            rawBodyChars = appended.chars;
+            rawBodyTruncated = rawBodyTruncated || appended.truncated;
+        },
+        appendSseBlock(block: string) {
+            if (!block) return;
+            if (sseBlocksChars >= maxChars) {
+                sseBlocksTruncated = true;
+                return;
+            }
+
+            const remaining = maxChars - sseBlocksChars;
+            const stored = block.length <= remaining ? block : block.slice(0, remaining);
+            sseBlocks.push(stored);
+            sseBlocksChars += stored.length;
+            if (stored.length < block.length) {
+                sseBlocksTruncated = true;
+            }
+        },
+        snapshot() {
+            return {
+                format: 'sse',
+                body: rawBody,
+                sseBlocks,
+                truncated: rawBodyTruncated || sseBlocksTruncated,
+                maxChars,
+            };
+        },
+    };
+}
+
+/**
+ * Content-free raw-stream capture used when a request declares the hosted
+ * image generation tool. Base64 may span many chunks, so truncation plus
+ * post-hoc redaction cannot prove that no image payload was persisted. Only
+ * bounded structural diagnostics are retained.
+ */
+function createRawStreamDiagnosticsCapture(): RawStreamCapture {
+    let chunkCount = 0;
+    let chunkCharCount = 0;
+    let sseBlockCount = 0;
+    let nonJsonBlockCount = 0;
+    const eventTypes = new Map<string, number>();
+
+    return {
+        appendChunk(text: string) {
+            if (!text) return;
+            chunkCount += 1;
+            chunkCharCount += text.length;
+        },
+        appendSseBlock(block: string) {
+            if (!block) return;
+            sseBlockCount += 1;
+            for (const rawLine of block.replace(/\r/g, '').split('\n')) {
+                if (!rawLine.startsWith('data:')) continue;
+                const payload = rawLine.slice(5).trim();
+                if (!payload || payload === '[DONE]') continue;
+                try {
+                    const event = JSON.parse(payload);
+                    const type = typeof event?.type === 'string' && event.type ? event.type.slice(0, 80) : 'unknown';
+                    eventTypes.set(type, (eventTypes.get(type) || 0) + 1);
+                } catch {
+                    nonJsonBlockCount += 1;
+                }
+            }
+        },
+        snapshot() {
+            return {
+                format: 'sse-diagnostics',
+                hostedImageGeneration: true,
+                contentOmitted: true,
+                chunkCount,
+                chunkCharCount,
+                sseBlockCount,
+                nonJsonBlockCount,
+                eventTypes: Object.fromEntries([...eventTypes.entries()].sort(([left], [right]) => left.localeCompare(right))),
+            };
+        },
+    };
+}
 
 function newModelStreamId(iteration: number): string {
     return `ms_${iteration}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -158,6 +533,7 @@ function normalizeModelStreamToolCalls(toolCalls: ModelStreamToolCall[] | undefi
         index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
         ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
         ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
+        ...(typeof toolCall.arguments === 'string' ? { arguments: toolCall.arguments } : {}),
     }));
 }
 
@@ -171,36 +547,107 @@ function areModelStreamToolCallsEqual(left: ModelStreamToolCall[] = [], right: M
         return !!rightCall
             && leftCall.index === rightCall.index
             && (leftCall.id || '') === (rightCall.id || '')
-            && (leftCall.name || '') === (rightCall.name || '');
+            && (leftCall.name || '') === (rightCall.name || '')
+            && (leftCall.arguments || '') === (rightCall.arguments || '');
     });
 }
 
-function createModelStreamEventEmitter(args: {
+function makeModelStreamTextDelta(previous: string, current: string) {
+    if (previous === current) return undefined;
+    if (current.startsWith(previous)) return { offset: previous.length, text: current.slice(previous.length) };
+    return { offset: 0, text: current };
+}
+
+export function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
     iteration: number;
+    llmRequestId: string;
+    currentSessionEffects?: CurrentSessionEffects;
+    now?: () => number;
+    setTimer?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+    clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }) {
+    const now = args.now || Date.now;
+    const setTimer = args.setTimer || setTimeout;
+    const clearTimer = args.clearTimer || clearTimeout;
     const streamId = newModelStreamId(args.iteration);
     let latestSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
+    let emittedSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let hasPendingUpdate = false;
+    let toolArgsTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSentAt = 0;
+    let lastToolArgsSentAt = 0;
+    let sequence = 0;
+    let startedAt = now();
+    const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
+        if (!args.sessionId) return;
+        if (args.currentSessionEffects) args.currentSessionEffects.notifySessionEvent(args.sessionId, event);
+        else sessionManager.notifySessionEvent(args.sessionId, event);
+    };
 
-    const notify = () => {
+    const notify = (forceToolArgs = false) => {
         if (!args.enabled || !args.sessionId) {
             return;
         }
-
-        sessionManager.notifySessionEvent(args.sessionId, {
+        const reasoning = latestSnapshot.reasoning || '';
+        const text = latestSnapshot.text || '';
+        const previousReasoning = emittedSnapshot.reasoning || '';
+        const previousText = emittedSnapshot.text || '';
+        const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+        const previousToolCalls = normalizeModelStreamToolCalls(emittedSnapshot.toolCalls);
+        const previousByIndex = new Map(previousToolCalls.map(call => [call.index, call]));
+        const toolArgsDue = forceToolArgs || now() - lastToolArgsSentAt >= MODEL_STREAM_TOOL_ARGS_THROTTLE_MS;
+        const toolCallDeltas = currentToolCalls.flatMap(call => {
+            const previous = previousByIndex.get(call.index);
+            const identityChanged = !previous || previous.id !== call.id || previous.name !== call.name;
+            const argumentsDelta = toolArgsDue
+                ? makeModelStreamTextDelta(previous?.arguments || '', call.arguments || '')
+                : undefined;
+            if (!identityChanged && !argumentsDelta) return [];
+            return [{
+                index: call.index,
+                ...(identityChanged && call.id ? { id: call.id } : {}),
+                ...(identityChanged && call.name ? { name: call.name } : {}),
+                ...(argumentsDelta ? { argumentsDelta } : {}),
+            }];
+        });
+        const reasoningDelta = makeModelStreamTextDelta(previousReasoning, reasoning);
+        const textDelta = makeModelStreamTextDelta(previousText, text);
+        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0) return;
+        notifySessionEvent({
             type: 'model-stream-update',
             streamId,
             iteration: args.iteration,
-            reasoning: latestSnapshot.reasoning || '',
-            text: latestSnapshot.text || '',
-            toolCalls: normalizeModelStreamToolCalls(latestSnapshot.toolCalls),
+            streamVersion: 2,
+            sequenceStart: sequence + 1,
+            sequence: ++sequence,
+            startedAt,
+            llmRequestId: args.llmRequestId,
+            ...(reasoningDelta ? { reasoningDelta } : {}),
+            ...(textDelta ? { textDelta } : {}),
+            ...(toolCallDeltas.length ? { toolCallDeltas } : {}),
         });
-        hasPendingUpdate = false;
-        lastSentAt = Date.now();
+        emittedSnapshot = {
+            reasoning,
+            text,
+            toolCalls: currentToolCalls.map(call => ({
+                ...call,
+                arguments: toolArgsDue ? call.arguments : previousByIndex.get(call.index)?.arguments,
+            })),
+        };
+        updateModelStreamDraft(args.sessionId, {
+            streamId,
+            iteration: args.iteration,
+            sequence,
+            startedAt,
+            llmRequestId: args.llmRequestId,
+            reasoning,
+            text,
+            toolCalls: currentToolCalls,
+        });
+        lastSentAt = now();
+        if (toolArgsDue && toolCallDeltas.some(call => call.argumentsDelta)) lastToolArgsSentAt = lastSentAt;
     };
 
     const scheduleNotify = () => {
@@ -208,16 +655,21 @@ function createModelStreamEventEmitter(args: {
             return;
         }
 
-        hasPendingUpdate = true;
         if (timer) {
             return;
         }
 
-        const elapsed = Date.now() - lastSentAt;
+        const elapsed = now() - lastSentAt;
         const delay = Math.max(0, MODEL_STREAM_EVENT_THROTTLE_MS - elapsed);
-        timer = setTimeout(() => {
+        timer = setTimer(() => {
             timer = null;
             notify();
+            const latestCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+            const emittedCalls = normalizeModelStreamToolCalls(emittedSnapshot.toolCalls);
+            if (!areModelStreamToolCallsEqual(latestCalls, emittedCalls) && !toolArgsTimer) {
+                const argsDelay = Math.max(0, MODEL_STREAM_TOOL_ARGS_THROTTLE_MS - (now() - lastToolArgsSentAt));
+                toolArgsTimer = setTimer(() => { toolArgsTimer = null; notify(true); }, argsDelay);
+            }
         }, delay);
     };
 
@@ -229,17 +681,29 @@ function createModelStreamEventEmitter(args: {
             }
 
             latestSnapshot = { reasoning: '', text: '', toolCalls: [] };
-            hasPendingUpdate = false;
+            emittedSnapshot = { reasoning: '', text: '', toolCalls: [] };
+            startedAt = now();
             if (timer) {
-                clearTimeout(timer);
+                clearTimer(timer);
                 timer = null;
             }
-            sessionManager.notifySessionEvent(args.sessionId, {
+            if (toolArgsTimer) {
+                clearTimer(toolArgsTimer);
+                toolArgsTimer = null;
+            }
+            notifySessionEvent({
                 type: 'model-stream-reset',
                 streamId,
                 iteration: args.iteration,
+                streamVersion: 2,
+                sequenceStart: sequence + 1,
+                sequence: ++sequence,
+                startedAt,
+                llmRequestId: args.llmRequestId,
             });
-            lastSentAt = Date.now();
+            resetModelStreamDraft(args.sessionId, streamId, args.iteration, sequence, startedAt, args.llmRequestId);
+            lastSentAt = now();
+            lastToolArgsSentAt = lastSentAt;
         },
         emit(snapshot: ModelStreamProgressSnapshot) {
             const nextSnapshot = {
@@ -255,16 +719,34 @@ function createModelStreamEventEmitter(args: {
             }
 
             latestSnapshot = nextSnapshot;
+            if (args.enabled && args.sessionId) {
+                updateModelStreamDraft(args.sessionId, {
+                    streamId,
+                    iteration: args.iteration,
+                    sequence,
+                    startedAt,
+                    llmRequestId: args.llmRequestId,
+                    reasoning: nextSnapshot.reasoning || '',
+                    text: nextSnapshot.text || '',
+                    toolCalls: nextSnapshot.toolCalls || [],
+                });
+            }
             scheduleNotify();
         },
         flush() {
             if (timer) {
-                clearTimeout(timer);
+                clearTimer(timer);
                 timer = null;
             }
-            if (hasPendingUpdate) {
-                notify();
+            if (toolArgsTimer) {
+                clearTimer(toolArgsTimer);
+                toolArgsTimer = null;
             }
+            notify(true);
+        },
+        close() {
+            this.flush();
+            if (args.sessionId) clearModelStreamDraft(args.sessionId, streamId);
         },
     };
 }
@@ -288,7 +770,7 @@ async function resolvePromptCacheKeyForRequest(options: RequestLlmOnceOptions): 
 }
 
 export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
-    if (providerType === 'openai' || providerType === 'openai-responses') {
+    if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-ws') {
         return 'responses';
     }
 
@@ -300,13 +782,14 @@ export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-c
 }
 
 function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbackModelKey: string): string {
+    const canonicalModelKey = typeof modelEntry?.canonicalModelKey === 'string' ? modelEntry.canonicalModelKey.trim() : '';
+    if (canonicalModelKey) return canonicalModelKey;
+
     const providerKey = typeof modelEntry?.providerKey === 'string' ? modelEntry.providerKey.trim() : '';
     const modelName = typeof modelEntry?.model === 'string' ? modelEntry.model.trim() : '';
 
     if (providerKey && modelName) {
-        return modelName.startsWith(`${providerKey}/`)
-            ? modelName
-            : `${providerKey}/${modelName}`;
+        return `${providerKey}/${modelName}`;
     }
 
     if (providerKey) {
@@ -314,6 +797,42 @@ function getModelIdForMetadata(modelEntry: ModelConfigEntry | undefined, fallbac
     }
 
     return fallbackModelKey;
+}
+
+/**
+ * Resolves a truthful concrete snapshot identity without selecting a virtual
+ * route. Virtual sessions without a recorded generation identity defer until
+ * an actual provider attempt selects a leaf.
+ */
+export function resolveSessionSnapshotModelId(session: Pick<Session, 'model' | 'persistentMemorySnapshot'>): string | undefined {
+    const recordedModelId = readCurrentModelSnapshotId(session.persistentMemorySnapshot || '');
+    if (recordedModelId) return recordedModelId;
+
+    return resolveConcreteModelIdForSnapshot(session.model);
+}
+
+export function resolveConcreteModelIdForSnapshot(model?: string, modelsConfigOverride?: ModelsConfig): string | undefined {
+    const resolved = modelsConfigOverride
+        ? (() => {
+            const currentKey = model && modelsConfigOverride.models[model] ? model : modelsConfigOverride.default;
+            return { currentKey, modelEntry: modelsConfigOverride.models[currentKey] };
+        })()
+        : resolveModelConfig(model);
+    if (!resolved.modelEntry || isVirtualModelConfigEntry(resolved.modelEntry)) return undefined;
+    return getModelIdForMetadata(resolved.modelEntry, resolved.currentKey);
+}
+
+export async function buildSessionSystemPromptSnapshotForSession(
+    session: Pick<Session, 'agent' | 'id' | 'model' | 'persistentMemorySnapshot' | 'systemPromptFiles'>,
+): Promise<string | undefined> {
+    const modelId = resolveSessionSnapshotModelId(session);
+    if (!modelId) return undefined;
+    return buildSessionSystemPromptSnapshot({
+        agentName: session.agent || 'main',
+        sessionId: session.id,
+        systemPromptFiles: session.systemPromptFiles,
+        modelId,
+    });
 }
 
 function readStreamAsText(stream: any, signal: AbortSignal): Promise<string> {
@@ -533,13 +1052,15 @@ function shouldInjectMemoryFileForSession(metadata: MemoryFileFrontMatter, fileP
     return true;
 }
 
-async function readSessionFilteredMemoryFile(filePath: string, sessionId?: string): Promise<string | null> {
+async function readSessionFilteredMemoryFile(filePath: string, sessionId: string | undefined, modelId: string): Promise<string | null> {
     const content = await fs.readFile(filePath, 'utf8');
     const { metadata, body } = parseMemoryFileFrontMatter(content, filePath);
-    return shouldInjectMemoryFileForSession(metadata, filePath, sessionId) ? body : null;
+    return shouldInjectMemoryFileForSession(metadata, filePath, sessionId)
+        ? filterConditionalMemorySource(body, modelId)
+        : null;
 }
 
-async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[], sessionId?: string): Promise<string> {
+async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles: string[], modelId: string, sessionId?: string): Promise<string> {
     let combined = '';
     const restrictToAgentDir = sessionManager.isAgentIsolated(agentName);
 
@@ -557,7 +1078,7 @@ async function appendConfiguredMemoryFiles(agentName: string, systemPromptFiles:
             throw new Error(`systemPromptFiles entry \`${fileReference}\` is not a file.`);
         }
 
-        const content = await readSessionFilteredMemoryFile(filePath, sessionId);
+        const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
         if (content !== null) {
             combined += formatMemoryBlock(filePath, agentName, 'self', content);
         }
@@ -574,14 +1095,16 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
 
     let combined = '';
     combined += 'The following skills provide specialized instructions for specific tasks.\n';
-    combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
-    combined += 'with the skill\'s name to load its full instructions:\n';
+    combined += 'When a task matches a skill\'s description, call skill with action="load"\n';
+    combined += 'and the skill\'s name to load its full instructions and resource list.\n';
+    combined += 'Read listed resources only when the loaded skill or current task needs them:\n';
     combined += '<available_skills>\n';
 
     for (const skill of visibleSkills) {
         combined += '  <skill>';
-        combined += `    <name>${escapeXmlText(skill.name)}</name>`;
-        combined += `    <description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += `<name>${escapeXmlText(skill.name)}</name>`;
+        combined += `<description>${escapeXmlText(skill.description || '')}</description>`;
+        combined += `<source>${escapeXmlText(skill.sourceType)}</source>`;
         combined += '</skill>\n';
     }
 
@@ -589,17 +1112,17 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
     return combined;
 }
 
-async function appendDefaultMemoryFiles(agentName: string, sessionId?: string): Promise<string> {
+async function appendDefaultMemoryFiles(agentName: string, modelId: string, sessionId?: string): Promise<string> {
     const mainMemoryDir = MAIN_AGENT_MEMORY_DIR;
     let combined = '';
 
     if (await fs.pathExists(AGENTS_SYSTEM_PROMPT_PATH)) {
-        const content = await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8');
+        const content = filterConditionalMemorySource(await fs.readFile(AGENTS_SYSTEM_PROMPT_PATH, 'utf8'), modelId);
         combined += formatMemoryBlock(AGENTS_SYSTEM_PROMPT_PATH, 'framework', 'inherited', content);
     } else {
         const mainSystemPath = path.join(mainMemoryDir, '00_SYSTEM.md');
         if (await fs.pathExists(mainSystemPath)) {
-            const content = await fs.readFile(mainSystemPath, 'utf8');
+            const content = filterConditionalMemorySource(await fs.readFile(mainSystemPath, 'utf8'), modelId);
             const kind = agentName === 'main' ? 'self' : 'inherited';
             combined += formatMemoryBlock(mainSystemPath, 'main', kind, content);
         }
@@ -608,7 +1131,7 @@ async function appendDefaultMemoryFiles(agentName: string, sessionId?: string): 
     const inheritChain = sessionManager.getAgentInheritanceChain(agentName);
     for (const inheritedAgentName of inheritChain) {
         const kind = inheritedAgentName === agentName ? 'self' : 'inherited';
-        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind, sessionId);
+        combined += await appendMemoryFilesForAgent(inheritedAgentName, kind, modelId, sessionId);
     }
 
     return combined;
@@ -618,15 +1141,16 @@ export async function buildSessionSystemPromptSnapshot(options: {
     agentName?: string;
     sessionId?: string;
     systemPromptFiles?: string[] | string;
-} = {}): Promise<string> {
+    modelId: string;
+}): Promise<string> {
     const agentName = options.agentName || 'main';
     const sessionId = options.sessionId;
     const normalizedSystemPromptFiles = normalizeSystemPromptFiles(options.systemPromptFiles);
     const hasCustomMemorySources = options.systemPromptFiles !== undefined;
 
     const memoryBlocks = hasCustomMemorySources
-        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [], sessionId)
-        : await appendDefaultMemoryFiles(agentName, sessionId);
+        ? await appendConfiguredMemoryFiles(agentName, normalizedSystemPromptFiles || [], options.modelId, sessionId)
+        : await appendDefaultMemoryFiles(agentName, options.modelId, sessionId);
     const skillCatalog = await appendSkillCatalogForAgent(agentName);
     const dirInfo = '\n\n--- DIRECTORIES ---\n- agent_folder: ' + getAgentDir(agentName) + '\n';
     const archiveInfo = [
@@ -634,7 +1158,7 @@ export async function buildSessionSystemPromptSnapshot(options: {
         '',
         '--- EARLIER CONTEXT RECALL ---',
         '- Long sessions use layered context: older conversation is archived and may be compacted into CTX-BLOCK summaries to keep the active prompt small.',
-        '- Compaction is system-initiated: Foxwarm forks a temporary compact thread to generate summary blocks, then the main session gets a bold `COMPACTION COMPLETED` identity notice and continues the agent task.',
+        '- Compaction is system-initiated: Foxwarm forks a temporary compact thread to generate summary blocks, then the main session gets a `<foxwarm-system kind="session-boundary" event="compact-completed" ... />` identity notice and continues the agent task.',
         '- Block levels are hierarchical: lower/newer blocks are closer to raw messages; higher/older blocks are coarser summaries. Drill down step by step with `recall`.',
         '- Use `recall({"target":"overview"})` for archived ranges/examples, and `recall({"target":"B#123"})` for a CTX-BLOCK; use `msg:B#123` or `msg#100-120` only when you need raw detail.',
         '- Compaction/recall preserves traceable session history; it is not agent memory. Do not write routine process notes, temporary progress, or completed details to memory just to preserve context.',
@@ -642,9 +1166,10 @@ export async function buildSessionSystemPromptSnapshot(options: {
         '- If you need lower-level archive helpers, use `search_tools(...)` and then `call_tool(...)`.',
         '',
     ].join('\n');
-    return [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
+    const body = [memoryBlocks.trim(), skillCatalog.trim(), `${dirInfo}${archiveInfo}`.trim()]
         .filter(Boolean)
         .join('\n\n');
+    return buildCurrentModelSnapshot(options.modelId, body);
 }
 
 function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string; message: string } } {
@@ -658,28 +1183,7 @@ function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string
     };
 }
 
-function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string {
-    if (nodeParam === undefined || nodeParam === null) {
-        return currentNode;
-    }
-
-    if (typeof nodeParam !== 'string') {
-        return String(nodeParam) || currentNode;
-    }
-
-    const trimmed = nodeParam.trim();
-    if (!trimmed) {
-        return currentNode;
-    }
-
-    if (trimmed.toLowerCase() === 'current') {
-        return currentNode;
-    }
-
-    return trimmed;
-}
-
-async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', sessionId?: string): Promise<string> {
+async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', modelId: string, sessionId?: string): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
         return '';
@@ -692,7 +1196,7 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     for (const file of mdFiles) {
         if (file.toLowerCase() === 'onboot.md') continue;
         const filePath = path.join(agentMemoryDir, file);
-        const content = await readSessionFilteredMemoryFile(filePath, sessionId);
+        const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
         if (content !== null) {
             combined += formatMemoryBlock(filePath, agentName, kind, content);
         }
@@ -706,7 +1210,7 @@ async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFi
     try {
         const timestamp = formatTime();
         const requestPath = await getRecentLogPath(LOGS_DIR, `${timestamp}_iter${iteration}_req.json`);
-        await fs.writeJson(requestPath, data, { spaces: 2 });
+        await fs.writeJson(requestPath, redactProviderImagesForLog(data), { spaces: 2 });
         const responseFileName = `${timestamp}_iter${iteration}_res.json`;
         return {
             requestPath,
@@ -718,12 +1222,49 @@ async function logRequest(data: any, iteration = 0): Promise<LlmInteractionLogFi
     }
 }
 
+function isRedactableImagePayloadField(owner: Record<string, any>, key: string, entry: unknown): boolean {
+    if (typeof entry !== 'string' || entry.length === 0) return false;
+    // Partial-preview and Images-API fields are always binary payloads.
+    if (key === 'partial_image_b64' || key === 'b64_json') return true;
+    // A `result` string is image data only on a hosted image generation item;
+    // unrelated business function responses keep their own `result` fields.
+    return key === 'result' && owner.type === 'image_generation_call';
+}
+
+export function redactProviderImagesForLog(value: any): any {
+    if (typeof value === 'string') {
+        return /^data:image\/[a-z0-9.+-]+;base64,/iu.test(value)
+            ? value.replace(/;base64,.+$/su, ';base64,[image omitted from diagnostics]')
+            : value;
+    }
+    if (Array.isArray(value)) return value.map(item => redactProviderImagesForLog(item));
+    if (!value || typeof value !== 'object') return value;
+
+    const result: Record<string, any> = {};
+    for (const [key, entry] of Object.entries(value)) {
+        if (key === 'data'
+            && typeof entry === 'string'
+            && value.type === 'base64'
+            && typeof value.media_type === 'string'
+            && value.media_type.startsWith('image/')) {
+            result[key] = '[image omitted from diagnostics]';
+        } else if (isRedactableImagePayloadField(value, key, entry)) {
+            // Hosted image payloads must never reach persisted diagnostics,
+            // regardless of whether image generation is currently enabled.
+            result[key] = '[image omitted from diagnostics]';
+        } else {
+            result[key] = redactProviderImagesForLog(entry);
+        }
+    }
+    return result;
+}
+
 async function logResponse(data: any, logFiles: LlmInteractionLogFiles | null) {
     if (!logFiles) return;
 
     try {
         logFiles.responsePath = await getRecentLogPath(LOGS_DIR, path.basename(logFiles.responsePath));
-        await fs.writeJson(logFiles.responsePath, data, { spaces: 2 });
+        await fs.writeJson(logFiles.responsePath, redactProviderImagesForLog(data), { spaces: 2 });
     } catch (e) {
         logger.error({ err: e }, 'Failed to log LLM response');
     }
@@ -747,10 +1288,10 @@ export function fixToolCalls(contents: Message[]): Message[] {
     const isSkippableSystemInterruption = (message: Message | null | undefined): boolean => {
         if (!message || message.role !== 'user' || !message.parts?.length) return false;
         return message.parts.every((part: MessagePart) => {
-            if (part.functionCall || part.functionResponse || part.inlineData || part.thinking) return false;
+            if (part.functionCall || part.functionResponse || part.inlineData || part.inlineDataRef || part.thinking) return false;
             if (part.system) return true;
             if (isSystemPayloadTextPart(part)) return true;
-            return typeof part.text === 'string' && part.text.startsWith('[SYSTEM:');
+            return typeof part.text === 'string' && (part.text.startsWith('[SYSTEM:') || isFoxwarmMetadataLine(part.text));
         });
     };
 
@@ -828,13 +1369,88 @@ export function fixToolCalls(contents: Message[]): Message[] {
     return fixed as Message[];
 }
 
+function getHistoricalConcreteModelId(message: Message): string | undefined {
+    const modelId = message.role === 'model' ? message.__meta?.modelId : undefined;
+    return typeof modelId === 'string' && modelId.length > 0 && modelId === modelId.trim()
+        ? modelId
+        : undefined;
+}
+
+/**
+ * Build an attempt-local provider history. Internal message metadata is never
+ * serialized, while model-specific reasoning artifacts are retained only when
+ * their concrete source is absent/legacy or exactly matches this destination.
+ */
+function prepareHistoryForConcreteModel(contents: Message[], destinationModelId: string): Message[] {
+    const prepared: Message[] = [];
+
+    for (const original of contents) {
+        const sourceModelId = getHistoricalConcreteModelId(original);
+        const { __meta: _internalMeta, ...withoutInternalMeta } = original;
+        if (!sourceModelId || sourceModelId === destinationModelId) {
+            prepared.push(withoutInternalMeta);
+            continue;
+        }
+
+        const { providerMeta: _messageProviderMeta, ...withoutProviderMeta } = withoutInternalMeta;
+        const parts = withoutProviderMeta.parts
+            .map(part => {
+                const { thinking: _thinking, providerMeta, ...rest } = part;
+                if (!providerMeta) return rest;
+                const {
+                    thinkingSummaries: _thinkingSummaries,
+                    encryptedThinking: _encryptedThinking,
+                    signature: _signature,
+                    openaiResponses: _openaiResponses,
+                    ...remainingProviderMeta
+                } = providerMeta;
+                return Object.keys(remainingProviderMeta).length > 0
+                    ? { ...rest, providerMeta: remainingProviderMeta }
+                    : rest;
+            })
+            .filter(part => Object.keys(part).length > 0);
+
+        const legacyContent = (withoutProviderMeta as Message & { content?: unknown }).content;
+        const hasLegacyContent = typeof legacyContent === 'string'
+            ? legacyContent.length > 0
+            : Array.isArray(legacyContent)
+            ? legacyContent.length > 0
+            : legacyContent !== undefined && legacyContent !== null;
+        if (parts.length === 0 && !hasLegacyContent) {
+            continue;
+        }
+        prepared.push({ ...withoutProviderMeta, parts });
+    }
+
+    return prepared;
+}
+
 /**
  * Convert internal message format to Anthropic/Minimax format
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, functionCall, functionResponse }] }
  * Anthropic format: { role: 'user'|'assistant'|'user', content: string | array }
  */
-function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
-    const anthropicMessages = [];
+export function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'anthropic');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
+    const anthropicMessages: AnthropicMessage[] = [];
+
+    const asContentBlocks = (value: any): AnthropicContentBlock[] => {
+        if (Array.isArray(value)) {
+            return value;
+        }
+        return [{ type: 'text', text: String(value ?? '') }];
+    };
+    const formatPreviousLlmRequestPrefix = (part: MessagePart): string | undefined => {
+        const timing = part.functionResponse?.previousLlmRequest;
+        if (!timing || typeof timing.time !== 'string' || !Number.isFinite(timing.durationMs)) return undefined;
+        return formatFoxwarmSystemTag({
+            kind: 'time',
+            time: timing.time,
+            prevLLMReqTime: `${(Math.max(0, timing.durationMs) / 1000).toFixed(1)}s`,
+        });
+    };
     
     for (const msg of contents) {
         let role = msg.role as AnthropicMessage['role'] | Message['role'];
@@ -843,9 +1459,10 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
         let content = [];
         const imagePartsByToolUseId = new Map<string, MessagePart[]>();
+        const emittedToolImageIds = new Set<string>();
         if (msg.role === 'tool') {
             for (const part of msg.parts || []) {
-                if (!part.inlineData || !part.toolUseId) {
+                if ((!part.inlineData && !isDeduplicated(part)) || !part.toolUseId) {
                     continue;
                 }
                 const grouped = imagePartsByToolUseId.get(part.toolUseId) || [];
@@ -864,7 +1481,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
             // Handle system/meta parts by merging them back into user text for providers without developer messages
             if (part.system) {
-                content.push({ type: 'text', text: `[SYSTEM: ${part.system}]` });
+                content.push({ type: 'text', text: formatSystemPartForModel(part.system) });
             }
 
             // Handle text
@@ -886,11 +1503,37 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
                 const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
-                const toolResult = {
+                const timingPrefix = formatPreviousLlmRequestPrefix(part);
+                const repeatedToolImages = emittedToolImageIds.has(toolUseId);
+                const associatedImages = imagePartsByToolUseId.get(toolUseId) || [];
+                const outputText = appendImageGuidanceText(
+                    associatedImages,
+                    formatToolResponsePayload(resp),
+                    repeatedToolImages ? () => true : isDeduplicated,
+                );
+                const images = repeatedToolImages
+                    ? []
+                    : associatedImages;
+                emittedToolImageIds.add(toolUseId);
+                const toolResult: any = {
                     type: 'tool_result',
                     tool_use_id: toolUseId,
-                    content: appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp))
+                    content: timingPrefix ? `${timingPrefix}${outputText ? `\n${outputText}` : ''}` : outputText,
                 };
+                if (images.length > 0) {
+                    toolResult.content = [
+                        ...(timingPrefix ? [{ type: 'text', text: timingPrefix }] : []),
+                        ...(outputText ? [{ type: 'text', text: outputText }] : []),
+                        ...images.filter(image => !!image.inlineData).map(image => ({
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                media_type: image.inlineData!.mimeType || image.inlineData!.mime_type || 'image/jpeg',
+                                data: image.inlineData!.data,
+                            },
+                        })),
+                    ];
+                }
                 if (config.baseUrl?.startsWith('https://api.kimi.com/')) {
                     if (!content.find(x => x.type === 'thinking')) {
                         (toolResult as any).reasoning_content = '';
@@ -901,6 +1544,17 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
             // Handle image data - convert internal format to Anthropic format
             if (part.inlineData) {
+                if (msg.role === 'tool' && part.toolUseId) {
+                    // Tool-result images are emitted with their matching result
+                    // above, so an annotated prefix remains first-visible.
+                    continue;
+                }
+                if (msg.role === 'model' && part.imageMeta?.origin === 'generated') {
+                    // Cross-provider edit is out of V1 scope. Describe the image
+                    // honestly instead of sending an assistant image block.
+                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                    continue;
+                }
                 content.push({
                     type: 'image',
                     source: {
@@ -923,7 +1577,14 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             content = (msg as any).content || ' ';
         }
         
-        anthropicMessages.push({ role, content });
+        const previous: AnthropicMessage | undefined = anthropicMessages[anthropicMessages.length - 1];
+        if (previous?.role === role) {
+            // Anthropic requires alternating roles. Keep canonical session
+            // messages separate, and normalize only this outbound payload.
+            previous.content = [...asContentBlocks(previous.content), ...asContentBlocks(content)];
+        } else {
+            anthropicMessages.push({ role, content });
+        }
     }
     
     return anthropicMessages;
@@ -943,184 +1604,550 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 /**
  * Execute tools and return results as a single message with multiple parts
  */
-export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
-    const parts = [];
+const PARALLEL_EXEC_LIMIT = 4;
+
+type ToolExecutionSnapshot = {
+    currentNode: string;
+    cwd?: string;
+};
+
+type PreparedToolCall = {
+    call: FunctionCall;
+    index: number;
+    toolId: string;
+    resolved?: ResolvedTool;
+    toolArgs: Record<string, any>;
+    sessionId: string;
+    executionNode: string;
+    result?: any;
+    sessionSnapshot?: ToolExecutionSnapshot;
+    placementError?: any;
+};
+
+type ExecutedToolCall = PreparedToolCall & {
+    result: any;
+    executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
+    imageParts: MessagePart[];
+    stopCurrentTurn: boolean;
+    waitForReply: boolean;
+    explicitWaitId?: string;
+    successfulSendToSessionTarget?: string;
+    successfulWaitAfterSendTarget?: string;
+    successfulFinishAfterSend: boolean;
+    deferredExecCwdSync?: { nextCwd: string };
+    fatalCurrentTurn?: { code: string; message: string };
+};
+
+function normalizeExecutedToolResult(rawResult: any): any {
+    if (rawResult === undefined) return { output: '(No output)' };
+    if (rawResult === null) return { output: null };
+    if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
+        return { output: rawResult };
+    }
+    if (typeof rawResult === 'object') return rawResult;
+    return { output: String(rawResult) };
+}
+
+function formatToolArgPreviewValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value === undefined) return 'undefined';
+    try {
+        const serialized = JSON.stringify(value);
+        return typeof serialized === 'string' ? serialized : String(value);
+    } catch {
+        return String(value);
+    }
+}
+
+function buildToolArgsPreview(call: FunctionCall): string {
+    let argValue: unknown = '';
+    if (call.argsParseError && typeof call.rawArgsText === 'string') {
+        argValue = call.rawArgsText;
+    } else if (call.name === 'exec') {
+        argValue = call.args?.command;
+    } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
+        argValue = call.args?.filePath;
+    } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
+        argValue = typeof call.args?.input === 'string' ? call.args.input : '';
+    } else if (call.name === 'read' || call.name === 'read_memory') {
+        const { filePath, startLine, endLine } = call.args || {};
+        argValue = (filePath ?? '') + (startLine ? ` (lines ${startLine}-${endLine})` : '');
+    } else if (call.args) {
+        const keys = Object.keys(call.args);
+        if (keys.length === 1) {
+            argValue = call.args[keys[0]];
+        } else {
+            argValue = keys.map(key => `${key}: ${formatToolArgPreviewValue(call.args[key])}`).join('\n');
+        }
+    }
+    const argStr = formatToolArgPreviewValue(argValue);
+    return argStr.length > 200 ? `${argStr.substring(0, 197)}...` : argStr;
+}
+
+async function prepareToolCall(
+    call: FunctionCall,
+    index: number,
+    total: number,
+    toolContext: any,
+    session: Session,
+    snapshot?: ToolExecutionSnapshot,
+    notifyStart = true,
+    presetResult?: any,
+): Promise<PreparedToolCall> {
+    const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const argsPreview = buildToolArgsPreview(call);
+    const sessionId = session.id;
+    let placementError: any;
+    let resolved: ResolvedTool | undefined;
+    if (presetResult === undefined) {
+        try {
+            if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
+            else {
+                resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
+                const permissionIdentity = resolved.source === 'node'
+                    ? { source: 'node' as const, node: resolved.executionNode, tool: resolved.name }
+                    : resolved.source === 'mcp'
+                        ? { source: 'mcp' as const, server: resolved.server, tool: resolved.name }
+                        : { source: 'builtin' as const, tool: resolved.name };
+                await checkGenericToolAuthorizationForSession(session, permissionIdentity, resolved.permissionNode, resolved.args,
+                    toolContext.sessionPlacement === 'session-worker');
+            }
+        } catch (error) { placementError = error; }
+    }
+    const toolArgs = resolved?.args || { ...(call.args || {}) };
+    const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
+    if (notifyStart && !placementError && presetResult === undefined) {
+        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
+        if (toolContext.broadcast && session.verbose) {
+            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
+        }
+        const startedAt = Date.now();
+        await Promise.resolve(toolContext.onToolStart?.({
+            id: toolId,
+            name: call.name,
+            index,
+            total,
+            executionNode,
+            argsPreview: argsPreview.length > 500 ? `${argsPreview.slice(0, 500)}…` : argsPreview,
+            startedAt,
+        }));
+    }
+
+    return {
+        call,
+        index,
+        toolId,
+        resolved,
+        toolArgs,
+        sessionId,
+        executionNode,
+        result: presetResult !== undefined ? presetResult : (call.argsParseError ? buildInvalidToolArgsResult(call) : undefined),
+        sessionSnapshot: resolved?.routingSnapshot,
+        placementError,
+    };
+}
+
+function buildCanceledToolResult(): { canceled: true; message: string } {
+    return { canceled: true, message: 'Tool call canceled before execution.' };
+}
+
+function buildToolControlArgumentError(message: string): { error: { type: string; message: string } } {
+    return { error: { type: 'invalid_tool_control_argument', message } };
+}
+
+function buildHandoffConfirmationError(error: any): { error: { type: string; message: string } } {
+    return {
+        error: {
+            type: 'invalid_inter_agent_handoff_confirmation',
+            message: error?.message || String(error),
+        },
+    };
+}
+
+type PlannedToolCall = {
+    call: FunctionCall;
+    presetResult?: any;
+};
+
+function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
+    if (isWholeBatchCancellationRequested(functionCalls)) {
+        return functionCalls.map(call => ({
+            call: { ...call, args: stripToolCancellationArguments(call.args) },
+            presetResult: buildCanceledToolResult(),
+        }));
+    }
+
+    return functionCalls.map(call => {
+        const executionCall = { ...call, args: stripToolCancellationArguments(call.args) };
+        const controlError = getToolCancellationArgumentError(call);
+        if (controlError) return { call: executionCall, presetResult: buildToolControlArgumentError(controlError) };
+        if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
+        if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
+            try {
+                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED);
+            } catch (error) {
+                return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
+            }
+        }
+        return { call: executionCall };
+    });
+}
+
+async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
+    let result = prepared.result;
+    let executionTiming: ExecutedToolCall['executionTiming'];
+    let imageParts: MessagePart[] = [];
+    let stopCurrentTurn = false;
+    let waitForReply = false;
+    let explicitWaitId: string | undefined;
+    let successfulSendToSessionTarget: string | undefined;
+    let successfulWaitAfterSendTarget: string | undefined;
+    let successfulFinishAfterSend = false;
+    let deferredExecCwdSync: { nextCwd: string } | undefined;
+    let fatalCurrentTurn: { code: string; message: string } | undefined;
+
+    try {
+        if (prepared.placementError) throw prepared.placementError;
+        if (result === undefined && prepared.resolved) {
+            const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
+            const localToolContext = prepared.sessionSnapshot
+                ? {
+                    ...runtimeContext,
+                    toolExecutionSnapshot: prepared.sessionSnapshot,
+                    deferSessionCwdSync: prepared.call.name === 'exec',
+                }
+                : runtimeContext;
+            const startedAt = Date.now();
+            const monotonicStart = performance.now();
+            try {
+                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
+            } finally {
+                executionTiming = {
+                    startedAt,
+                    completedAt: Math.max(startedAt, Date.now()),
+                    durationMs: Math.max(0, performance.now() - monotonicStart),
+                };
+            }
+        } else if (result === undefined) {
+            result = { error: `Unknown tool: ${prepared.call.name}` };
+        }
+
+        if (result && typeof result === 'object') {
+            if (result.__toolLoopControl && typeof result.__toolLoopControl === 'object') {
+                stopCurrentTurn = !!result.__toolLoopControl.stopCurrentTurn;
+            }
+            if (result.__toolPostAction && typeof result.__toolPostAction === 'object') {
+                waitForReply = result.__toolPostAction.waitForReply === true;
+                explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
+                    ? result.__toolPostAction.explicitWaitId
+                    : undefined;
+                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
+                    && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
+                    ? result.__toolPostAction.successfulSendToSessionTarget
+                    : undefined;
+                successfulWaitAfterSendTarget = successfulSendToSessionTarget
+                    && (prepared.call.args?.afterSend === 'wait' || prepared.call.args?.waitAfterHandoff === true)
+                    && waitForReply
+                    ? successfulSendToSessionTarget : undefined;
+                successfulFinishAfterSend = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
+                    && result.__toolPostAction.finishAfterSend === true;
+            }
+            if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
+                deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
+            }
+            const { __toolLoopControl, __toolPostAction, __execBatchCwdSync, ...visibleResult } = result;
+            result = visibleResult;
+        }
+
+        const normalizedImages = await normalizeToolResultImages(
+            result,
+            prepared.toolId,
+            `[Inline data returned by ${prepared.call.name}]`,
+        );
+        imageParts = normalizedImages.imageParts;
+        result = normalizedImages.result;
+    } catch (error: any) {
+        if (isToolAuthorizationPolicyUnavailable(error)) {
+            fatalCurrentTurn = { code: TOOL_AUTH_POLICY_UNAVAILABLE, message: error?.message || 'Tool authorization policy is unavailable.' };
+        }
+        result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
+            ...(error?.retryable === true ? { retryable: true } : {}) };
+        imageParts = [];
+    }
+
+    return {
+        ...prepared,
+        result: normalizeExecutedToolResult(result),
+        ...(executionTiming ? { executionTiming } : {}),
+        imageParts,
+        stopCurrentTurn,
+        waitForReply,
+        explicitWaitId,
+        successfulSendToSessionTarget,
+        successfulWaitAfterSendTarget,
+        successfulFinishAfterSend,
+        deferredExecCwdSync,
+        fatalCurrentTurn,
+    };
+}
+
+async function runBoundedToolCalls(
+    prepared: PreparedToolCall[],
+    toolContext: any,
+): Promise<Array<ExecutedToolCall | undefined>> {
+    const results: Array<ExecutedToolCall | undefined> = new Array(prepared.length);
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(PARALLEL_EXEC_LIMIT, prepared.length) }, async () => {
+        while (true) {
+            const index = nextIndex++;
+            if (index >= prepared.length) return;
+            try {
+                results[index] = await runPreparedToolCall(prepared[index], toolContext);
+            } catch (error: any) {
+                results[index] = buildFailedToolCall(prepared[index], error);
+            }
+        }
+    });
+    await Promise.allSettled(workers);
+    return results;
+}
+
+function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedToolCall {
+    return {
+        ...prepared,
+        result: { error: error?.message || String(error) },
+        imageParts: [],
+        stopCurrentTurn: false,
+        waitForReply: false,
+        successfulFinishAfterSend: false,
+        ...(isToolAuthorizationPolicyUnavailable(error) ? {
+            fatalCurrentTurn: { code: TOOL_AUTH_POLICY_UNAVAILABLE, message: error?.message || 'Tool authorization policy is unavailable.' },
+        } : {}),
+    };
+}
+
+function buildSkippedToolCall(prepared: PreparedToolCall, message = 'Tool call was not started because the session was stopped.'): ExecutedToolCall {
+    return {
+        ...prepared,
+        result: { error: message },
+        imageParts: [],
+        stopCurrentTurn: false,
+        waitForReply: false,
+        successfulFinishAfterSend: false,
+    };
+}
+
+async function replayDeferredExecCwd(execution: ExecutedToolCall, toolContext: any): Promise<ExecutedToolCall> {
+    if (!execution.deferredExecCwdSync) return execution;
+    try {
+        const { applyDeferredExecCwdSync } = await import('./tools/execTools');
+        return {
+            ...execution,
+            result: await applyDeferredExecCwdSync(toolContext, execution.result, execution.deferredExecCwdSync),
+            deferredExecCwdSync: undefined,
+        };
+    } catch (error: any) {
+        return {
+            ...execution,
+            result: { error: error?.message || String(error) },
+            deferredExecCwdSync: undefined,
+        };
+    }
+}
+
+/**
+ * Execute tools and return results as a single message with multiple parts.
+ * Adjacent direct exec calls share a node/cwd snapshot and run concurrently;
+ * every other tool is a serial ordering barrier.
+ */
+export async function executeTools(
+    functionCalls: FunctionCall[],
+    toolContext: any,
+    session: any,
+    options?: { currentSessionEffects?: CurrentSessionEffects },
+): Promise<Message> {
+    const requestedSourceId = typeof toolContext?.sessionId === 'string' && toolContext.sessionId.trim()
+        ? toolContext.sessionId.trim()
+        : undefined;
+    let sourceSession: Session;
+    if (options?.currentSessionEffects) {
+        if (!session || typeof session.id !== 'string' || !session.id.trim()) {
+            throw new Error('Tool execution with current-session effects requires an authoritative Session.');
+        }
+        if (requestedSourceId && requestedSourceId !== session.id) {
+            throw new Error(`Tool execution source session \`${requestedSourceId}\` does not match authoritative Session \`${session.id}\`.`);
+        }
+        sourceSession = session;
+    } else {
+        if (!requestedSourceId) {
+            throw new Error('Tool execution requires a source session ID when current-session effects are absent.');
+        }
+        const existing = await sessionManager.getExistingSession(requestedSourceId);
+        if (!existing) {
+            throw new Error(`Tool execution source session \`${requestedSourceId}\` was not found.`);
+        }
+        sourceSession = existing;
+    }
+    session = sourceSession;
+    toolContext = {
+        ...toolContext,
+        sessionId: sourceSession.id,
+        session: sourceSession,
+        persistCurrentSession: options?.currentSessionEffects
+            ? () => options.currentSessionEffects!.persistSession(sourceSession)
+            : undefined,
+        sessionPlacement: options?.currentSessionEffects?.placement || 'local',
+        ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
+    };
+    const plannedCalls = planToolCalls(functionCalls);
+    const executions: ExecutedToolCall[] = [];
+    let cursor = 0;
+    let fatalCurrentTurn = false;
+
+    while (cursor < plannedCalls.length) {
+        if (session?.stopping) {
+            for (; cursor < plannedCalls.length; cursor++) {
+                const planned = plannedCalls[cursor];
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult);
+                executions.push(planned.presetResult !== undefined
+                    ? await runPreparedToolCall(prepared, toolContext)
+                    : buildSkippedToolCall(prepared));
+            }
+            break;
+        }
+
+        if (plannedCalls[cursor].call.name !== 'exec') {
+            const planned = plannedCalls[cursor];
+            const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, true, planned.presetResult);
+            const execution = await runPreparedToolCall(prepared, toolContext);
+            executions.push(execution);
+            cursor++;
+            if (execution.fatalCurrentTurn) {
+                fatalCurrentTurn = true;
+                for (; cursor < plannedCalls.length; cursor++) {
+                    const skipped = plannedCalls[cursor];
+                    const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session, undefined, false, skipped.presetResult);
+                    executions.push(skipped.presetResult !== undefined
+                        ? await runPreparedToolCall(skippedPrepared, toolContext)
+                        : buildSkippedToolCall(skippedPrepared, 'Tool call was not started because tool authorization policy was unavailable.'));
+                }
+                break;
+            }
+            continue;
+        }
+
+        const segmentStart = cursor;
+        while (cursor < plannedCalls.length && plannedCalls[cursor].call.name === 'exec') cursor++;
+        const snapshot: ToolExecutionSnapshot = {
+            currentNode: sourceSession.currentNode || 'master',
+            cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
+        };
+        const preparedSegment: PreparedToolCall[] = [];
+        for (let index = segmentStart; index < cursor; index++) {
+            const planned = plannedCalls[index];
+            preparedSegment.push(await prepareToolCall(
+                planned.call,
+                index,
+                plannedCalls.length,
+                toolContext,
+                session,
+                snapshot,
+                true,
+                planned.presetResult,
+            ));
+        }
+        const settled = await runBoundedToolCalls(preparedSegment, toolContext);
+        for (let index = 0; index < preparedSegment.length; index++) {
+            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index]), toolContext));
+        }
+        if (executions.slice(-preparedSegment.length).some(execution => execution.fatalCurrentTurn)) {
+            fatalCurrentTurn = true;
+            for (; cursor < plannedCalls.length; cursor++) {
+                const skipped = plannedCalls[cursor];
+                const skippedPrepared = await prepareToolCall(skipped.call, cursor, plannedCalls.length, toolContext, session, undefined, false, skipped.presetResult);
+                executions.push(skipped.presetResult !== undefined
+                    ? await runPreparedToolCall(skippedPrepared, toolContext)
+                    : buildSkippedToolCall(skippedPrepared, 'Tool call was not started because tool authorization policy was unavailable.'));
+            }
+            break;
+        }
+    }
+
+    const parts: MessagePart[] = [];
     let stopCurrentTurn = false;
     let batchHasError = false;
+    let waitForReply = false;
+    const explicitWaitIds: string[] = [];
+    const successfulSendToSessionTargets: string[] = [];
+    const successfulWaitAfterSendTargets: string[] = [];
+    let successfulFinishAfterSend = false;
+    let fatalError: { code: string; message: string } | undefined;
 
-    const normalizeToolResult = (rawResult: any): any => {
-        if (rawResult === undefined) return { output: '(No output)' };
-        if (rawResult === null) return { output: null };
-        if (typeof rawResult === 'string' || typeof rawResult === 'number' || typeof rawResult === 'boolean') {
-            return { output: rawResult };
-        }
-        if (typeof rawResult === 'object') {
-            return rawResult;
-        }
-        return { output: String(rawResult) };
-    };
-
-    const consumeInlineData = async (result: any, toolId: string, fallbackLabel: string): Promise<any> => {
-        if (!result || typeof result !== 'object') return result;
-
-        const normalized = await normalizeToolResultImages(result, toolId, fallbackLabel);
-        if (normalized.imageParts.length > 0) {
-            parts.push(...normalized.imageParts);
-        }
-
-        return normalized.result;
-    };
-
-    const extractToolLoopControl = (result: any): any => {
-        if (!result || typeof result !== 'object' || !result.__toolLoopControl || typeof result.__toolLoopControl !== 'object') {
-            return result;
-        }
-
-        stopCurrentTurn = stopCurrentTurn || !!result.__toolLoopControl.stopCurrentTurn;
-        const { __toolLoopControl, ...rest } = result;
-        return rest;
-    };
-
-    const hasToolResponseError = (result: any): boolean => {
-        if (!result || typeof result !== 'object') {
-            return false;
-        }
-        return result.error !== undefined && result.error !== null;
-    };
-    
-    for (const call of functionCalls) {
-        const toolFn = (tools as any)[call.name];
-        const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Log what's being executed
-        let argStr = '';
-        if (call.argsParseError && typeof call.rawArgsText === 'string') {
-            argStr = call.rawArgsText;
-        } else if (call.name === 'exec') {
-            argStr = call.args.command;
-        } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
-            argStr = call.args.filePath;
-        } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
-            argStr = typeof call.args.input === 'string' ? call.args.input : '';
-        } else if (call.name === 'read' || call.name === 'read_memory') {
-            const { filePath, startLine, endLine } = call.args;
-            argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
-        } else if (call.args) {
-            const keys = Object.keys(call.args);
-            if (keys.length === 1) {
-                const value = call.args[keys[0]];
-                // If value is object, stringify it
-                argStr = typeof value === 'object' ? JSON.stringify(value) : value;
-            } else {
-                argStr = keys.map(key => {
-                    const value = call.args[key];
-                    const valueStr = typeof value === 'object' ? JSON.stringify(value) : value;
-                    return `${key}: ${valueStr}`;
-                }).join('\n');
-            }
-        }
-        if (argStr.length > 200) argStr = argStr.substring(0, 197) + '...';
-        logger.info({ tool: call.name, args: argStr }, 'Executing tool');
-        if (toolContext.broadcast && session.verbose) {
-            // Exclude webui as it gets updates via onHistoryUpdate
-            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argStr}\``, { excludePlatforms: ['webui'] });
-        }
-
-        let result;
-        if (call.argsParseError) {
-            result = buildInvalidToolArgsResult(call);
-        }
-        
-        const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
-        const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
-        const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
-        const sessionId = toolContext.sessionId || 'main';
-        
-        // Get current node for this session
-        const currentNode = await nodesManager.getCurrentNode(sessionId) || 'master';
-        
-        // Determine target node: explicit node param > current node > master.
-        const targetNode = normalizeRequestedNode(nodeParam, currentNode);
-        
-        // Remove node parameter from args before execution
-        const toolArgs = { ...call.args };
-        if (supportsExplicitNode) {
-            delete toolArgs.node;
-        }
-        
-        // Tools that must run on master because they depend on host-local
-        // session/channel/agent/vector/MCP state rather than remote node files.
-        const forceMaster = tools.isMasterOnlyToolName(call.name);
-        const executionNode = forceMaster ? 'master' : targetNode;
-        const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
-
-        // Check isolated session tool permission (includes path access check for master)
+    for (const execution of executions) {
+        let result = execution.result;
         try {
-            if (!result?.error) {
-                await checkToolPermission(call.name, sessionId, permissionNode, toolArgs);
-            }
-        } catch (e: any) {
-            result = { error: e.message || String(e) };
+            result = await guardToolOutputForModel(result, {
+                sessionId: execution.sessionId,
+                session,
+                toolName: execution.call.name,
+                toolUseId: execution.toolId,
+                nodeId: execution.executionNode,
+            });
+        } catch (error: any) {
+            result = { error: error?.message || String(error) };
         }
-        
-        if (result?.error) {
-            // Skip tool execution if permission check failed
-        } else {
-        
-        if (executionNode !== 'master') {
-            // Execute on remote node
-            try {
-                result = normalizeToolResult(await nodesManager.executeTool(executionNode, call.name, toolArgs, sessionId));
-            } catch (e: any) {
-                result = { error: e.message || String(e) };
-            }
-        } else if (toolFn) {
-            // Execute locally on master
-            const localToolContext = call.name === 'send_file' || call.name === 'image_write_to_file'
-                ? { ...toolContext, runtimeNodeId: targetNode, toolUseId: toolId }
-                : { ...toolContext, toolUseId: toolId };
-            try {
-                result = normalizeToolResult(await toolFn(toolArgs, localToolContext));
-            } catch (e: any) {
-                result = { error: e?.message || String(e) };
-            }
-        } else {
-            result = { error: `Unknown tool: ${call.name}` };
-        }
-        } // End if (result?.error)
-
-        result = extractToolLoopControl(result);
-        result = await consumeInlineData(result, toolId, `[Inline data returned by ${call.name}]`);
-        result = await guardToolOutputForModel(result, {
-            sessionId,
-            session,
-            toolName: call.name,
-            toolUseId: toolId,
-            nodeId: executionNode,
-        });
-
-        batchHasError = batchHasError || hasToolResponseError(result);
-        
-        parts.push({
+        parts.push(...execution.imageParts, {
             functionResponse: {
-                tool_use_id: toolId,
-                name: call.name,
-                response: result
-            }
+                tool_use_id: execution.toolId,
+                name: execution.call.name,
+                ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
+                ...(execution.index === 0 && toolContext.previousLlmRequest ? {
+                    previousLlmRequest: {
+                        time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),
+                        durationMs: toolContext.previousLlmRequest.durationMs,
+                    },
+                } : {}),
+                response: result,
+            },
         });
+        stopCurrentTurn = stopCurrentTurn || execution.stopCurrentTurn;
+        batchHasError = batchHasError || !!(result && typeof result === 'object' && result.error !== undefined && result.error !== null);
+        waitForReply = waitForReply || execution.waitForReply;
+        if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
+        if (execution.successfulSendToSessionTarget) successfulSendToSessionTargets.push(execution.successfulSendToSessionTarget);
+        if (execution.successfulWaitAfterSendTarget && !successfulWaitAfterSendTargets.includes(execution.successfulWaitAfterSendTarget)) {
+            successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
+        }
+        successfulFinishAfterSend = successfulFinishAfterSend || execution.successfulFinishAfterSend;
+        fatalError = fatalError || execution.fatalCurrentTurn;
     }
-    
-    const toolMessage: Message = {
-        role: 'tool',
-        parts: parts
-    };
 
-    if (stopCurrentTurn && !batchHasError) {
+    if (stopCurrentTurn && batchHasError) {
+        for (const waitId of explicitWaitIds) {
+            if (options?.currentSessionEffects) {
+                await options.currentSessionEffects.clearWaitById(toolContext.sessionId || session?.id, waitId);
+            } else {
+                await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+            }
+        }
+    }
+
+    const toolMessage: Message = { role: 'tool', parts };
+    if (fatalCurrentTurn && fatalError) {
+        (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true, fatalError };
+    } else if ((stopCurrentTurn && !batchHasError) || successfulFinishAfterSend) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
-    } else if (stopCurrentTurn && batchHasError) {
+    } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-
+    if (waitForReply || successfulFinishAfterSend || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
+        (toolMessage as any).__toolPostAction = {
+            ...(waitForReply ? { waitForReply: true } : {}),
+            ...(successfulFinishAfterSend ? { finishAfterSend: true } : {}),
+            ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
+            ...(successfulWaitAfterSendTargets.length ? { successfulWaitAfterSendTargets } : {}),
+        };
+    }
     return toolMessage;
 }
 
@@ -1140,23 +2167,57 @@ export async function chat(
         appendMessage?: (message: Message) => Promise<void>;
         notifySessionEvents?: boolean;
         registerAbortController?: boolean;
+        abortSignal?: AbortSignal;
+        onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+        purpose?: LlmRequestPurpose;
+        compactPlanBackground?: boolean;
+        turnId?: string;
+        currentSessionEffects?: CurrentSessionEffects;
+        snapshotAuthority?: 'authoritative' | 'detached';
     },
 ): Promise<ChatResult> {
+    const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
     const appendMessage = async (message: Message) => {
         if (options?.appendMessage) {
             await options.appendMessage(message);
             return;
         }
-        await sessionManager.appendSessionMessage(session, message);
+        await currentSessionEffects.appendMessage(session, message);
     };
 
-    // Get persistent context
     const agentName = session.agent || 'main';
-    const systemPrompt = session.persistentMemorySnapshot || await buildSessionSystemPromptSnapshot({
-        agentName,
-        sessionId: session.id,
-        systemPromptFiles: session.systemPromptFiles,
-    });
+    const resolveSystemPromptForModel = async (modelId: string): Promise<string> => {
+        const currentSnapshot = session.persistentMemorySnapshot || '';
+        if (readCurrentModelSnapshotId(currentSnapshot) === modelId) return currentSnapshot;
+
+        const rebuiltSnapshot = await buildSessionSystemPromptSnapshot({
+            agentName,
+            sessionId: session.id,
+            systemPromptFiles: session.systemPromptFiles,
+            modelId,
+        });
+        if (options?.snapshotAuthority === 'detached') {
+            session.persistentMemorySnapshot = rebuiltSnapshot;
+            return rebuiltSnapshot;
+        }
+
+        session.persistentMemorySnapshot = rebuiltSnapshot;
+        try {
+            if (currentSessionEffects.persistSessionStrict) {
+                await currentSessionEffects.persistSessionStrict(session);
+            } else {
+                await currentSessionEffects.persistSession(session);
+            }
+        } catch (error) {
+            // A failed authoritative persistence must not leave a matching hot
+            // marker that suppresses the required write on the next attempt.
+            if (!isSessionAuthorityPostCommitError(error) && session.persistentMemorySnapshot === rebuiltSnapshot) {
+                session.persistentMemorySnapshot = currentSnapshot;
+            }
+            throw error;
+        }
+        return rebuiltSnapshot;
+    };
 
     // Add user message if provided
     if (parts) {
@@ -1168,154 +2229,459 @@ export async function chat(
     // Convert to appropriate format based on provider
     const contentsForLlm = session.history
         .filter(isModelVisibleMessage)
-        .map(({ __meta, ...msg }: Message) => msg);
+        .map((message: Message): Message => {
+            const { __meta, ...msg } = message;
+            const modelId = getHistoricalConcreteModelId(message);
+            return modelId ? { ...msg, __meta: { modelId } } : msg;
+        });
     const availableToolDefinitions = options?.toolDefinitions
         ?? tools.modelFacingDefinitions;
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
-    if (session.id && session.promptCacheKey !== previousPromptCacheKey && sessionManager.getAllSessions().get(session.id) === session) {
-        await sessionManager.saveSession(session.id);
+    if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
+        await currentSessionEffects.persistSession(session);
     }
-    const result = await requestLlmOnce({
+    const completion = await requestLlmOnceInternal({
         contents: contentsForLlm,
-        systemPrompt,
+        systemPrompt: session.persistentMemorySnapshot || '',
         model: session.model,
+        effort: session.effort,
         sessionId: session.id,
         promptCacheKey,
+        turnId: options?.turnId,
         iteration,
         toolDefinitions: availableToolDefinitions,
         notifySessionEvents: options?.notifySessionEvents,
         registerAbortController: options?.registerAbortController,
+        abortSignal: options?.abortSignal,
+        onRetry: options?.onRetry,
+        purpose: options?.purpose || 'normal-turn',
+        compactPlanBackground: options?.compactPlanBackground,
+        currentSessionEffects: options?.currentSessionEffects,
+        resolveSystemPromptForModel,
     });
+    const result = completion.result;
 
-    if (result.usage) {
-        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Calls: ${(result.toolCalls || []).length}`);
+    try {
+        if (result.usage) {
+            logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Reasoning: ${result.usage.reasoningTokens ?? 'n/a'} | Calls: ${(result.toolCalls || []).length}`);
 
-        // Update session accumulated usage stats
-        session.stats.totalInputTokens += result.usage.inputTokens || 0;
-        session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
-        session.stats.totalOutputTokens += result.usage.outputTokens || 0;
-    }
+            // Update session accumulated usage stats
+            session.stats.totalInputTokens += result.usage.inputTokens || 0;
+            session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
+            session.stats.totalOutputTokens += result.usage.outputTokens || 0;
+        }
 
-    // Add assistant message to history
-    if (result.allParts && result.allParts.length > 0) {
-        const assistantMeta = {
-            ...(result.modelId ? { modelId: result.modelId } : {}),
-            ...(result.usage ? { usage: result.usage } : {}),
-        };
-        const assistantMsg: Message = {
-            role: 'model',
-            parts: result.allParts,
-            ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
-        };
-        await appendMessage(assistantMsg);
+        // Add assistant message to history. A stateful provider completion is
+        // deliberately not reusable until this exact object has committed.
+        if (result.allParts && result.allParts.length > 0) {
+            const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
+            const assistantMeta = {
+                ...(result.modelId ? { modelId: result.modelId } : {}),
+                ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
+                ...(result.usage ? { usage: result.usage } : {}),
+                ...(llmRequestTiming ? { llmRequestTiming } : {}),
+                ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
+            };
+            const assistantMsg: Message = {
+                role: 'model',
+                parts: result.allParts,
+                ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
+                ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
+            };
+            await appendMessage(assistantMsg);
+            settleHistoryAppendFinalizer(
+                completion.finalizeHistoryAppend,
+                { appended: true, message: assistantMsg },
+                'Failed to finalize provider state after assistant history commit',
+            );
+        } else {
+            settleHistoryAppendFinalizer(
+                completion.finalizeHistoryAppend,
+                { appended: false },
+                'Failed to discard provider state without an assistant history commit',
+            );
+        }
+    } catch (error) {
+        settleHistoryAppendFinalizer(
+            completion.finalizeHistoryAppend,
+            { appended: false },
+            'Failed to discard provider state after assistant history failure',
+        );
+        throw error;
     }
 
     return result;
 }
 
-export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
-    const fixedContents = fixToolCalls(options.contents || []);
-    let messages, url, headers, data;
+type ConcreteRequestPlan = {
+    modelEntry: ModelConfigEntry;
+    modelKey: string;
+    modelId: string;
+    providerType: string;
+    requestedEffort?: ModelEffort;
+    effectiveEffort: ModelEffort;
+    effortFallback: boolean;
+    url: string;
+    headers: Record<string, any>;
+    data: any;
+    requestBody: any;
+    compressionHeaders: Record<string, string>;
+    useOpenAIResponsesApi: boolean;
+    useOpenAIResponsesWs: boolean;
+    useOpenAIChatCompletionsApi: boolean;
+    useStreamingApi: boolean;
+    /** True when the physical request declares the hosted image_generation tool. */
+    usesHostedImageGeneration: boolean;
+    /**
+     * True when raw stream content must not be captured because the physical
+     * request can carry or receive hosted image payloads.
+     */
+    rawStreamDiagnosticsOnly: boolean;
+};
 
-    const resolvedModel = resolveModelConfig(options.model);
-    const modelEntry = options.modelEntryOverride || resolvedModel.modelEntry;
-    const modelKey = options.modelEntryOverride
-        ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
-        : resolvedModel.currentKey;
+function normalizeRequestedEffort(value: unknown): ModelEffort | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort)) {
+        throw new Error(`Model effort must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+    }
+    return value as ModelEffort;
+}
+
+function isPlainRequestObject(value: unknown): value is Record<string, any> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function applyFirstClassEffort(
+    data: Record<string, any>,
+    providerType: string,
+    effort: ModelEffort,
+): void {
+    const openaiRequestApi = getOpenAIRequestApi(providerType);
+    if (openaiRequestApi === 'responses') {
+        const reasoning = isPlainRequestObject(data.reasoning) ? { ...data.reasoning } : {};
+        reasoning.effort = effort;
+        const include = Array.isArray(data.include) ? [...data.include] : [];
+        if (effort === 'none') {
+            delete reasoning.summary;
+            const filteredInclude = include.filter(item => item !== 'reasoning.encrypted_content');
+            if (filteredInclude.length > 0) data.include = filteredInclude;
+            else delete data.include;
+        } else {
+            if (!Object.prototype.hasOwnProperty.call(reasoning, 'summary')) reasoning.summary = 'auto';
+            if (!include.includes('reasoning.encrypted_content')) include.push('reasoning.encrypted_content');
+            data.include = include;
+        }
+        data.reasoning = reasoning;
+        return;
+    }
+    if (openaiRequestApi === 'chat-completions') {
+        data.reasoning_effort = effort;
+        return;
+    }
+
+    if (effort === 'none') {
+        data.thinking = { type: 'disabled' };
+        if (isPlainRequestObject(data.output_config)) {
+            const outputConfig = { ...data.output_config };
+            delete outputConfig.effort;
+            if (Object.keys(outputConfig).length > 0) data.output_config = outputConfig;
+            else delete data.output_config;
+        }
+        return;
+    }
+    data.output_config = {
+        ...(isPlainRequestObject(data.output_config) ? data.output_config : {}),
+        effort,
+    };
+}
+
+class ConcreteAttemptFailure extends Error {
+    readonly kind: LlmRetryEvent['kind'];
+    readonly status?: string;
+    readonly retryable: boolean;
+    readonly countable: boolean;
+    readonly logDetail?: Record<string, any>;
+
+    constructor(message: string, options: {
+        kind: LlmRetryEvent['kind'];
+        status?: string;
+        retryable: boolean;
+        countable: boolean;
+        logDetail?: Record<string, any>;
+    }) {
+        super(message);
+        this.name = 'ConcreteAttemptFailure';
+        this.kind = options.kind;
+        this.status = options.status;
+        this.retryable = options.retryable;
+        this.countable = options.countable;
+        this.logDetail = options.logDetail;
+    }
+}
+
+function collectProviderErrorStrings(value: unknown, strings: string[], structuredCodes: string[], depth = 0): void {
+    if (depth > 8 || value === null || value === undefined) return;
+    if (typeof value === 'string') {
+        strings.push(value);
+        const trimmed = value.trim();
+        if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && depth < 8) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && typeof parsed === 'object') {
+                    collectProviderErrorStrings(parsed, strings, structuredCodes, depth + 1);
+                }
+            } catch {
+                // Provider error bodies are frequently plain text; JSON parsing
+                // is only a best-effort path for streamed structured errors.
+            }
+        }
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) collectProviderErrorStrings(item, strings, structuredCodes, depth + 1);
+        return;
+    }
+    if (typeof value !== 'object') return;
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        if ((key === 'code' || key === 'type') && typeof nestedValue === 'string') {
+            structuredCodes.push(nestedValue);
+        }
+        collectProviderErrorStrings(nestedValue, strings, structuredCodes, depth + 1);
+    }
+}
+
+function isModelNotFoundProviderError(body: unknown): boolean {
+    const strings: string[] = [];
+    const structuredCodes: string[] = [];
+    collectProviderErrorStrings(body, strings, structuredCodes);
+
+    const structuredMatch = structuredCodes.some(value => {
+        const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        return /^model_(?:not_found|does_not_exist)(?:_error)?$/.test(normalized)
+            || /^unknown_model(?:_error)?$/.test(normalized);
+    });
+    if (structuredMatch) return true;
+
+    const text = strings.join('\n');
+    const unknownModel = strings.some(value => {
+        const match = /\bunknown\s+model\b/i.exec(value);
+        if (!match) return false;
+        const suffix = value.slice(match.index + match[0].length).trim();
+        if (!suffix || /^[.:;,"'`]/.test(suffix)) return true;
+        const token = suffix.split(/\s|[,;]/, 1)[0].replace(/[.!?]+$/, '');
+        return /\d/.test(token) || /[/_-]/.test(token) || /\.[A-Za-z0-9]/.test(token);
+    });
+    return /\bmodel(?:[\s_-]+)not(?:[\s_-]+)found\b/i.test(text)
+        || /\bno\s+such\s+model\b/i.test(text)
+        || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+(?:was\s+)?not\s+found\b/i.test(text)
+        || /\b(?:the\s+|requested\s+)?model\s+(?:"[^"]{1,200}"|'[^']{1,200}'|`[^`]{1,200}`|[^\s,;:]{1,200})\s+does\s+not\s+exist\b/i.test(text)
+        || unknownModel;
+}
+
+export function classifyHttpFailure(statusCode: number, body: any): { retryable: boolean; countable: boolean } {
+    if (isModelNotFoundProviderError(body)) {
+        return { retryable: true, countable: true };
+    }
+    if (statusCode === 400 || statusCode === 413 || statusCode === 422) {
+        return { retryable: false, countable: false };
+    }
+    if (statusCode === 401 || statusCode === 403 || statusCode === 404
+        || statusCode === 408 || statusCode === 429 || statusCode === 529
+        || (statusCode >= 500 && statusCode <= 599)) {
+        return { retryable: true, countable: true };
+    }
+    // Preserve the previous retry behavior for other HTTP statuses without
+    // allowing an unclassified client response to poison shared route health.
+    return { retryable: true, countable: false };
+}
+
+function buildOpenAIWebSearchTool(config: NormalizedOpenAIWebSearchConfig | undefined): Record<string, any> | undefined {
+    if (config?.enabled !== true) {
+        return undefined;
+    }
+
+    const tool: Record<string, any> = { type: 'web_search' };
+    if (config.searchContextSize && ['low', 'medium', 'high'].includes(config.searchContextSize)) {
+        tool.search_context_size = config.searchContextSize;
+    }
+
+    const allowedDomains = Array.isArray(config.allowedDomains)
+        ? config.allowedDomains
+            .filter((domain): domain is string => typeof domain === 'string' && domain.trim().length > 0)
+            .map(domain => domain.trim())
+        : [];
+    if (allowedDomains.length > 0) {
+        tool.filters = { allowed_domains: allowedDomains };
+    }
+
+    if (config.userLocation && typeof config.userLocation === 'object') {
+        const userLocation: Record<string, string> = { type: 'approximate' };
+        for (const key of ['country', 'city', 'region', 'timezone'] as const) {
+            const value = config.userLocation[key];
+            if (typeof value === 'string' && value.trim().length > 0) {
+                userLocation[key] = value.trim();
+            }
+        }
+        tool.user_location = userLocation;
+    }
+
+    return tool;
+}
+
+function arrayContainsImageGenerationTool(value: unknown): boolean {
+    return Array.isArray(value) && value.some(item => (
+        !!item && typeof item === 'object' && !Array.isArray(item)
+        && (item as Record<string, any>).type === 'image_generation'
+    ));
+}
+
+function toolChoiceReferencesImageGeneration(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const type = (value as Record<string, any>).type;
+    return type === 'image_generation' || type === 'image_generation_preview';
+}
+
+function buildConcreteRequestPlan(options: {
+    request: RequestLlmOnceOptions;
+    fixedContents: Message[];
+    modelEntry: ModelConfigEntry;
+    modelKey: string;
+    promptCacheKey: string;
+    turnId: string;
+    attempt: number;
+    requestedEffort?: ModelEffort;
+}): ConcreteRequestPlan {
+    const { request, fixedContents, modelEntry, modelKey, promptCacheKey, turnId, attempt, requestedEffort } = options;
     const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
     const modelId = getModelIdForMetadata(modelEntry, modelKey);
-    const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
+    // Compatibility filtering and provider-only hydration have already been
+    // performed for this exact concrete attempt. Do not prepare history twice.
+    const providerContents = fixedContents;
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
+    const useOpenAIResponsesWs = providerType === 'openai-ws';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
+    const useStreamingApi = !useOpenAIResponsesWs && (useOpenAIResponsesApi || useOpenAIChatCompletionsApi);
+    const providerPromptCacheKey = resolveProviderPromptCacheKey(providerType, request, promptCacheKey);
+    if (useOpenAIResponsesWs && modelEntry.requestCompression) {
+        throw new Error('requestCompression is not supported for openai-ws providers.');
+    }
+    const webSearchConfig = useOpenAIResponsesApi
+        && request.purpose !== 'compact-plan'
+        && request.purpose !== 'setup-test'
+        ? normalizeOpenAIWebSearchConfig(modelEntry.webSearch)
+        : undefined;
+    const webSearchTool = buildOpenAIWebSearchTool(webSearchConfig);
+    const webSearchToolChoice = webSearchTool
+        && (webSearchConfig?.toolChoice === 'required' || webSearchConfig?.toolChoice === 'auto')
+        ? webSearchConfig.toolChoice
+        : 'auto';
+    if (modelEntry.imageGeneration?.enabled === true && !useOpenAIResponsesApi) {
+        // Only the Responses protocol carries the hosted image_generation tool.
+        // Fail loudly instead of silently dropping an enabled capability.
+        throw new Error(`Model \`${modelKey}\` enables imageGeneration, but provider type \`${providerType}\` does not support the OpenAI Responses image_generation tool.`);
+    }
+    const imageGenerationConfig: NormalizedOpenAIImageGenerationConfig | undefined = useOpenAIResponsesApi
+        && request.purpose !== 'compact-plan'
+        && request.purpose !== 'setup-test'
+        ? modelEntry.imageGeneration
+        : undefined;
+    const imageGenerationTool = buildOpenAIImageGenerationTool(imageGenerationConfig);
+    const effortConfig = getConcreteModelEffortConfig(modelEntry);
+    const effectiveEffort = requestedEffort && effortConfig.allowed.includes(requestedEffort)
+        ? requestedEffort
+        : effortConfig.default;
+    const effortFallback = requestedEffort !== undefined && requestedEffort !== effectiveEffort;
 
     if (!baseUrl) {
-        throw new Error('Model config has no baseUrl');
+        throw new Error(`Model config \`${modelKey}\` has no baseUrl`);
     }
 
-    const iteration = options.iteration || 0;
-    logger.info(`Requesting LLM (${modelKey}, type ${providerType}, iteration ${iteration})...`);
-
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
-    const availableToolDefinitions = options.toolDefinitions ?? [];
-    const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh' :
-                         THINKING_BUDGET >= 4000 ? 'high' :
-                         THINKING_BUDGET >= 2000 ? 'medium' :
-                         THINKING_BUDGET > 0 ? 'low'
-                         : undefined;
+    const availableToolDefinitions = request.toolDefinitions ?? [];
+    let messages: any;
+    let url: string;
+    let headers: Record<string, any>;
+    let data: any;
 
     if (useOpenAIResponsesApi) {
-        messages = convertToOpenAIResponsesFormatProvider(fixedContents);
+        messages = convertToOpenAIResponsesFormatProvider(providerContents, modelId);
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
             ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
             'originator': 'codex-tui',
-            'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
-                crypto.createHash('md5').update(`turn_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex')
-            }","sandbox":"seccomp"}`,
-            'x-client-request-id': crypto.createHash('md5').update(`req_id_${options.sessionId || 'default'}_${Date.now()}`).digest('hex'),
+            ...(!useOpenAIResponsesWs ? {
+                'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
+                    crypto.createHash('md5').update(`turn_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex')
+                }","sandbox":"seccomp"}`,
+                'x-client-request-id': crypto.createHash('md5').update(`req_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex'),
+            } : {}),
         };
-
         data = {
             model: modelName,
-            instructions: options.systemPrompt,
-            input: [
-                ...messages
-            ],
-            tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
-                type: 'function',
-                name: fd.name,
-                description: fd.description,
-                parameters: fd.parameters
-            })) : undefined,
-            tool_choice: 'auto',
+            instructions: request.systemPrompt,
+            input: [...messages],
+            tools: availableToolDefinitions.length > 0 || webSearchTool || imageGenerationTool ? [
+                ...availableToolDefinitions.map(fd => ({
+                    type: 'function',
+                    name: fd.name,
+                    description: fd.description,
+                    parameters: fd.parameters,
+                    strict: false,
+                })),
+                ...(webSearchTool ? [webSearchTool] : []),
+                ...(imageGenerationTool ? [imageGenerationTool] : []),
+            ] : undefined,
+            tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
-            reasoning: {
-                summary: 'auto',
-                ...(openaiEffort ? { effort: openaiEffort } : {}),
-            },
+            reasoning: effectiveEffort === 'none' ? undefined : { summary: 'auto' },
+            max_output_tokens: MAX_OUTPUT,
             store: false,
-            include: ['reasoning.encrypted_content'],
-            prompt_cache_key: promptCacheKey,
-            stream: true,
+            include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
+            prompt_cache_key: providerPromptCacheKey,
+            ...(!useOpenAIResponsesWs ? { stream: true } : {}),
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(fixedContents);
+        messages = convertToOpenAIFormatProvider(
+            providerContents,
+            modelId,
+            modelEntry.historyReasoningField || 'reasoning_content',
+        );
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
             ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'foxwarm/1.0',
         };
-
         data = {
             model: modelName,
             max_tokens: MAX_OUTPUT,
             prompt_cache_key: promptCacheKey,
-            reasoning_effort: openaiEffort,
             stream: true,
             stream_options: { include_usage: true },
             messages: [
-                { role: 'system', content: options.systemPrompt },
-                ...messages
+                ...(request.systemPrompt?.trim() ? [{ role: 'system', content: request.systemPrompt }] : []),
+                ...messages,
             ],
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 type: 'function',
                 function: {
                     name: fd.name,
                     description: fd.description,
-                    parameters: fd.parameters
-                }
-            })) : undefined
+                    parameters: fd.parameters,
+                    strict: false,
+                },
+            })) : undefined,
         };
     } else {
-        messages = convertToAnthropicFormat(fixedContents, modelEntry);
+        // Preserve current custom-provider behavior: any concrete provider type
+        // not recognized as OpenAI-compatible uses Anthropic serialization.
+        messages = convertToAnthropicFormat(providerContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
             'Content-Type': 'application/json',
@@ -1324,34 +2690,52 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             'anthropic-beta': 'interleaved-thinking-2025-05-14',
             'user-agent': 'foxwarm/1.0',
         };
-
         data = {
             model: modelName,
             max_tokens: MAX_OUTPUT,
-            thinking: THINKING_BUDGET ? { type: "enabled", budget_tokens: THINKING_BUDGET } : undefined,
-            system: options.systemPrompt,
-            messages: messages,
+            system: request.systemPrompt,
+            messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
                 name: fd.name,
                 description: fd.description,
-                input_schema: fd.parameters
-            })) : undefined
+                input_schema: fd.parameters,
+            })) : undefined,
         };
     }
 
-    const extraFields = modelEntry.extraFields || {};
-    Object.assign(data, extraFields);
-    if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
-        const { reasoning: extraReasoning } = extraFields;
-        const hasSummaryOverride = Object.prototype.hasOwnProperty.call(extraReasoning, 'summary');
-        data.reasoning = {
-            ...(data.reasoning || {}),
-            ...extraReasoning,
-            summary: hasSummaryOverride
-                ? extraReasoning.summary
-                : ((data.reasoning as any)?.summary || 'auto'),
-        };
+    const templateVars: Record<string, string> = {
+        SESSION_CACHE_KEY: providerPromptCacheKey,
+        TURN_ID: turnId,
+    };
+    const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
+    if (useOpenAIResponsesApi) {
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'tools')) {
+            if (imageGenerationTool) {
+                throw new Error(`Model \`${modelKey}\` enables imageGeneration, so extraFields.tools cannot replace the tool list; configure hosted tools with the first-class config fields instead.`);
+            }
+            if (arrayContainsImageGenerationTool(extraFields.tools)) {
+                throw new Error(`Model \`${modelKey}\` extraFields.tools must not declare the hosted image_generation tool; use the imageGeneration config field instead.`);
+            }
+        }
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'tool_choice')
+            && toolChoiceReferencesImageGeneration(extraFields.tool_choice)
+            && !imageGenerationTool) {
+            throw new Error(`Model \`${modelKey}\` extraFields.tool_choice references the image_generation tool, but no image generation tool is enabled for this request.`);
+        }
     }
+    if (useOpenAIResponsesWs) {
+        const reserved = ['input', 'previous_response_id', 'stream', 'type', 'background', 'context_management', 'conversation', 'stream_id'].filter(field =>
+            Object.prototype.hasOwnProperty.call(extraFields, field));
+        if (reserved.length > 0) {
+            throw new Error(`openai-ws extraFields cannot set transport-owned field${reserved.length === 1 ? '' : 's'}: ${reserved.join(', ')}.`);
+        }
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'store') && extraFields.store !== false) {
+            throw new Error('openai-ws requires store:false; extraFields cannot enable provider storage.');
+        }
+    }
+    Object.assign(data, extraFields);
+    applyFirstClassEffort(data, providerType, effectiveEffort);
+    if (useOpenAIResponsesWs) data.store = false;
 
     const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
     if (sanitizedRequestPayload.replacementCount > 0) {
@@ -1362,170 +2746,85 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             omittedPathCount: Math.max(0, sanitizedRequestPayload.paths.length - 20),
             providerType,
             modelKey,
-            sessionId: options.sessionId,
+            sessionId: request.sessionId,
         }, 'Sanitized lone surrogate code units from provider request payload');
     }
 
-    const logFiles = await logRequest(data, iteration);
-    const responseAttempts: any[] = [];
-    const buildChatResult = (result: Omit<ChatResult, 'modelId'>): ChatResult => ({
-        ...result,
-        modelId,
-    });
-    const returnWithLoggedFailure = async (text: string): Promise<ChatResult> => {
-        await moveInteractionLogsToErrorDir(logFiles);
-        return buildChatResult({
-            text,
-            allParts: [{ text }],
-        });
-    };
-
-    let response: AxiosResponse;
-    let resp: any;
-    const maxRetries = Math.max(1, options.maxRetries ?? 3);
-    const abortController = new AbortController();
-    const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
-    const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
-    const modelStreamEmitter = createModelStreamEventEmitter({
-        enabled: shouldNotifySessionEvents,
-        sessionId: options.sessionId,
-        iteration,
-    });
-
-    if (shouldRegisterAbortController) {
-        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
-    }
-    if (shouldNotifySessionEvents) {
-        modelStreamEmitter.reset();
-    }
-
     const { requestBody, requestHeaders: compressionHeaders } = maybeCompressLlmRequestBody(data, modelEntry);
+    return {
+        modelEntry,
+        modelKey,
+        modelId,
+        providerType,
+        requestedEffort,
+        effectiveEffort,
+        effortFallback,
+        url,
+        headers: {
+            ...headers,
+            ...expandTemplateVariables(modelEntry.extraHeaders || {}, templateVars),
+        },
+        data,
+        requestBody,
+        compressionHeaders,
+        useOpenAIResponsesApi,
+        useOpenAIResponsesWs,
+        useOpenAIChatCompletionsApi,
+        useStreamingApi,
+        usesHostedImageGeneration: !!imageGenerationTool,
+        // Raw content capture is disabled whenever the request can carry or
+        // receive hosted image bytes: either the tool is declared for this
+        // purpose, the effective config enables it, or history replays a
+        // native generated-image call. This keeps the log policy aligned with
+        // the real request instead of the UI-level enablement alone.
+        rawStreamDiagnosticsOnly: useOpenAIResponsesApi && (
+            modelEntry.imageGeneration?.enabled === true
+            || (Array.isArray(messages) && messages.some((item: any) => item?.type === 'image_generation_call'))
+        ),
+    };
+}
 
-    try {
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                response = await axios.post(url, requestBody, {
-                    headers: { ...headers, ...compressionHeaders, ...(modelEntry.extraHeaders || {}) },
-                    timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
-                    validateStatus: () => true,
-                    signal: abortController.signal,
-                    ...(useStreamingApi ? { responseType: 'stream' as const } : {}),
-                });
-
-                if (useStreamingApi) {
-                    if (response.status !== 200) {
-                        const errorBody = await readStreamAsText(response.data, abortController.signal);
-                        await logResponse({
-                            status: response.status + ' ' + response.statusText,
-                            headers: response.headers,
-                            body: errorBody
-                        }, logFiles);
-                        logger.error({
-                            status: response.status + ' ' + response.statusText,
-                            headers: response.headers,
-                            body: errorBody
-                        }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                        if (attempt === maxRetries) {
-                            return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
-                        }
-                        await sleepWithSignal(5000, abortController.signal);
-                        continue;
-                    }
-
-                    if (useOpenAIResponsesApi) {
-                        resp = await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, {
-                            onProgress: shouldNotifySessionEvents
-                                ? (snapshot) => modelStreamEmitter.emit(snapshot)
-                                : undefined,
-                        });
-                    } else {
-                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, {
-                            onProgress: shouldNotifySessionEvents
-                                ? (snapshot) => modelStreamEmitter.emit(snapshot)
-                                : undefined,
-                        });
-                    }
-
-                    await logResponse({
-                        status: response.status + ' ' + response.statusText,
-                        headers: response.headers,
-                        body: resp
-                    }, logFiles);
-                } else {
-                    resp = response.data;
-                    await logResponse({
-                        status: response.status + ' ' + response.statusText,
-                        headers: response.headers,
-                        body: resp
-                    }, logFiles);
-                }
-
-                if (response.status !== 200) {
-                    logger.error({
-                        status: response.status + ' ' + response.statusText,
-                        headers: response.headers,
-                        body: resp
-                    }, `LLM API Error (Attempt ${attempt}/${maxRetries})`);
-                    if (attempt === maxRetries) {
-                        return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts`);
-                    }
-                    await sleepWithSignal(2000, abortController.signal);
-                    continue;
-                }
-                break;
-            } catch (e: any) {
-                if (isAbortError(e)) {
-                    responseAttempts.push({
-                        attempt,
-                        kind: 'abort',
-                        error: e?.message || String(e),
-                        code: e?.code,
-                        name: e?.name,
-                    });
-                    await logResponse({ attempts: responseAttempts }, logFiles);
-                    await moveInteractionLogsToErrorDir(logFiles);
-                    throw e;
-                }
-
-                responseAttempts.push({
-                    attempt,
-                    kind: 'network-error',
-                    error: e?.message || String(e),
-                    code: e?.code,
-                    name: e?.name,
-                });
-                await logResponse({ attempts: responseAttempts }, logFiles);
-                logger.error({ status: (e as AxiosResponse)?.status }, `LLM API Network Error (Attempt ${attempt}/${maxRetries})`);
-                if (attempt === maxRetries) {
-                    return returnWithLoggedFailure(`Error: API request failed after ${maxRetries} attempts: ${e?.message || e}`);
-                }
-                await sleepWithSignal(2000, abortController.signal);
-            }
-        }
-    } finally {
-        modelStreamEmitter.flush();
-        if (shouldRegisterAbortController) {
-            sessionManager.clearSessionAbortController(options.sessionId!, abortController);
-        }
-    }
-
+async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Promise<ChatResult> {
     let responseText = '';
     const allParts: Message['parts'] = [];
+    let messageProviderMeta: ChatResult['providerMeta'];
+    let successfulImageCount = 0;
+    let imageFailureNote: string | undefined;
+    let imageFailureCount = 0;
 
-    if (useOpenAIResponsesApi) {
-        const outputItems = Array.isArray(resp.output) ? resp.output : [];
-
-        if (outputItems.length === 0) {
-            return returnWithLoggedFailure('Error: No response from OpenAI Responses API');
-        }
-
-        for (const item of outputItems) {
+    if (plan.useOpenAIResponsesApi) {
+        const outputItems = Array.isArray(resp?.output) ? resp.output : [];
+        // Externalize hosted image results before any logging or journaling so
+        // only Blob references survive past this await boundary.
+        const generatedImages = await externalizeGeneratedImageItems(outputItems, { sourceModelId: plan.modelId });
+        const generatedImagePartByIndex = new Map(generatedImages.images.map(entry => [entry.index, entry.part]));
+        for (let outputIndex = 0; outputIndex < outputItems.length; outputIndex += 1) {
+            const item = outputItems[outputIndex];
+            if (isImageGenerationCallItem(item)) {
+                // Hosted image tools are completed by OpenAI inside this
+                // request. Keep the safe output metadata for same-model replay
+                // and never expose it as a Foxwarm function call.
+                const imagePart = generatedImagePartByIndex.get(outputIndex);
+                if (imagePart) allParts.push(imagePart);
+                continue;
+            }
+            if (item.type === 'web_search_call') {
+                // Hosted Responses tools are completed by OpenAI inside this
+                // request. Keep the output item for same-model history replay,
+                // but never expose it as a Foxwarm function call.
+                allParts.push({
+                    providerMeta: {
+                        openaiResponses: {
+                            sourceModelId: plan.modelId,
+                            outputItem: item,
+                        },
+                    },
+                });
+                continue;
+            }
             if (item.type === 'reasoning') {
                 const summaryText = Array.isArray(item.summary)
-                    ? item.summary
-                        .map((entry: any) => entry?.text || entry?.summary || '')
-                        .filter(Boolean)
-                        .join('\n')
+                    ? item.summary.map((entry: any) => entry?.text || entry?.summary || '').filter(Boolean).join('\n')
                     : '';
                 allParts.push({
                     thinking: summaryText,
@@ -1536,131 +2835,727 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 });
                 continue;
             }
-
             if (item.type === 'message' && item.role === 'assistant') {
+                const phase = item.phase === 'commentary' || item.phase === 'final_answer'
+                    ? item.phase
+                    : undefined;
                 for (const contentPart of item.content || []) {
-                    if (contentPart.type === 'output_text' && contentPart.text) {
+                    if (contentPart.type === 'output_text' && typeof contentPart.text === 'string') {
                         responseText += contentPart.text;
-                        allParts.push({ text: contentPart.text });
-                    } else if (contentPart.type === 'refusal' && contentPart.refusal) {
+                        const annotations = Array.isArray(contentPart.annotations) && contentPart.annotations.length > 0
+                            ? contentPart.annotations
+                            : undefined;
+                        allParts.push({
+                            text: contentPart.text,
+                            ...(phase ? { phase } : {}),
+                            ...(annotations ? {
+                                providerMeta: {
+                                    openaiResponses: {
+                                        sourceModelId: plan.modelId,
+                                        annotations,
+                                    },
+                                },
+                            } : {}),
+                        });
+                    } else if (contentPart.type === 'refusal' && typeof contentPart.refusal === 'string') {
                         responseText += contentPart.refusal;
-                        allParts.push({ text: contentPart.refusal });
+                        allParts.push({ text: contentPart.refusal, ...(phase ? { phase } : {}) });
                     }
                 }
                 continue;
             }
-
             if (item.type === 'function_call') {
                 const parsedArgs = parseFunctionCallArgs(item.arguments);
                 const callId = item.call_id || item.id;
                 if (parsedArgs.argsParseError) {
-                    logger.warn({ providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
+                    logger.warn({ providerType: plan.providerType, callId, toolName: item.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI Responses tool arguments; converting to structured tool error');
                 }
-                allParts.push({
-                    functionCall: {
-                        id: callId,
-                        name: item.name,
-                        ...parsedArgs,
-                    }
-                });
+                allParts.push({ functionCall: { id: callId, name: item.name, ...parsedArgs } });
             }
         }
-    } else if (useOpenAIChatCompletionsApi) {
-        const choice = resp.choices?.[0];
-        if (!choice) {
-            return buildChatResult({
-                text: 'Error: No response from OpenAI API',
-                allParts: [{ text: 'Error: No response from OpenAI API' }],
-            });
+        successfulImageCount = generatedImages.images.length;
+        imageFailureCount = generatedImages.failures.length;
+        imageFailureNote = formatGeneratedImageFailureNote(generatedImages.failures);
+        if (successfulImageCount > 0 && imageFailureNote) {
+            allParts.push({ text: imageFailureNote });
+            logger.warn({
+                providerType: plan.providerType,
+                modelId: plan.modelId,
+                failureCount: generatedImages.failures.length,
+                successCount: successfulImageCount,
+            }, 'Some hosted image generation items could not be externalized');
         }
-
-        const message = choice.message;
-
-        if (message.reasoning_content) {
-            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
-            allParts.push({ thinking: message.reasoning_content });
+    } else if (plan.useOpenAIChatCompletionsApi) {
+        const choice = resp?.choices?.[0];
+        const message = choice?.message;
+        if (
+            message?.provider_specific_fields
+            && typeof message.provider_specific_fields === 'object'
+            && !Array.isArray(message.provider_specific_fields)
+        ) {
+            messageProviderMeta = {
+                providerSpecificFields: message.provider_specific_fields,
+                sourceModelId: plan.modelId,
+            };
         }
-
-        if (message.content) {
+        const reasoningContent = message?.reasoning_content
+            || (typeof message?.reasoning === 'string' ? message.reasoning : undefined);
+        if (reasoningContent) {
+            logger.info({ reasoningLength: reasoningContent.length }, 'Received reasoning content from OpenAI');
+            allParts.push({ thinking: reasoningContent });
+        }
+        if (typeof message?.content === 'string') {
             responseText = message.content;
             allParts.push({ text: message.content });
         }
-
-        if (message.tool_calls) {
+        if (Array.isArray(message?.tool_calls)) {
             for (const toolCall of message.tool_calls) {
                 if (toolCall.type === 'function') {
                     const parsedArgs = parseFunctionCallArgs(toolCall.function.arguments);
                     if (parsedArgs.argsParseError) {
-                        logger.warn({ providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
+                        logger.warn({ providerType: plan.providerType, callId: toolCall.id, toolName: toolCall.function.name, rawArgsText: parsedArgs.rawArgsText }, 'Failed to parse OpenAI chat tool arguments; converting to structured tool error');
                     }
                     allParts.push({
-                        functionCall: {
-                            id: toolCall.id,
-                            name: toolCall.function.name,
-                            ...parsedArgs,
-                        }
+                        functionCall: { id: toolCall.id, name: toolCall.function.name, ...parsedArgs },
                     });
                 }
             }
         }
-    } else {
-        if (resp.content) {
-            for (const rawBlock of resp.content) {
-                const block = rawBlock as AnthropicContentBlock;
-                if (block.type === 'text') {
-                    const extractedParts = block.text ? extractAnthropicThinkingTaggedParts(block.text) : null;
-                    if (extractedParts) {
-                        for (const part of extractedParts) {
-                            if (part.text) {
-                                responseText += part.text;
-                            }
-                            allParts.push(part);
-                        }
-                    } else {
-                        responseText += block.text;
-                        allParts.push({ text: block.text });
+    } else if (Array.isArray(resp?.content)) {
+        for (const rawBlock of resp.content) {
+            const block = rawBlock as AnthropicContentBlock;
+            if (block.type === 'text') {
+                const blockText = typeof block.text === 'string' ? block.text : '';
+                const extractedParts = blockText ? extractAnthropicThinkingTaggedParts(blockText) : null;
+                if (extractedParts) {
+                    for (const part of extractedParts) {
+                        if (part.text) responseText += part.text;
+                        allParts.push(part);
                     }
-                } else if (block.type === 'thinking') {
-                    const thinkingPart: MessagePart = { thinking: block.thinking };
-                    if (block.signature) {
-                        thinkingPart.providerMeta = { signature: block.signature };
-                    }
-                    allParts.push(thinkingPart);
-                } else if (block.type === 'tool_use') {
-                    allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
+                } else {
+                    responseText += blockText;
+                    allParts.push({ text: blockText });
                 }
+            } else if (block.type === 'thinking') {
+                const thinkingPart: MessagePart = { thinking: block.thinking };
+                if (block.signature) thinkingPart.providerMeta = { signature: block.signature };
+                allParts.push(thinkingPart);
+            } else if (block.type === 'tool_use') {
+                allParts.push({ functionCall: { id: block.id, name: block.name, args: block.input } });
             }
         }
     }
 
+    const toolCalls = allParts.filter(part => !!part.functionCall).map(part => part.functionCall!);
+    if (!responseText.trim() && toolCalls.length === 0 && successfulImageCount === 0) {
+        if (imageFailureCount > 0) {
+            // A failed image attempt is not an empty completion. Report the
+            // real cause and never silently retry a possibly billed request.
+            throw new ConcreteAttemptFailure(imageFailureNote || 'Hosted image generation produced no usable image.', {
+                kind: 'response-error',
+                retryable: false,
+                countable: false,
+            });
+        }
+        if (plan.modelEntry.disallowEmptyResponse === true) {
+            throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
+                kind: 'response-error',
+                retryable: true,
+                countable: true,
+            });
+        }
+        logger.warn({
+            providerType: plan.providerType,
+            modelKey: plan.modelKey,
+            modelId: plan.modelId,
+        }, 'Model completed with no non-whitespace content or tool call; accepting the empty completion.');
+    }
+
+    const getReportedReasoningTokens = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
     let usage: TokenUsage = null;
-    if (useOpenAIResponsesApi) {
-        const cached = resp.usage?.input_tokens_details?.cached_tokens || 0;
-        usage = resp.usage ? {
+    if (plan.useOpenAIResponsesApi) {
+        const cached = resp?.usage?.input_tokens_details?.cached_tokens || 0;
+        // OpenAI Responses exposes this output component as
+        // usage.output_tokens_details.reasoning_tokens. output_tokens remains
+        // the complete output count, including reasoning.
+        const reasoningTokens = getReportedReasoningTokens(resp?.usage?.output_tokens_details?.reasoning_tokens);
+        usage = resp?.usage ? {
             inputTokens: resp.usage.input_tokens - cached,
             outputTokens: resp.usage.output_tokens,
-            cachedTokens: cached
+            cachedTokens: cached,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
-    } else if (useOpenAIChatCompletionsApi) {
-        usage = resp.usage ? {
-            inputTokens: resp.usage.prompt_tokens,
+    } else if (plan.useOpenAIChatCompletionsApi) {
+        const cached = resp?.usage?.prompt_tokens_details?.cached_tokens || 0;
+        // OpenAI Chat Completions exposes this output component as
+        // usage.completion_tokens_details.reasoning_tokens. completion_tokens
+        // remains the complete output count, including reasoning.
+        const reasoningTokens = getReportedReasoningTokens(resp?.usage?.completion_tokens_details?.reasoning_tokens);
+        usage = resp?.usage ? {
+            inputTokens: resp.usage.prompt_tokens - cached,
             outputTokens: resp.usage.completion_tokens,
-            cachedTokens: 0
+            cachedTokens: cached,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else {
-        usage = resp.usage ? {
+        usage = resp?.usage ? {
             inputTokens: resp.usage.input_tokens,
             outputTokens: resp.usage.output_tokens,
-            cachedTokens: resp.usage.cache_read_input_tokens || 0
+            cachedTokens: resp.usage.cache_read_input_tokens || 0,
         } : null;
     }
 
-    const toolCalls = allParts.filter(x => x.functionCall).map(x => x.functionCall);
-
-    return buildChatResult({
+    return {
         text: responseText,
+        modelId: plan.modelId,
         usage,
         toolCalls,
         allParts: allParts.length > 0 ? allParts : undefined,
+        ...(messageProviderMeta ? { providerMeta: messageProviderMeta } : {}),
+    };
+}
+
+async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<InternalLlmResult> {
+    // Repair the provider-neutral source form first. This exact canonical
+    // array is journaled before clone-only provider hydration, so durable
+    // session image references are never expanded into provider base64 here.
+    const canonicalContents = stripReservedProviderImageHelperFields(
+        fixToolCalls(structuredClone(options.contents || [])),
+    );
+    const resolvedModel = options.modelsConfigOverride
+        ? (() => {
+            const modelsConfig = options.modelsConfigOverride!;
+            const defaultKey = modelsConfig.default;
+            const currentKey = options.model && modelsConfig.models[options.model] ? options.model : defaultKey;
+            return {
+                modelsConfig,
+                defaultKey,
+                currentKey,
+                modelEntry: modelsConfig.models[currentKey] || modelsConfig.models[defaultKey],
+            };
+        })()
+        : resolveModelConfig(options.model);
+    const routeEntry = options.modelEntryOverride || resolvedModel.modelEntry;
+    const routeKey = options.modelEntryOverride
+        ? `${options.modelEntryOverride.providerKey || 'setup'}/${options.modelEntryOverride.model || 'model'}`
+        : resolvedModel.currentKey;
+    if (!routeEntry) {
+        throw new Error(`Unable to resolve model config for \`${routeKey}\`.`);
+    }
+    if (options.modelEntryOverride && isVirtualModelConfigEntry(routeEntry)) {
+        throw new Error('modelEntryOverride does not support virtual model routing; select a configured model key instead.');
+    }
+
+    // Activation is an independent-request boundary. Retries use this captured
+    // generation and cannot reactivate an obsolete configuration fingerprint.
+    const virtualRoutingRequest: VirtualRoutingRequest | undefined = isVirtualModelConfigEntry(routeEntry)
+        ? beginVirtualRoutingRequest(routeKey, routeEntry)
+        : undefined;
+    if (!virtualRoutingRequest) clearVirtualRoutingState(routeKey);
+
+    // Resolve once per outer request. Every retry attempt, including virtual
+    // failover attempts, shares this prefix-lineage routing key. A selected
+    // openai-ws leaf derives its provider-facing cache key later, inside the
+    // complete concrete request plan, without changing this routing lineage.
+    const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
+    // A low-level caller may omit the turn identity. Keep one generated value
+    // for this whole request so retries expand `${TURN_ID}` consistently;
+    // normal session turns provide their own value from SessionTurnRunner.
+    const turnId = options.turnId || randomUUID();
+    // Resolve the provider-neutral requested effort once for this entire outer
+    // request. Each physical concrete attempt may fall back independently to
+    // its leaf default when the selected leaf does not allow that request.
+    const requestedEffort = normalizeRequestedEffort(options.effort);
+    // Allocate the stable outer-request identity before streaming setup. The
+    // manifest is written after attempt 1 selects its concrete model and
+    // resolves the exact effective prompt, but still before provider send.
+    const requestId = randomUUID();
+    let requestJournalStarted = false;
+    const requestedMaxAttempts = options.maxRetries ?? DEFAULT_LLM_MAX_ATTEMPTS;
+    const maxAttempts = Number.isFinite(requestedMaxAttempts)
+        ? Math.max(1, Math.floor(requestedMaxAttempts))
+        : DEFAULT_LLM_MAX_ATTEMPTS;
+    const iteration = options.iteration || 0;
+    const responseAttempts: any[] = [];
+    const abortController = new AbortController();
+    const abortFromCaller = () => abortController.abort();
+    if (options.abortSignal?.aborted) abortController.abort();
+    else options.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
+    const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
+    const modelStreamEmitter = createModelStreamEventEmitter({
+        enabled: shouldNotifySessionEvents,
+        sessionId: options.sessionId,
+        iteration,
+        llmRequestId: requestId,
+        currentSessionEffects: options.currentSessionEffects,
     });
+    let logFiles: LlmInteractionLogFiles | null = null;
+    const virtualRequestSelections: Array<{
+        attempt: number;
+        modelId: string;
+        requestedEffort?: ModelEffort;
+        effectiveEffort: ModelEffort;
+        effortFallback: boolean;
+    }> = [];
+    let requestStartedAt: number | undefined;
+
+    const notifyRetry = async (event: LlmRetryEvent): Promise<void> => {
+        if (!options.onRetry) return;
+        try {
+            await options.onRetry(event);
+        } catch (error) {
+            logger.warn({ err: error, sessionId: options.sessionId, attempt: event.attempt }, 'LLM retry notification failed');
+        }
+    };
+
+    if (shouldRegisterAbortController) {
+        if (options.currentSessionEffects) options.currentSessionEffects.registerAbortController(options.sessionId!, abortController);
+        else sessionManager.registerSessionAbortController(options.sessionId!, abortController);
+    }
+    if (shouldNotifySessionEvents) modelStreamEmitter.reset();
+
+    try {
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            if (attempt > 1 && shouldNotifySessionEvents) modelStreamEmitter.reset();
+
+            let selection: VirtualTargetSelection | undefined;
+            let modelEntry = routeEntry;
+            let modelKey = routeKey;
+            if (virtualRoutingRequest) {
+                selection = selectVirtualTarget(virtualRoutingRequest, promptCacheKey);
+                modelKey = selection.targetKey;
+                const concreteEntry = resolvedModel.modelsConfig.models[modelKey];
+                if (!concreteEntry || isVirtualModelConfigEntry(concreteEntry)) {
+                    throw new Error(`Virtual model \`${routeKey}\` resolved invalid concrete target \`${modelKey}\`.`);
+                }
+                modelEntry = concreteEntry;
+            }
+
+            const concreteModelId = getModelIdForMetadata(modelEntry, modelKey);
+            const requestApi = getOpenAIRequestApi(modelEntry.providerType || 'openai');
+            const providerContents = prepareHistoryForConcreteModel(canonicalContents, concreteModelId);
+            // This runs outside the transport retry catch: unreadable original
+            // blobs and local decoding failures cannot fail over or count as
+            // model/provider health failures.
+            const fixedContents = await hydrateMessagesForProvider(providerContents, {
+                protocol: requestApi === 'responses' ? 'openai-responses'
+                    : requestApi === 'chat-completions' ? 'openai-chat-completions' : 'anthropic',
+                concreteModelId,
+                outputFormat: PROVIDER_IMAGE_OUTPUT_FORMAT,
+            });
+            const effectiveSystemPrompt = options.resolveSystemPromptForModel
+                ? await options.resolveSystemPromptForModel(concreteModelId)
+                : options.systemPrompt || '';
+            const attemptRequest = effectiveSystemPrompt === options.systemPrompt
+                ? options
+                : { ...options, systemPrompt: effectiveSystemPrompt };
+            const plan = buildConcreteRequestPlan({
+                request: attemptRequest,
+                fixedContents,
+                modelEntry,
+                modelKey,
+                promptCacheKey,
+                turnId,
+                attempt,
+                requestedEffort,
+            });
+            if (!requestJournalStarted) {
+                await beginLlmRequestJournal({
+                    requestId,
+                    sessionId: options.sessionId,
+                    purpose: options.purpose || 'low-level',
+                    iteration: options.iteration || 0,
+                    systemPrompt: effectiveSystemPrompt,
+                    toolDefinitions: options.toolDefinitions || [],
+                    messages: canonicalContents,
+                    requestedModelKey: routeKey,
+                    promptCacheKey,
+                });
+                requestJournalStarted = true;
+            }
+            await appendLlmAttemptStart({
+                requestId,
+                attempt,
+                concreteModelId: plan.modelId,
+                ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                providerType: plan.providerType,
+                semanticPayload: plan.data,
+                systemPrompt: effectiveSystemPrompt,
+            });
+            logger.info({
+                modelKey,
+                providerType: plan.providerType,
+                requestedEffort: plan.requestedEffort || 'default',
+                effectiveEffort: plan.effectiveEffort,
+                effortFallback: plan.effortFallback,
+                iteration,
+                attempt,
+                maxAttempts,
+                ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+            }, 'Requesting LLM');
+            if (isVirtualModelConfigEntry(routeEntry)) {
+                virtualRequestSelections.push({
+                    attempt,
+                    modelId: plan.modelId,
+                    requestedEffort: plan.requestedEffort,
+                    effectiveEffort: plan.effectiveEffort,
+                    effortFallback: plan.effortFallback,
+                });
+                const virtualRequestLog = {
+                    virtualModelKey: routeKey,
+                    selections: virtualRequestSelections,
+                    selectedModelId: plan.modelId,
+                    request: plan.data,
+                };
+                if (!logFiles) {
+                    logFiles = await logRequest(virtualRequestLog, iteration);
+                } else {
+                    await fs.writeJson(logFiles.requestPath, redactProviderImagesForLog(virtualRequestLog), { spaces: 2 }).catch(error => {
+                        logger.warn({ err: error, virtualModelKey: routeKey, attempt }, 'Failed to update virtual LLM request log');
+                    });
+                }
+            } else if (!logFiles) {
+                logFiles = await logRequest(plan.data, iteration);
+            }
+
+            let attemptRawStreamLog: RawStreamCapture | null = null;
+            let attemptHistoryAppendFinalizer: OpenAIWsHistoryAppendFinalizer | undefined;
+            let resp: any;
+            let response: AxiosResponse | undefined;
+            let responseStatus = '';
+            let responseHeaders: any;
+            let cleanupStreamingAttempt = () => {};
+            let streamingTimeoutError: Error | undefined;
+            try {
+                if (requestStartedAt === undefined) {
+                    requestStartedAt = performance.now();
+                }
+                attemptRawStreamLog = (plan.useStreamingApi || plan.useOpenAIResponsesWs)
+                    ? plan.rawStreamDiagnosticsOnly
+                        ? createRawStreamDiagnosticsCapture()
+                        : createRawStreamLogCapture()
+                    : null;
+                let attemptSignal = abortController.signal;
+                let markMeaningfulProgress: (() => void) | undefined;
+                let handleSafetyBuffering: ((metadata: Record<string, unknown>) => void) | undefined;
+                let imageGenerationWatchdog: { reportImageGenerationActivity(): void } | undefined;
+                if (plan.useStreamingApi) {
+                    const attemptAbortController = new AbortController();
+                    const abortAttemptFromOuter = () => attemptAbortController.abort();
+                    if (abortController.signal.aborted) attemptAbortController.abort();
+                    else abortController.signal.addEventListener('abort', abortAttemptFromOuter, { once: true });
+                    const watchdog = createStreamingAttemptWatchdog({
+                        hardTimeoutMs: options.timeoutMs,
+                        streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
+                        onTimeout: error => {
+                            streamingTimeoutError = error;
+                            attemptAbortController.abort();
+                        },
+                    });
+                    attemptSignal = attemptAbortController.signal;
+                    markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
+                    imageGenerationWatchdog = watchdog;
+                    handleSafetyBuffering = metadata => {
+                        const boundedMetadata = boundSafetyBufferingMetadata(metadata);
+                        const inactivityTimeoutMs = watchdog.enterSafetyBuffering(boundedMetadata);
+                        logger.warn({
+                            sessionId: options.sessionId,
+                            purpose: options.purpose || 'low-level',
+                            llmRequestId: requestId,
+                            iteration,
+                            attempt,
+                            metadata: boundedMetadata,
+                        }, `OpenAI response entered safety buffering; extending the output inactivity timeout to ${inactivityTimeoutMs}ms.`);
+                    };
+                    cleanupStreamingAttempt = () => {
+                        watchdog.finish();
+                        abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
+                    };
+                }
+                const streamCollectOptions = {
+                    onProgress: shouldNotifySessionEvents
+                        ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
+                        : undefined,
+                    onMeaningfulProgress: markMeaningfulProgress,
+                    onSafetyBuffering: handleSafetyBuffering,
+                    onImageGenerationActivity: () => {
+                        imageGenerationWatchdog?.reportImageGenerationActivity();
+                    },
+                    onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
+                    onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
+                };
+
+                if (plan.useOpenAIResponsesWs) {
+                    logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM WebSocket request');
+                    const pending = await requestOpenAIResponsesWs({
+                        url: plan.url,
+                        headers: plan.headers,
+                        concreteIdentity: plan.modelKey,
+                        data: plan.data,
+                        placement: options.currentSessionEffects?.placement || 'local',
+                        signal: abortController.signal,
+                        hardTimeoutMs: options.timeoutMs,
+                        streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
+                        diagnostics: {
+                            sessionId: options.sessionId,
+                            purpose: options.purpose || 'low-level',
+                            llmRequestId: requestId,
+                            iteration,
+                            attempt,
+                        },
+                        onProgress: streamCollectOptions.onProgress,
+                        onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
+                        onRawFrame: frame => {
+                            attemptRawStreamLog?.appendChunk(`${frame}\n`);
+                            attemptRawStreamLog?.appendSseBlock(frame);
+                        },
+                    });
+                    resp = pending.response;
+                    responseStatus = '101 WebSocket';
+                    responseHeaders = {};
+                    const unsafeReplayProjection = Array.isArray(resp?.output)
+                        && resp.output.some((item: any) => (
+                            item?.type === 'message'
+                                && Array.isArray(item.content)
+                                && item.content.some((part: any) => part?.type === 'refusal')
+                        ) || (
+                            item?.type === 'function_call'
+                                && (
+                                    !(typeof (item.call_id || item.id) === 'string' && (item.call_id || item.id).trim())
+                                    || !!parseFunctionCallArgs(item.arguments).argsParseError
+                                )
+                        ));
+                    // A response that produced a hosted image cannot reuse the
+                    // WebSocket chain: the finalizer projects the committed
+                    // message without the hydrated native image data, so the
+                    // next turn must send the full local history instead.
+                    const responseHasGeneratedImages = Array.isArray(resp?.output)
+                        && resp.output.some((item: any) => isCompletedImageGenerationItem(item));
+                    attemptHistoryAppendFinalizer = outcome => {
+                        if (!outcome.appended || unsafeReplayProjection || responseHasGeneratedImages) {
+                            pending.finalize(false);
+                            return;
+                        }
+                        try {
+                            const replayMessage = prepareHistoryForConcreteModel([outcome.message], plan.modelId);
+                            const replayItems = convertToOpenAIResponsesFormatProvider(replayMessage, plan.modelId);
+                            pending.finalize(replayItems);
+                        } catch (error) {
+                            pending.finalize(false);
+                            throw error;
+                        }
+                    };
+                } else {
+                    logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
+                    response = await axios.post(plan.url, plan.requestBody, {
+                        headers: { ...plan.headers, ...plan.compressionHeaders },
+                        timeout: plan.useStreamingApi ? 0 : (options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS),
+                        validateStatus: () => true,
+                        signal: attemptSignal,
+                        ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
+                    });
+                    responseStatus = `${response.status} ${response.statusText}`.trim();
+                    responseHeaders = response.headers;
+                    if (response.status !== 200) {
+                        const errorBody = plan.useStreamingApi
+                            ? await readStreamAsText(response.data, attemptSignal)
+                            : response.data;
+                        const classification = classifyHttpFailure(response.status, errorBody);
+                        throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || responseStatus), {
+                            kind: 'http-error',
+                            status: responseStatus,
+                            ...classification,
+                            logDetail: { headers: response.headers, body: errorBody },
+                        });
+                    }
+                }
+
+                if (plan.useStreamingApi && response) {
+                    resp = plan.useOpenAIResponsesApi
+                        ? await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions)
+                        : await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                } else if (!plan.useOpenAIResponsesWs && response) {
+                    resp = response.data;
+                }
+
+                cleanupStreamingAttempt();
+                const result = await parseConcreteProviderResponse(plan, resp);
+                const completedAt = Date.now();
+                const durationMs = Math.max(0, performance.now() - requestStartedAt);
+                if (virtualRoutingRequest && selection) {
+                    recordVirtualTargetSuccess(virtualRoutingRequest, selection.targetKey);
+                }
+                await logResponse({
+                    status: responseStatus,
+                    headers: responseHeaders,
+                    body: resp,
+                    ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                    ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
+                }, logFiles);
+                // A post-response journal failure must never enter the provider
+                // retry path and generate a duplicate successful completion.
+                // Attempt-start remains durable and exposes the incomplete
+                // result; normal session delivery proceeds.
+                const previousLlmRequest = { completedAt, durationMs };
+                const completedResult: ChatResult = virtualRoutingRequest
+                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt }
+                    : { ...result, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt };
+                await appendLlmAttemptResult({
+                    requestId,
+                    attempt,
+                    outcome: 'success',
+                    result: completedResult,
+                }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
+                return {
+                    result: completedResult,
+                    ...(attemptHistoryAppendFinalizer ? { finalizeHistoryAppend: attemptHistoryAppendFinalizer } : {}),
+                };
+            } catch (error: any) {
+                cleanupStreamingAttempt();
+                if (streamingTimeoutError) error = streamingTimeoutError;
+                settleHistoryAppendFinalizer(
+                    attemptHistoryAppendFinalizer,
+                    { appended: false },
+                    'Failed to discard provider state after LLM attempt failure',
+                );
+                if (isAbortError(error)) {
+                    responseAttempts.push({
+                        attempt,
+                        modelId: plan.modelId,
+                        requestedEffort: plan.requestedEffort || 'default',
+                        effectiveEffort: plan.effectiveEffort,
+                        effortFallback: plan.effortFallback,
+                        ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                        kind: 'abort',
+                        error: error?.message || String(error),
+                        code: error?.code,
+                        name: error?.name,
+                        ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                    });
+                    await logResponse({ attempts: responseAttempts }, logFiles);
+                    await appendLlmAttemptResult({ requestId, attempt, outcome: 'abort', error: { message: error?.message || String(error), code: error?.code, name: error?.name } })
+                        .catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append aborted LLM attempt result'));
+                    await moveInteractionLogsToErrorDir(logFiles);
+                    throw error;
+                }
+
+                let failure = error instanceof ConcreteAttemptFailure
+                    ? error
+                    : error instanceof GeneratedImageReplayError
+                    // Local recovery failure: the stored bytes for an already
+                    // generated image are gone, so the provider was never
+                    // called. Retrying cannot restore them and failing over
+                    // could pay for a duplicate generation.
+                    ? new ConcreteAttemptFailure(error.message, {
+                        kind: 'request-error',
+                        retryable: false,
+                        countable: false,
+                        logDetail: { error: error.message, name: error.name },
+                    })
+                    : new ConcreteAttemptFailure(summarizeRetryReason(error), {
+                        kind: 'request-error',
+                        status: (error as AxiosResponse)?.status ? String((error as AxiosResponse).status) : undefined,
+                        retryable: true,
+                        countable: true,
+                        logDetail: {
+                            error: error?.message || String(error),
+                            code: error?.code,
+                            name: error?.name,
+                            ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                        },
+                    });
+                responseAttempts.push({
+                    attempt,
+                    modelId: plan.modelId,
+                    requestedEffort: plan.requestedEffort || 'default',
+                    effectiveEffort: plan.effectiveEffort,
+                    effortFallback: plan.effortFallback,
+                    ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                    kind: failure.kind,
+                    status: failure.status,
+                    error: failure.message,
+                    ...(failure.logDetail || (failure.kind === 'response-error' ? {
+                        headers: response?.headers,
+                        body: resp,
+                        ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
+                    } : {})),
+                });
+                await logResponse({ attempts: responseAttempts }, logFiles);
+                await appendLlmAttemptResult({
+                    requestId,
+                    attempt,
+                    outcome: 'failure',
+                    error: { kind: failure.kind, status: failure.status, message: failure.message, retryable: failure.retryable, countable: failure.countable },
+                }).catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append failed LLM attempt result'));
+                logger.error({
+                    modelId: plan.modelId,
+                    virtualModelKey: isVirtualModelConfigEntry(routeEntry) ? routeKey : undefined,
+                    kind: failure.kind,
+                    status: failure.status,
+                }, `LLM attempt failed (${attempt}/${maxAttempts})`);
+
+                let routeTerminal = false;
+                if (failure.countable && virtualRoutingRequest && selection) {
+                    routeTerminal = recordVirtualTargetFailure(virtualRoutingRequest, selection).terminal;
+                }
+                const final = !failure.retryable || routeTerminal || attempt === maxAttempts;
+                const retryEvent: LlmRetryEvent = {
+                    attempt,
+                    maxRetries: maxAttempts,
+                    kind: failure.kind,
+                    reason: failure.message,
+                    status: failure.status,
+                    modelId: plan.modelId,
+                    ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                };
+                if (final) {
+                    await notifyRetry({ ...retryEvent, final: true });
+                    await moveInteractionLogsToErrorDir(logFiles);
+                    throw new LlmRequestError(`API request failed after ${attempt} attempts: ${failure.message}`, {
+                        modelId: plan.modelId,
+                        attempt,
+                        maxRetries: maxAttempts,
+                        kind: failure.kind,
+                        status: failure.status,
+                        attempts: responseAttempts,
+                    });
+                }
+
+                const delayMs = getLlmRetryDelayMs(attempt);
+                await notifyRetry({
+                    ...retryEvent,
+                    nextAttempt: attempt + 1,
+                    delayMs,
+                });
+                await sleepWithSignal(delayMs, abortController.signal);
+            }
+        }
+    } finally {
+        options.abortSignal?.removeEventListener('abort', abortFromCaller);
+        modelStreamEmitter.close();
+        if (shouldRegisterAbortController) {
+            if (options.currentSessionEffects) options.currentSessionEffects.clearAbortController(options.sessionId!, abortController);
+            else sessionManager.clearSessionAbortController(options.sessionId!, abortController);
+        }
+    }
+
+    throw new LlmRequestError(`API request failed after ${maxAttempts} attempts`, {
+        maxRetries: maxAttempts,
+        attempts: responseAttempts,
+    });
+}
+
+export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+    const completion = await requestLlmOnceInternal(options);
+    // Low-level callers do not cross chat()'s canonical assistant-history
+    // boundary, so a provider-local state chain cannot become reusable here.
+    settleHistoryAppendFinalizer(
+        completion.finalizeHistoryAppend,
+        { appended: false },
+        'Failed to discard provider state after low-level LLM request',
+    );
+    return completion.result;
 }

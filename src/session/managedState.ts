@@ -120,7 +120,7 @@ export function shouldRouteQueueItemToManagedInbox(session: Session | null | und
     return false;
   }
 
-  return item.type !== 'compact' && item.type !== 'compact-commit';
+  return item.type !== 'compact-commit';
 }
 
 function getManagedSessionLastTouchedAt(state: ManagedSessionState): number {

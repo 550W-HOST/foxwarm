@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import * as sessionManager from './sessionManager';
 import { getAgentDir } from './config';
 import { nodesManager } from './nodes/manager';
+import { buildFoxwarmAttachmentText } from '../packages/shared/dist/foxwarmMarkup';
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -53,13 +54,13 @@ export async function resolveChannelAgentName(platform: string, channelUserId: s
     return 'main';
   }
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   return session?.agent || 'main';
 }
 
 async function resolveInboundSession(platform: string, channelUserId?: string, sessionId?: string) {
   if (typeof sessionId === 'string' && sessionId.trim()) {
-    return await sessionManager.getExistingSession(sessionId.trim());
+    return sessionManager.getSessionCatalog(sessionId.trim()) || null;
   }
 
   if (!channelUserId) {
@@ -71,7 +72,13 @@ async function resolveInboundSession(platform: string, channelUserId?: string, s
     return null;
   }
 
-  return await sessionManager.getExistingSession(resolvedSessionId);
+  return sessionManager.getSessionCatalog(resolvedSessionId) || null;
+}
+
+export async function isInboundSessionMainHosted(sessionId: string, platform = 'qqbot'): Promise<boolean> {
+  const session = await resolveInboundSession(platform, undefined, sessionId);
+  if (!session) return true;
+  return resolveInboundTargetNode(session, session.agent || 'main') === 'master';
 }
 
 function resolveInboundTargetNode(session: any, agentName: string): string {
@@ -117,14 +124,24 @@ function buildInboundStoragePaths(options: {
   };
 }
 
-async function saveInboundFile(options: {
+type InboundSaveOptions = {
   platform: string;
-  buffer: Buffer;
   fileName?: string;
   mimeType?: string;
   isImage?: boolean;
   session?: any;
-}): Promise<SavedChannelFile> {
+};
+
+type PreparedInboundFile = InboundSaveOptions & {
+  agentName: string;
+  nodeId: string;
+  mimeType: string;
+  isImage: boolean;
+  storedFileName: string;
+  paths: ReturnType<typeof buildInboundStoragePaths>;
+};
+
+function prepareInboundFile(options: InboundSaveOptions): PreparedInboundFile {
   const agentName = options.session?.agent || 'main';
   const nodeId = resolveInboundTargetNode(options.session, agentName);
 
@@ -141,32 +158,69 @@ async function saveInboundFile(options: {
     nodeId,
   });
 
-  let absolutePath = paths.absolutePath;
-  let promptPath = paths.promptPath;
+  return { ...options, agentName, nodeId, mimeType, isImage, storedFileName, paths };
+}
 
-  if (nodeId === 'master') {
-    await fs.ensureDir(path.dirname(paths.writePath));
-    await fs.writeFile(paths.writePath, options.buffer);
+function finishInboundFile(prepared: PreparedInboundFile, sizeBytes: number, absolutePath: string, promptPath: string): SavedChannelFile {
+  return {
+    agentName: prepared.agentName,
+    nodeId: prepared.nodeId,
+    absolutePath,
+    relativePath: prepared.paths.relativePath,
+    promptPath,
+    fileName: prepared.fileName || prepared.storedFileName,
+    mimeType: prepared.mimeType,
+    sizeBytes,
+    isImage: prepared.isImage,
+  };
+}
+
+async function saveInboundFile(options: InboundSaveOptions & { buffer: Buffer }): Promise<SavedChannelFile> {
+  const prepared = prepareInboundFile(options);
+
+  let absolutePath = prepared.paths.absolutePath;
+  let promptPath = prepared.paths.promptPath;
+
+  if (prepared.nodeId === 'master') {
+    await fs.ensureDir(path.dirname(prepared.paths.writePath));
+    const tempPath = `${prepared.paths.writePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await fs.writeFile(tempPath, options.buffer, { flag: 'wx' });
+      await fs.rename(tempPath, prepared.paths.writePath);
+    } finally {
+      await fs.remove(tempPath).catch(() => {});
+    }
   } else {
     if (!options.session?.id) {
       throw new Error('Session context is required when saving inbound files to a remote node.');
     }
-    const writeResult = await nodesManager.writeFileToNode(nodeId, paths.writePath, options.buffer.toString('base64'), false, options.session.id);
-    absolutePath = writeResult.absolutePath || paths.absolutePath;
+    const writeResult = await nodesManager.writeFileToNode(prepared.nodeId, prepared.paths.writePath, options.buffer.toString('base64'), false, options.session.id);
+    absolutePath = writeResult.absolutePath || prepared.paths.absolutePath;
     promptPath = absolutePath;
   }
 
-  return {
-    agentName,
-    nodeId,
-    absolutePath,
-    relativePath: paths.relativePath,
-    promptPath,
-    fileName: options.fileName || storedFileName,
-    mimeType,
-    sizeBytes: options.buffer.length,
-    isImage,
-  };
+  return finishInboundFile(prepared, options.buffer.length, absolutePath, promptPath);
+}
+
+async function saveInboundFileFromPath(options: InboundSaveOptions & { sourcePath: string; sizeBytes: number }): Promise<SavedChannelFile> {
+  const prepared = prepareInboundFile(options);
+  const sourceStats = await fs.lstat(options.sourcePath);
+  if (!sourceStats.isFile()) {
+    throw new Error('Inbound media spool is not a regular file.');
+  }
+  if (prepared.nodeId !== 'master') {
+    throw new Error('Inbound media cannot be saved to an isolated node: the existing node file transfer is whole-buffer only and has no bounded streaming boundary.');
+  }
+
+  await fs.ensureDir(path.dirname(prepared.paths.writePath));
+  const tempPath = `${prepared.paths.writePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.copyFile(options.sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+    await fs.rename(tempPath, prepared.paths.writePath);
+  } finally {
+    await fs.remove(tempPath).catch(() => {});
+  }
+  return finishInboundFile(prepared, sourceStats.size, prepared.paths.absolutePath, prepared.paths.promptPath);
 }
 
 export async function saveInboundSessionFile(options: {
@@ -179,6 +233,22 @@ export async function saveInboundSessionFile(options: {
 }): Promise<SavedChannelFile> {
   const session = await resolveInboundSession(options.platform, undefined, options.sessionId);
   return saveInboundFile({
+    ...options,
+    session,
+  });
+}
+
+export async function saveInboundSessionFileFromPath(options: {
+  sessionId: string;
+  platform: string;
+  sourcePath: string;
+  sizeBytes: number;
+  fileName?: string;
+  mimeType?: string;
+  isImage?: boolean;
+}): Promise<SavedChannelFile> {
+  const session = await resolveInboundSession(options.platform, undefined, options.sessionId);
+  return saveInboundFileFromPath({
     ...options,
     session,
   });
@@ -199,15 +269,12 @@ export async function saveInboundChannelFile(options: {
   });
 }
 
-function prependMessageDescriptor(text: string | undefined, descriptor: string): string {
-  if (text && text.trim()) {
-    return `${text.trim()}\n\n${descriptor}`;
-  }
-  return descriptor;
-}
-
 export function buildSavedFileText(saved: SavedChannelFile, kind: 'image' | 'file', extraText?: string): string {
-  const label = kind === 'image' ? 'Image' : 'File';
-  const descriptor = `[${label}: ${saved.fileName}]\nNode: ${saved.nodeId}\nPath: ${saved.promptPath}` + (kind === 'file' ? `\nMIME: ${saved.mimeType}` : '');
-  return prependMessageDescriptor(extraText, descriptor);
+  return buildFoxwarmAttachmentText({
+    kind,
+    name: saved.fileName,
+    node: saved.nodeId,
+    path: saved.promptPath,
+    mime: saved.mimeType,
+  }, extraText);
 }

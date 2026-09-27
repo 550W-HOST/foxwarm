@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { DiskJsonData } from './diskJsonData';
+import { DiskJsonData, shouldIgnoreDirectorySyncError } from './diskJsonData';
+
+test('directory sync ignores only unsupported filesystem errors', () => {
+  for (const code of ['EINVAL', 'ENOTSUP', 'ENOSYS', 'EPERM', 'EISDIR']) {
+    assert.equal(shouldIgnoreDirectorySyncError({ code }), true);
+  }
+  assert.equal(shouldIgnoreDirectorySyncError({ code: 'EIO' }), false);
+});
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-disk-json-data-'));

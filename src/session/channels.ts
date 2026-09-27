@@ -1,8 +1,10 @@
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../channel';
+import { channelProgressCoordinator, type ChannelProgressTarget } from '../channelProgress';
 import { logger } from '../common';
-import { CHANNELS_FILE } from '../config';
-import { Session, SessionBroadcast } from '../types';
+import { CHANNELS_FILE, getChannelConfigById, normalizeChannelProgressInterval, readAppConfigFile } from '../config';
+import { ChannelTurnProgress, Session, SessionBroadcast } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
+import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 
 export type ChannelMode = 'send-only' | undefined;
 type LegacyChannelMode = 'push-only';
@@ -92,13 +94,17 @@ function normalizeChannelConfig(config: ChannelConfig): ChannelConfig {
   return normalized;
 }
 
+async function persistChannelsCritical(): Promise<void> {
+  const data: any = { channels: {} };
+  for (const [channelKey, config] of channelAttachments.entries()) {
+    data.channels[channelKey] = normalizeChannelConfig(config);
+  }
+  await channelsStore.write(data);
+}
+
 async function persistChannels(): Promise<void> {
   try {
-    const data: any = { channels: {} };
-    for (const [channelKey, config] of channelAttachments.entries()) {
-      data.channels[channelKey] = normalizeChannelConfig(config);
-    }
-    await channelsStore.write(data);
+    await persistChannelsCritical();
   } catch (e) {
     logger.error(e, 'Failed to save channels');
   }
@@ -131,6 +137,10 @@ export async function saveChannels(): Promise<void> {
   await persistChannels();
 }
 
+export async function saveChannelsCritical(): Promise<void> {
+  await persistChannelsCritical();
+}
+
 export async function importLegacyChannelAttachments(attachments: Record<string, string | ChannelConfig>): Promise<void> {
   for (const [channelKey, value] of Object.entries(attachments)) {
     if (typeof value === 'string') {
@@ -147,6 +157,21 @@ export function attachChannel(channelId: string, conversationId: string, session
   const channelKey = makeChannelKey(channelId, conversationId);
   channelAttachments.set(channelKey, normalizeChannelConfig({ sessionId, ...(configUpdates || {}) } as ChannelConfig));
   void persistChannels();
+  logger.info({ channelId, conversationId, sessionId, configUpdates }, 'Channel attached to session');
+  return sessionId;
+}
+
+export async function attachChannelDurably(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<ChannelConfig>): Promise<string> {
+  const channelKey = makeChannelKey(channelId, conversationId);
+  const previous = channelAttachments.get(channelKey);
+  channelAttachments.set(channelKey, normalizeChannelConfig({ sessionId, ...(configUpdates || {}) } as ChannelConfig));
+  try {
+    await persistChannelsCritical();
+  } catch (error) {
+    if (previous) channelAttachments.set(channelKey, previous);
+    else channelAttachments.delete(channelKey);
+    throw error;
+  }
   logger.info({ channelId, conversationId, sessionId, configUpdates }, 'Channel attached to session');
   return sessionId;
 }
@@ -198,6 +223,59 @@ export async function sendToChannelTargetId(channelTargetId: string, message: st
     throw new Error(`Channel instance \`${channelInstanceId}\` not found`);
   }
   await channel.sendMessage(conversationId, message);
+}
+
+function getProgressIntervalMs(channelInstanceId: string): number | undefined {
+  const configured = getChannelConfigById(channelInstanceId, readAppConfigFile())?.config.channelProgress;
+  try { return normalizeChannelProgressInterval(configured); }
+  catch (error) {
+    logger.warn({ err: error, channelInstanceId }, 'Ignoring invalid channel progress config');
+    return undefined;
+  }
+}
+
+function getChannelProgressTargets(sessionId: string, turnId: string): ChannelProgressTarget[] {
+  const attached = getChannelsBySession(sessionId);
+  return attached.flatMap(target => {
+    const intervalMs = getProgressIntervalMs(target.channelId);
+    const channel = getChannelInstance(target.channelId);
+    if (!intervalMs || !channel || channel.platform === 'webui') return [];
+    if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') return [];
+    if (channel.isTurnLifecycleActive?.(target.conversationId)) return [];
+    return [{
+      channelInstanceId: target.channelId,
+      conversationId: target.conversationId,
+      intervalMs,
+      send: (text: string) => channel.sendMessage(target.conversationId, text, { channelProgressTurnId: turnId }),
+    }];
+  });
+}
+
+export function reportChannelTurnProgress(sessionId: string, turnId: string, progress: ChannelTurnProgress): void {
+  for (const target of getChannelsBySession(sessionId)) {
+    if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') continue;
+    const channel = getChannelInstance(target.channelId);
+    void channel?.handleTurnLifecycle?.(target.conversationId, {
+      channelProgressTurnId: turnId,
+      channelTurnProgress: progress,
+    }).catch(error => logger.error({ err: error, channelId: target.channelId, conversationId: target.conversationId }, 'Channel turn progress delivery failed'));
+  }
+  channelProgressCoordinator.report(turnId, getChannelProgressTargets(sessionId, turnId), progress);
+}
+
+export async function finishChannelTurnProgress(turnId: string): Promise<void> {
+  await channelProgressCoordinator.finish(turnId);
+}
+
+export function resetChannelTurnProgress(): void {
+  channelProgressCoordinator.reset();
+}
+
+export function decorateChannelProgressText(target: { channelId: string; conversationId: string }, text: string, options: any): string {
+  return channelProgressCoordinator.decorate(options?.channelProgressTurnId, {
+    channelInstanceId: target.channelId,
+    conversationId: target.conversationId,
+  }, text);
 }
 
 export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
@@ -295,6 +373,14 @@ function findAttachedChannel(
 function parseSourceSystemPart(system?: string): { channelId: string; channelUserId: string; conversationId: string } | undefined {
   if (!system) return undefined;
 
+  const foxwarmTag = parseFoxwarmOpeningTag(system);
+  if (foxwarmTag?.tagName === 'foxwarm-message' && foxwarmTag.attrs.type === 'channel') {
+    const channelId = foxwarmTag.attrs.channelInstanceId || foxwarmTag.attrs.channelId || foxwarmTag.attrs.channelType;
+    const conversationId = foxwarmTag.attrs.conversationId || foxwarmTag.attrs.channelUserId;
+    if (!channelId || !conversationId) return undefined;
+    return { channelId, channelUserId: conversationId, conversationId };
+  }
+
   if (system.startsWith('FROM: ')) {
     const raw = system.slice('FROM: '.length);
     const firstColon = raw.indexOf(':');
@@ -350,7 +436,7 @@ export function getChannelBySession(sessionId: string, session?: Session): { cha
         const msg = session.history[i];
         if (msg.role !== 'user') continue;
 
-        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `') || part.system.includes('channel_instance_id: `')));
+        const sourcePart = msg.parts.find(part => typeof part.system === 'string' && (part.system.startsWith('FROM: ') || part.system.includes('channel_id: `') || part.system.includes('channel_instance_id: `') || parseFoxwarmOpeningTag(part.system)?.attrs.type === 'channel'));
         const parsedChannel = parseSourceSystemPart(sourcePart?.system);
         const attachedChannel = findAttachedChannel(channels, parsedChannel);
         if (attachedChannel) {
@@ -367,15 +453,10 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
   return (text: string, options?: any) => {
     const channels = getChannelsBySession(sessionId);
     const excludePlatforms = options?.excludePlatforms || [];
-    const targetChannel = options?.targetChannel;
     const isEmptyBroadcast = typeof text !== 'string' || text.trim().length === 0;
     logger.debug({ sessionId, channelCount: channels.length, excludePlatforms, textPreview: text.substring(0, 50) }, 'Broadcasting message');
 
     for (const channelInfo of channels) {
-      if (targetChannel && (targetChannel.channelId !== channelInfo.channelId || targetChannel.conversationId !== channelInfo.conversationId)) {
-        continue;
-      }
-
       if (isEmptyBroadcast && !options?.allowEmptyBroadcast) {
         continue;
       }
@@ -393,8 +474,15 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
 
       const channel = getChannelInstance(channelInfo.channelId);
       if (channel) {
+        if (isEmptyBroadcast) {
+          channel.handleTurnLifecycle?.(channelInfo.conversationId, options)?.catch((e: any) => {
+            logger.error({ err: e, channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Failed to finish channel turn');
+          });
+          continue;
+        }
         logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Calling channel.sendMessage');
-        channel.sendMessage(channelInfo.conversationId, text, options)?.catch((e: any) => {
+        const deliveredText = decorateChannelProgressText(channelInfo, text, options);
+        channel.sendMessage(channelInfo.conversationId, deliveredText, options)?.catch((e: any) => {
           logger.error({ err: e, channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Failed to broadcast message');
         });
       } else {
@@ -402,6 +490,37 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
       }
     }
   };
+}
+
+export async function deliverCommittedFinalToAttachments(
+  sessionId: string,
+  text: string,
+  options: any,
+): Promise<{ attempted: number; delivered: number; failures: string[] }> {
+  const result = { attempted: 0, delivered: 0, failures: [] as string[] };
+  const excludePlatforms = options?.excludePlatforms || [];
+  const isEmpty = !text.trim();
+  for (const target of getChannelsBySession(sessionId)) {
+    if ((isEmpty && !options?.allowEmptyBroadcast) || excludePlatforms.includes(target.channelId)) continue;
+    if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') continue;
+    const channel = getChannelInstance(target.channelId);
+    if (!channel) continue;
+    if (isEmpty) {
+      if (!channel.handleTurnLifecycle) continue;
+      result.attempted += 1;
+      try { await channel.handleTurnLifecycle(target.conversationId, options); result.delivered += 1; }
+      catch (error: any) { result.failures.push(`${target.channelId}:${target.conversationId}: ${error?.message || error}`); }
+      continue;
+    }
+    result.attempted += 1;
+    try {
+      const deliveredText = decorateChannelProgressText(target, text, options);
+      await channel.sendMessage(target.conversationId, deliveredText, options);
+      result.delivered += 1;
+    }
+    catch (error: any) { result.failures.push(`${target.channelId}:${target.conversationId}: ${error?.message || error}`); }
+  }
+  return result;
 }
 
 export function detachChannelsForSession(sessionId: string): void {

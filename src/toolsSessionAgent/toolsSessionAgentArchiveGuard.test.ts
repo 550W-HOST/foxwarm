@@ -5,12 +5,18 @@ import os from 'os';
 import path from 'path';
 import type { Session } from '../types';
 
+process.env.TZ = 'Asia/Shanghai';
+
 type LoadedDeps = {
   tempRoot: string;
   sessionManager: typeof import('../sessionManager');
   toolsSessionAgent: typeof import('../toolsSessionAgent');
+  archiveRecall: typeof import('./archiveRecall');
   archive: typeof import('../session/archive');
   layeredContext: typeof import('../session/layeredContext');
+  httpServerModule: typeof import('../httpServer');
+  webuiChannel: typeof import('../channels/webuiChannel');
+  imageBlobs: typeof import('../imageBlobs');
 };
 
 let depsPromise: Promise<LoadedDeps> | null = null;
@@ -38,15 +44,19 @@ async function loadDeps(): Promise<LoadedDeps> {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-archive-guard-'));
       process.env.FOXWARM_DATA_DIR = tempRoot;
 
-      const [sessionManager, toolsSessionAgent, archive, layeredContext] = await Promise.all([
+      const [sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel, imageBlobs] = await Promise.all([
         import('../sessionManager'),
         import('../toolsSessionAgent'),
+        import('./archiveRecall'),
         import('../session/archive'),
         import('../session/layeredContext'),
+        import('../httpServer'),
+        import('../channels/webuiChannel'),
+        import('../imageBlobs'),
       ]);
 
       await sessionManager.loadSessions();
-      return { tempRoot, sessionManager, toolsSessionAgent, archive, layeredContext };
+      return { tempRoot, sessionManager, toolsSessionAgent, archiveRecall, archive, layeredContext, httpServerModule, webuiChannel, imageBlobs };
     })();
   }
 
@@ -69,16 +79,15 @@ async function appendTextMessages(sessionManager: typeof import('../sessionManag
   }
 }
 
-async function createArchivedSession(deps: LoadedDeps, sessionId: string): Promise<void> {
+async function createArchivedSession(deps: LoadedDeps, sessionId: string, firstMessageParts: any[] = [{ text: 'archived alpha' }]): Promise<void> {
   const session: Session = {
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
-    { role: 'user', parts: [{ text: 'archived alpha' }], __meta: { timestamp: 1000 } },
+    { role: 'user', parts: firstMessageParts, __meta: { timestamp: 1000 } },
     { role: 'model', parts: [{ text: 'archived beta' }], __meta: { timestamp: 2000 } },
     { role: 'user', parts: [{ text: 'archived gamma' }], __meta: { timestamp: 3000 } },
     { role: 'model', parts: [{ text: 'archived delta' }], __meta: { timestamp: 4000 } },
@@ -129,7 +138,89 @@ test('get_session_messages treats previewLength as a clamped total preview budge
     }, {});
     assert.match(String(singleResult), /showing 1 of 3 message\(s\)/i);
     assert.match(String(singleResult), /using 20000/i);
+
+    const filteredResult = await toolsSessionAgent.tool_get_session_messages({
+      sessionId,
+      count: 3,
+      contentFilter: 'two',
+      previewLength: 1000,
+    }, {});
+    assert.match(String(filteredResult), /showing 1 of 3 message\(s\)/i);
+    assert.match(String(filteredResult), /contentFilter excluded 2 item\(s\)/i);
+    assert.doesNotMatch(String(filteredResult), /\[hint\]/i);
+
+    await assert.rejects(
+      () => toolsSessionAgent.tool_get_session_messages({ sessionId, query: 'two' }, {}),
+      /get_session_messages no longer accepts `query`[\s\S]*contentFilter/i,
+    );
   } finally {
+    try {
+      await sessionManager.deleteSession(sessionId);
+    } catch {
+      // ignore cleanup failure in tests
+    }
+  }
+});
+
+test('get_session_messages reports canonical execution state for populated, filtered, and empty pages', async () => {
+  const { sessionManager, toolsSessionAgent } = await loadDeps();
+  const sessionId = makeId('session_messages_execution_state');
+  const startedAt = Date.now() - 1000;
+
+  try {
+    const session = await ensureSession(sessionManager, sessionId);
+    await appendTextMessages(sessionManager, session, ['execution state probe']);
+
+    const idleResult = String(await toolsSessionAgent.tool_get_session_messages({ sessionId }, {}));
+    assert.match(idleResult, /Session execution state: idle\./);
+
+    sessionManager.setActiveSessionRuntimeState(sessionId, {
+      state: 'requesting-model',
+      since: startedAt,
+      active: { phase: 'normal-turn', modelKey: 'test-model' },
+    });
+    const modelResult = String(await toolsSessionAgent.tool_get_session_messages({ sessionId }, {}));
+    assert.match(modelResult, /Session execution state: requesting-model\./);
+
+    session.queue = [{ type: 'background', parts: [{ text: 'queued work' }] } as any];
+    sessionManager.setActiveSessionRuntimeState(sessionId, {
+      state: 'running-tool',
+      since: startedAt,
+      active: { phase: 'normal-turn' },
+      tool: { name: 'exec', index: 0, total: 1, startedAt },
+    });
+    const toolResult = String(await toolsSessionAgent.tool_get_session_messages({ sessionId }, {}));
+    assert.match(toolResult, /Session execution state: running-tool:exec 1\/1; queue: 1\./);
+
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
+    session.queue = [];
+    session.meta.wait = {
+      id: 'session-messages-wait',
+      startedAt,
+      waitAll: {
+        sessions: ['child-a', 'child-b'],
+        satisfiedSessions: ['child-a'],
+        deferredQueue: [],
+      },
+    } as any;
+    const filteredResult = String(await toolsSessionAgent.tool_get_session_messages({
+      sessionId,
+      contentFilter: 'does not match',
+    }, {}));
+    assert.match(filteredResult, /Session execution state: waiting:all 1\/2\./);
+    assert.equal((filteredResult.match(/Session execution state:/g) || []).length, 1);
+    assert.match(filteredResult, /No messages matched the requested filters/);
+
+    delete session.meta.wait;
+    const emptyPageResult = String(await toolsSessionAgent.tool_get_session_messages({
+      sessionId,
+      start: 99,
+      count: 1,
+    }, {}));
+    assert.match(emptyPageResult, /Session execution state: idle\./);
+    assert.match(emptyPageResult, /No messages found in session/);
+  } finally {
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
     try {
       await sessionManager.deleteSession(sessionId);
     } catch {
@@ -315,6 +406,197 @@ test('recall target selectors read block details and message ranges', async () =
   assert.doesNotMatch(singleMessage, /\n\nSuggestions/);
 });
 
+test('renderContextBlockExpansion returns structured child block/raw message items without mutating session state', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('ctx_block_expand');
+  const session = await ensureSession(deps.sessionManager, sessionId);
+  await createArchivedSession(deps, sessionId);
+  session.history = [
+    deps.layeredContext.renderBlockMessage({
+      v: 1,
+      kind: 'block',
+      sessionId,
+      agent: 'main',
+      id: 4,
+      level: 2,
+      sourceKind: 'block',
+      sourceStart: 1,
+      sourceEnd: 2,
+      rawStartSeq: 1,
+      rawEndSeq: 2,
+      summary: 'parent alpha beta block',
+      createdAt: 5000,
+    }),
+  ];
+  await deps.sessionManager.saveSession(sessionId);
+
+  const before = await deps.sessionManager.getExistingSession(sessionId);
+  const beforeHistory = JSON.stringify(before?.history || []);
+  const mutableSessionManager = require('../sessionManager') as typeof import('../sessionManager');
+  const originalGetArchivedBlocks = mutableSessionManager.getArchivedBlocks;
+  const originalGetArchivedMessages = mutableSessionManager.getArchivedMessages;
+  const blockReads: Array<{ startId?: number; endId?: number }> = [];
+  const messageReads: Array<{ startSeq?: number; endSeq?: number }> = [];
+  (mutableSessionManager as any).getArchivedBlocks = async (targetSessionId: string, options: any) => {
+    if (targetSessionId === sessionId) blockReads.push({ startId: options?.startId, endId: options?.endId });
+    return originalGetArchivedBlocks(targetSessionId, options);
+  };
+  (mutableSessionManager as any).getArchivedMessages = async (targetSessionId: string, options: any) => {
+    if (targetSessionId === sessionId) messageReads.push({ startSeq: options?.startSeq, endSeq: options?.endSeq });
+    return originalGetArchivedMessages(targetSessionId, options);
+  };
+
+  try {
+    const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, previewLength: 2000 });
+    assert.deepEqual(blockReads, [{ startId: 4, endId: 4 }, { startId: 1, endId: 2 }],
+      'parent and immediate child blocks should each be read once');
+    assert.deepEqual(messageReads, [{ startSeq: 1, endSeq: 1 }, { startSeq: 2, endSeq: 2 }],
+      'each immediate child should hydrate its single-message timestamp once');
+    assert.equal(detail.expansionKind, 'child-blocks');
+    assert.equal(detail.target, 'B#4');
+    assert.equal(detail.block.id, 4);
+    assert.equal(detail.totalItems, 2);
+    assert.equal(detail.items.length, 2);
+    assert.equal(detail.messages.length, 2);
+    assert.equal(detail.items[0].kind, 'block');
+    assert.equal(detail.items[0].block?.id, 1);
+    assert.equal(detail.items[0].message.role, 'model');
+    assert.equal(detail.items[0].message.__meta?.contextBlock?.id, 1);
+    assert.equal(detail.items[1].message.__meta?.contextBlock?.id, 2);
+    assert.match(detail.items[0].message.parts[0].text || '', /block alpha/);
+    assert.match(detail.items[1].message.parts[0].text || '', /block beta/);
+    assert.doesNotMatch(detail.items[0].message.parts[0].text || '', /archived alpha/);
+    assert.match(detail.text, /Immediate child blocks/);
+    assert.match(detail.text, /block alpha/);
+    assert.match(detail.text, /block beta/);
+    assert.doesNotMatch(detail.text, /archived alpha/);
+    assert.doesNotMatch(detail.text, /Suggestions/);
+    const detailRecallText = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#4', previewLength: 2000 }));
+    assert.equal(detail.text, detailRecallText.split('\n\nSuggestions')[0],
+      'structured expansion text must remain exactly compatible with ordinary block detail formatting');
+
+    blockReads.length = 0;
+    messageReads.length = 0;
+    const raw = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1, previewLength: 2000 });
+    assert.deepEqual(blockReads, [{ startId: 1, endId: 1 }], 'message-backed parent block should be read once');
+    assert.deepEqual(messageReads, [{ startSeq: 1, endSeq: 1 }], 'immediate source messages should be read once');
+    assert.equal(raw.expansionKind, 'messages');
+    assert.equal(raw.target, 'B#1');
+    assert.equal(raw.totalItems, 1);
+    assert.equal(raw.items[0].kind, 'message');
+    assert.equal(raw.items[0].seq, 1);
+    assert.equal(raw.messages[0].role, 'user');
+    assert.equal(raw.messages[0].__meta?.seq, 1);
+    assert.match(raw.messages[0].parts[0].text || '', /archived alpha/);
+    assert.equal(raw.messages[0].__meta?.contextBlock, undefined);
+    assert.match(raw.text, /Source messages/);
+    assert.match(raw.text, /archived alpha/);
+    assert.doesNotMatch(raw.text, /archived beta/);
+    assert.doesNotMatch(raw.text, /Suggestions/);
+    const rawRecallText = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#1', previewLength: 2000 }));
+    assert.equal(raw.text, rawRecallText.split('\n\nSuggestions')[0],
+      'message expansion text must remain exactly compatible with ordinary block detail formatting');
+  } finally {
+    (mutableSessionManager as any).getArchivedBlocks = originalGetArchivedBlocks;
+    (mutableSessionManager as any).getArchivedMessages = originalGetArchivedMessages;
+  }
+
+  const after = await deps.sessionManager.getExistingSession(sessionId);
+  assert.equal(JSON.stringify(after?.history || []), beforeHistory);
+});
+
+test('renderContextBlockExpansion reports invalid session/block', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('ctx_block_invalid');
+  await ensureSession(deps.sessionManager, sessionId);
+  await createArchivedSession(deps, sessionId);
+
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId: `${sessionId}_missing`, blockId: 1 }),
+    /Session `.*_missing` not found/,
+  );
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 999 }),
+    /CTX-BLOCK B#999 not found/,
+  );
+  await assert.rejects(
+    () => deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1.5 }),
+    /blockId must be a positive integer/,
+  );
+});
+
+test('WebUI context block expansion route is admin-authenticated and read-only', async () => {
+  const deps = await loadDeps();
+  const sessionId = makeId('ctx_block_route');
+  const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const session = await ensureSession(deps.sessionManager, sessionId);
+  await createArchivedSession(deps, sessionId, [
+    { text: 'archived alpha' },
+    { inlineData: { data: imageBase64, mimeType: 'image/png' } },
+  ]);
+  session.history = [];
+  await deps.sessionManager.saveSession(sessionId);
+  const before = await deps.sessionManager.getExistingSession(sessionId);
+  const beforeHistory = JSON.stringify(before?.history || []);
+
+  const port = 33180 + Math.floor(Math.random() * 1000);
+  const server = new deps.httpServerModule.HttpServer(port, 'secret-token');
+  deps.httpServerModule.setHttpServer(server);
+  new deps.webuiChannel.WebUIChannel({ router: {} as any, token: 'secret-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  let blobId: string | undefined;
+  try {
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4/expand?previewLength=2000`;
+
+    const unauthorized = await fetch(`${baseUrl}${path}`);
+    assert.equal(unauthorized.status, 401);
+
+    const ok = await fetch(`${baseUrl}${path}`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(ok.status, 200);
+    const payload = await ok.json() as any;
+    assert.equal(payload.sessionId, sessionId);
+    assert.equal(payload.blockId, 4);
+    assert.equal(payload.expansionKind, 'child-blocks');
+    assert.equal(payload.totalItems, 2);
+    assert.equal(payload.messages.length, 2);
+    assert.equal(payload.items[0].kind, 'block');
+    assert.equal(payload.items[0].message.__meta.contextBlock.id, 1);
+    assert.match(payload.items[0].message.parts[0].text, /block alpha/);
+    assert.doesNotMatch(payload.items[0].message.parts[0].text, /archived alpha/);
+
+    const rawOk = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/1/expand?previewLength=2000`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(rawOk.status, 200);
+    const rawPayload = await rawOk.json() as any;
+    assert.equal(rawPayload.expansionKind, 'messages');
+    assert.equal(rawPayload.totalItems, 1);
+    assert.equal(rawPayload.items[0].kind, 'message');
+    assert.equal(rawPayload.messages[0].__meta.seq, 1);
+    assert.match(rawPayload.messages[0].parts[0].text, /archived alpha/);
+    assert.equal(rawPayload.messages[0].parts[1].inlineData, undefined);
+    assert.equal(rawPayload.messages[0].parts[1].inlineDataRef.path, undefined);
+    assert.match(rawPayload.messages[0].parts[1].inlineDataRef.apiPath, /^\/blobs\//);
+    blobId = rawPayload.messages[0].parts[1].inlineDataRef.blobId;
+    assert.equal(JSON.stringify(rawPayload).includes(imageBase64), false);
+
+    const invalidBlock = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/999/expand`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(invalidBlock.status, 404);
+
+    const invalidBlockId = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/context-blocks/4.5/expand`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(invalidBlockId.status, 400);
+
+    const invalidSession = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}_missing/context-blocks/4/expand`, { headers: { Authorization: 'Bearer secret-token' } });
+    assert.equal(invalidSession.status, 404);
+  } finally {
+    await server.stop();
+    deps.httpServerModule.setHttpServer(null);
+    if (blobId) await fs.remove(deps.imageBlobs.resolveImageBlobPath(blobId));
+  }
+
+  const after = await deps.sessionManager.getExistingSession(sessionId);
+  assert.equal(JSON.stringify(after?.history || []), beforeHistory);
+});
+
 test('recall renderer filters messages and centers previews around matches', async () => {
   const deps = await loadDeps();
   const sessionId = makeId('recall_renderer_filters');
@@ -322,8 +604,7 @@ test('recall renderer filters messages and centers previews around matches', asy
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
     {
@@ -342,17 +623,40 @@ test('recall renderer filters messages and centers previews around matches', asy
       __meta: { timestamp: 3000 },
     },
   ]);
+  await deps.layeredContext.appendBlocksToArchive(session, [
+    { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 3, rawStartSeq: 1, rawEndSeq: 3, summary: 'summary remains visible while source messages are post-filtered' },
+  ]);
 
   const literal = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
     target: 'msg#1-3',
-    query: 'UNIQUE_NEEDLE',
+    contentFilter: 'UNIQUE_NEEDLE',
     previewLength: 1000,
   }));
   assert.match(literal, /UNIQUE_NEEDLE/);
   assert.match(literal, /showing 1 of 3 matched message\(s\)/);
+  assert.match(literal, /contentFilter excluded 2 item\(s\)/);
   assert.doesNotMatch(literal, /boring beta message/);
   assert.ok(literal.length < 1500, 'literal filtered preview should respect total budget');
+
+  const allFilteredBlock = String(await deps.toolsSessionAgent.tool_recall({
+    sessionId,
+    target: 'B#1',
+    contentFilter: 'TOPIC_NOT_PRESENT_IN_SOURCE',
+    previewLength: 500,
+  }));
+  assert.match(allFilteredBlock, /CTX-BLOCK B#1/);
+  assert.match(allFilteredBlock, /contentFilter excluded 3 item\(s\)/);
+  assert.match(allFilteredBlock, /literal result post-filter, not semantic search/i);
+  assert.match(allFilteredBlock, /omit it to inspect the complete recalled CTX-BLOCK\/message target/i);
+  assert.match(allFilteredBlock, /No archived messages matched the requested filters/i);
+
+  const unfilteredBlock = String(await deps.toolsSessionAgent.tool_recall({
+    sessionId,
+    target: 'B#1',
+    previewLength: 1000,
+  }));
+  assert.doesNotMatch(unfilteredBlock, /\[filter\]|\[hint\]/);
 
   const regexFiltered = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
@@ -363,11 +667,13 @@ test('recall renderer filters messages and centers previews around matches', asy
   }));
   assert.match(regexFiltered, /UNIQUE_NEEDLE/);
   assert.doesNotMatch(regexFiltered, /TOOL_SECRET_MATCH/);
+  assert.match(regexFiltered, /includeRegex excluded 1 additional item\(s\)/);
+  assert.match(regexFiltered, /excludeRegex excluded 1 additional item\(s\)/);
 
   const foldedToolMatch = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
     target: 'msg#1-3',
-    query: 'TOOL_SECRET_MATCH',
+    contentFilter: 'TOOL_SECRET_MATCH',
     previewLength: 1000,
   }));
   assert.match(foldedToolMatch, /Tool results: read\(call_secret\): ok \(content omitted\)/);
@@ -377,12 +683,17 @@ test('recall renderer filters messages and centers previews around matches', asy
   const snippetToolMatch = String(await deps.toolsSessionAgent.tool_recall({
     sessionId,
     target: 'msg#1-3',
-    query: 'TOOL_SECRET_MATCH',
+    contentFilter: 'TOOL_SECRET_MATCH',
     toolDetail: 'snippets',
     previewLength: 1000,
   }));
   assert.match(snippetToolMatch, /\[tool:read\(call_secret\)\]/);
   assert.match(snippetToolMatch, /TOOL_SECRET_MATCH/);
+
+  await assert.rejects(
+    () => deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#1', query: 'UNIQUE_NEEDLE' }),
+    /recall no longer accepts `query`[\s\S]*contentFilter[\s\S]*vector_query[\s\S]*target/i,
+  );
 });
 
 test('recall rejects unsupported targets with examples', async () => {
@@ -406,8 +717,7 @@ test('recall uses clamped total preview budgets for broad ranges', async () => {
     ...createBaseSession(sessionId),
     nextMessageSeq: 5,
     nextBlockId: 5,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
   await deps.layeredContext.appendBlocksToArchive(session, [
     { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, rawStartSeq: 1, rawEndSeq: 4, summary: 'wide message-backed block' },
   ]);
@@ -447,8 +757,7 @@ test('recall blocks target caps large frontier output while suggesting B# drill-
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, Array.from({ length: 25 }, (_, index) => ({
     role: 'user' as const,
@@ -481,8 +790,7 @@ test('recall lets previewLength control archived tool response previews and trea
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
     {

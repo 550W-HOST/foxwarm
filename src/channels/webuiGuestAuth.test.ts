@@ -67,12 +67,19 @@ test('webui guest token filters sessions and denies admin-only APIs', async () =
       assert.equal(tokenPayload.label, 'route test');
       const guestToken = tokenPayload.token;
 
+      const guestLogin = await fetch(`${baseUrl}/api/auth`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: guestToken }),
+      });
+      assert.equal(guestLogin.status, 200);
+      assert.equal((await guestLogin.json() as any).role, 'guest');
+
       const guestSessions = await fetch(`${baseUrl}/api/sessions`, {
         headers: { Authorization: `Bearer ${guestToken}` },
       });
       assert.equal(guestSessions.status, 200);
       const guestPayload = await guestSessions.json() as { sessions: Array<{ id: string }> };
       assert.deepEqual(guestPayload.sessions.map((session: any) => session.id), [boundSessionId]);
+      assert.equal((guestPayload.sessions[0] as any).cwd, undefined);
 
       const adminSessions = await fetch(`${baseUrl}/api/sessions`, {
         headers: { Authorization: `Bearer ${adminToken}` },
@@ -82,6 +89,15 @@ test('webui guest token filters sessions and denies admin-only APIs', async () =
       const adminIds = new Set(adminPayload.sessions.map((session: any) => session.id));
       assert.equal(adminIds.has(boundSessionId), true);
       assert.equal(adminIds.has(unboundSessionId), true);
+
+      const guestRole = await fetch(`${baseUrl}/api/auth/session`, { headers: { Authorization: `Bearer ${guestToken}` } });
+      assert.equal(guestRole.status, 200);
+      assert.equal((await guestRole.json() as any).role, 'guest');
+      const guestAdminOnly = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${guestToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      assert.equal(guestAdminOnly.status, 403);
 
       const unboundHistory = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(unboundSessionId)}/history`, {
         headers: { Authorization: `Bearer ${guestToken}` },
@@ -96,7 +112,7 @@ test('webui guest token filters sessions and denies admin-only APIs', async () =
       assert.equal(slashMessage.status, 403);
       assert.equal(calls.count, 0);
 
-      for (const route of ['/api/commands', '/api/fs/tree?path=%2F', '/api/terminals', '/api/setup/status']) {
+      for (const route of ['/api/commands', '/api/nodes', '/api/terminals', '/api/setup/status']) {
         const denied = await fetch(`${baseUrl}${route}`, {
           headers: { Authorization: `Bearer ${guestToken}` },
         });
@@ -129,8 +145,28 @@ test('webui guest token filters sessions and denies admin-only APIs', async () =
         body: boundUpload,
       });
       assert.equal(boundUploadResult.status, 200);
-      const uploadPayload = await boundUploadResult.json() as { filePath: string };
-      await fs.remove(uploadPayload.filePath).catch(() => {});
+      const uploadPayload = await boundUploadResult.json() as { path: string };
+      const forged = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(boundSessionId)}/message`, {
+        method: 'POST', headers: { Authorization: `Bearer ${guestToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'attach', uploadedFiles: [{ path: '/tmp/not-my-upload.txt' }] }),
+      });
+      assert.equal(forged.status, 403);
+      assert.equal(calls.count, 0);
+
+      const accepted = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(boundSessionId)}/message`, {
+        method: 'POST', headers: { Authorization: `Bearer ${guestToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'attach', uploadedFiles: [{ path: uploadPayload.path, filename: 'hello.txt', mimeType: 'text/plain' }] }),
+      });
+      assert.equal(accepted.status, 200);
+      assert.equal(calls.count, 1);
+      assert.equal(await fs.pathExists(uploadPayload.path), false);
+
+      const adminBlob = await fetch(`${baseUrl}/api/blobs/${'0'.repeat(64)}.png`, { headers: { Authorization: `Bearer ${guestToken}` } });
+      assert.equal(adminBlob.status, 403);
+      const unrelatedBlob = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(boundSessionId)}/blobs/${'0'.repeat(64)}.png`, { headers: { Authorization: `Bearer ${guestToken}` } });
+      assert.equal(unrelatedBlob.status, 403);
+      const unboundBlob = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(unboundSessionId)}/blobs/${'0'.repeat(64)}.png`, { headers: { Authorization: `Bearer ${guestToken}` } });
+      assert.equal(unboundBlob.status, 403);
     });
   } finally {
     await sessionManager.deleteSession(boundSessionId).catch(() => {});

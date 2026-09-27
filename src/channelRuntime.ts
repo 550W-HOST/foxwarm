@@ -2,10 +2,12 @@ import { Channel, ChannelContext, ChannelMessage, getChannelInstance, listRegist
 import { logger } from './common';
 import { getChannelConfigById, getNormalizedChannelConfigs, readAppConfigFile } from './config';
 import { WeixinChannel } from './channels/weixinChannel';
+import { isQQBotChannelConfigReady, QQBotChannel } from './channels/qqbotChannel';
 import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
 import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import * as sessionManager from './sessionManager';
+import { resetChannelTurnProgress } from './session/channels';
 
 export type ChannelRuntimeStatus = {
   channelId: string;
@@ -169,6 +171,36 @@ function buildWeixinFactory(channelId: string): ManagedChannelFactory {
   };
 }
 
+function buildQQBotFactory(channelId: string): ManagedChannelFactory {
+  return {
+    channelId,
+    type: 'qqbot',
+    create: async () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      if (!isQQBotChannelConfigReady(config)) {
+        throw new Error(`QQ Bot appId/clientSecret are required for channel \`${channelId}\` in state/config.yaml`);
+      }
+      const channel = new QQBotChannel(config, channelId);
+      channel.onMessage(requireRuntimeMessageHandler());
+      return channel;
+    },
+    describe: () => {
+      const entry = getChannelConfigById(channelId, readAppConfigFile());
+      const config = (entry?.config || {}) as any;
+      return {
+        configured: isQQBotChannelConfigReady(config),
+        enabled: config.enabled !== false,
+        details: [
+          `appId=${config.appId?.trim() ? 'configured' : 'missing'}`,
+          `clientSecret=${config.clientSecret?.trim() ? 'configured' : 'missing'}`,
+          `allowedUsers=${Array.isArray(config.allowedUsers) ? config.allowedUsers.length : 0}`,
+        ],
+      };
+    },
+  };
+}
+
 function rebuildFactories(): void {
   managedFactories.clear();
   for (const entry of getNormalizedChannelConfigs(readAppConfigFile())) {
@@ -180,6 +212,8 @@ function rebuildFactories(): void {
       managedFactories.set(entry.id, buildWeWorkFactory(entry.id));
     } else if (entry.type === 'weixin') {
       managedFactories.set(entry.id, buildWeixinFactory(entry.id));
+    } else if (entry.type === 'qqbot') {
+      managedFactories.set(entry.id, buildQQBotFactory(entry.id));
     }
   }
 }
@@ -190,7 +224,7 @@ function ensureFactories(): void {
 
 export function initializeChannelRuntime(
   handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>,
-  commandHandler?: (ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>,
+  commandHandler?: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>,
 ): void {
   runtimeMessageHandler = handler;
   runtimeCommandHandler = commandHandler;
@@ -253,10 +287,11 @@ async function stopRegisteredChannel(channelId: string): Promise<boolean> {
 }
 
 export async function reloadManagedChannels(): Promise<{ stopped: string[]; started: string[]; statuses: ChannelRuntimeStatus[] }> {
+  resetChannelTurnProgress();
   const previousIds = new Set<string>([
     ...managedFactories.keys(),
     ...listRegisteredChannels()
-      .filter(item => ['telegram', 'matrix', 'wework', 'weixin'].includes(item.type))
+      .filter(item => ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'].includes(item.type))
       .map(item => item.channelInstanceId),
   ]);
 

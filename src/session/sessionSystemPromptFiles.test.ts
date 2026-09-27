@@ -4,7 +4,8 @@ import fs from 'fs-extra';
 import path from 'path';
 import * as sessionManager from '../sessionManager';
 import { tool_create_session } from '../toolsSessionAgent';
-import { SESSIONS_FILE, getAgentDir, getAgentMemoryDir } from '../config';
+import { getAgentDir, getAgentMemoryDir } from '../config';
+import { getSessionHistoryFilePath } from './metadataStore';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -84,10 +85,7 @@ test('systemPromptFiles uses string[] and only overrides memory-file sources whi
     assert.doesNotMatch(customSession.persistentMemorySnapshot, /FULL SKILL INSTRUCTIONS UNIQUE/);
     assert.match(customSession.persistentMemorySnapshot, /--- DIRECTORIES ---/);
 
-    const sessionsIndex = await fs.readJson(SESSIONS_FILE);
-    assert.deepEqual(sessionsIndex.sessions?.[customSessionId]?.systemPromptFiles, [relativePromptRef, externalFile]);
-
-    const customHistoryFile = path.join(path.dirname(SESSIONS_FILE), 'sessions', `${customSessionId}.json`);
+    const customHistoryFile = getSessionHistoryFilePath(customSessionId);
     const customHistoryPayload = await fs.readJson(customHistoryFile);
     assert.deepEqual(customHistoryPayload.systemPromptFiles, [relativePromptRef, externalFile]);
 
@@ -143,11 +141,13 @@ test('isolated agent sessions reject out-of-agent custom systemPromptFiles but a
     await tool_create_session({
       agentName,
       sessionName: allowedSessionName,
+      node: 'ignored-explicit-node',
       systemPromptFiles: [insideRelativeRef],
     }, { sessionId: parentSessionId, session: parent });
 
     const allowedSession = await sessionManager.getSession(allowedSessionId);
     assert.deepEqual(allowedSession.systemPromptFiles, [insideRelativeRef]);
+    assert.equal(allowedSession.currentNode, 'sandbox-node');
     assert.match(allowedSession.persistentMemorySnapshot, /Inside relative allowed/);
     assert.doesNotMatch(allowedSession.persistentMemorySnapshot, /Forbidden/);
   } finally {

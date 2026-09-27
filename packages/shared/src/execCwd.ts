@@ -46,7 +46,7 @@ function formatNode(nodeId?: string): string {
 
 export function buildInvalidExecCwdMessage(resolved: ResolvedExecCwd, reason: string, nodeId?: string): string {
   const rawPart = resolved.raw ? ` Raw cwd: \`${resolved.raw}\`.` : '';
-  return `Cannot start exec${formatNode(nodeId)}: working directory is invalid (${reason}). Source: ${resolved.source}.${rawPart} Resolved cwd: \`${resolved.cwd}\`. This is usually a cwd problem, not a missing \`/bin/bash\`; Node.js can report invalid cwd as \`spawn /bin/bash ENOENT\`.`;
+  return `Cannot start exec${formatNode(nodeId)}: working directory is invalid (${reason}). Source: ${resolved.source}.${rawPart} Resolved cwd: \`${resolved.cwd}\`.`;
 }
 
 export async function validateResolvedExecCwd(resolved: ResolvedExecCwd, nodeId?: string): Promise<ResolvedExecCwd> {

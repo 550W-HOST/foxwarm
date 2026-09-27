@@ -12,6 +12,12 @@ import {
   listPendingPairings,
   touchApprovedNode,
 } from './registry';
+import {
+  CURRENT_NODE_PROTOCOL_RANGE,
+  describeNodeProtocolCompatibility,
+  negotiateNodeProtocol,
+  resolveAdvertisedNodeProtocol,
+} from '../../packages/shared/dist/nodeProtocol';
 
 function rawDataToString(message: RawData): string {
   if (typeof message === 'string') {
@@ -109,6 +115,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     let pendingPairingId: string | null = null;
     let nodeRegistered = false;
     let authenticatedNodeId: string | null = null;
+    let protocolState: 'pending' | 'compatible' | 'upgrade-required' = 'pending';
     let readyForMessages = false;
     const pendingMessages: string[] = [];
     const stopHeartbeat = setupNodeHeartbeat(ws, {
@@ -119,6 +126,12 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
 
     const processNodeMessage = async (messageText: string) => {
       const data = JSON.parse(messageText);
+
+      if (protocolState === 'upgrade-required') {
+        const error = 'Node protocol is incompatible; update and restart this Node before sending application messages.';
+        ws.send(JSON.stringify({ type: 'error', code: 'NODE_PROTOCOL_INCOMPATIBLE', ...(data?.requestId ? { requestId: data.requestId } : {}), error }));
+        return;
+      }
 
       if (pairingMode) {
         if (data.type !== 'pair_request') {
@@ -170,10 +183,18 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           }
         }
 
+        let advertisedProtocol;
+        try { advertisedProtocol = resolveAdvertisedNodeProtocol(data.nodeProtocol); }
+        catch (error: any) {
+          ws.send(JSON.stringify({ type: 'error', code: 'NODE_PROTOCOL_INVALID', error: error?.message || String(error) }));
+          return;
+        }
         const pending = await createPendingPairing({
           nodeType,
           capabilities,
           requestedName,
+          nodeProtocol: advertisedProtocol.range,
+          legacyProtocol: advertisedProtocol.legacy,
         });
         pendingPairingId = pending.id;
         attachPendingPairingSocket(pending.id, ws);
@@ -184,6 +205,16 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           pairCode: pending.pairCode,
           requestedName: pending.requestedName,
           nodeType: pending.nodeType,
+        }));
+        return;
+      }
+
+      if (!nodeRegistered && data.type !== 'node_register') {
+        ws.send(JSON.stringify({
+          type: 'error',
+          code: 'NODE_PROTOCOL_NEGOTIATION_REQUIRED',
+          ...(data?.requestId ? { requestId: data.requestId } : {}),
+          error: 'Authenticated Node must complete core protocol registration before application messages.',
         }));
         return;
       }
@@ -204,28 +235,77 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             break;
           }
 
-          nodeId = nodesManager.registerNodeWithTools(
-            ws,
-            req,
-            nodeType,
-            capabilities,
-            authenticatedNodeId || undefined
+          let advertisedProtocol;
+          try { advertisedProtocol = resolveAdvertisedNodeProtocol(data.nodeProtocol); }
+          catch (error: any) {
+            const message = error?.message || String(error);
+            ws.send(JSON.stringify({ type: 'error', code: 'NODE_PROTOCOL_INVALID', error: message }));
+            logger.warn({ nodeId: authenticatedNodeId, err: error }, 'Rejected malformed Node protocol offer');
+            break;
+          }
+          const protocolCompatibility = negotiateNodeProtocol(
+            advertisedProtocol.range,
+            CURRENT_NODE_PROTOCOL_RANGE,
+            advertisedProtocol.legacy,
           );
           if (authenticatedNodeId) {
             await touchApprovedNode(authenticatedNodeId, {
               nodeType,
               capabilities,
               lastSeenAt: Date.now(),
+              nodeProtocol: protocolCompatibility.client,
+              protocolCompatibility,
             });
+          }
+          if (protocolCompatibility.status === 'compatible') {
+            nodeId = nodesManager.registerNodeWithTools(
+              ws,
+              req,
+              nodeType,
+              capabilities,
+              authenticatedNodeId || undefined,
+              protocolCompatibility,
+            );
+            protocolState = 'compatible';
+          } else {
+            nodeId = nodesManager.registerIncompatibleNodeWithTools(
+              ws,
+              req,
+              nodeType,
+              capabilities,
+              protocolCompatibility,
+              authenticatedNodeId || undefined,
+            );
+            protocolState = 'upgrade-required';
+            logger.warn({ nodeId, protocolCompatibility }, describeNodeProtocolCompatibility(protocolCompatibility));
           }
           nodeRegistered = true;
           break;
         }
         case 'tool_call_response':
-          nodesManager.handleToolResponse(data.callId, data.result);
+          nodesManager.handleToolResponse(data.callId, data.result, nodeId || authenticatedNodeId || undefined);
           break;
         case 'tool_call_error':
-          nodesManager.handleToolError(data.callId, data.error);
+          nodesManager.handleToolError(data.callId, data.error, typeof data.execStarted === 'boolean' ? data.execStarted : undefined,
+            nodeId || authenticatedNodeId || undefined);
+          break;
+        case 'external_exec_background': {
+          const accepted = nodesManager.registerExternalExecBackground(nodeId || authenticatedNodeId || '', data.owner,
+            data.execId, data.completionCapability);
+          if (!accepted) logger.warn({ nodeId, execId: data.execId }, 'Rejected external exec background notice');
+          break;
+        }
+        case 'external_exec_completed': {
+          const accepted = nodesManager.completeExternalExec(nodeId || authenticatedNodeId || '', data.owner,
+            data.execId, data.completionCapability, data.output, data.cwd);
+          if (data.requestId) ws.send(JSON.stringify(accepted
+            ? { type: 'cli_response', requestId: data.requestId, ok: true, result: { accepted: true } }
+            : { type: 'cli_response', requestId: data.requestId, ok: false, error: 'External execution owner is unavailable.' }));
+          break;
+        }
+        case 'external_exec_result_response':
+          nodesManager.handleExternalExecQuery(nodeId || authenticatedNodeId || '', data.requestId, data.result,
+            data.error ? new Error('External Node result query failed.') : undefined);
           break;
         case 'file_read_response':
           nodesManager.handleFileReadResponse(data.transferId, data.file);
@@ -236,6 +316,15 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
         case 'file_transfer_error':
           nodesManager.handleFileTransferError(data.transferId, data.error);
           break;
+        case 'node_service_response':
+          nodesManager.handleNodeServiceResponse(nodeId || authenticatedNodeId || 'unknown-node', String(data.requestId || ''), data.result);
+          break;
+        case 'node_service_error':
+          nodesManager.handleNodeServiceError(nodeId || authenticatedNodeId || 'unknown-node', String(data.requestId || ''), data.error || 'Node service failed.');
+          break;
+        case 'node_service_event':
+          nodesManager.handleNodeServiceEvent(nodeId || authenticatedNodeId || 'unknown-node', String(data.service || ''), data.event);
+          break;
         case 'session_event':
           if (!data.sessionId || typeof data.message !== 'string') {
             ws.send(JSON.stringify({
@@ -245,14 +334,44 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             }));
             break;
           }
-          await nodesManager.handleSessionEvent(
-            nodeId || authenticatedNodeId || 'unknown-node',
-            String(data.sessionId),
-            data.message,
-            data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background'
-          );
-          if (data.requestId) {
-            ws.send(JSON.stringify({ type: 'session_event_accepted', requestId: data.requestId }));
+          try {
+            await nodesManager.handleSessionEvent(
+              nodeId || authenticatedNodeId || 'unknown-node',
+              String(data.sessionId),
+              data.message,
+              data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background',
+              {
+                eventId: typeof data.eventId === 'string' ? data.eventId : undefined,
+                execId: typeof data.execId === 'string' ? data.execId : undefined,
+                completionCapability: typeof data.completionCapability === 'string' ? data.completionCapability : undefined,
+                eventTimestamp: typeof data.eventTimestamp === 'number' ? data.eventTimestamp : undefined,
+              },
+            );
+            if (data.requestId) {
+              ws.send(JSON.stringify({ type: 'session_event_accepted', requestId: data.requestId }));
+            }
+          } catch (error: any) {
+            if (!data.requestId) throw error;
+            ws.send(JSON.stringify({
+              type: 'error',
+              requestId: data.requestId,
+              error: error?.message || String(error),
+            }));
+          }
+          break;
+        case 'remote_exec_background':
+          try {
+            if (typeof data.sessionId !== 'string' || typeof data.execId !== 'string'
+              || typeof data.completionCapability !== 'string') {
+              throw new Error('Invalid remote_exec_background message.');
+            }
+            nodesManager.registerRemoteExecBackground(nodeId || authenticatedNodeId || 'unknown-node', {
+              sessionId: data.sessionId,
+              execId: data.execId,
+              completionCapability: data.completionCapability,
+            });
+          } catch (error: any) {
+            logger.warn({ err: error, nodeId: nodeId || authenticatedNodeId }, 'Rejected remote background exec liveness registration');
           }
           break;
         case 'session_list_request': {

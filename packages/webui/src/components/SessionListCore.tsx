@@ -1,22 +1,34 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
-import { useDraggable } from '@dnd-kit/core'
+import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X } from 'lucide-react'
+import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
+import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
+import { useSessionListCompact } from '../sessionListDensity'
+import { getResolvedSessionNodeId } from '../sessionNode'
+import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
 export interface Session {
   id: string
   agent?: string
   messageCount: number
+  sequenceMessageCount?: number
   lastMessageTime: number
   parentSessionId: string | null
-  childSessions: string[]
+  childSessions?: string[]
+  childTotal?: number
   aliases?: string[]
   busy?: boolean
   busyStartedAt?: number | null
   queueLength?: number
+  runtimeState?: SessionRuntimeState
   displayName?: string
   archived?: boolean
+  pinned?: boolean
+  sidebarOrder?: number | null
   currentNode?: string
   cwd?: string | null
   model?: string | null
@@ -32,12 +44,48 @@ export interface Session {
   }
 }
 
+export interface BoundedSessionListPresentationProps {
+  serverOrdered: true
+  hasMoreRoots: boolean
+  childPages: Map<string, { ids: string[]; total: number; nextCursor: string | null }>
+  branchLoadStates: Map<string, { status: 'loading' | 'error'; message?: string }>
+  descendantBusy: Map<string, number>
+  invalidationVersion: number
+  onModeChange: (mode: SessionListOrderMode) => void
+  onFilterChange: (query: string) => void
+  onLoadMoreRoots: () => void
+  onLoadMoreChildren: (parentSessionId: string) => void
+  onExpandBranch: (parentSessionId: string) => void
+  onExpandBranches: (parentSessionIds: string[]) => void
+  onRetryBranch: (parentSessionId: string) => void
+  onCollapseBranch: (parentSessionId: string) => void
+}
+
 interface SessionListCoreProps {
   sessions: Session[]
-  currentSession?: string  // Optional, for highlighting in sidebar
+  currentSession?: string
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
+  toolbarContainerClassName?: string
+  listContainerClassName?: string
+  dragEnabled?: boolean
+  idleNotificationModes?: Record<string, SessionIdleNotificationMode>
+  unreadSessionIds?: ReadonlySet<string>
+  onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
+  bounded?: BoundedSessionListPresentationProps
 }
+
+export interface SessionMoveRequest {
+  parentSessionId?: string | null
+  beforeSessionId?: string | null
+  afterSessionId?: string | null
+  position?: 'first' | 'last'
+  updateOrder?: boolean
+}
+
+type SessionListViewMode = SessionListOrderMode
+
+const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
 
 interface ContextMenuState {
   sessionId: string
@@ -48,9 +96,40 @@ interface ContextMenuState {
 }
 
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
-const LEGACY_TOKEN_KEY = 'alphabot_token'
 const DEFAULT_VISIBLE_CHILDREN = 5
 const MORE_VISIBLE_CHILDREN_STEP = 10
+const DEFAULT_VISIBLE_ROOTS = 50
+const MORE_VISIBLE_ROOTS_STEP = 50
+
+const SESSION_LIST_VIEW_MODES: SessionListViewMode[] = ['default', 'time', 'flat-time']
+
+const SESSION_LIST_VIEW_MODE_LABELS: Record<SessionListViewMode, string> = {
+  default: 'Default',
+  time: 'Time',
+  'flat-time': 'Flat',
+}
+
+const SESSION_LIST_VIEW_MODE_ICONS = {
+  default: ListTree,
+  time: Clock3,
+  'flat-time': Rows3,
+} as const
+
+const SESSION_LIST_VIEW_MODE_TITLES: Record<SessionListViewMode, string> = {
+  default: 'Default: use saved sidebar order when present, otherwise sort by recent activity. Dragging can reorder and change parents.',
+  time: 'Time: ignore saved sidebar order and sort by recent activity. Dragging can change parents but not reorder siblings.',
+  'flat-time': 'Flat time: ignore saved sidebar order and parent tree; show all sessions at the top level by recent activity.',
+}
+
+const loadStoredSessionListViewMode = (): SessionListViewMode => {
+  const stored = localStorage.getItem(SESSION_LIST_VIEW_MODE_KEY)
+  return SESSION_LIST_VIEW_MODES.includes(stored as SessionListViewMode) ? stored as SessionListViewMode : 'default'
+}
+
+const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
+  const index = SESSION_LIST_VIEW_MODES.indexOf(mode)
+  return SESSION_LIST_VIEW_MODES[(index + 1) % SESSION_LIST_VIEW_MODES.length] || 'default'
+}
 
 const getSessionFilterFields = (session: Session): string[] => {
   return [
@@ -73,20 +152,36 @@ const sessionMatchesFilter = (session: Session, normalizedQuery: string): boolea
   return getSessionFilterFields(session).some(field => field.toLowerCase().includes(normalizedQuery))
 }
 
+const getRuntimeBadgeTone = (session: Session): string => {
+  const state = getSessionRuntimeStateName(session)
+  if (state === 'requesting-model') return 'text-fw-accent dark:text-fw-accent'
+  if (state === 'running-tool') return 'text-fw-special dark:text-fw-special'
+  if (state === 'waiting') return 'text-fw-warning dark:text-fw-warning'
+  return 'text-fw-text-muted'
+}
+
+const RuntimeActivityDots = ({ state }: { state: string }) => {
+  const colorClass = state === 'running-tool'
+    ? 'bg-fw-special dark:bg-fw-special'
+    : state === 'waiting'
+      ? 'bg-fw-warning dark:bg-fw-warning'
+      : 'bg-fw-accent dark:bg-fw-accent'
+
+  if (state === 'waiting') {
+    return <span className={`w-1.5 h-1.5 ${colorClass} rounded-full`} />
+  }
+
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`}></span>
+      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`} style={{ animationDelay: '0.1s' }}></span>
+      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`} style={{ animationDelay: '0.2s' }}></span>
+    </span>
+  )
+}
+
 const getStoredAuthToken = () => {
-  const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
-  if (foxwarmToken) {
-    return foxwarmToken
-  }
-
-  const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY)
-  if (legacyToken) {
-    localStorage.setItem(FOXWARM_TOKEN_KEY, legacyToken)
-    localStorage.removeItem(LEGACY_TOKEN_KEY)
-    return legacyToken
-  }
-
-  return null
+  return localStorage.getItem(FOXWARM_TOKEN_KEY)
 }
 
 const formatPromoteApiError = async (response: Response): Promise<string> => {
@@ -169,6 +264,128 @@ const isFullyVisibleInContainer = (element: HTMLElement, container: HTMLElement)
   return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom
 }
 
+function SidebarDropZone({
+  id,
+  data,
+  disabled,
+  className,
+  children,
+}: {
+  id: string
+  data: Record<string, unknown>
+  disabled?: boolean
+  className: string
+  children?: (isOver: boolean) => ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id, data, disabled })
+  return (
+    <div ref={setNodeRef} className={className}>
+      {children?.(isOver && !disabled)}
+    </div>
+  )
+}
+
+function SidebarRootDropZone({ visible, disabled, allowOrder }: { visible: boolean; disabled?: boolean; allowOrder: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'sidebar-root-drop',
+    disabled: disabled || !visible,
+    data: {
+      type: 'sidebar-root-drop',
+      parentSessionId: null,
+      ...(allowOrder ? { position: 'first' } : { updateOrder: false }),
+    },
+  })
+
+  if (!visible) return null
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`mb-2 rounded-lg border border-dashed px-3 py-2 text-xs transition-colors ${
+        isOver && !disabled
+          ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent dark:border-fw-accent-border/70 dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
+          : disabled
+            ? 'border-fw-border bg-fw-surface-sunken text-fw-text-muted dark:border-fw-border dark:bg-fw-canvas/50 dark:text-fw-text-muted'
+            : 'border-fw-border bg-fw-surface-sunken text-fw-text-muted dark:border-fw-border dark:bg-fw-canvas/50 dark:text-fw-text-muted'
+      }`}
+    >
+      <div className="flex items-center gap-2 font-medium">
+        <CornerDownRight className="h-3.5 w-3.5 rotate-180" />
+        <span>Drop here to detach to root</span>
+      </div>
+      <div className="mt-0.5 text-[11px] opacity-80">Keeps this thread in the sidebar, but removes its parent.</div>
+    </div>
+  )
+}
+
+function SessionRowDropLayer({
+  session,
+  parentSessionId,
+  disabled,
+  allowReorder,
+  allowParentDrop,
+}: {
+  session: Session
+  parentSessionId: string | null
+  disabled?: boolean
+  allowReorder: boolean
+  allowParentDrop: boolean
+}) {
+  if (!allowReorder && !allowParentDrop) return null
+
+  return (
+    <div className={`pointer-events-none absolute inset-0 z-10 rounded ${disabled ? 'hidden' : ''}`}>
+      {allowReorder && (
+        <SidebarDropZone
+          id={`sidebar-session-before:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-before',
+            sessionId: session.id,
+            parentSessionId,
+          }}
+          className="pointer-events-none absolute inset-x-0 top-0 h-[28%]"
+        >
+          {(isOver) => isOver ? <div className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-fw-accent ring-2 ring-fw-accent/20" /> : null}
+        </SidebarDropZone>
+      )}
+      {allowParentDrop && (
+        <SidebarDropZone
+          id={`sidebar-session-child:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-child',
+            sessionId: session.id,
+            parentSessionId: session.id,
+            ...(allowReorder ? { position: 'first' } : { updateOrder: false }),
+          }}
+          className="pointer-events-none absolute inset-x-0 top-[28%] bottom-[28%]"
+        >
+          {(isOver) => isOver ? (
+            <div className="absolute inset-x-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md border border-fw-accent-border bg-fw-accent-surface/95 px-2 py-1 text-[11px] font-medium text-fw-accent shadow-sm dark:border-fw-accent-border/60 dark:bg-fw-accent-surface-strong/95 dark:text-fw-accent">
+              Assign as child
+            </div>
+          ) : null}
+        </SidebarDropZone>
+      )}
+      {allowReorder && (
+        <SidebarDropZone
+          id={`sidebar-session-after:${session.id}`}
+          disabled={disabled}
+          data={{
+            type: 'sidebar-session-after',
+            sessionId: session.id,
+            parentSessionId,
+          }}
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[28%]"
+        >
+          {(isOver) => isOver ? <div className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-fw-accent ring-2 ring-fw-accent/20" /> : null}
+        </SidebarDropZone>
+      )}
+    </div>
+  )
+}
+
 function DraggableSessionRow({
   session,
   children,
@@ -177,6 +394,7 @@ function DraggableSessionRow({
   onDoubleClick,
   onContextMenu,
   setRowRef,
+  dragEnabled,
 }: {
   session: Session
   children: ReactNode
@@ -185,16 +403,55 @@ function DraggableSessionRow({
   onDoubleClick: () => void
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void
   setRowRef: (node: HTMLDivElement | null) => void
+  dragEnabled: boolean
 }) {
   const title = session.displayName || session.id
+  const suppressClickRef = useRef(false)
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `session:${session.id}`,
+    disabled: !dragEnabled,
     data: {
       type: 'session',
       sessionId: session.id,
       title,
+      sessionPinned: !!session.pinned,
     },
   })
+
+  const handlePointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    suppressClickRef.current = false
+    pointerStartRef.current = dragEnabled ? { x: event.clientX, y: event.clientY } : null
+  }
+
+  const handlePointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = pointerStartRef.current
+    if (!start) return
+    if (Math.abs(event.clientX - start.x) > 4 || Math.abs(event.clientY - start.y) > 4) {
+      suppressClickRef.current = true
+    }
+  }
+
+  const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (isDragging || suppressClickRef.current) {
+      event.preventDefault()
+      event.stopPropagation()
+      suppressClickRef.current = false
+      return
+    }
+    onClick()
+  }
+
+  const dragListeners = dragEnabled
+    ? {
+        ...listeners,
+        onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
+          if (shouldActivateSessionListDrag(dragEnabled, event.pointerType)) {
+            listeners?.onPointerDown?.(event)
+          }
+        },
+      }
+    : {}
 
   return (
     <div
@@ -202,41 +459,108 @@ function DraggableSessionRow({
         setNodeRef(node)
         setRowRef(node)
       }}
+      data-session-id={session.id}
       className={`${className} ${isDragging ? 'opacity-50' : ''}`}
-      onClick={onClick}
+      title={dragEnabled ? (session.pinned ? 'Pinned session: drag to open in a pane; unpin before changing its sidebar parent or order' : 'Drag in the sidebar or open in a pane') : `Open session ${session.id}`}
+      onPointerDownCapture={handlePointerDownCapture}
+      onPointerMoveCapture={handlePointerMoveCapture}
+      onClick={handleClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
-      {...attributes}
-      {...listeners}
+      {...(dragEnabled ? attributes : {})}
+      {...dragListeners}
     >
       {children}
     </div>
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
+  const { active } = useDndContext()
+  const [compact, toggleCompact] = useSessionListCompact()
+  const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [visibleChildCounts, setVisibleChildCounts] = useState<Map<string, number>>(new Map())
   const [filterText, setFilterText] = useState('')
+  const [viewMode, setViewMode] = useState<SessionListViewMode>(loadStoredSessionListViewMode)
+  const [visibleRootCount, setVisibleRootCount] = useState(DEFAULT_VISIBLE_ROOTS)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [deleteIncludeDescendants, setDeleteIncludeDescendants] = useState(false)
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null)
+  const [archiveIncludeDescendants, setArchiveIncludeDescendants] = useState(false)
+  const [archiveSubmitting, setArchiveSubmitting] = useState(false)
+  const [archiveError, setArchiveError] = useState('')
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renameSubmitting, setRenameSubmitting] = useState(false)
+  const [descendantSummaries, setDescendantSummaries] = useState<Map<string, { total: number; busy: number }>>(new Map())
+  const [descendantSummaryLoading, setDescendantSummaryLoading] = useState<Set<string>>(new Set())
+  const [relationRows, setRelationRows] = useState<Map<string, Session>>(new Map())
+  const relationGenerationRef = useRef(0)
+  const descendantSummaryGenerationRef = useRef(new Map<string, number>())
   const renameInputRef = useRef<HTMLInputElement>(null)
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
+  const previousCurrentSessionIdRef = useRef<string | undefined>(undefined)
+  const autoExpandedCurrentSessionIdRef = useRef<string | undefined>(undefined)
+  const manuallyCollapsedSessionsRef = useRef<Set<string>>(new Set())
+  const sessionDragEnabled = shouldEnableSessionListDrag(dragEnabled, primaryPointerCoarse)
+
+  useEffect(() => {
+    if (!window.matchMedia) return
+    const mediaQuery = window.matchMedia('(pointer: coarse)')
+    const handleChange = (event: MediaQueryListEvent) => setPrimaryPointerCoarse(event.matches)
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
+
+  const activeDragData = active?.data.current as { type?: string; sessionId?: string; sessionPinned?: boolean } | undefined
+  const draggingSessionId = activeDragData?.type === 'session' ? activeDragData.sessionId || null : null
+  const draggingPinnedSession = activeDragData?.type === 'session' && !!activeDragData.sessionPinned
+
+  const allowSidebarOrder = viewMode === 'default'
+  const allowParentDrop = viewMode !== 'flat-time'
 
   const sortSessions = (a: Session, b: Session) => {
-    if (a.archived && !b.archived) return 1
-    if (!a.archived && b.archived) return -1
-    return (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
+    if (bounded?.serverOrdered) return 0
+    return compareSessionListSessions(a, b, viewMode)
   }
 
   const normalizedFilterQuery = filterText.trim().toLowerCase()
+  const boundedOwnershipKey = bounded ? sessions.map(session => session.id).join('\0') : ''
   const isFiltering = normalizedFilterQuery.length > 0
 
-  const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
+  const sessionMap = useMemo(() => new Map([...relationRows.values(), ...sessions].map(session => [session.id, session])), [sessions, relationRows])
+
+  const loadDescendantSummary = async (sessionId: string) => {
+    const generation = (descendantSummaryGenerationRef.current.get(sessionId) || 0) + 1
+    descendantSummaryGenerationRef.current.set(sessionId, generation)
+    setDescendantSummaryLoading(current => new Set(current).add(sessionId))
+    try {
+      const response = await fetch(`${API_BASE_PATH}/session-list/descendants/${encodeURIComponent(sessionId)}?limit=1`)
+      if (!response.ok) return
+      const payload = await response.json()
+      if (descendantSummaryGenerationRef.current.get(sessionId) !== generation) return
+      setDescendantSummaries(current => new Map(current).set(sessionId, {
+        total: Number(payload.total || 0), busy: Number(payload.busy || 0),
+      }))
+    } catch (error) { console.error('Failed to load descendant summary', error) }
+    finally { if (descendantSummaryGenerationRef.current.get(sessionId) === generation) setDescendantSummaryLoading(current => { const next = new Set(current); next.delete(sessionId); return next }) }
+  }
+  const loadRelationParent = async (sessionId: string) => {
+    const generation = ++relationGenerationRef.current
+    const session = sessionMap.get(sessionId); if (!session?.parentSessionId || sessionMap.has(session.parentSessionId)) return
+    try {
+      const response = await fetch(`${API_BASE_PATH}/session-list/by-id`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [session.parentSessionId], includePaths: false }) })
+      if (!response.ok) return
+      const payload = await response.json(); const parent = payload.results?.[0]?.session
+      if (parent && generation === relationGenerationRef.current) setRelationRows(current => new Map(current).set(parent.id, parent))
+    } catch (error) { console.error('Failed to load Session relation context', error) }
+  }
 
   const aliasMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -273,7 +597,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [sessions, sessionMap, aliasMap])
 
   const visibleSessionIds = useMemo(() => {
-    if (!isFiltering) {
+    if (!isFiltering || bounded) {
       return null
     }
 
@@ -295,6 +619,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const map = new Map<string, string | null>()
 
     for (const session of visibleSessions) {
+      if (shouldElevateSessionToRoot(session, viewMode)) {
+        map.set(session.id, null)
+        continue
+      }
+
       let parentId = normalizedParentMap.get(session.id) || null
 
       while (parentId && visibleSessionIds && !visibleSessionIds.has(parentId)) {
@@ -305,7 +634,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, normalizedParentMap, visibleSessionIds])
+  }, [visibleSessions, normalizedParentMap, visibleSessionIds, viewMode])
 
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
@@ -325,50 +654,92 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [visibleSessions, visibleParentMap])
-
-  const descendantBusyCountMap = useMemo(() => {
-    const map = new Map<string, number>()
-
-    const countBusyDescendants = (sessionId: string): number => {
-      if (map.has(sessionId)) {
-        return map.get(sessionId) || 0
-      }
-
-      const children = childrenMap.get(sessionId) || []
-      const total = children.reduce((sum, child) => {
-        const childBusy = child.busy ? 1 : 0
-        return sum + childBusy + countBusyDescendants(child.id)
-      }, 0)
-
-      map.set(sessionId, total)
-      return total
-    }
-
-    for (const session of visibleSessions) {
-      countBusyDescendants(session.id)
-    }
-
-    return map
-  }, [childrenMap, visibleSessions])
+  }, [visibleSessions, visibleParentMap, viewMode])
 
   const rootSessions = useMemo(
     () => visibleSessions.filter(session => !visibleParentMap.get(session.id)).sort(sortSessions),
-    [visibleSessions, visibleParentMap]
+    [visibleSessions, visibleParentMap, viewMode]
   )
+
+  const visibleRootSessions = bounded ? rootSessions : rootSessions.slice(0, visibleRootCount)
+  const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : rootSessions.length - visibleRootSessions.length
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
 
-  useEffect(() => {
-    if (!resolvedCurrentSessionId) return
+  const isDescendantOf = (candidateSessionId: string | null | undefined, ancestorSessionId: string | null | undefined): boolean => {
+    if (!candidateSessionId || !ancestorSessionId || candidateSessionId === ancestorSessionId) return false
 
-    const sessionsToExpand = new Set<string>()
+    let cursor = visibleParentMap.get(candidateSessionId) || normalizedParentMap.get(candidateSessionId) || null
+    const seen = new Set<string>()
+    while (cursor && !seen.has(cursor)) {
+      if (cursor === ancestorSessionId) return true
+      seen.add(cursor)
+      cursor = visibleParentMap.get(cursor) || normalizedParentMap.get(cursor) || null
+    }
+    return false
+  }
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_LIST_VIEW_MODE_KEY, viewMode)
+    setVisibleRootCount(DEFAULT_VISIBLE_ROOTS)
+    bounded?.onModeChange(viewMode)
+  }, [viewMode, normalizedFilterQuery])
+
+  useEffect(() => { bounded?.onFilterChange(filterText) }, [filterText, bounded?.onFilterChange])
+  useEffect(() => { if (bounded) setExpandedSessions(new Set()) }, [viewMode, filterText, resolvedCurrentSessionId])
+  useEffect(() => {
+    if (!bounded) return
+    relationGenerationRef.current += 1; setContextMenu(null); setDeleteConfirm(null); setArchiveConfirm(null); setRelationRows(new Map())
+    descendantSummaryGenerationRef.current.clear(); setDescendantSummaries(new Map()); setDescendantSummaryLoading(new Set())
+  }, [viewMode, filterText, resolvedCurrentSessionId, boundedOwnershipKey])
+  useEffect(() => {
+    const active = new Set([contextMenu?.sessionId, deleteConfirm, archiveConfirm].filter((id): id is string => !!id))
+    if (!contextMenu) { relationGenerationRef.current += 1; setRelationRows(new Map()) }
+    setDescendantSummaries(current => new Map([...current].filter(([id]) => active.has(id))))
+    setDescendantSummaryLoading(current => new Set([...current].filter(id => active.has(id))))
+    for (const id of descendantSummaryGenerationRef.current.keys()) if (!active.has(id)) descendantSummaryGenerationRef.current.delete(id)
+  }, [contextMenu?.sessionId, deleteConfirm, archiveConfirm])
+  useEffect(() => {
+    if (!bounded) return
+    descendantSummaryGenerationRef.current.clear()
+    setDescendantSummaries(new Map())
+    setDescendantSummaryLoading(new Set())
+    if (contextMenu) void loadDescendantSummary(contextMenu.sessionId)
+    if (deleteConfirm) void loadDescendantSummary(deleteConfirm)
+    if (archiveConfirm) void loadDescendantSummary(archiveConfirm)
+  }, [bounded?.invalidationVersion])
+  useEffect(() => () => { relationGenerationRef.current += 1; descendantSummaryGenerationRef.current.clear(); sessionRefs.current.clear() }, [])
+
+  useEffect(() => {
+    if (!resolvedCurrentSessionId) {
+      autoExpandedCurrentSessionIdRef.current = undefined
+      return
+    }
+
+    const activePath: string[] = []
+    const seen = new Set<string>()
     let currentId: string | null = resolvedCurrentSessionId
 
-    while (currentId) {
-      sessionsToExpand.add(currentId)
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId)
+      activePath.push(currentId)
       currentId = normalizedParentMap.get(currentId) || null
     }
+    activePath.reverse()
+
+    const currentSessionChanged = autoExpandedCurrentSessionIdRef.current !== resolvedCurrentSessionId
+    autoExpandedCurrentSessionIdRef.current = resolvedCurrentSessionId
+    if (currentSessionChanged) {
+      // Navigating to another session should reveal its path, but background
+      // list refreshes for the same active session must respect branches the
+      // user explicitly collapsed.
+      activePath.forEach(sessionId => manuallyCollapsedSessionsRef.current.delete(sessionId))
+    }
+    const sessionsToExpand = getSessionListAutoExpandedPath(
+      activePath,
+      manuallyCollapsedSessionsRef.current,
+      currentSessionChanged,
+    )
 
     setExpandedSessions(prev => {
       let changed = false
@@ -384,8 +755,23 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       return changed ? next : prev
     })
 
+    if (bounded && !normalizedFilterQuery && viewMode !== 'flat-time' && sessionsToExpand.length) {
+      bounded.onExpandBranches(sessionsToExpand)
+    }
+
+  }, [resolvedCurrentSessionId, normalizedParentMap, normalizedFilterQuery, viewMode])
+
+  useEffect(() => {
+    if (!resolvedCurrentSessionId) {
+      previousCurrentSessionIdRef.current = undefined
+      return
+    }
+
+    if (previousCurrentSessionIdRef.current === resolvedCurrentSessionId) return
+
+    previousCurrentSessionIdRef.current = resolvedCurrentSessionId
     setPendingFocusSessionId(resolvedCurrentSessionId)
-  }, [resolvedCurrentSessionId, normalizedParentMap])
+  }, [resolvedCurrentSessionId])
 
   useEffect(() => {
     if (!pendingFocusSessionId) return
@@ -418,16 +804,35 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [renameSessionId])
 
   const toggleExpand = (sessionId: string) => {
-    const newExpanded = new Set(expandedSessions)
-    if (newExpanded.has(sessionId)) {
-      newExpanded.delete(sessionId)
+    const wasExpanded = expandedSessions.has(sessionId)
+    const newExpanded = wasExpanded
+      ? collapseSessionListExpandedBranch(expandedSessions, childrenMap, sessionId)
+      : new Set(expandedSessions).add(sessionId)
+    if (wasExpanded) {
+      manuallyCollapsedSessionsRef.current.add(sessionId)
+      bounded?.onCollapseBranch(sessionId)
     } else {
-      newExpanded.add(sessionId)
+      const remainsActivePathBarrier = sessionId === resolvedCurrentSessionId
+        || isDescendantOf(resolvedCurrentSessionId, sessionId)
+      if (!remainsActivePathBarrier) {
+        manuallyCollapsedSessionsRef.current.delete(sessionId)
+      }
+      bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)
   }
 
+  const cycleViewMode = () => {
+    setViewMode(current => getNextSessionListViewMode(current))
+  }
+
+  const toggleShowMoreRoots = () => {
+    if (bounded) { bounded.onLoadMoreRoots(); return }
+    setVisibleRootCount(current => current >= rootSessions.length ? DEFAULT_VISIBLE_ROOTS : current + MORE_VISIBLE_ROOTS_STEP)
+  }
+
   const toggleShowMore = (sessionId: string) => {
+    if (bounded) { bounded.onLoadMoreChildren(sessionId); return }
     setVisibleChildCounts(prev => {
       const next = new Map(prev)
       const currentCount = next.get(sessionId) ?? DEFAULT_VISIBLE_CHILDREN
@@ -443,15 +848,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     })
   }
 
-  // Get display ID for a session, removing parent prefix if applicable
-  const getDisplayId = (session: Session, parentSession: Session | null) => {
-    if (!parentSession) return session.id
-    if (session.id.startsWith(parentSession.id)) {
-      return session.id.slice(parentSession.id.length)
-    }
-    return session.id
-  }
-
   // Handle right click
   const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
     e.preventDefault()
@@ -462,6 +858,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       y: e.clientY,
       preferredPlacement: 'point',
     })
+    void loadDescendantSummary(sessionId)
+    void loadRelationParent(sessionId)
   }
 
   // Handle menu button click (for mobile)
@@ -484,11 +882,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       },
       preferredPlacement: 'bottom-end',
     })
+    void loadDescendantSummary(sessionId)
+    void loadRelationParent(sessionId)
   }
 
   // API calls
-  const deleteSession = async (sessionId: string) => {
+  const deleteSession = async (sessionId: string, includeDescendants: boolean) => {
+    if (deleteSubmitting) return
     try {
+      setDeleteSubmitting(true)
+      setDeleteError('')
       const token = getStoredAuthToken()
       const url = `${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}`
       console.log('[DELETE] Sending request to:', url)
@@ -497,35 +900,45 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       const response = await fetch(url, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ includeDescendants })
       })
       
       console.log('[DELETE] Response status:', response.status)
       console.log('[DELETE] Response ok:', response.ok)
       
       if (!response.ok) {
-        const error = await response.json()
+        const error = await response.json().catch(() => ({ error: `Request failed with ${response.status}` }))
         console.error('[DELETE] Error response:', error)
-        alert(`Failed to delete session: ${error.error}`)
+        setDeleteError(error.error || `Request failed with ${response.status}`)
       } else {
         console.log('[DELETE] Success')
+        const result = await response.json().catch(() => ({}))
+        dispatchSessionIdleDeleted(Array.isArray(result.deletedSessionIds) ? result.deletedSessionIds : [sessionId])
+        setContextMenu(null)
+        setDeleteConfirm(null)
+        setDeleteIncludeDescendants(false)
       }
     } catch (err) {
       console.error('[DELETE] Exception:', err)
-      alert('Failed to delete session')
+      setDeleteError('Failed to reach Foxwarm. Check the connection and retry.')
+    } finally {
+      setDeleteSubmitting(false)
     }
-    setContextMenu(null)
-    setDeleteConfirm(null)
   }
 
-  const toggleArchive = async (sessionId: string, archived: boolean) => {
+  const toggleArchive = async (sessionId: string, archived: boolean, includeDescendants: boolean = false) => {
+    if (archiveSubmitting) return
     try {
+      setArchiveSubmitting(true)
+      setArchiveError('')
       const token = getStoredAuthToken()
       const url = `${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/archive`
       console.log('[ARCHIVE] Sending request to:', url)
       console.log('[ARCHIVE] Token:', token ? 'present' : 'missing')
-      console.log('[ARCHIVE] Body:', { archived })
+      console.log('[ARCHIVE] Body:', { archived, includeDescendants })
       
       const response = await fetch(url, {
         method: 'POST',
@@ -533,22 +946,67 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ archived })
+        body: JSON.stringify({ archived, includeDescendants })
       })
       
       console.log('[ARCHIVE] Response status:', response.status)
       console.log('[ARCHIVE] Response ok:', response.ok)
       
       if (!response.ok) {
-        const error = await response.json()
+        const error = await response.json().catch(() => ({ error: `Request failed with ${response.status}` }))
         console.error('[ARCHIVE] Error response:', error)
-        alert(`Failed to archive session: ${error.error}`)
+        if (archiveConfirm) setArchiveError(error.error || `Request failed with ${response.status}`)
+        else alert(`Failed to archive session: ${error.error || `Request failed with ${response.status}`}`)
       } else {
         console.log('[ARCHIVE] Success')
+        setArchiveConfirm(null)
+        setArchiveIncludeDescendants(false)
+        setContextMenu(null)
       }
     } catch (err) {
       console.error('[ARCHIVE] Exception:', err)
-      alert('Failed to archive session')
+      if (archiveConfirm) setArchiveError('Failed to reach Foxwarm. Check the connection and retry.')
+      else alert('Failed to archive session')
+    } finally {
+      setArchiveSubmitting(false)
+    }
+  }
+
+  const openDeleteDialog = (sessionId: string) => {
+    void loadDescendantSummary(sessionId)
+    setDeleteConfirm(sessionId)
+    setDeleteIncludeDescendants(false)
+    setDeleteError('')
+    setContextMenu(null)
+  }
+
+  const openArchiveDialog = (sessionId: string) => {
+    void loadDescendantSummary(sessionId)
+    setArchiveConfirm(sessionId)
+    setArchiveIncludeDescendants(false)
+    setArchiveError('')
+    setContextMenu(null)
+  }
+
+  const togglePinned = async (sessionId: string, pinned: boolean) => {
+    try {
+      const token = getStoredAuthToken()
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/pin`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ pinned })
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        alert(`Failed to ${pinned ? 'pin' : 'unpin'} session: ${error.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('[PIN] Exception:', err)
+      alert(`Failed to ${pinned ? 'pin' : 'unpin'} session`)
     }
     setContextMenu(null)
   }
@@ -659,18 +1117,115 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
-    const hasChildren = children.length > 0
-    const descendantBusyCount = descendantBusyCountMap.get(session.id) || 0
+    const boundedChildPage = bounded?.childPages.get(session.id)
+    const branchLoadState = bounded?.branchLoadStates.get(session.id)
+    const childDisclosure = getSessionListChildDisclosure({
+      bounded: !!bounded,
+      loadedCount: children.length,
+      boundedTotal: boundedChildPage?.total,
+      itemTotal: session.childTotal,
+      allowTree: !isFiltering && viewMode !== 'flat-time',
+    })
+    const childTotal = childDisclosure.total
+    const hasChildren = childDisclosure.canExpand
+    const descendantBusyCount = bounded?.descendantBusy.get(session.id) ?? descendantSummaries.get(session.id)?.busy ?? 0
     const isExpanded = isFiltering || expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
-    const visibleChildren = children.slice(0, visibleCount)
-    const hiddenCount = children.length - visibleChildren.length
+    const visibleChildren = bounded ? children : children.slice(0, visibleCount)
+    const hiddenCount = childTotal === null ? 0 : Math.max(0, childTotal - visibleChildren.length)
+    const showBranchLoading = !!bounded && branchLoadState?.status === 'loading'
+    const showBranchRetry = !!bounded && (branchLoadState?.status === 'error' || (!boundedChildPage && !branchLoadState))
+    const showMoreChildren = hiddenCount > 0 && (!bounded || (!!boundedChildPage && !branchLoadState))
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
-    const displayId = getDisplayId(session, parentSession)
+    const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
+    const displayId = getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
+    const runtimeStateName = getSessionRuntimeStateName(session)
+    const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' : !!session.busy
+    const resolvedNodeId = getResolvedSessionNodeId(session)
+    const rowParentSessionId = visibleParentMap.get(session.id) || null
+    const targetParentWouldCreateCycle = rowParentSessionId
+      ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
+      : false
+    const disableSidebarDrop = !draggingSessionId
+      || !sessionDragEnabled
+      || isFiltering
+      || !allowParentDrop && !allowSidebarOrder
+      || draggingPinnedSession
+      || !!session.pinned
+      || draggingSessionId === session.id
+      || isDescendantOf(session.id, draggingSessionId)
+      || targetParentWouldCreateCycle
+
+    const nodeBadge = resolvedNodeId !== 'master' && (
+      <span
+        role="img"
+        aria-label={`Node: ${resolvedNodeId}`}
+        title={`Node: ${resolvedNodeId}`}
+        data-session-node={resolvedNodeId}
+        className="inline-flex shrink-0 items-center justify-center text-fw-accent"
+      >
+        <Server className={compact ? 'h-3.5 w-3.5' : 'h-3.5 w-3.5'} strokeWidth={2} aria-hidden="true" />
+      </span>
+    )
+
+    const pinButton = (
+      <button
+        type="button"
+        className={`session-pin ${compact ? 'session-compact-pin h-6' : 'h-5'} inline-flex w-4 shrink-0 items-center justify-center rounded focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 ${session.pinned ? 'text-fw-accent' : 'text-fw-text-muted hover:text-fw-text'}`}
+        aria-label={session.pinned ? 'Unpin from top' : 'Pin to top'}
+        aria-pressed={!!session.pinned}
+        title={session.pinned ? 'Unpin from top' : 'Pin to top'}
+        onClick={(e) => {
+          e.stopPropagation()
+          void togglePinned(session.id, !session.pinned)
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        <Pin className="h-3.5 w-3.5 rotate-45" strokeWidth={1.5} aria-hidden="true" />
+      </button>
+    )
+
+    const disclosure = (
+      hasChildren && (
+        <div className={compact ? "session-compact-disclosure w-4 shrink-0 flex items-center" : "mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-fw-text-muted"}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              toggleExpand(session.id)
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className={`${compact ? 'h-6 w-4 justify-center' : '-ml-1 -my-1 gap-x-1.5 gap-y-0.5 px-1 py-1'} inline-flex items-center rounded text-left text-fw-text-muted hover:text-fw-text focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 dark:text-fw-text-muted dark:hover:text-fw-text-strong`}
+            title={`${isExpanded ? 'Collapse' : 'Expand'} child sessions · ${childTotal ?? 'Unknown'} children${descendantBusyCount ? ` · ${descendantBusyCount} active` : ''}`}
+            aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
+            aria-expanded={isExpanded}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {isExpanded ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              )}
+            </svg>
+            <span className={compact ? "sr-only" : undefined}>{childTotal} {childTotal === 1 ? 'child' : 'children'}</span>
+            {!compact && descendantBusyCount > 0 && (
+              <>
+                <span>•</span>
+                <span className="text-fw-accent dark:text-fw-accent">{descendantBusyCount} active</span>
+              </>
+            )}
+          </button>
+        </div>
+      )
+    )
 
     return (
       <div
@@ -678,117 +1233,152 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       >
         <DraggableSessionRow
           session={session}
-          className={`flex items-center rounded cursor-pointer mt-1 ${
+          className={`group session-row relative flex items-center rounded cursor-pointer active:cursor-grabbing ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${
             isCurrentSession
-              ? 'bg-blue-100 dark:bg-blue-900/30' 
-              : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+              ? 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/30'
+              : 'hover:bg-fw-hover dark:hover:bg-fw-hover'
           } ${session.archived ? 'opacity-70' : ''}`}
           onClick={() => onSelectSession(session.id)}
           onDoubleClick={() => onKeepSession?.(session.id)}
           onContextMenu={(e) => handleContextMenu(e, session.id)}
-          setRowRef={(node) => {
-            sessionRefs.current.set(session.id, node)
-          }}
+          setRowRef={(node) => { if (node) sessionRefs.current.set(session.id, node); else sessionRefs.current.delete(session.id) }}
+          dragEnabled={sessionDragEnabled}
         >
-          <div className="flex-1 min-w-0 py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
-            <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
-              {session.displayName || displayId}
-              {session.archived && (
-                <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">[Archived]</span>
-              )}
-            </div>
-            {session.displayName && (
-              <div className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
-                {displayId}
-              </div>
-            )}
-            <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              {session.busy && (
-                <>
-                  <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-300">
-                    <span className="inline-flex items-center gap-0.5">
-                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce"></span>
-                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></span>
-                      <span className="w-1.5 h-1.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
-                    </span>
-                    <span>busy</span>
+          <>
+              <SessionRowDropLayer
+                session={session}
+                parentSessionId={rowParentSessionId}
+                disabled={disableSidebarDrop}
+                allowReorder={allowSidebarOrder}
+                allowParentDrop={allowParentDrop}
+              />
+              {compact ? (
+                <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
+                  {hasChildren ? disclosure : <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" />}
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong" title={`${session.displayName || displayId} · ${session.id}`}>
+                    {session.displayName || displayId}
                   </span>
-                  <span>•</span>
-                </>
-              )}
-              {!!session.queueLength && (
-                <>
-                  <span>{session.queueLength} queued</span>
-                  <span>•</span>
-                </>
-              )}
-              <span>{session.messageCount || 0} msgs</span>
-            </div>
-            {session.cwd && (
-              <div className="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500" title={session.cwd}>
-                cwd: {session.cwd}
-              </div>
-            )}
-            {hasChildren && (
-              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    toggleExpand(session.id)
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                  className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:text-gray-400 dark:hover:text-gray-200"
-                  title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                  aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
-                  aria-expanded={isExpanded}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {isExpanded ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    )}
-                  </svg>
-                  <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
-                  {descendantBusyCount > 0 && (
-                    <>
-                      <span>•</span>
-                      <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} busy</span>
-                    </>
+                  {pinButton}
+                  {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
+                  {unreadSessionIds.has(session.id) && (
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
                   )}
-                </button>
+                  {nodeBadge}
+                  {descendantBusyCount > 0 && (
+                    <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
+                      <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+                    </span>
+                  )}
+                  {showRuntimeBadge && (
+                    <span
+                      role="img"
+                      aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
+                      title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
+                      data-session-status={runtimeStateName}
+                      className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
+                    />
+                  )}
+                </div>
+              ) : (
+              <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
+                    <span className="min-w-0 flex-1 truncate" data-session-title>
+                      {session.displayName || displayId}
+                      {unreadSessionIds.has(session.id) && (
+                        <span className="ml-1.5 inline-flex items-center align-middle">
+                          <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
+                          <span className="sr-only">Unread idle completion</span>
+                        </span>
+                      )}
+                      {session.archived && (
+                        <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
+                      )}
+                    </span>
+                    {pinButton}
+                  </div>
+                  {session.displayName && (
+                    <div className="text-xs text-fw-text-muted font-mono truncate">
+                      {displayId}
+                    </div>
+                  )}
+                  <div className="text-xs text-fw-text-muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    {nodeBadge}
+                    {resolvedNodeId !== 'master' && <span>•</span>}
+                    {showRuntimeBadge && (
+                      <>
+                        <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
+                          <RuntimeActivityDots state={runtimeStateName} />
+                          <span>{getSessionRuntimeSummary(session)}</span>
+                        </span>
+                        <span>•</span>
+                      </>
+                    )}
+                    {!!session.queueLength && (
+                      <>
+                        <span>{session.queueLength} queued</span>
+                        <span>•</span>
+                      </>
+                    )}
+                    <span>{session.sequenceMessageCount ?? session.messageCount ?? 0} msgs</span>
+                  </div>
+                  {disclosure}
+                </div>
               </div>
-            )}
-          </div>
-          {/* Menu button - only visible on mobile */}
-          <button
-            onClick={(e) => handleMenuClick(e, session.id)}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded md:hidden"
-            title="More options"
-          >
-            <MoreVertical className="w-4 h-4" />
-          </button>
+              )}
+              {/* Menu button - only visible on mobile */}
+              <button
+                onClick={(e) => handleMenuClick(e, session.id)}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="p-2 text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text hover:bg-fw-hover dark:hover:bg-fw-hover rounded md:hidden"
+                title="More options"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+          </>
         </DraggableSessionRow>
 
         {hasChildren && isExpanded && (
           <div>
             {visibleChildren.map(child => renderSession(child, level + 1, session))}
-            {hiddenCount > 0 && (
+            {showBranchLoading && (
+              <div
+                data-session-branch-loading={session.id}
+                aria-live="polite"
+                className="p-2 text-xs text-fw-text-muted"
+                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
+              >
+                {boundedChildPage ? 'Loading more child sessions…' : 'Loading child sessions…'}
+              </div>
+            )}
+            {showBranchRetry && (
+              <button
+                type="button"
+                data-session-branch-retry={session.id}
+                onClick={(event) => { event.stopPropagation(); bounded?.onRetryBranch(session.id) }}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="w-full p-2 text-left text-xs text-fw-danger hover:text-fw-danger dark:text-fw-danger dark:hover:text-fw-danger"
+                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
+                title={branchLoadState?.message || 'Failed to load child sessions'}
+              >
+                {branchLoadState?.status === 'error'
+                  ? boundedChildPage ? 'Failed to load more child sessions. Retry' : 'Failed to load child sessions. Retry'
+                  : 'Child sessions are not loaded. Retry'}
+              </button>
+            )}
+            {showMoreChildren && (
               <button
                 onClick={() => toggleShowMore(session.id)}
-                className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
               >
                 {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
               </button>
             )}
-            {hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
+            {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
               <button
                 onClick={() => toggleShowMore(session.id)}
-                className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
               >
                 ▲ Show less
@@ -803,11 +1393,21 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const contextMenuEntries: ContextMenuEntry[] = contextMenu ? (() => {
     const session = sessionMap.get(contextMenu.sessionId)
     const isArchived = session?.archived || false
+    const isPinned = session?.pinned || false
+    const idleNotificationMode = idleNotificationModes[contextMenu.sessionId]
     const hasParent = !!session?.parentSessionId
     const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
     const grandparentId = parentSession?.parentSessionId || undefined
+    const descendantSummaryKnown = descendantSummaries.has(contextMenu.sessionId) && !descendantSummaryLoading.has(contextMenu.sessionId)
+    const descendantCount = descendantSummaries.get(contextMenu.sessionId)?.total || 0
 
     return [
+      {
+        key: 'pin',
+        icon: isPinned ? <PinOff size={14} /> : <Pin size={14} />,
+        label: isPinned ? 'Unpin from top' : 'Pin to top',
+        onSelect: () => { void togglePinned(contextMenu.sessionId, !isPinned) },
+      },
       {
         key: 'rename',
         icon: <Pencil size={14} />,
@@ -818,7 +1418,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         key: 'archive',
         icon: isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />,
         label: isArchived ? 'Unarchive' : 'Archive',
-        onSelect: () => { void toggleArchive(contextMenu.sessionId, !isArchived) },
+        disabled: !isArchived && !descendantSummaryKnown,
+        onSelect: () => {
+          if (!isArchived && descendantCount > 0) openArchiveDialog(contextMenu.sessionId)
+          else void toggleArchive(contextMenu.sessionId, !isArchived)
+        },
       },
       {
         key: 'fork',
@@ -826,13 +1430,29 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
-      ...(hasParent && grandparentId ? [{
+      {
+        key: 'idle-notification',
+        icon: idleNotificationMode
+          ? <BellRing size={14} className="text-fw-accent dark:text-fw-accent" />
+          : <Bell size={14} />,
+        label: 'Notify on idle',
+        checked: idleNotificationMode === 'once',
+        disabled: !onToggleIdleNotificationMode,
+        onSelect: () => onToggleIdleNotificationMode?.(contextMenu.sessionId, 'once'),
+        trailingControl: {
+          label: 'always',
+          checked: idleNotificationMode === 'always',
+          disabled: !onToggleIdleNotificationMode,
+          onSelect: () => onToggleIdleNotificationMode?.(contextMenu.sessionId, 'always'),
+        },
+      },
+      ...(hasParent && grandparentId && !isPinned ? [{
         key: 'promote-up',
         icon: <ArrowUpFromDot size={14} />,
         label: `Move up one level`,
         onSelect: () => { void promoteSession(contextMenu.sessionId, grandparentId) },
       }] : []),
-      ...(hasParent ? [{
+      ...(hasParent && !isPinned ? [{
         key: 'promote',
         icon: <ArrowUpFromDot size={14} />,
         label: 'Promote to root',
@@ -844,50 +1464,121 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         icon: <Trash2 size={14} />,
         label: 'Delete',
         danger: true,
-        onSelect: () => setDeleteConfirm(contextMenu.sessionId),
+        onSelect: () => openDeleteDialog(contextMenu.sessionId),
       },
     ] as ContextMenuEntry[]
   })() : []
 
+  const deleteDescendantCount = deleteConfirm ? descendantSummaries.get(deleteConfirm)?.total || 0 : 0
+  const archiveDescendantCount = archiveConfirm ? descendantSummaries.get(archiveConfirm)?.total || 0 : 0
+  const deleteDescendantSummaryLoading = !!deleteConfirm && descendantSummaryLoading.has(deleteConfirm)
+  const effectiveDeleteIncludeDescendants = deleteIncludeDescendants && deleteDescendantCount > 0
+  const effectiveArchiveIncludeDescendants = archiveIncludeDescendants && archiveDescendantCount > 0
+  useEffect(() => {
+    if (deleteConfirm && deleteDescendantCount === 0 && deleteIncludeDescendants) {
+      setDeleteIncludeDescendants(false)
+    }
+  }, [deleteConfirm, deleteDescendantCount, deleteIncludeDescendants])
+  useEffect(() => {
+    if (archiveConfirm && archiveDescendantCount === 0 && archiveIncludeDescendants) {
+      setArchiveIncludeDescendants(false)
+    }
+  }, [archiveConfirm, archiveDescendantCount, archiveIncludeDescendants])
+  const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
+
   return (
     <>
-      <div className="sticky top-0 z-10 mb-1 space-y-1 bg-white/95 dark:bg-gray-800/95">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-          <input
-            type="search"
-            value={filterText}
-            onChange={(e) => setFilterText(e.currentTarget.value)}
-            placeholder="Search sessions"
-            aria-label="Search sessions"
-            className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
-          />
-          {filterText && (
+      <div className="flex h-full min-h-0 flex-col" data-session-list-density={compact ? 'normal' : 'detailed'}>
+        <div className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
+          <div className="flex items-center gap-1.5">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
+              <input
+                type="search"
+                value={filterText}
+                onChange={(e) => setFilterText(e.currentTarget.value)}
+                placeholder="Search sessions"
+                aria-label="Search sessions"
+                className="w-full rounded-lg border border-fw-border bg-fw-surface py-1 pl-8 pr-8 text-sm text-fw-text-strong outline-none transition placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong dark:placeholder:text-fw-text-muted dark:focus:border-fw-accent-border"
+              />
+              {filterText && (
+                <button
+                  type="button"
+                  onClick={() => setFilterText('')}
+                  className="absolute inset-y-0 right-1.5 my-auto inline-flex h-6 w-6 items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
+                  aria-label="Clear session search"
+                  title="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
             <button
               type="button"
-              onClick={() => setFilterText('')}
-              className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              aria-label="Clear session search"
-              title="Clear search"
+              onClick={cycleViewMode}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text dark:hover:border-fw-accent-border/70 dark:hover:text-fw-accent"
+              title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
+              aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
             >
-              <X className="h-3.5 w-3.5" />
+              <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
-          )}
-        </div>
-        {isFiltering && (
-          <div className="px-1 text-xs text-gray-500 dark:text-gray-400">
-            {visibleSessions.length} {visibleSessions.length === 1 ? 'match' : 'matches'}
+            <button
+              type="button"
+              onClick={toggleCompact}
+              aria-label="Detailed session rows"
+              aria-pressed={!compact}
+              title={compact ? 'Use detailed session rows' : 'Use normal session rows'}
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${!compact ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
+            >
+              <List className="h-3.5 w-3.5" />
+            </button>
           </div>
-        )}
-      </div>
-
-      {rootSessions.length > 0 ? (
-        rootSessions.map(session => renderSession(session))
-      ) : (
-        <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+          <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
-      )}
+
+        <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
+          <div className={listContainerClassName}>
+            {rootSessions.length > 0 ? (
+              <>
+                {[
+                  { label: 'Pinned', pinned: true },
+                  { label: 'Sessions', pinned: false },
+                ].map(({ label, pinned }) => {
+                  // Partition existing visible roots only: pinned descendants are already
+                  // elevated by visibleParentMap, and each root retains its subtree.
+                  const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
+                  return sectionRoots.length > 0 ? (
+                    <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
+                      <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">{label}</h3>
+                      {sectionRoots.map(session => renderSession(session))}
+                    </section>
+                  ) : null
+                })}
+                {hiddenRootCount > 0 && (
+                  <button
+                    onClick={toggleShowMoreRoots}
+                    className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+                  >
+                    {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+                  </button>
+                )}
+                {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
+                  <button
+                    onClick={toggleShowMoreRoots}
+                    className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+                  >
+                    ▲ Show less
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
+                {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       <ContextMenu
         open={!!contextMenu}
@@ -900,14 +1591,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Rename Dialog */}
       {renameSessionId && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+        <div className="fixed inset-0 bg-fw-overlay flex items-center justify-center z-50">
+          <div className="bg-fw-surface rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-fw-text-strong">
               Rename Session
             </h3>
             <div className="space-y-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-fw-text mb-2">
                   Display name
                 </label>
                 <input
@@ -926,10 +1617,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     }
                   }}
                   placeholder="Enter a custom chat name"
-                  className="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 rounded border border-fw-border-strong dark:border-fw-border-strong bg-fw-surface dark:bg-fw-canvas text-fw-text-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring"
                 />
               </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-fw-text-muted">
                 Session ID: <span className="font-mono text-xs">{renameSessionId}</span>
                 <br />
                 Leave the display name empty to clear it.
@@ -941,14 +1632,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   setRenameSessionId(null)
                   setRenameValue('')
                 }}
-                className="px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                className="px-4 py-2 text-sm rounded bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text hover:bg-fw-border-strong dark:hover:bg-fw-hover"
                 disabled={renameSubmitting}
               >
                 Cancel
               </button>
               <button
                 onClick={() => renameSession()}
-                className="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                className="px-4 py-2 text-sm rounded bg-fw-accent text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60"
                 disabled={renameSubmitting}
               >
                 {renameSubmitting ? 'Saving...' : (renameValue.trim() ? 'Save' : 'Clear name')}
@@ -960,27 +1651,108 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+        <div className="foxwarm-session-delete-modal-backdrop fixed inset-0 bg-fw-overlay flex items-center justify-center z-50">
+          <div className="foxwarm-session-delete-modal bg-fw-surface rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="foxwarm-session-delete-modal-title text-lg font-semibold mb-4 text-fw-text-strong">
               Delete Session
             </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              Are you sure you want to delete session <span className="font-mono text-sm">{deleteConfirm}</span>?
+            <p className="foxwarm-session-delete-modal-body text-fw-text-muted mb-4">
+              Are you sure you want to delete session <span className="foxwarm-session-delete-session-id font-mono text-sm">{deleteConfirm}</span>?
               This action cannot be undone.
             </p>
-            <div className="flex justify-end gap-3">
+            {deleteDescendantSummaryLoading && <p className="mb-4 text-sm text-fw-text-muted">Loading descendant summary…</p>}
+            {deleteDescendantCount > 0 && (
+              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-fw-border p-3 text-sm text-fw-text dark:border-fw-border dark:text-fw-text">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={deleteIncludeDescendants}
+                  onChange={(event) => setDeleteIncludeDescendants(event.currentTarget.checked)}
+                  disabled={deleteSubmitting}
+                />
+                <span>Also delete {deleteDescendantCount} descendant session{deleteDescendantCount === 1 ? '' : 's'} (all levels)</span>
+              </label>
+            )}
+            {deleteError && (
+              <p role="alert" className="mb-4 rounded border border-fw-danger-border bg-fw-danger-surface p-3 text-sm text-fw-danger dark:border-fw-danger-border/70 dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">
+                {deleteError}
+              </p>
+            )}
+            <div className="foxwarm-session-delete-modal-actions flex justify-end gap-3">
               <button
-                onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                onClick={() => {
+                  setDeleteConfirm(null)
+                  setDeleteIncludeDescendants(false)
+                  setDeleteError('')
+                }}
+                className="foxwarm-session-delete-cancel-button px-4 py-2 text-sm rounded bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text hover:bg-fw-border-strong dark:hover:bg-fw-hover"
+                disabled={deleteSubmitting}
               >
                 Cancel
               </button>
               <button
-                onClick={() => deleteSession(deleteConfirm)}
-                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+                onClick={() => deleteSession(deleteConfirm, effectiveDeleteIncludeDescendants)}
+                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-fw-danger text-fw-text-inverse hover:bg-fw-danger disabled:opacity-60"
+                disabled={deleteSubmitting || deleteDescendantSummaryLoading}
               >
-                Delete
+                {deleteSubmitting
+                  ? 'Deleting...'
+                  : effectiveDeleteIncludeDescendants
+                    ? `Delete ${deleteDescendantCount + 1} sessions`
+                    : 'Delete session'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Archive Confirmation Dialog */}
+      {archiveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-fw-overlay">
+          <div className="mx-4 w-full max-w-md rounded-lg bg-fw-surface p-6 dark:bg-fw-surface">
+            <h3 className="mb-4 text-lg font-semibold text-fw-text-strong">Archive Session</h3>
+            <p className="mb-4 text-fw-text-muted">
+              Archive session <span className="font-mono text-sm">{archiveConfirm}</span>?
+            </p>
+            {archiveDescendantCount > 0 && (
+              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-fw-border p-3 text-sm text-fw-text dark:border-fw-border dark:text-fw-text">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={effectiveArchiveIncludeDescendants}
+                  onChange={(event) => setArchiveIncludeDescendants(event.currentTarget.checked)}
+                  disabled={archiveSubmitting}
+                />
+                <span>Also archive {archiveDescendantCount} descendant session{archiveDescendantCount === 1 ? '' : 's'} (all levels)</span>
+              </label>
+            )}
+            {archiveError && (
+              <p role="alert" className="mb-4 rounded border border-fw-danger-border bg-fw-danger-surface p-3 text-sm text-fw-danger dark:border-fw-danger-border/70 dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">
+                {archiveError}
+              </p>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setArchiveConfirm(null)
+                  setArchiveIncludeDescendants(false)
+                  setArchiveError('')
+                }}
+                className="rounded bg-fw-neutral-border px-4 py-2 text-sm text-fw-text hover:bg-fw-border-strong disabled:opacity-60 dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover"
+                disabled={archiveSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => toggleArchive(archiveConfirm, true, effectiveArchiveIncludeDescendants)}
+                className="rounded bg-fw-accent px-4 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60"
+                disabled={archiveSubmitting}
+              >
+                {archiveSubmitting
+                  ? 'Archiving...'
+                  : effectiveArchiveIncludeDescendants
+                    ? `Archive ${archiveDescendantCount + 1} sessions`
+                    : 'Archive session'}
               </button>
             </div>
           </div>

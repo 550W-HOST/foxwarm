@@ -1,31 +1,99 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, FolderOpen, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
+import type { ChildPolicyChainEntry } from './childModelState'
 import ChatTimeline from './ChatTimeline'
+import ContextScrollbar from './ContextScrollbar'
+import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
-import { copyTextToClipboard } from './chatShared'
-import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
+import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
+import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { isSessionTurnIncomplete } from '../sessionContinuation'
+import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
+import { buildReferencedAttachmentParts } from '../attachmentRefs'
+import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
+import { formatSessionHeaderSubtitle } from '../sessionHeader'
+import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
+import { webUiRealtime } from '../realtime'
+import SessionUiSettingsMenu from './SessionUiSettingsMenu'
+import {
+  advanceHistorySeqFrontier,
+  buildOptimisticUserMessage,
+  countCommittedHistoryMessages,
+  decideHistoryReconciliation,
+  getClientMessageId,
+  getLatestCommittedMessageSeq,
+  hasStableHistoryIdentity,
+  mergeHistoryMessages,
+  mergeHistorySnapshot,
+  reconcileHistoryMessage,
+} from '../chatHistoryState'
+import {
+  CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
+  CHAT_MESSAGE_ANCHOR_SELECTOR,
+  CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
+  chooseChatViewportState,
+  getChatViewportAnchorAdjustment,
+  getStoredChatViewportState,
+  storeChatViewportState,
+  updateChatBottomFollow,
+  type ChatViewportState,
+} from '../chatViewportState'
 
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
   return base.replace(/^http/i, 'ws')
 }
 
-type AsrTranscribeResult = {
-  text: string
-  status: number
-  rawLength: number
-  textLength: number
-  responsePreview: string
-}
-
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
+
+type HistoryResponse = {
+  session?: SessionListRecord
+  messages?: Message[]
+  persistentMemorySnapshot?: string
+  queuedMessages?: Message[]
+  queueLength?: number
+  latestSeq?: number
+  historyVersion?: number
+  prefixLength?: number
+  historyComplete?: boolean
+  code?: string
+  error?: string
+}
+
+type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
+type PendingQueueAppend = { historyVersion: number; startSeq: number; endSeq: number }
+
+type TimelineState = { messages: Message[]; queuedMessages: Message[] }
+type TimelineAction =
+  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'queue'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[] }
+
+function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
+  if (action.type === 'atomic') return { messages: typeof action.messages === 'function' ? action.messages(state.messages) : action.messages, queuedMessages: action.queuedMessages }
+  if (action.type === 'messages') return { ...state, messages: typeof action.update === 'function' ? action.update(state.messages) : action.update }
+  return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+}
+
+type PendingViewportRestore =
+  | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
+  | {
+      kind: 'prepend'
+      anchors: Array<{ messageKey: string; offsetPx: number }>
+      scrollTop: number
+      scrollHeight: number
+      interactionVersion: number
+    }
 
 function getMessagePlainText(message: Message): string {
   return message.parts
@@ -70,14 +138,24 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 
 interface ChatProps {
   sessionId: string
+  canonicalSessionId?: string
   sessionDisplayName?: string
-  onBack?: () => void
-  onOpenWorkspace?: () => void
-  onOpenTerminal?: () => void
   guestMode?: boolean
+  onBack?: () => void
+  onOpenTerminal?: () => void
+  onOpenCode?: () => void
+  onOpenCodeNewWindow?: () => void
+  onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
+  onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
+  onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
+  showUserMessageMetadata?: boolean
+  onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
+  onGroupToolsChange?: (enabled: boolean) => void
+  onShowUsageBadgeChange?: (enabled: boolean) => void
+  onShowUserMessageMetadataChange?: (enabled: boolean) => void
   onDraftEdited?: (draftText: string) => void
 }
 
@@ -91,100 +169,43 @@ type SessionListRecord = {
   id: string
   agent?: string
   messageCount?: number
+  historyVersion?: number
   lastMessageTime?: number
   parentSessionId?: string | null
   childSessions?: string[]
   aliases?: string[]
   busy?: boolean
+  busyStartedAt?: number | null
   queueLength?: number
+  runtimeState?: SessionRuntimeState
   displayName?: string | null
   archived?: boolean
   currentNode?: string
+  cwd?: string | null
   model?: string | null
   modelKey?: string
   defaultModelKey?: string
   childModelDefault?: string | null
+  childModelPolicySource?: 'explicit' | 'follow-parent'
+  childPolicyChain?: ChildPolicyChainEntry[]
   effectiveChildModelKey?: string
+  effort?: string | null
+  effectiveEffort?: string
+  effortAllowed?: string[]
+  effortDefault?: string | null
+  childEffortDefault?: string | null
+  effectiveChildEffort?: string
+  childEffortAllowed?: string[]
+  childModelEffortDefault?: string | null
   isolated?: boolean
 }
 
-type SessionFilePayload = {
-  history?: Message[]
-  persistentMemorySnapshot?: string
-  [key: string]: any
-}
-
-type StreamingAssistantDraft = {
-  streamId: string
-  iteration?: number
-  reasoning: string
-  text: string
-  toolCalls: ModelStreamToolCall[]
-}
-
-const normalizeStreamingToolCalls = (toolCalls: ModelStreamToolCall[] | undefined): ModelStreamToolCall[] => {
-  if (!Array.isArray(toolCalls)) return []
-  return toolCalls.map((toolCall, fallbackIndex) => ({
-    index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
-    ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
-    ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
-  }))
-}
-
-const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): Message | null => {
-  if (!draft) return null
-
-  const parts: MessagePart[] = []
-  if (draft.reasoning.trim()) {
-    parts.push({ thinking: draft.reasoning })
-  }
-  if (draft.text) {
-    parts.push({ text: draft.text })
-  }
-  for (const toolCall of draft.toolCalls) {
-    parts.push({
-      functionCall: {
-        id: toolCall.id || `stream-${draft.streamId}-${toolCall.index}`,
-        name: toolCall.name || 'tool call',
-        args: {},
-      },
-    })
-  }
-
-  if (parts.length === 0) return null
-  return {
-    role: 'model',
-    parts,
-    __meta: {
-      synthetic: 'streamingAssistantDraft',
-      temporary: true,
-      streaming: true,
-      streamId: draft.streamId,
-      iteration: draft.iteration,
-      timestamp: Number.MAX_SAFE_INTEGER,
-    },
-  }
-}
-
-async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPath: string | null; payload: SessionFilePayload | null }> {
-  try {
-    const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/debug-file`)
-    if (!res.ok) {
-      return { resolvedPath: null, payload: null }
-    }
-
-    const data = await res.json()
-    return {
-      resolvedPath: typeof data?.resolvedPath === 'string' ? data.resolvedPath : null,
-      payload: data?.payload && typeof data.payload === 'object' ? data.payload as SessionFilePayload : null,
-    }
-  } catch {
-    return { resolvedPath: null, payload: null }
-  }
-}
-
-const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenWorkspace, onOpenTerminal, guestMode = false, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([])
+const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, guestMode = false, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {}, onDraftEdited }: ChatProps) {
+  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
+  const messages = timelineState.messages
+  const queuedMessages = timelineState.queuedMessages
+  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'messages', update }), [])
+  const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
@@ -194,66 +215,157 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
-  const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
-  const [debugInfoLoading, setDebugInfoLoading] = useState(false)
-  const [debugInfoError, setDebugInfoError] = useState<string | null>(null)
-  const [debugInfoCopied, setDebugInfoCopied] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
+  const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
+  const clearStreamingAssistantDraft = useCallback(() => {
+    streamingAssistantDraftRef.current = null
+    setStreamingAssistantDraft(null)
+  }, [])
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelBusy, setModelBusy] = useState(false)
+  const [modelsRefreshing, setModelsRefreshing] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
-  const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
-  const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
+  const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
+  const [earlierHistoryError, setEarlierHistoryError] = useState(false)
+  const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
+  const viewportSessionId = canonicalSessionId || sessionId
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesContentRef = useRef<HTMLDivElement>(null)
+  const committedTimelineRef = useRef<HTMLDivElement>(null)
   const chatRootRef = useRef<HTMLDivElement>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
   const lastKnownTimestampRef = useRef<number>(0)
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const reconnectDelayRef = useRef<number>(1000)
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
-  const pendingSentMessagesRef = useRef<string[]>([])
-  const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
+  const pendingUserLeaveBottomRef = useRef(false)
+  const touchScrollStartYRef = useRef<number | null>(null)
+  const pointerScrollInteractionRef = useRef(false)
+  const pendingSentMessageIdsRef = useRef<Set<string>>(new Set())
+  const sessionBusyRef = useRef(false)
+  const sessionQueueLengthRef = useRef(0)
+  const sessionMessageCountRef = useRef(0)
+  const sessionHistoryVersionRef = useRef(0)
+  const representedMessageCountRef = useRef(0)
+  const representedHistoryVersionRef = useRef(0)
+  const latestCommittedSeqRef = useRef(0)
+  const hasTrustedHistoryFrontierRef = useRef(false)
+  const historyBootstrapStartedRef = useRef(false)
+  const fullHistoryLoadedRef = useRef(false)
+  const reconnectAwaitingStateRef = useRef(false)
+  const queueRefreshNeededRef = useRef(false)
+  const historyGapDetectedRef = useRef(false)
+  const pendingQueueAppendRef = useRef<PendingQueueAppend | null>(null)
+  const atomicRecoveryScheduledRef = useRef(false)
+  const queuedMessagesRef = useRef<Message[]>([])
+  const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
-  const expandHistoryScrollRestoreRef = useRef<{ top: number; height: number } | null>(null)
+  const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
+  const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
+  const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
+    kind: 'state',
+    state: initialViewportState,
+    interactionVersion: 0,
+  })
+  const currentViewportGeometryRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null)
+  const userInteractionVersionRef = useRef(0)
+  const capturedInteractionVersionRef = useRef(0)
+  const resizeRestoreFrameRef = useRef<number | null>(null)
+  const heightFollowHoldsRef = useRef(new Set<object>())
+  const heightFollowAnimatingRef = useRef(new Set<object>())
+  const heightFollowPendingContentRef = useRef(false)
+  const heightFollowPreparesRef = useRef(new Set<object>())
+  const heightFollowReleaseTimersRef = useRef(new Set<number>())
+  const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
+  const pendingScrollToTrueTopRef = useRef(false)
+  const modelRequestGateRef = useRef(createLatestRequestGate())
+  const historyRequestGateRef = useRef(createLatestRequestGate())
+  const historyAbortControllerRef = useRef<AbortController | null>(null)
+  const historyInFlightRef = useRef<{ sessionId: string; promise: Promise<boolean>; controller: AbortController } | null>(null)
+  const historyTrailingRefreshRef = useRef(false)
+  const historyEventVersionRef = useRef(0)
+  const historyStateEventVersionRef = useRef(0)
+  const historyModelStreamEventVersionRef = useRef(0)
+  const historyEventsRef = useRef<Array<{ version: number; message: Message }>>([])
+  const historyRefreshTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
-    setStreamingAssistantDraft(null)
+    setMessages([])
+    setHistoryLoaded(false)
+    setIsFullHistoryLoaded(false)
+    setEarlierHistoryError(false)
+    clearStreamingAssistantDraft()
     setToolScriptProgress({})
-  }, [sessionId])
+    setQueuedMessages([])
+    setSessionRecord(null)
+    setSessionBusy(false)
+    setSessionQueueLength(0)
+    sessionBusyRef.current = false
+    sessionQueueLengthRef.current = 0
+    sessionMessageCountRef.current = 0
+    sessionHistoryVersionRef.current = 0
+    representedMessageCountRef.current = 0
+    representedHistoryVersionRef.current = 0
+    latestCommittedSeqRef.current = 0
+    hasTrustedHistoryFrontierRef.current = false
+    historyBootstrapStartedRef.current = false
+    fullHistoryLoadedRef.current = false
+    reconnectAwaitingStateRef.current = false
+    queueRefreshNeededRef.current = false
+    historyGapDetectedRef.current = false
+    pendingQueueAppendRef.current = null
+    atomicRecoveryScheduledRef.current = false
+    queuedMessagesRef.current = []
+    pendingSentMessageIdsRef.current.clear()
+    sessionStateInitializedRef.current = false
+    historyRequestGateRef.current.invalidate()
+    historyAbortControllerRef.current?.abort()
+    historyAbortControllerRef.current = null
+    historyInFlightRef.current = null
+    historyTrailingRefreshRef.current = false
+    historyEventVersionRef.current = 0
+    historyStateEventVersionRef.current = 0
+    historyModelStreamEventVersionRef.current = 0
+    historyEventsRef.current = []
+    setPersistentMemorySnapshot('')
+    pendingContextScrollbarNavigationRef.current = null
+    pendingScrollToTrueTopRef.current = false
+  }, [clearStreamingAssistantDraft, sessionId])
+
+  useEffect(() => {
+    sessionBusyRef.current = sessionBusy
+  }, [sessionBusy])
+
+  useEffect(() => {
+    sessionQueueLengthRef.current = sessionQueueLength
+  }, [sessionQueueLength])
+
+  useEffect(() => {
+    queuedMessagesRef.current = queuedMessages
+  }, [queuedMessages])
 
   useEffect(() => {
     setShowDebugInfo(false)
-    setDebugInfoError(null)
-    setDebugInfoCopied(false)
   }, [sessionId])
 
   useEffect(() => {
-    setShowFullTimeline(false)
-    expandHistoryScrollRestoreRef.current = null
-  }, [sessionId])
-
-  useEffect(() => {
-    if (guestMode) {
-      setAsrAvailable(false)
-      return
-    }
     let cancelled = false
 
     const fetchAsrStatus = async () => {
       try {
-        const res = await fetch(`${API_BASE_PATH}/asr/status`)
-        if (!res.ok) return
-        const data = await res.json()
-        if (!cancelled) {
-          setAsrAvailable(Boolean(data?.configured && data?.available))
-        }
+        const available = await loadPageOnce('webui:asr-status', async () => {
+          const res = await fetch(`${API_BASE_PATH}/asr/status`)
+          if (!res.ok) throw new Error(`Failed to load ASR status (${res.status})`)
+          const data = await res.json()
+          return Boolean(data?.configured && data?.available)
+        })
+        if (!cancelled) setAsrAvailable(available)
       } catch (e) {
         if (!cancelled) {
           setAsrAvailable(false)
@@ -261,48 +373,40 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       }
     }
 
-    fetchAsrStatus()
+    if (!guestMode) void fetchAsrStatus()
+    else setAsrAvailable(false)
     return () => {
       cancelled = true
     }
+  }, [guestMode])
+
+  const fetchModels = useCallback(async () => {
+    if (guestMode) return
+    await runLatestModelOptionsRequest(modelRequestGateRef.current, () => loadPageOnce('webui:models', async () => {
+      const res = await fetch(`${API_BASE_PATH}/models`)
+      if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
+      const data = await res.json()
+      return (Array.isArray(data.models) ? data.models : []) as ModelOption[]
+    }), (state) => {
+      if (state.options) setModelOptions(state.options)
+      if (state.error !== undefined) {
+        setModelError(state.error)
+        if (state.error) console.error('Failed to fetch models:', state.error)
+      }
+      if (state.loading !== undefined) setModelsRefreshing(state.loading)
+    })
   }, [guestMode])
 
   useEffect(() => {
-    if (guestMode) {
-      setModelOptions([])
-      setModelError(null)
-      return
-    }
-    let cancelled = false
-
-    const fetchModels = async () => {
-      try {
-        const res = await fetch(`${API_BASE_PATH}/models`)
-        if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
-        const data = await res.json()
-        if (!cancelled) {
-          setModelOptions(Array.isArray(data.models) ? data.models : [])
-        }
-      } catch (error) {
-        console.error('Failed to fetch models:', error)
-        if (!cancelled) {
-          setModelError(error instanceof Error ? error.message : 'Failed to load models')
-          setModelOptions([])
-        }
-      }
-    }
-
-    fetchModels()
-    return () => {
-      cancelled = true
-    }
-  }, [guestMode])
+    if (!guestMode) void fetchModels()
+    return () => modelRequestGateRef.current.invalidate()
+  }, [fetchModels])
 
   useEffect(() => {
     if (!sessionBusy) {
-      setStreamingAssistantDraft(null)
+      clearStreamingAssistantDraft()
     }
-  }, [sessionBusy])
+  }, [clearStreamingAssistantDraft, sessionBusy])
 
   useEffect(() => {
     const handleResize = () => {
@@ -315,9 +419,93 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
+      // Explicit bottom navigation and independent new content win over a card-only hold.
+      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+      heightFollowReleaseTimersRef.current.clear()
+      heightFollowHoldsRef.current.clear()
+      heightFollowAnimatingRef.current.clear()
+      heightFollowPendingContentRef.current = false
+      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
       container.scrollTop = container.scrollHeight
+      const state: ChatViewportState = { kind: 'bottom' }
+      currentViewportStateRef.current = state
+      currentViewportGeometryRef.current = null
+      shouldAutoScrollRef.current = true
+      pendingUserLeaveBottomRef.current = false
+      storeChatViewportState(viewportSessionId, state)
+    }
+  }, [viewportSessionId])
+
+  const prepareCardHeight = useCallback(() => {
+    const token = {}
+    heightFollowPreparesRef.current.add(token)
+    const container = messagesContainerRef.current
+    if (container) container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowPreparesRef.current.delete(token)
+      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
+        container?.style.removeProperty('overflow-anchor')
+      }
     }
   }, [])
+
+  const holdTallCardFollow = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
+    const container = messagesContainerRef.current
+    // Clicking a disclosure is viewport interaction, not a request to detach. Re-arm
+    // the existing ResizeObserver generation after its pointerdown invalidation.
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    if (!container || !shouldAutoScrollRef.current || pendingUserLeaveBottomRef.current || targetHeight <= startHeight) return () => {}
+    const viewport = container.getBoundingClientRect()
+    // Predict the card's top after bottom alignment, including the unscrolled distance
+    // below the current viewport. No fixed card-height cutoff or scrollTop snapshot.
+    const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
+    if (card.getBoundingClientRect().top - bottomAlignmentDelta >= viewport.top) return () => {}
+    const hold = {}
+    heightFollowHoldsRef.current.add(hold)
+    heightFollowAnimatingRef.current.add(hold)
+    // An initial bottom restoration still pending when the user opens a card must
+    // not reassert bottom after the temporary hold expires.
+    if (pendingViewportRestoreRef.current?.kind === 'state' && pendingViewportRestoreRef.current.state.kind === 'bottom') {
+      pendingViewportRestoreRef.current = null
+    }
+    container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowAnimatingRef.current.delete(hold)
+      // A stream/history update while a tall card is still moving is distinct
+      // from the card's own resize. Follow once after the last active transition,
+      // without letting an earlier reversal release another card's hold.
+      if (heightFollowPendingContentRef.current) queueMicrotask(() => {
+        if (!heightFollowPendingContentRef.current || heightFollowAnimatingRef.current.size) return
+        heightFollowPendingContentRef.current = false
+        if (shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current && !pendingViewportRestoreRef.current) {
+          scrollToBottom()
+        }
+      })
+      // The final auto-height cleanup can deliver a ResizeObserver notification
+      // after transitionend. Drain that notification before normal follow resumes;
+      // a later token/layout update can use the unchanged follow latch as usual.
+      const timer = window.setTimeout(() => {
+        heightFollowReleaseTimersRef.current.delete(timer)
+        heightFollowHoldsRef.current.delete(hold)
+        if (heightFollowHoldsRef.current.size === 0 && heightFollowPreparesRef.current.size === 0 && messagesContainerRef.current === container) {
+          container.style.removeProperty('overflow-anchor')
+        }
+      }, 200)
+      heightFollowReleaseTimersRef.current.add(timer)
+    }
+  }, [scrollToBottom])
+
+  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
+
+  useEffect(() => () => {
+    heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+    heightFollowReleaseTimersRef.current.clear()
+    heightFollowHoldsRef.current.clear()
+    heightFollowAnimatingRef.current.clear()
+    heightFollowPendingContentRef.current = false
+    heightFollowPreparesRef.current.clear()
+    messagesContainerRef.current?.style.removeProperty('overflow-anchor')
+  }, [sessionId])
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(0, Math.round(height))
@@ -328,20 +516,164 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     chatRootRef.current?.style.setProperty('--chat-composer-offset', `${nextHeight}px`)
   }, [])
 
-  useEffect(() => {
-    return () => {
-      if (debugInfoCopyResetTimeoutRef.current !== null) {
-        window.clearTimeout(debugInfoCopyResetTimeoutRef.current)
+  const readCurrentViewportState = useCallback((bottomThresholdPx?: number): ChatViewportState | null => {
+    const container = messagesContainerRef.current
+    const timeline = committedTimelineRef.current
+    if (!container || !timeline) return null
+
+    const containerRect = container.getBoundingClientRect()
+    const anchors = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR)).map((element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        messageKey: element.getAttribute('data-chat-message-anchor-key') || '',
+        top: rect.top,
+        bottom: rect.bottom,
       }
-    }
+    }).filter((anchor) => anchor.messageKey)
+
+    return chooseChatViewportState({
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+      clientHeight: container.clientHeight,
+      viewportTop: containerRect.top,
+      viewportBottom: containerRect.bottom,
+      anchors,
+      ...(bottomThresholdPx === undefined ? {} : { bottomThresholdPx }),
+    })
   }, [])
+
+  const updateBottomFollowState = useCallback((userIntent: 'none' | 'leave' = 'none') => {
+    const container = messagesContainerRef.current
+    const distanceFromBottom = container
+      ? container.scrollHeight - container.scrollTop - container.clientHeight
+      : Number.POSITIVE_INFINITY
+    const next = updateChatBottomFollow({
+      following: shouldAutoScrollRef.current,
+      pendingUserLeave: pendingUserLeaveBottomRef.current,
+      distanceFromBottom,
+      userIntent,
+    })
+    shouldAutoScrollRef.current = next.following
+    pendingUserLeaveBottomRef.current = next.pendingUserLeave
+    return next
+  }, [])
+
+  const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    if (heightFollowHoldsRef.current.size && shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current) return currentViewportStateRef.current
+    const followState = updateBottomFollowState()
+    const bottomThresholdPx = followState.pendingUserLeave
+      ? -1
+      : followState.following
+        ? undefined
+        : CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX
+    const state = readCurrentViewportState(bottomThresholdPx)
+    if (!state) return null
+
+    currentViewportStateRef.current = state
+    currentViewportGeometryRef.current = null
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    storeChatViewportState(viewportSessionId, state)
+    return state
+  }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId])
+
+  const applyViewportState = useCallback((state: ChatViewportState): boolean => {
+    const container = messagesContainerRef.current
+    if (!container) return false
+
+    if (state.kind === 'bottom') {
+      if (heightFollowHoldsRef.current.size) return false
+      container.scrollTop = container.scrollHeight
+      currentViewportStateRef.current = state
+      currentViewportGeometryRef.current = null
+      shouldAutoScrollRef.current = true
+      pendingUserLeaveBottomRef.current = false
+      storeChatViewportState(viewportSessionId, state)
+      return true
+    }
+
+    const timeline = committedTimelineRef.current
+    if (!timeline) return false
+
+    const anchor = Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+      .find((element) => element.getAttribute('data-chat-message-anchor-key') === state.messageKey)
+    if (!anchor) return false
+
+    const currentOffset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+    const adjustment = getChatViewportAnchorAdjustment(currentOffset, state.offsetPx)
+    if (Math.abs(adjustment) >= 0.5) {
+      container.scrollTop += adjustment
+    }
+    currentViewportStateRef.current = state
+    currentViewportGeometryRef.current = null
+    shouldAutoScrollRef.current = false
+    pendingUserLeaveBottomRef.current = false
+    storeChatViewportState(viewportSessionId, state)
+    return true
+  }, [viewportSessionId])
+
+  const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
+    for (const candidate of anchors) {
+      const state: ChatViewportState = { kind: 'anchor', ...candidate }
+      if (!applyViewportState(state)) continue
+      const container = messagesContainerRef.current
+      const timeline = committedTimelineRef.current
+      const anchor = timeline
+        ? Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+          .find((element) => element.getAttribute('data-chat-message-anchor-key') === candidate.messageKey)
+        : null
+      if (!container || !anchor) continue
+      const restoredOffset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+      if (Math.abs(restoredOffset - candidate.offsetPx) <= 2) return true
+    }
+    return false
+  }, [applyViewportState])
+
+  const markUserViewportInteraction = useCallback(() => {
+    userInteractionVersionRef.current += 1
+    pendingViewportRestoreRef.current = null
+    currentViewportGeometryRef.current = null
+  }, [])
+
+  const leaveBottomFollow = useCallback(() => {
+    markUserViewportInteraction()
+    updateBottomFollowState('leave')
+  }, [markUserViewportInteraction, updateBottomFollowState])
 
   const scrollToTop = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
+      markUserViewportInteraction()
+      shouldAutoScrollRef.current = false
+      pendingUserLeaveBottomRef.current = false
+      if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+        pendingScrollToTrueTopRef.current = true
+        setShowFullTimeline(true)
+        return
+      }
       container.scrollTop = 0
     }
+  }, [markUserViewportInteraction, messages.length, showFullTimeline])
+
+  const scrollToContextScrollbarAnchor = useCallback((anchorKey: string, fraction: number): boolean => {
+    const container = messagesContainerRef.current
+    const timeline = committedTimelineRef.current
+    if (!container || !timeline) return false
+    const anchor = Array.from(timeline.querySelectorAll<HTMLElement>(CONTEXT_SCROLLBAR_ANCHOR_SELECTOR))
+      .find((element) => element.getAttribute('data-context-scrollbar-anchor-key') === anchorKey)
+    if (!anchor) return false
+    const offset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+    container.scrollTop += offset + anchor.getBoundingClientRect().height * Math.max(0, Math.min(1, fraction))
+    return true
   }, [])
+
+  const handleContextScrollbarNavigate = useCallback((anchorKey: string, fraction: number) => {
+    // This is an explicit pointer/keyboard scroll intent, so use the same
+    // latch as wheel/touch/scrollbar interaction before moving native scroll.
+    leaveBottomFollow()
+    if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
+    pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
+    setShowFullTimeline(true)
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -353,14 +685,42 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       const clientHeight = container.clientHeight
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight
 
+      if (pointerScrollInteractionRef.current && distanceFromBottom > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX) {
+        leaveBottomFollow()
+      }
+
       setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
-      shouldAutoScrollRef.current = distanceFromBottom < 200
+      captureCurrentViewportState()
 
       if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
-        expandHistoryScrollRestoreRef.current = {
-          top: scrollTop,
-          height: container.scrollHeight,
+        const containerRect = container.getBoundingClientRect()
+        const anchors = committedTimelineRef.current
+          ? Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+            .map((element, index) => {
+              const rect = element.getBoundingClientRect()
+              return {
+                messageKey: element.getAttribute('data-chat-message-anchor-key') || '',
+                offsetPx: rect.top - containerRect.top,
+                distancePx: rect.bottom <= containerRect.top
+                  ? containerRect.top - rect.bottom
+                  : rect.top >= containerRect.bottom
+                    ? rect.top - containerRect.bottom
+                    : 0,
+                index,
+              }
+            })
+            .filter((anchor) => anchor.messageKey)
+            .sort((left, right) => left.distancePx - right.distancePx || left.index - right.index)
+            .slice(0, 8)
+            .map(({ messageKey, offsetPx }) => ({ messageKey, offsetPx }))
+          : []
+        pendingViewportRestoreRef.current = {
+          kind: 'prepend',
+          anchors,
+          scrollTop,
+          scrollHeight,
+          interactionVersion: userInteractionVersionRef.current,
         }
         setShowFullTimeline(true)
       }
@@ -368,84 +728,548 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 
     const container = messagesContainerRef.current
     if (container) {
-      container.addEventListener('scroll', handleScroll)
-      return () => container.removeEventListener('scroll', handleScroll)
-    }
-  }, [messages.length, showFullTimeline])
-
-  const fetchHistory = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history`)
-      if (res.status === 404) {
-        setSessionMissing(true)
-        setMessages([])
-        lastKnownTimestampRef.current = 0
-        return
-      }
-
-      if (res.ok) {
-        const data = await res.json()
-        setSessionMissing(false)
-        setMessages(data.messages || [])
-        setStreamingAssistantDraft(null)
-        const lastMsg = data.messages?.[data.messages.length - 1]
-        if (lastMsg?.__meta?.timestamp) {
-          lastKnownTimestampRef.current = lastMsg.__meta.timestamp
+      const handleWheel = (event: WheelEvent) => {
+        if (event.deltaY < 0) {
+          leaveBottomFollow()
+        } else {
+          markUserViewportInteraction()
         }
       }
-    } catch (e) {
-      console.error('Failed to fetch history:', e)
+      const handleTouchStart = (event: TouchEvent) => {
+        markUserViewportInteraction()
+        touchScrollStartYRef.current = event.touches[0]?.clientY ?? null
+      }
+      const handleTouchMove = (event: TouchEvent) => {
+        const currentY = event.touches[0]?.clientY
+        const startY = touchScrollStartYRef.current
+        if (typeof currentY === 'number' && typeof startY === 'number' && currentY > startY + 2) {
+          leaveBottomFollow()
+        }
+        if (typeof currentY === 'number') {
+          touchScrollStartYRef.current = currentY
+        }
+      }
+      const handleTouchEnd = () => {
+        touchScrollStartYRef.current = null
+      }
+      const handlePointerDown = () => {
+        markUserViewportInteraction()
+        pointerScrollInteractionRef.current = true
+      }
+      const handlePointerEnd = () => {
+        pointerScrollInteractionRef.current = false
+      }
+      const handleWindowKeyDown = (event: KeyboardEvent) => {
+        const target = event.target
+        if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName))) {
+          return
+        }
+        if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+          const leavesBottom = ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)
+          if (leavesBottom) leaveBottomFollow()
+          else markUserViewportInteraction()
+        }
+      }
+      container.addEventListener('scroll', handleScroll)
+      container.addEventListener('wheel', handleWheel, { passive: true })
+      container.addEventListener('touchstart', handleTouchStart, { passive: true })
+      container.addEventListener('touchmove', handleTouchMove, { passive: true })
+      container.addEventListener('touchend', handleTouchEnd, { passive: true })
+      container.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+      container.addEventListener('pointerdown', handlePointerDown, { passive: true })
+      window.addEventListener('pointerup', handlePointerEnd)
+      window.addEventListener('pointercancel', handlePointerEnd)
+      window.addEventListener('keydown', handleWindowKeyDown)
+      return () => {
+        container.removeEventListener('scroll', handleScroll)
+        container.removeEventListener('wheel', handleWheel)
+        container.removeEventListener('touchstart', handleTouchStart)
+        container.removeEventListener('touchmove', handleTouchMove)
+        container.removeEventListener('touchend', handleTouchEnd)
+        container.removeEventListener('touchcancel', handleTouchEnd)
+        container.removeEventListener('pointerdown', handlePointerDown)
+        window.removeEventListener('pointerup', handlePointerEnd)
+        window.removeEventListener('pointercancel', handlePointerEnd)
+        window.removeEventListener('keydown', handleWindowKeyDown)
+      }
     }
-  }, [sessionId])
+  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, showFullTimeline])
 
-  const connectSSE = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-      eventSourceRef.current = null
+  const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
+    if (!session || typeof session.id !== 'string') return
+    const nextBusy = isSessionRuntimeActive(session)
+    const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
+    const nextMessageCount = typeof session.messageCount === 'number' ? session.messageCount : 0
+    const nextHistoryVersion = typeof session.historyVersion === 'number' ? session.historyVersion : 0
+    sessionBusyRef.current = nextBusy
+    sessionQueueLengthRef.current = nextQueueLength
+    sessionMessageCountRef.current = nextMessageCount
+    sessionHistoryVersionRef.current = nextHistoryVersion
+    sessionStateInitializedRef.current = true
+    setSessionRecord(session)
+    setSessionBusy(nextBusy)
+    setSessionQueueLength(nextQueueLength)
+  }, [])
+
+  const fetchHistory = useCallback(async (requestedMode: HistoryFetchMode = 'full') => {
+    let mode = requestedMode
+    if (mode === 'reconcile') {
+      if (!historyBootstrapStartedRef.current) return true
+      const decision = decideHistoryReconciliation({
+        fullHistoryLoaded: fullHistoryLoadedRef.current,
+        serverMessageCount: sessionMessageCountRef.current,
+        representedMessageCount: representedMessageCountRef.current,
+        serverHistoryVersion: sessionHistoryVersionRef.current,
+        representedHistoryVersion: representedHistoryVersionRef.current,
+        hasTrustedFrontier: hasTrustedHistoryFrontierRef.current,
+        queueRefreshNeeded: queueRefreshNeededRef.current,
+        gapDetected: historyGapDetectedRef.current,
+      })
+      if (decision === 'none') {
+        reconnectAwaitingStateRef.current = false
+        return true
+      }
+      mode = decision
     }
 
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current)
-      reconnectTimeoutRef.current = null
+    const activeRequest = historyInFlightRef.current
+    if (activeRequest?.sessionId === sessionId) {
+      historyTrailingRefreshRef.current = true
+      return activeRequest.promise
     }
 
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current)
-      countdownIntervalRef.current = null
+    const requestSequence = historyRequestGateRef.current.begin()
+    const eventVersionAtStart = historyEventVersionRef.current
+    const stateEventVersionAtStart = historyStateEventVersionRef.current
+    const modelStreamEventVersionAtStart = historyModelStreamEventVersionRef.current
+    const modelStreamDraftAtStart = streamingAssistantDraftRef.current
+    const controller = new AbortController()
+    historyAbortControllerRef.current = controller
+
+    const requestJson = async (query = ''): Promise<{ response: Response; data: HistoryResponse }> => {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history${query}`, {
+        signal: controller.signal,
+      })
+      const data = await response.json().catch(() => ({})) as HistoryResponse
+      return { response, data }
     }
 
-    setConnectionState('connecting')
-    const es = new EventSource(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/stream`)
+    const requestPromise = (async () => {
+      const isCurrent = () => historyRequestGateRef.current.isCurrent(requestSequence)
+      const handleMissing = (response: Response): boolean | null => {
+        if (response.status !== 404) return null
+        if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
+        setSessionMissing(true)
+        setMessages([])
+        setQueuedMessages([])
+        setSessionQueueLength(0)
+        setPersistentMemorySnapshot('')
+        lastKnownTimestampRef.current = 0
+        representedMessageCountRef.current = 0
+        latestCommittedSeqRef.current = 0
+        hasTrustedHistoryFrontierRef.current = false
+        pendingQueueAppendRef.current = null
+        atomicRecoveryScheduledRef.current = false
+        fullHistoryLoadedRef.current = true
+        setIsFullHistoryLoaded(true)
+        setHistoryLoaded(true)
+        return false
+      }
+      const concurrentMessages = () => historyEventsRef.current
+        .filter(entry => entry.version > eventVersionAtStart)
+        .map(entry => entry.message)
+      const updateFrontier = (data: HistoryResponse, snapshotMessages: Message[], complete: boolean) => {
+        const version = typeof data.historyVersion === 'number'
+          ? data.historyVersion
+          : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
+        representedHistoryVersionRef.current = version
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const hasAuthoritativeFrontier = typeof data.latestSeq === 'number'
+        if (hasAuthoritativeFrontier) {
+          let contiguousLatestSeq = responseLatestSeq
+          const concurrentSeqs = concurrentMessages()
+            .map(message => message.__meta?.seq)
+            .filter((seq): seq is number => Number.isSafeInteger(seq))
+          for (const seq of [...new Set(concurrentSeqs)].sort((left, right) => left - right)) {
+            contiguousLatestSeq = advanceHistorySeqFrontier(contiguousLatestSeq, seq).latestSeq
+          }
+          latestCommittedSeqRef.current = contiguousLatestSeq
+        } else {
+          latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
+        }
+        hasTrustedHistoryFrontierRef.current = hasAuthoritativeFrontier
+        if (complete) {
+          fullHistoryLoadedRef.current = true
+          setIsFullHistoryLoaded(true)
+          setEarlierHistoryError(false)
+        }
+      }
+      const applyMetadata = (data: HistoryResponse, deferTimeline = false): boolean => {
+        const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
+        const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
+        const hasNewerMismatchedQueue = hasNewerStreamState
+          && historyQueueLength !== null
+          && historyQueueLength !== sessionQueueLengthRef.current
+        if (!hasNewerStreamState) {
+          setSessionMissing(false)
+          applySessionState(data.session)
+        }
+        if (hasNewerMismatchedQueue) {
+          queueRefreshNeededRef.current = true
+          historyTrailingRefreshRef.current = true
+        } else if (!deferTimeline) {
+          setQueuedMessages(Array.isArray(data.queuedMessages) ? data.queuedMessages : [])
+          queueRefreshNeededRef.current = false
+        }
+        setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
+        if (!hasNewerStreamState && typeof data.queueLength === 'number') setSessionQueueLength(data.queueLength)
+        return hasNewerMismatchedQueue
+      }
+      const maybeClearDraft = (snapshotMessages: Message[]) => {
+        if (shouldClearDraftAfterHistory({
+          draftAtRequestStart: modelStreamDraftAtStart,
+          currentDraft: streamingAssistantDraftRef.current,
+          hasNewerStreamEvent: historyModelStreamEventVersionRef.current > modelStreamEventVersionAtStart,
+          snapshotMessages,
+        })) clearStreamingAssistantDraft()
+      }
+      const updateLastTimestamp = (snapshotMessages: Message[]) => {
+        const lastTimestamp = snapshotMessages.reduce((latest, message) => Math.max(latest, message.__meta?.timestamp || 0), 0)
+        lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastTimestamp)
+      }
+      const applyFullSnapshot = (data: HistoryResponse, snapshotMessages: Message[]) => {
+        const concurrent = concurrentMessages()
+        const pending = pendingQueueAppendRef.current
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
+        const pendingCovered = !pending || responseVersion !== pending.historyVersion || responseLatestSeq >= pending.endSeq
+        const queueMismatch = applyMetadata(data, true)
+        if (!pendingCovered || queueMismatch) {
+          historyTrailingRefreshRef.current = true
+          return false
+        }
+        dispatchTimeline({
+          type: 'atomic',
+          messages: currentMessages => {
+            const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
+            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+            return merged
+          },
+          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+        })
+        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        if (pending) {
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+        }
+        queueRefreshNeededRef.current = false
+        for (const message of snapshotMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, snapshotMessages, true)
+        updateLastTimestamp(snapshotMessages)
+        return true
+      }
+      const applySnapshotBeforePendingQueueAppend = (data: HistoryResponse, snapshotMessages: Message[]) => {
+        const pending = pendingQueueAppendRef.current
+        if (!pending) return false
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
+        if (responseVersion !== pending.historyVersion || responseLatestSeq >= pending.startSeq) return false
+        const concurrent = concurrentMessages()
+        setMessages(currentMessages => {
+          const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
+          representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+          return merged
+        })
+        for (const message of snapshotMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, snapshotMessages, true)
+        updateLastTimestamp(snapshotMessages)
+        historyGapDetectedRef.current = true
+        queueRefreshNeededRef.current = true
+        historyTrailingRefreshRef.current = true
+        return true
+      }
+      const fetchAndApplyFull = async (): Promise<boolean> => {
+        const { response, data } = await requestJson()
+        if (!isCurrent()) return true
+        const missing = handleMissing(response)
+        if (missing !== null) return missing
+        if (!response.ok) throw new Error(data.error || `Failed to fetch history (${response.status})`)
+        const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
+        if (!applyFullSnapshot(data, snapshotMessages)) return true
+        maybeClearDraft(snapshotMessages)
+        historyGapDetectedRef.current = false
+        reconnectAwaitingStateRef.current = false
+        historyEventsRef.current = []
+        if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
+        setHistoryLoaded(true)
+        return true
+      }
 
-    es.onopen = () => {
-      setConnectionState('connected')
-      reconnectDelayRef.current = 1000
-    }
-
-    es.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data)
+        if (mode === 'bootstrap') {
+          const { response, data } = await requestJson(`?tail=${DEFAULT_VISIBLE_TIMELINE_MESSAGES}`)
+          if (!isCurrent()) return true
+          const missing = handleMissing(response)
+          if (missing !== null) return missing
+          if (!response.ok) throw new Error(data.error || `Failed to fetch recent history (${response.status})`)
+          const tailMessages = Array.isArray(data.messages) ? data.messages : []
+          applyMetadata(data)
+          const concurrent = concurrentMessages()
+          setMessages(currentMessages => mergeHistorySnapshot({
+            snapshot: tailMessages,
+            concurrentMessages: concurrent,
+            currentMessages,
+            pendingClientMessageIds: pendingSentMessageIdsRef.current,
+          }))
+          updateFrontier(data, tailMessages, false)
+          updateLastTimestamp(tailMessages)
+          maybeClearDraft(tailMessages)
+
+          const prefixLength = typeof data.prefixLength === 'number' ? data.prefixLength : 0
+          const historyVersion = typeof data.historyVersion === 'number'
+            ? data.historyVersion
+            : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
+          if (prefixLength > 0) {
+            const prefixResult = await requestJson(`?prefixLength=${prefixLength}&historyVersion=${historyVersion}`)
+            if (!isCurrent()) return true
+            if (prefixResult.response.status === 409 && prefixResult.data.code === 'SESSION_HISTORY_BOUNDARY_STALE') {
+              return fetchAndApplyFull()
+            }
+            if (!prefixResult.response.ok) {
+              setEarlierHistoryError(true)
+              return true
+            }
+            const prefixMessages = Array.isArray(prefixResult.data.messages) ? prefixResult.data.messages : []
+            const assembledSnapshot = [...prefixMessages, ...tailMessages]
+            if (!applyFullSnapshot(data, assembledSnapshot)
+              && !applySnapshotBeforePendingQueueAppend(data, assembledSnapshot)) return true
+          } else {
+            setMessages(currentMessages => {
+              representedMessageCountRef.current = countCommittedHistoryMessages(currentMessages)
+              return currentMessages
+            })
+            updateFrontier(data, tailMessages, true)
+          }
+          historyEventsRef.current = []
+          if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
+          setHistoryLoaded(true)
+          return true
+        }
+
+        if (mode === 'full') return fetchAndApplyFull()
+
+        const historyVersion = representedHistoryVersionRef.current
+        const afterSeq = latestCommittedSeqRef.current
+        const { response, data } = await requestJson(`?afterSeq=${afterSeq}&historyVersion=${historyVersion}`)
+        if (!isCurrent()) return true
+        const missing = handleMissing(response)
+        if (missing !== null) return missing
+        if (response.status === 409 && data.code === 'SESSION_HISTORY_BOUNDARY_STALE') return fetchAndApplyFull()
+        if (!response.ok) throw new Error(data.error || `Failed to reconcile history (${response.status})`)
+        const appendedMessages = Array.isArray(data.messages) ? data.messages : []
+        const pending = pendingQueueAppendRef.current
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(appendedMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : historyVersion
+        const queueMismatch = applyMetadata(data, true)
+        if (queueMismatch || pending && responseVersion === pending.historyVersion && responseLatestSeq < pending.endSeq) {
+          historyTrailingRefreshRef.current = true
+          return true
+        }
+        dispatchTimeline({
+          type: 'atomic',
+          messages: currentMessages => {
+            const merged = mergeHistoryMessages(currentMessages, appendedMessages)
+            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+            return merged
+          },
+          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+        })
+        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        if (pending) {
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+        }
+        queueRefreshNeededRef.current = false
+        for (const message of appendedMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, appendedMessages, true)
+        updateLastTimestamp(appendedMessages)
+        maybeClearDraft(appendedMessages)
+        historyGapDetectedRef.current = false
+        reconnectAwaitingStateRef.current = false
+        historyEventsRef.current = []
+        if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
+        setHistoryLoaded(true)
+        return true
+      } catch (error) {
+        if (controller.signal.aborted) return true
+        if (pendingQueueAppendRef.current) atomicRecoveryScheduledRef.current = false
+        console.error('Failed to fetch history:', error)
+        if (mode === 'bootstrap') {
+          setEarlierHistoryError(true)
+          setHistoryLoaded(true)
+        }
+        return true
+      } finally {
+        if (historyAbortControllerRef.current === controller) historyAbortControllerRef.current = null
+      }
+    })()
+
+    historyInFlightRef.current = { sessionId, promise: requestPromise, controller }
+    void requestPromise.finally(() => {
+      if (historyInFlightRef.current?.controller !== controller) return
+      historyInFlightRef.current = null
+      if (!historyTrailingRefreshRef.current || !historyRequestGateRef.current.isCurrent(requestSequence)) return
+      historyTrailingRefreshRef.current = false
+      historyRefreshTimeoutRef.current = window.setTimeout(() => {
+        historyRefreshTimeoutRef.current = null
+        void fetchHistory('reconcile')
+      }, 0)
+    })
+    return requestPromise
+  }, [applySessionState, clearStreamingAssistantDraft, sessionId])
+
+  const scheduleAtomicRecovery = useCallback(() => {
+    if (atomicRecoveryScheduledRef.current) return
+    atomicRecoveryScheduledRef.current = true
+    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
+    historyRefreshTimeoutRef.current = window.setTimeout(() => {
+      historyRefreshTimeoutRef.current = null
+      void fetchHistory('reconcile')
+    }, 0)
+  }, [fetchHistory])
+
+  const scheduleHistoryRefresh = useCallback((delay = 100) => {
+    if (pendingQueueAppendRef.current) {
+      scheduleAtomicRecovery()
+      return
+    }
+    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
+    historyRefreshTimeoutRef.current = window.setTimeout(() => {
+      historyRefreshTimeoutRef.current = null
+      void fetchHistory('reconcile')
+    }, delay)
+  }, [fetchHistory, scheduleAtomicRecovery])
+
+  const subscribeRealtime = useCallback(() => {
+    let unsubscribe = () => {}
+    unsubscribe = webUiRealtime.subscribeSession(sessionId, {
+      onOpen: () => {
+        setConnectionState('connected')
+        setReconnectCountdown(0)
+        if (historyBootstrapStartedRef.current) {
+          reconnectAwaitingStateRef.current = true
+          return
+        }
+        historyBootstrapStartedRef.current = true
+        void fetchHistory('bootstrap').then((sessionExists) => {
+          if (sessionExists) return
+          unsubscribe()
+          setConnectionState('disconnected')
+        })
+      },
+      onStatus: (status, retryInSeconds) => {
+        setConnectionState(status)
+        setReconnectCountdown(retryInSeconds || 0)
+      },
+      onMessage: data => {
+        try {
+        if (data.type === 'session-state') {
+          historyStateEventVersionRef.current += 1
+          const hadSessionState = sessionStateInitializedRef.current
+          const previousQueueLength = sessionQueueLengthRef.current
+          const previousMessageCount = sessionMessageCountRef.current
+          const previousHistoryVersion = sessionHistoryVersionRef.current
+          const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
+          const nextMessageCount = typeof data.session?.messageCount === 'number' ? data.session.messageCount : 0
+          const nextHistoryVersion = typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
+          setSessionMissing(false)
+          applySessionState(data.session)
+          if (!hadSessionState) return
+          if (!fullHistoryLoadedRef.current) {
+            if (reconnectAwaitingStateRef.current && historyInFlightRef.current === null) scheduleHistoryRefresh()
+            return
+          }
+          if (nextQueueLength !== previousQueueLength
+            || (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)) {
+            queueRefreshNeededRef.current = true
+          }
+          if (reconnectAwaitingStateRef.current
+            || nextMessageCount !== previousMessageCount
+            || nextHistoryVersion !== previousHistoryVersion
+            || queueRefreshNeededRef.current) {
+            if (pendingQueueAppendRef.current) scheduleAtomicRecovery()
+            else scheduleHistoryRefresh()
+          }
+          return
+        }
+
+        if (data.type === 'session-deleted') {
+          historyRequestGateRef.current.invalidate()
+          historyAbortControllerRef.current?.abort()
+          historyAbortControllerRef.current = null
+          historyInFlightRef.current = null
+          historyTrailingRefreshRef.current = false
+          historyEventsRef.current = []
+          if (historyRefreshTimeoutRef.current !== null) {
+            window.clearTimeout(historyRefreshTimeoutRef.current)
+            historyRefreshTimeoutRef.current = null
+          }
+          setSessionMissing(true)
+          setSessionBusy(false)
+          setSessionQueueLength(0)
+          setQueuedMessages([])
+          setMessages([])
+          setPersistentMemorySnapshot('')
+          clearStreamingAssistantDraft()
+          setHistoryLoaded(true)
+          lastKnownTimestampRef.current = 0
+          sessionBusyRef.current = false
+          sessionQueueLengthRef.current = 0
+          sessionMessageCountRef.current = 0
+          sessionHistoryVersionRef.current = 0
+          representedMessageCountRef.current = 0
+          representedHistoryVersionRef.current = 0
+          latestCommittedSeqRef.current = 0
+          hasTrustedHistoryFrontierRef.current = false
+          fullHistoryLoadedRef.current = true
+          setIsFullHistoryLoaded(true)
+          queuedMessagesRef.current = []
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+          unsubscribe()
+          setConnectionState('disconnected')
+          return
+        }
+
+        if (data.type === 'model-stream-snapshot') {
+          historyModelStreamEventVersionRef.current += 1
+          const next = applyModelStreamSnapshot(data.draft || null)
+          streamingAssistantDraftRef.current = next
+          setStreamingAssistantDraft(next)
+          return
+        }
+
         if (data.type === 'session-event') {
           const sessionEvent = data.event as SessionStreamEvent
           if (sessionEvent.type === 'model-stream-reset') {
-            setStreamingAssistantDraft({
-              streamId: sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`,
-              iteration: sessionEvent.iteration,
-              reasoning: '',
-              text: '',
-              toolCalls: [],
-            })
+            historyModelStreamEventVersionRef.current += 1
+            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
+            streamingAssistantDraftRef.current = next
+            setStreamingAssistantDraft(next)
           } else if (sessionEvent.type === 'model-stream-update') {
-            const streamId = sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`
-            setStreamingAssistantDraft(prev => ({
-              streamId,
-              iteration: sessionEvent.iteration ?? prev?.iteration,
-              reasoning: sessionEvent.reasoning ?? (prev?.streamId === streamId ? prev.reasoning : ''),
-              text: sessionEvent.text ?? (prev?.streamId === streamId ? prev.text : ''),
-              toolCalls: sessionEvent.toolCalls !== undefined
-                ? normalizeStreamingToolCalls(sessionEvent.toolCalls)
-                : (prev?.streamId === streamId ? prev.toolCalls : []),
-            }))
+            historyModelStreamEventVersionRef.current += 1
+            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
+            streamingAssistantDraftRef.current = next
+            setStreamingAssistantDraft(next)
           } else if (sessionEvent.type === 'toolscript-progress' && sessionEvent.toolUseId) {
             setToolScriptProgress(prev => ({
               ...prev,
@@ -455,61 +1279,115 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
           return
         }
 
+        if (data.type === 'history-append') {
+          const incomingMessages = Array.isArray(data.messages) ? data.messages as Message[] : []
+          const seqs = incomingMessages.map(message => message.__meta?.seq).filter((seq): seq is number => Number.isSafeInteger(seq))
+          const startSeq = seqs.length ? Math.min(...seqs) : 0
+          const endSeq = seqs.length ? Math.max(...seqs) : 0
+          const historyVersion = Number.isSafeInteger(data.historyVersion) ? data.historyVersion : 0
+          if (historyVersion === representedHistoryVersionRef.current && hasTrustedHistoryFrontierRef.current && endSeq > 0 && endSeq <= latestCommittedSeqRef.current) return
+          let batchFrontier = latestCommittedSeqRef.current
+          let batchHasGap = false
+          if (hasTrustedHistoryFrontierRef.current) {
+            for (const seq of [...new Set(seqs)].sort((left, right) => left - right)) {
+              const next = advanceHistorySeqFrontier(batchFrontier, seq)
+              batchFrontier = next.latestSeq
+              batchHasGap ||= next.gapDetected
+            }
+          }
+          const stateMatches = historyVersion === sessionHistoryVersionRef.current
+            && data.messageCount === sessionMessageCountRef.current
+            && data.queueLength === sessionQueueLengthRef.current
+          if (!stateMatches || batchHasGap || pendingQueueAppendRef.current || historyInFlightRef.current?.sessionId === sessionId) {
+            const existing = pendingQueueAppendRef.current
+            pendingQueueAppendRef.current = existing && existing.historyVersion === historyVersion
+              ? { historyVersion, startSeq: Math.min(existing.startSeq, startSeq), endSeq: Math.max(existing.endSeq, endSeq) }
+              : { historyVersion, startSeq, endSeq }
+            historyGapDetectedRef.current = true
+            queueRefreshNeededRef.current = true
+            scheduleAtomicRecovery()
+            return
+          }
+          dispatchTimeline({
+            type: 'atomic',
+            messages: currentMessages => {
+              const merged = mergeHistoryMessages(currentMessages, incomingMessages)
+              representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+              return merged
+            },
+            queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+          })
+          queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+          for (const message of incomingMessages) {
+            const clientMessageId = getClientMessageId(message)
+            if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+          }
+          representedHistoryVersionRef.current = historyVersion
+          latestCommittedSeqRef.current = hasTrustedHistoryFrontierRef.current ? batchFrontier : Math.max(latestCommittedSeqRef.current, endSeq)
+          hasTrustedHistoryFrontierRef.current = endSeq > 0 || hasTrustedHistoryFrontierRef.current
+          queueRefreshNeededRef.current = false
+          historyGapDetectedRef.current = false
+          return
+        }
+
         if (data.type === 'message') {
+          const incomingMessage = data.message as Message
+          const pendingQueueAppend = pendingQueueAppendRef.current
+          if (pendingQueueAppend && Number.isSafeInteger(incomingMessage.__meta?.seq)
+            && (incomingMessage.__meta?.seq as number) >= pendingQueueAppend.startSeq) {
+            historyGapDetectedRef.current = true
+            scheduleAtomicRecovery()
+            return
+          }
           const msgTimestamp = data.message.__meta?.timestamp
           const isCommandResponse = data.message.__meta?.isCommandResponse
+          const isUpdateExisting = data.message.__meta?.updateExisting
 
           if (data.message.role === 'model') {
-            setStreamingAssistantDraft(null)
+            if (shouldClearDraftForCommittedModel(streamingAssistantDraftRef.current, data.message.__meta?.timestamp)) {
+              clearStreamingAssistantDraft()
+            }
           }
 
-          if (!isCommandResponse) {
-            if (msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
-              return
-            }
+          if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
+            queueRefreshNeededRef.current = true
+            scheduleHistoryRefresh()
+          }
+
+          const hasStableIdentity = hasStableHistoryIdentity(incomingMessage)
+          if (!isCommandResponse && !isUpdateExisting && !hasStableIdentity
+            && msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
+            return
+          }
+
+          const clientMessageId = getClientMessageId(incomingMessage)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+          historyEventVersionRef.current += 1
+          if (historyAbortControllerRef.current) {
+            historyEventsRef.current.push({
+              version: historyEventVersionRef.current,
+              message: incomingMessage,
+            })
+          }
+
+          if (fullHistoryLoadedRef.current && !isCommandResponse && !isUpdateExisting) {
+            const frontier = advanceHistorySeqFrontier(latestCommittedSeqRef.current, incomingMessage.__meta?.seq)
+            latestCommittedSeqRef.current = frontier.latestSeq
+            if (frontier.gapDetected) historyGapDetectedRef.current = true
           }
 
           setMessages(prev => {
-            if (msgTimestamp && !isCommandResponse) {
-              const exists = prev.some(m => m.__meta?.timestamp === msgTimestamp)
-              if (exists) {
-                return prev
-              }
-            }
-
-            if (data.message.role === 'user') {
-              const newMessageText = data.message.parts
-                .map((p: MessagePart) => p.text || '')
-                .join('')
-                .trim()
-
-              const pendingIndex = pendingSentMessagesRef.current.findIndex(pending =>
-                newMessageText.includes(pending) || pending.includes(newMessageText)
-              )
-
-              if (pendingIndex !== -1) {
-                pendingSentMessagesRef.current.splice(pendingIndex, 1)
-
-                const filtered = prev.filter((m) => {
-                  if (m.role !== 'user') return true
-                  const userMessages = prev.filter(msg => msg.role === 'user')
-                  const isLastUser = m === userMessages[userMessages.length - 1]
-                  return !isLastUser
-                })
-
-                if (msgTimestamp && !isCommandResponse) {
-                  lastKnownTimestampRef.current = msgTimestamp
-                }
-
-                return [...filtered, data.message]
-              }
-            }
-
-            if (msgTimestamp && !isCommandResponse) {
-              lastKnownTimestampRef.current = msgTimestamp
-            }
-            return [...prev, data.message]
+            const beforeCount = countCommittedHistoryMessages(prev)
+            const next = reconcileHistoryMessage(prev, incomingMessage)
+            representedMessageCountRef.current += countCommittedHistoryMessages(next) - beforeCount
+            return next
           })
+
+          if (fullHistoryLoadedRef.current && historyGapDetectedRef.current) scheduleHistoryRefresh()
+
+          if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
+            lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, msgTimestamp)
+          }
 
           // Clean up toolscript progress when tool response message arrives
           if (data.message.role === 'tool') {
@@ -530,86 +1408,13 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
             }
           }
         }
-      } catch (e) {
-        console.error('Failed to parse SSE message:', e)
-      }
-    }
-
-    es.onerror = () => {
-      es.close()
-
-      if (es.readyState === EventSource.CLOSED) {
-        setConnectionState('reconnecting')
-        const delay = Math.min(reconnectDelayRef.current, 30000)
-        setReconnectCountdown(Math.ceil(delay / 1000))
-
-        countdownIntervalRef.current = setInterval(() => {
-          setReconnectCountdown(prev => {
-            if (prev <= 1) {
-              if (countdownIntervalRef.current) {
-                clearInterval(countdownIntervalRef.current)
-                countdownIntervalRef.current = null
-              }
-              return 0
-            }
-            return prev - 1
-          })
-        }, 1000)
-
-        reconnectTimeoutRef.current = setTimeout(() => {
-          fetchHistory().then(() => {
-            connectSSE()
-          })
-          reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
-        }, delay)
-      } else {
-        setConnectionState('disconnected')
-      }
-    }
-
-    eventSourceRef.current = es
-  }, [fetchHistory, sessionId])
-
-  const refreshSessionDebugData = useCallback(async () => {
-    if (guestMode) {
-      setSessionRecord(null)
-      setResolvedSessionFilePath(null)
-      setSessionFilePayload(null)
-      setDebugInfoError(null)
-      setDebugInfoLoading(false)
-      return
-    }
-
-    setDebugInfoLoading(true)
-    setDebugInfoError(null)
-
-    try {
-      const [sessionsRes, fileData] = await Promise.all([
-        fetch(`${API_BASE_PATH}/sessions`),
-        fetchSessionFilePayload(sessionId),
-      ])
-
-      if (sessionsRes.ok) {
-        const data = await sessionsRes.json()
-        const currentSession = (data.sessions || []).find((session: SessionListRecord) => session.id === sessionId) || null
-        setSessionRecord(currentSession)
-      } else {
-        setSessionRecord(null)
-      }
-
-      setResolvedSessionFilePath(fileData.resolvedPath)
-      setSessionFilePayload(fileData.payload)
-
-      if (!fileData.payload) {
-        setDebugInfoError('Session file JSON is not available from the current WebUI runtime paths.')
-      }
-    } catch (error) {
-      console.error('Failed to refresh session debug data:', error)
-      setDebugInfoError(error instanceof Error ? error.message : 'Failed to refresh debug info')
-    } finally {
-      setDebugInfoLoading(false)
-    }
-  }, [guestMode, sessionId])
+        } catch (e) {
+          console.error('Failed to process realtime message:', e)
+        }
+      },
+    })
+    return unsubscribe
+  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -622,7 +1427,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update model (${res.status})`)
-      await refreshSessionDebugData()
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update model'
       setModelError(message)
@@ -630,7 +1435,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     } finally {
       setModelBusy(false)
     }
-  }, [refreshSessionDebugData, sessionId])
+  }, [sessionId])
 
   const updateChildModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -643,7 +1448,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || `Failed to update child default model (${res.status})`)
-      await refreshSessionDebugData()
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update child default model'
       setModelError(message)
@@ -651,98 +1456,64 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     } finally {
       setModelBusy(false)
     }
-  }, [refreshSessionDebugData, sessionId])
+  }, [sessionId])
 
-  useEffect(() => {
-    fetchHistory()
-    connectSSE()
+  const updateSessionEffort = useCallback(async (effort: string | null) => {
+    setModelBusy(true); setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/model`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effort }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update effort (${res.status})`)
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+    } catch (error) { setModelError(error instanceof Error ? error.message : 'Failed to update effort'); throw error }
+    finally { setModelBusy(false) }
+  }, [sessionId])
 
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current)
-        countdownIntervalRef.current = null
-      }
-    }
-  }, [connectSSE, fetchHistory])
-
-  useEffect(() => {
-    refreshSessionDebugData()
-  }, [refreshSessionDebugData])
-
-  useEffect(() => {
-    setSessionMissing(false)
-
-    const fetchBusyStatus = async () => {
-      try {
-        const res = await fetch(`${API_BASE_PATH}/sessions`)
-        if (res.ok) {
-          const data = await res.json()
-          const currentSession = data.sessions.find((s: any) => s.id === sessionId)
-          if (currentSession) {
-            setSessionBusy(currentSession.busy || false)
-            setSessionQueueLength(currentSession.queueLength || 0)
-          } else {
-            setSessionBusy(false)
-            setSessionQueueLength(0)
-          }
-        }
-      } catch (e) {
-        console.error('Failed to fetch busy status:', e)
-      }
-    }
-
-    fetchBusyStatus()
-    const interval = setInterval(fetchBusyStatus, 2000)
-
-    return () => clearInterval(interval)
+  const updateChildEffort = useCallback(async (effort: string | null) => {
+    setModelBusy(true); setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ childEffortDefault: effort }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update child effort (${res.status})`)
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+    } catch (error) { setModelError(error instanceof Error ? error.message : 'Failed to update child effort'); throw error }
+    finally { setModelBusy(false) }
   }, [sessionId])
 
   useEffect(() => {
-    if (messages.length > 0) {
-      scrollToBottom()
-      setTimeout(() => {
-        scrollToBottom()
-      }, 100)
+    const unsubscribe = subscribeRealtime()
+
+    return () => {
+      unsubscribe()
+      if (historyRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(historyRefreshTimeoutRef.current)
+        historyRefreshTimeoutRef.current = null
+      }
+      historyRequestGateRef.current.invalidate()
+      historyAbortControllerRef.current?.abort()
+      historyAbortControllerRef.current = null
+      historyInFlightRef.current = null
+      historyTrailingRefreshRef.current = false
     }
-  }, [messages.length > 0, scrollToBottom, sessionId])
+  }, [subscribeRealtime])
 
   useEffect(() => {
-    if (shouldAutoScrollRef.current) {
-      scrollToBottom()
+    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
+    if (heightFollowAnimatingRef.current.size) {
+      heightFollowPendingContentRef.current = true
+      return
     }
+    // A fresh message/draft during only the final observer-settling grace is
+    // independent content: resume the existing follow immediately.
+    scrollToBottom()
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
-  useEffect(() => {
-    const restore = expandHistoryScrollRestoreRef.current
-    if (!restore || !showFullTimeline) {
-      return
-    }
-
-    const container = messagesContainerRef.current
-    if (!container) {
-      return
-    }
-
-    const nextScrollHeight = container.scrollHeight
-    container.scrollTop = Math.max(0, nextScrollHeight - restore.height + restore.top)
-    expandHistoryScrollRestoreRef.current = null
-  }, [showFullTimeline, messages.length])
-
   const snapshotSystemMessage = useMemo<Message | null>(() => {
-    if (guestMode) {
-      return null
-    }
-    const snapshotText = typeof sessionFilePayload?.persistentMemorySnapshot === 'string'
-      ? sessionFilePayload.persistentMemorySnapshot.trim()
-      : ''
+    const snapshotText = guestMode ? '' : persistentMemorySnapshot.trim()
 
     if (!snapshotText) {
       return null
@@ -750,13 +1521,13 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 
     return {
       role: 'tool',
-      parts: [{ text: `[SYSTEM: snapshot]\n${snapshotText}` }],
+      parts: [{ text: `<foxwarm-system kind="snapshot" hint="snapshot" />\n${snapshotText}` }],
       __meta: {
         timestamp: -1,
         synthetic: 'persistentMemorySnapshot',
       },
     }
-  }, [guestMode, sessionFilePayload])
+  }, [guestMode, persistentMemorySnapshot])
 
   const visibleMessages = useMemo(() => {
     if (showFullTimeline || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
@@ -776,189 +1547,278 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
     return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
 
-  const debugInfoObject = useMemo(() => ({
-    sessionId,
-    sessionDisplayName: sessionDisplayName || null,
-    sessionRecord,
-    resolvedSessionFilePath,
-    sessionPayload: sessionFilePayload
-      ? {
-          ...sessionFilePayload,
-          history: messages,
-        }
-      : {
-          history: messages,
-        },
-    clientState: {
-      connectionState,
-      reconnectCountdown,
-      sessionMissing,
-      sessionBusy,
-      sessionQueueLength,
-      groupTools,
-      showUsageBadge,
-      sendKeyBehavior: sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
-      loading,
-      asrAvailable,
-      modelBusy,
-      streamingAssistantDraft,
-    },
-  }), [
-    asrAvailable,
-    connectionState,
-    loading,
-    messages,
-    modelBusy,
-    reconnectCountdown,
-    resolvedSessionFilePath,
-    sessionBusy,
-    sessionDisplayName,
-    sessionFilePayload,
-    sessionId,
-    sessionMissing,
-    sessionQueueLength,
-    sessionRecord,
-    streamingAssistantDraft,
-    groupTools,
-    showUsageBadge,
-  ])
+  useLayoutEffect(() => {
+    if (!pendingScrollToTrueTopRef.current) return
+    const container = messagesContainerRef.current
+    if (!container || !showFullTimeline) return
+    container.scrollTop = 0
+    pendingScrollToTrueTopRef.current = false
+  }, [showFullTimeline, timelineMessages])
 
-  const debugInfoText = useMemo(() => JSON.stringify(debugInfoObject, null, 2), [debugInfoObject])
-
-  const handleOpenDebugInfo = useCallback(async () => {
-    setShowMenu(false)
-    setShowDebugInfo(true)
-    await refreshSessionDebugData()
-  }, [refreshSessionDebugData])
-
-  const handleCopyDebugInfo = useCallback(async () => {
-    try {
-      await copyTextToClipboard(debugInfoText)
-      setDebugInfoCopied(true)
-      if (debugInfoCopyResetTimeoutRef.current !== null) {
-        window.clearTimeout(debugInfoCopyResetTimeoutRef.current)
-      }
-      debugInfoCopyResetTimeoutRef.current = window.setTimeout(() => {
-        setDebugInfoCopied(false)
-        debugInfoCopyResetTimeoutRef.current = null
-      }, 1500)
-    } catch (error) {
-      console.error('Failed to copy debug info:', error)
+  useEffect(() => {
+    if (showFullTimeline || !historyLoaded || messages.length <= DEFAULT_VISIBLE_TIMELINE_MESSAGES) return
+    const container = messagesContainerRef.current
+    const content = messagesContentRef.current
+    if (!container || !content) return
+    const expandIfNoUpwardScroll = () => {
+      if (container.scrollHeight <= container.clientHeight + 1) setShowFullTimeline(true)
     }
-  }, [debugInfoText])
+    expandIfNoUpwardScroll()
+    const observer = new ResizeObserver(expandIfNoUpwardScroll)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [historyLoaded, messages.length, showFullTimeline, timelineMessages])
 
-  const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: File[] }) => {
+  useLayoutEffect(() => {
+    const pending = pendingViewportRestoreRef.current
+    if (!pending) return
+
+    if (pending.interactionVersion !== userInteractionVersionRef.current) {
+      pendingViewportRestoreRef.current = null
+      return
+    }
+
+    if (pending.kind === 'state') {
+      if (applyViewportState(pending.state)) {
+        pendingViewportRestoreRef.current = null
+        return
+      }
+
+      if (pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+        setShowFullTimeline(true)
+        return
+      }
+
+      if (!historyLoaded) return
+      const fallbackState: ChatViewportState = { kind: 'bottom' }
+      pendingViewportRestoreRef.current = null
+      applyViewportState(fallbackState)
+      return
+    }
+
+    if (applyViewportAnchorCandidates(pending.anchors)) {
+      pendingViewportRestoreRef.current = null
+      return
+    }
+
+    if (!showFullTimeline || !historyLoaded) return
+
+    const container = messagesContainerRef.current
+    if (!container) return
+    container.scrollTop = pending.scrollTop + (container.scrollHeight - pending.scrollHeight)
+    pendingViewportRestoreRef.current = null
+    shouldAutoScrollRef.current = false
+    pendingUserLeaveBottomRef.current = false
+
+    const nextState = readCurrentViewportState(CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX)
+    if (nextState?.kind === 'anchor') {
+      currentViewportStateRef.current = nextState
+      currentViewportGeometryRef.current = null
+      capturedInteractionVersionRef.current = userInteractionVersionRef.current
+      storeChatViewportState(viewportSessionId, nextState)
+    } else {
+      currentViewportGeometryRef.current = {
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+      }
+      capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    }
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, showFullTimeline, timelineMessages, viewportSessionId])
+
+  useLayoutEffect(() => {
+    const pending = pendingContextScrollbarNavigationRef.current
+    if (!pending) return
+    if (scrollToContextScrollbarAnchor(pending.anchorKey, pending.fraction)) {
+      pendingContextScrollbarNavigationRef.current = null
+    }
+  }, [scrollToContextScrollbarAnchor, showFullTimeline, timelineMessages])
+
+  useEffect(() => {
+    const content = messagesContentRef.current
+    const container = messagesContainerRef.current
+    if (!content || !container) return
+
+    const observer = new ResizeObserver(() => {
+      if (resizeRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeRestoreFrameRef.current)
+      }
+      resizeRestoreFrameRef.current = window.requestAnimationFrame(() => {
+        resizeRestoreFrameRef.current = null
+        if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
+
+        const pending = pendingViewportRestoreRef.current
+        if (heightFollowHoldsRef.current.size && !pending) {
+          setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
+          return
+        }
+        if (pending) {
+          if (pending.interactionVersion === userInteractionVersionRef.current) {
+            if (pending.kind === 'state') {
+              applyViewportState(pending.state)
+            } else {
+              applyViewportAnchorCandidates(pending.anchors)
+            }
+          }
+          return
+        }
+        const geometry = currentViewportGeometryRef.current
+        if (geometry) {
+          container.scrollTop = geometry.scrollTop + (container.scrollHeight - geometry.scrollHeight)
+          currentViewportGeometryRef.current = {
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+          }
+          return
+        }
+        applyViewportState(currentViewportStateRef.current)
+      })
+    })
+    observer.observe(content)
+
+    return () => {
+      observer.disconnect()
+      if (resizeRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeRestoreFrameRef.current)
+        resizeRestoreFrameRef.current = null
+      }
+    }
+  }, [applyViewportAnchorCandidates, applyViewportState])
+
+  useLayoutEffect(() => () => {
+    captureCurrentViewportState()
+  }, [captureCurrentViewportState])
+
+  const handleOpenDebugInfo = useCallback(() => {
+    setShowDebugInfo(true)
+  }, [])
+
+  const handleCloseDebugInfo = useCallback(() => {
+    setShowDebugInfo(false)
+  }, [])
+
+  const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: Array<{ ref: string; file: File }> }) => {
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
 
     setLoading(true)
-    setStreamingAssistantDraft(null)
+    clearStreamingAssistantDraft()
 
     const userMessage = text.trim()
+    const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
     const files = [...attachments]
     const sendTimestamp = Date.now()
-    lastKnownTimestampRef.current = sendTimestamp
+    const clientMessageId = globalThis.crypto?.randomUUID?.()
+      || `webui-${sendTimestamp}-${Math.random().toString(36).slice(2)}`
 
     const parts: any[] = []
     let messageText = userMessage
     let requestText = userMessage
-    const uploadedFiles: Array<{ path: string; filename: string; mimeType: string; size?: number }> = []
-
-    for (const file of files) {
-      try {
-        const formData = new FormData()
-        formData.append('file', file)
-        formData.append('sessionId', sessionId)
-
-        const uploadRes = await fetch(`${API_BASE_PATH}/upload`, {
-          method: 'POST',
-          body: formData,
-        })
-
-        if (!uploadRes.ok) {
-          throw new Error('Upload failed')
-        }
-
-        const uploadData = await uploadRes.json()
-        uploadedFiles.push({
-          path: uploadData.path,
-          filename: uploadData.filename || file.name,
-          mimeType: uploadData.mimeType || file.type || 'application/octet-stream',
-          size: uploadData.size,
-        })
-
-        messageText += file.type.startsWith('image/')
-          ? `\n\n[Image: ${file.name}]`
-          : `\n\n[File: ${file.name}]`
-      } catch (err) {
-        console.error('File upload failed:', err)
-        messageText += `\n\n[Failed to upload: ${file.name}]`
-      }
+    let uploadedFiles
+    try {
+      uploadedFiles = await uploadReferencedFiles(files, `${API_BASE_PATH}/upload`, fetch, guestMode ? sessionId : undefined)
+    } catch (err) {
+      console.error('File upload failed:', err)
+      setLoading(false)
+      setMessages(prev => [...prev, { role: 'model', parts: [{ text: `Error: ${err instanceof Error ? err.message : 'Failed to upload attachment'}` }], __meta: { temporary: true, timestamp: Date.now() } }])
+      return false
     }
+
+    const attachmentDisplays = uploadedFiles.map(file => ({
+      ref: file.ref,
+      name: file.filename,
+      mimeType: file.mimeType,
+      size: file.size,
+      kind: file.mimeType.startsWith('image/') ? 'image' : 'file',
+    } as const))
 
     if (requestText) {
       parts.push({ text: requestText })
     }
 
-    const previewParts = messageText ? [{ text: messageText }] : parts
+    const previewParts = buildReferencedAttachmentParts(messageText, attachmentDisplays)
 
-    pendingSentMessagesRef.current.push(userMessage)
-    setMessages(prev => [...prev, { role: 'user', parts: previewParts }])
+    const appendOptimistic = !isSlashCommand
+      && shouldAppendOptimisticMessage(sessionBusyRef.current, sessionQueueLengthRef.current)
+    if (appendOptimistic) {
+      pendingSentMessageIdsRef.current.add(clientMessageId)
+      setMessages(prev => [...prev, buildOptimisticUserMessage({
+        clientMessageId,
+        parts: previewParts,
+        timestamp: sendTimestamp,
+      })])
+    }
 
     try {
-      fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ parts, uploadedFiles }),
-      }).catch(e => {
-        console.error('Failed to send message:', e)
-        setMessages(prev => [...prev, { role: 'model', parts: [{ text: 'Error: Failed to send message' }] }])
+      await postReferencedMessage(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
+          parts,
+          uploadedFiles: toLegacyUploadedFiles(uploadedFiles),
+          ...(!isSlashCommand ? { clientMessageId } : {}),
       })
-
-      setLoading(false)
-      return true
+      if (!appendOptimistic && !isSlashCommand) {
+        queueRefreshNeededRef.current = true
+        scheduleHistoryRefresh()
+      }
     } catch (e) {
       console.error('Failed to send message:', e)
+      pendingSentMessageIdsRef.current.delete(clientMessageId)
+      setMessages(prev => {
+          const hasReconciledRow = prev.some(message => (
+            !message.__meta?.optimistic
+            && getClientMessageId(message) === clientMessageId
+          ))
+          const hasPendingOptimisticRow = prev.some(message => (
+            message.__meta?.optimistic
+            && getClientMessageId(message) === clientMessageId
+          ))
+          if (appendOptimistic && (hasReconciledRow || !hasPendingOptimisticRow)) return prev
+          return [
+            ...prev.filter(message => !(
+              message.__meta?.optimistic
+              && getClientMessageId(message) === clientMessageId
+            )),
+            { role: 'model', parts: [{ text: 'Error: Failed to send message' }], __meta: { temporary: true, timestamp: Date.now() } },
+          ]
+      })
       setLoading(false)
       return false
     }
-  }, [loading, sessionId, sessionMissing])
 
-  const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
-    const formData = new FormData()
-    formData.append('audio', file)
-    const context = buildAsrContext(messages, draftText)
-    if (context.trim()) {
-      formData.append('context', context.trim())
-    }
+    setLoading(false)
+    return true
+  }, [clearStreamingAssistantDraft, loading, scheduleHistoryRefresh, sessionId, sessionMissing])
 
-    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    const responseText = await response.text()
-    let data: any = {}
+  const sendSessionCommand = useCallback(async (command: string) => {
+    if (sessionMissing) return
     try {
-      data = responseText ? JSON.parse(responseText) : {}
-    } catch {
-      data = { error: responseText || 'ASR request failed' }
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: command }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || `Command failed (${response.status})`)
+      }
+    } catch (error) {
+      console.error(`Failed to send ${command}:`, error)
+      setMessages(prev => [...prev, {
+        role: 'model',
+        parts: [{ text: `Error: ${error instanceof Error ? error.message : `Failed to send ${command}`}` }],
+        __meta: { temporary: true, timestamp: Date.now() },
+      }])
     }
+  }, [sessionId, sessionMissing])
 
-    if (!response.ok) {
-      throw new Error(data?.error || `ASR request failed (${response.status})`)
-    }
+  const handleStop = useCallback(() => {
+    void sendSessionCommand('/stop')
+  }, [sendSessionCommand])
 
-    const text = typeof data?.text === 'string' ? data.text : ''
-    return {
-      text,
-      status: response.status,
-      rawLength: responseText.length,
-      textLength: text.length,
-      responsePreview: responseText.slice(0, 200),
-    }
-  }, [messages])
+  const handleRunQueued = useCallback(() => {
+    void sendSessionCommand('/dequeue')
+  }, [sendSessionCommand])
+
+  const handleContinue = useCallback(() => {
+    void sendSessionCommand('/continue')
+  }, [sendSessionCommand])
 
   const handleCreateStreamingTranscriber = useCallback(async ({
     draftText,
@@ -979,8 +1839,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       const socket = new WebSocket(getAsrStreamUrl())
       let resolved = false
       let settled = false
+      let terminal = false
 
       const fail = (message: string) => {
+        if (terminal) return
+        terminal = true
         onError(message)
         if (!settled) {
           settled = true
@@ -996,6 +1859,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
+        if (terminal) return
         onDebug(`ws open; contextLength=${context.length} language=auto`)
         socket.send(JSON.stringify({
           type: 'start',
@@ -1005,6 +1869,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       }
 
       socket.onmessage = (event) => {
+        if (terminal) return
         try {
           const payload = JSON.parse(String(event.data))
           if (payload.type === 'ready') {
@@ -1032,6 +1897,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
                 }
               },
               cancel: () => {
+                terminal = true
                 onDebug('ws cancel called')
                 try {
                   socket.close()
@@ -1048,6 +1914,7 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
           }
 
           if (payload.type === 'final') {
+            terminal = true
             onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
@@ -1072,101 +1939,171 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
       }
 
       socket.onclose = () => {
-        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)}`)
-        if (!resolved && !settled) {
+        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)} terminal=${String(terminal)}`)
+        if (terminal) return
+        if (resolved) fail('Streaming ASR connection closed before the final transcript')
+        else {
+          terminal = true
+          settled = true
           reject(new Error('Streaming ASR connection closed before ready'))
         }
       }
     })
   }, [messages])
 
+  const contextLimit = useMemo(() => {
+    const currentModelKey = sessionRecord?.modelKey
+    return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
+  }, [modelOptions, sessionRecord?.modelKey])
+
+  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
+
   return (
-    <div ref={chatRootRef} className="relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
-        title={sessionDisplayName || sessionId}
-        subtitle={<span className="font-mono text-[12px]">session {sessionId}</span>}
+        title={sessionDisplayName || sessionRecord?.displayName || sessionId}
+        subtitle={guestMode ? null : (
+          <span data-session-header-subtitle className="font-mono text-[12px]" title={sessionRecord?.cwd || undefined}>
+            {sessionHeaderSubtitle}
+          </span>
+        )}
         onBack={isMobile ? onBack : undefined}
         sticky
         actions={guestMode ? null : (
           <>
-            <button
-              onClick={onOpenWorkspace}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Open workspace"
-            >
-              <FolderOpen className="h-4 w-4" />
-              <span className="hidden md:inline">Open workspace</span>
-            </button>
-            <button
-              onClick={onOpenTerminal}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Open terminal"
-            >
-              <SquareTerminal className="h-4 w-4" />
-              <span className="hidden md:inline">Open terminal</span>
-            </button>
-            <div className="relative">
-              <button
-                onClick={() => setShowMenu(!showMenu)}
-                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-                title="Session options"
-              >
-                <Menu size={20} />
-              </button>
-              {showMenu && (
-                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg z-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+            {(onOpenCode || onOpenCodeNewWindow) && (
+              <div className="flex items-stretch">
+                {onOpenCode && (
                   <button
-                    onClick={handleOpenDebugInfo}
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                    onClick={onOpenCode}
+                    className={`inline-flex items-center gap-1 border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover sm:px-3 dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
+                    title="Open code"
                   >
-                    debug info
+                    <Code2 className="h-4 w-4" />
+                    <span className="hidden sm:inline">Open code</span>
                   </button>
-                </div>
-              )}
-            </div>
+                )}
+                {onOpenCodeNewWindow && (
+                  <button
+                    onClick={onOpenCodeNewWindow}
+                    className={`inline-flex items-center justify-center rounded-r-lg border border-fw-border px-2 text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text dark:hover:bg-fw-hover ${onOpenCode ? 'border-l-0' : ''}`}
+                    title="Open code in a new browser tab"
+                    aria-label="Open code in a new browser tab"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+            {onOpenTerminal && (
+              <button
+                onClick={onOpenTerminal}
+                className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
+                title="Open terminal"
+              >
+                <SquareTerminal className="h-4 w-4" />
+                <span className="hidden md:inline">Open terminal</span>
+              </button>
+            )}
+            <SessionUiSettingsMenu
+              sendKeyMode={sendKeyMode}
+              onSendKeyModeChange={onSendKeyModeChange}
+              groupTools={groupTools}
+              onGroupToolsChange={onGroupToolsChange}
+              showUsageBadge={showUsageBadge}
+              onShowUsageBadgeChange={onShowUsageBadgeChange}
+              showUserMessageMetadata={showUserMessageMetadata}
+              onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
+              onOpenDebugInfo={handleOpenDebugInfo}
+            />
           </>
         )}
       />
 
       {connectionState !== 'connected' && (
         <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
-          connectionState === 'connecting' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300' :
-          connectionState === 'reconnecting' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300' :
-          'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+          connectionState === 'connecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
+          connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
+          'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
         }`}>
           {connectionState === 'connecting' && 'Connecting...'}
-          {connectionState === 'reconnecting' && `Reconnecting in ${reconnectCountdown}s...`}
+          {connectionState === 'reconnecting' && 'Reconnecting...'}
           {connectionState === 'disconnected' && 'Disconnected'}
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
-        <div ref={messagesContainerRef} className="h-full overflow-y-auto p-4">
-          {hiddenMessageCount > 0 && !showFullTimeline && (
-            <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
-              Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+      <div className="foxwarm-chat-message-region relative min-h-0 flex-1">
+        <div id={chatMessageContainerId} ref={messagesContainerRef} className="foxwarm-chat-messages h-full overflow-x-hidden overflow-y-auto p-4">
+          {!isMobile && (
+            <div className="foxwarm-context-scrollbar-overlay">
+              <ContextScrollbar
+                messages={messages}
+                persistentMemorySnapshot={snapshotSystemMessage}
+                contextLimit={contextLimit}
+                historyComplete={isFullHistoryLoaded}
+                containerId={chatMessageContainerId}
+                containerRef={messagesContainerRef}
+                timelineRef={committedTimelineRef}
+                onNavigate={handleContextScrollbarNavigate}
+              />
             </div>
           )}
-          <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-            <ChatTimeline messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} />
-          </ToolScriptProgressContext.Provider>
-          <ProcessingStatus
-            sessionBusy={sessionBusy}
-            sessionQueueLength={sessionQueueLength}
-            loading={loading}
-            isMobile={isMobile}
-          />
-          <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+          <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full">
+            {hiddenMessageCount > 0 && !showFullTimeline && (
+              <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
+                Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+              </div>
+            )}
+            {earlierHistoryError && !isFullHistoryLoaded && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
+                <span>Earlier messages could not be loaded.</span>
+                <button
+                  type="button"
+                  className="font-medium text-fw-accent hover:underline"
+                  onClick={() => {
+                    setEarlierHistoryError(false)
+                    void fetchHistory('full')
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
+              <ThreadCardHeightContext.Provider value={cardHeightContext}>
+                <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                </ToolScriptProgressContext.Provider>
+              </ThreadCardHeightContext.Provider>
+            </div>
+            <ProcessingStatus
+              sessionBusy={sessionBusy}
+              runtimeState={sessionRecord?.runtimeState}
+              sessionQueueLength={sessionQueueLength}
+              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
+              loading={loading}
+              isMobile={isMobile}
+              onStop={guestMode ? undefined : handleStop}
+              onRunQueued={guestMode ? undefined : handleRunQueued}
+              onContinue={guestMode ? undefined : handleContinue}
+            />
+            {queuedMessages.length > 0 && (
+              <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
+              </div>
+            )}
+            <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
+          </div>
         </div>
-
+        <div className="foxwarm-display-effect-overlay" aria-hidden="true" />
         {showScrollTopButton && (
           <button
             onClick={scrollToTop}
-            className="absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             aria-label="Scroll to top"
           >
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
             </svg>
           </button>
@@ -1175,11 +2112,11 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
         {showScrollButton && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"
           >
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
             </svg>
           </button>
@@ -1188,92 +2125,88 @@ const Chat = memo(function Chat({ sessionId, sessionDisplayName, onBack, onOpenW
 
       <ChatComposer
         sessionId={sessionId}
+        guestMode={guestMode}
         sessionMissing={sessionMissing}
         loading={loading}
-        guestMode={guestMode}
         asrAvailable={asrAvailable}
         modelOptions={modelOptions}
         currentModelKey={sessionRecord?.modelKey}
         sessionModel={sessionRecord?.model || null}
         defaultModelKey={sessionRecord?.defaultModelKey}
         childModelDefault={sessionRecord?.childModelDefault || null}
+        childModelPolicySource={sessionRecord?.childModelPolicySource}
+        childPolicyChain={sessionRecord?.childPolicyChain}
         effectiveChildModelKey={sessionRecord?.effectiveChildModelKey}
+        effort={sessionRecord?.effort || null}
+        effectiveEffort={sessionRecord?.effectiveEffort}
+        effortAllowed={sessionRecord?.effortAllowed || []}
+        effortDefault={sessionRecord?.effortDefault || null}
+        childEffortDefault={sessionRecord?.childEffortDefault || null}
+        effectiveChildEffort={sessionRecord?.effectiveChildEffort}
+        childEffortAllowed={sessionRecord?.childEffortAllowed || []}
+        childModelEffortDefault={sessionRecord?.childModelEffortDefault || null}
         modelBusy={modelBusy}
         modelError={modelError}
         onChangeModel={updateSessionModel}
         onChangeChildModel={updateChildModel}
+        onChangeEffort={updateSessionEffort}
+        onChangeChildEffort={updateChildEffort}
+        onRefreshModels={fetchModels}
+        modelsRefreshing={modelsRefreshing}
+        onOpenModelSettings={onOpenModelSettings || (() => {})}
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
-        onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
         onDraftEdited={onDraftEdited}
       />
 
-      {showDebugInfo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowDebugInfo(false)}>
-          <div
-            className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-              <div>
-                <div className="text-sm font-semibold text-gray-900 dark:text-white">debug info</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Current session internal/debug JSON</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => void refreshSessionDebugData()}
-                  className="rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  refresh
-                </button>
-                <button
-                  onClick={() => void handleCopyDebugInfo()}
-                  className="inline-flex items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  {debugInfoCopied ? <Check size={13} /> : <Copy size={13} />}
-                  {debugInfoCopied ? 'copied' : 'copy'}
-                </button>
-                <button
-                  onClick={() => setShowDebugInfo(false)}
-                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-                  title="Close"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-950">
-              <div className="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                {resolvedSessionFilePath
-                  ? `session file: ${resolvedSessionFilePath}`
-                  : 'session file: unavailable from current WebUI runtime paths'}
-              </div>
-              {debugInfoError && (
-                <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
-                  {debugInfoError}
-                </div>
-              )}
-              {debugInfoLoading && (
-                <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-300">
-                  Refreshing debug info...
-                </div>
-              )}
-              <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-gray-900 dark:text-gray-100">{debugInfoText}</pre>
-            </div>
-          </div>
-        </div>
+      {!guestMode && showDebugInfo && (
+        <SessionDebugModal
+          source={{
+            sessionId,
+            sessionDisplayName,
+            sessionRecord,
+            messages,
+            connectionState,
+            reconnectCountdown,
+            sessionMissing,
+            sessionBusy,
+            sessionQueueLength,
+            queuedPreviewCount: queuedMessages.length,
+            groupTools,
+            showUsageBadge,
+            showUserMessageMetadata,
+            sendKeyMode,
+            loading,
+            asrAvailable,
+            modelBusy,
+            streamingAssistantDraft,
+          }}
+          onClose={handleCloseDebugInfo}
+        />
       )}
     </div>
   )
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.sessionDisplayName === next.sessionDisplayName &&
-  prev.guestMode === next.guestMode &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
-  prev.onOpenWorkspace === next.onOpenWorkspace &&
   prev.onOpenTerminal === next.onOpenTerminal
+  && prev.onOpenCode === next.onOpenCode
+  && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
+  && prev.onOpenCodeFile === next.onOpenCodeFile
+  && prev.onOpenCodeCommit === next.onOpenCodeCommit
+  && prev.onOpenModelSettings === next.onOpenModelSettings
+  && prev.sendKeyMode === next.sendKeyMode
+  && prev.groupTools === next.groupTools
+  && prev.showUsageBadge === next.showUsageBadge
+  && prev.guestMode === next.guestMode
+  && prev.showUserMessageMetadata === next.showUserMessageMetadata
+  && prev.onSendKeyModeChange === next.onSendKeyModeChange
+  && prev.onGroupToolsChange === next.onGroupToolsChange
+  && prev.onShowUsageBadgeChange === next.onShowUsageBadgeChange
+  && prev.onShowUserMessageMetadataChange === next.onShowUserMessageMetadataChange
 ))
 
 export default Chat

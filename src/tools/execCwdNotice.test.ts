@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as execManager from '../execManager';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { exec } from '../tools';
 import type { RunningExecEntry } from '../execManager';
 
@@ -31,7 +32,7 @@ test('exec cwd change notice is appended and names subsequent default-cwd tools'
   const originalBuildForegroundExecResult = execManager.buildForegroundExecResult;
   const originalFinalizeForegroundExec = execManager.finalizeForegroundExec;
   const originalSaveSession = sessionManager.saveSession;
-  const originalSetSessionCwd = sessionManager.setSessionCwd;
+  const originalUpdateSettings = sessionRuntime.updateSettings;
 
   const fakeEntry = buildExecEntry();
 
@@ -45,10 +46,10 @@ test('exec cwd change notice is appended and names subsequent default-cwd tools'
     (execManager as any).buildForegroundExecResult = async (): Promise<string> => 'command output';
     (execManager as any).finalizeForegroundExec = async (): Promise<void> => {};
     (sessionManager as any).saveSession = async (): Promise<void> => {};
-    (sessionManager as any).setSessionCwd = async (): Promise<{ previous?: string; current?: string; changed: boolean }> => ({
-      previous: '/tmp/before',
-      current: '/tmp/after',
-      changed: true,
+    (sessionRuntime as any).updateSettings = async () => ({
+      previous: { cwd: '/tmp/before' },
+      current: { cwd: '/tmp/after' },
+      changed: ['cwd'],
     });
 
     const result = String(await exec({ command: 'cd /tmp/after', timeout: 5 }, {
@@ -68,6 +69,6 @@ test('exec cwd change notice is appended and names subsequent default-cwd tools'
     (execManager as any).buildForegroundExecResult = originalBuildForegroundExecResult;
     (execManager as any).finalizeForegroundExec = originalFinalizeForegroundExec;
     (sessionManager as any).saveSession = originalSaveSession;
-    (sessionManager as any).setSessionCwd = originalSetSessionCwd;
+    (sessionRuntime as any).updateSettings = originalUpdateSettings;
   }
 });

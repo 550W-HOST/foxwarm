@@ -1,14 +1,14 @@
 export type WorkbenchTabBase = {
   id: string
   title: string
-  pinned?: boolean
 }
 
 export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'chat'; sessionId: string; preview?: boolean })
-  | (WorkbenchTabBase & { type: 'workspace'; nodeId: string; path: string; contextSessionId?: string })
-  | (WorkbenchTabBase & { type: 'file'; nodeId: string; path: string; contextSessionId?: string })
-  | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; contextSessionId?: string; createMode?: 'new' | 'reuse' })
+  | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; createMode?: 'new' | 'reuse' })
+  | (WorkbenchTabBase & { type: 'vscode' })
+  | (WorkbenchTabBase & { type: 'agents' })
+  | (WorkbenchTabBase & { type: 'setup' })
 
 export type WorkbenchPaneNode = {
   id: string

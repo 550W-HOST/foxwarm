@@ -8,7 +8,7 @@ export async function tool_browse_open(args: ToolArgs) {
     return `Tab opened: ${result.id}\nTitle: ${result.title}\nURL: ${url}`;
 }
 
-export async function tool_browse_list(args: ToolArgs) {
+export async function tool_browse_list(_args: ToolArgs) {
     const tabs = browserManager.listTabs();
     if (tabs.length === 0) {
         return 'No tabs open';

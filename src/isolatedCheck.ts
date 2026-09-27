@@ -6,39 +6,89 @@
 import * as sessionManager from './sessionManager';
 import { AGENTS_DIR, getAgentDir } from './config';
 import * as path from 'path';
-import { buildIsolatedToolRules, evaluatePermission } from './permissions';
+import {
+  findExactAgentToolRule,
+  isDefaultIsolatedCapabilityAllowed,
+  ResolvedToolPermissionIdentity,
+} from './permissions';
 import { expandHomePath } from './utils/pathResolve';
+import * as agentMetadata from './session/agentMetadata';
+import type { Session } from './types';
+import {
+  buildToolAuthorizationRequest,
+  evaluateToolAuthorizationPolicy,
+  isToolAuthorizationPotentiallyVisibleSync,
+  loadToolAuthorizationPolicy,
+  toolAuthorizationNeedsSessionTarget,
+} from './toolAuthorization';
+import { populateToolAuthorizationSessionTargets, supportsToolAuthorizationSessionTarget } from './toolAuthorizationSessionTargets';
+
+const ISOLATED_ALWAYS_UNAVAILABLE_BUILTINS = new Set([
+  'create_agent', 'list_agents', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
+  'create_session', 'create_child_session', 'delete_session', 'get_session_messages',
+]);
 
 /**
  * Check if isolated session can use a specific tool
- * @param toolName Tool name
+ * @param identity Canonical resolved capability identity
  * @param sessionId Session ID
  * @param executionNode Resolved execution node for the tool call
  * @param toolArgs Tool arguments (for path-based tools)
  * @throws Error if not allowed
  */
 export async function checkToolPermission(
-  toolName: string,
+  identity: ResolvedToolPermissionIdentity,
   sessionId: string,
   executionNode?: string,
   toolArgs?: Record<string, any>
 ): Promise<void> {
-  const session = await sessionManager.getExistingSession(sessionId);
-  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
-  const agentName = session?.agent || 'main';
-  const boundNode = sessionManager.getAgentIsolationNode(agentName) || session?.currentNode || 'master';
-  const extraRuntimeNodes = session?.currentNode && session.currentNode !== boundNode
-    ? [session.currentNode]
-    : [];
+  const session = sessionManager.getSessionCatalog(sessionId);
+  if (!session) return;
+  await checkToolPermissionForSession(session, identity, executionNode, toolArgs);
+}
 
-  if (toolName === 'copy_between_nodes') {
+/** Check a tool against an already-authoritative current Session without loading the global session map. */
+export async function checkToolPermissionForSession(
+  session: Session,
+  rawIdentity: ResolvedToolPermissionIdentity,
+  executionNode?: string,
+  toolArgs?: Record<string, any>,
+  refreshMetadata = false,
+): Promise<void> {
+  await checkGenericToolAuthorizationForSession(session, rawIdentity, executionNode, toolArgs, refreshMetadata);
+  if (refreshMetadata && agentMetadata.isSessionEffectivelyIsolated(session)) {
+    await agentMetadata.refreshAgentMetadata(session.agent || 'main');
+  }
+  if (!agentMetadata.isSessionEffectivelyIsolated(session)) return;
+  const agentName = session?.agent || 'main';
+  const boundNode = agentMetadata.getAgentIsolationNode(agentName) || session?.currentNode || 'master';
+  const effectiveNode = executionNode || 'master';
+  const identity: ResolvedToolPermissionIdentity = rawIdentity.source === 'node'
+    ? { ...rawIdentity, node: rawIdentity.node || effectiveNode }
+    : rawIdentity.source === 'mcp'
+      ? { ...rawIdentity, server: rawIdentity.server || 'default' }
+      : rawIdentity;
+
+  if (identity.source === 'node' && identity.node === 'master' && identity.tool === 'exec') {
+    throw new Error('Isolated agent sessions cannot run exec on master node. Use the bound node instead.');
+  }
+  if (identity.source === 'builtin' && ISOLATED_ALWAYS_UNAVAILABLE_BUILTINS.has(identity.tool)) {
+    throw new Error(`Isolated agent sessions cannot use structurally restricted builtin \`${identity.tool}\`.`);
+  }
+
+  const exactRule = findExactAgentToolRule(agentMetadata.getAgentToolRules(agentName), identity);
+  if (exactRule?.effect === 'deny') {
+    throw new Error(`Agent tool rule denies ${identity.source} capability \`${identity.tool}\`.`);
+  }
+
+  if (identity.source === 'builtin' && identity.tool === 'copy_between_nodes') {
     checkCopyBetweenNodesPermission(agentName, boundNode, session?.currentNode, toolArgs);
     return;
   }
 
-  const timerTools = ['create_timer', 'list_timers', 'delete_timer'];
-  if (timerTools.includes(toolName)) {
-    await checkTimerPermission(sessionId, {
+  const timerTools = ['create_timer', 'list_timers', 'update_timer', 'delete_timer'];
+  if (identity.source === 'builtin' && timerTools.includes(identity.tool)) {
+    checkTimerPermissionForSession(session, {
       targetSessionId: toolArgs?.sessionId,
       newSession: toolArgs?.newSession,
       agentName: toolArgs?.agentName,
@@ -47,24 +97,78 @@ export async function checkToolPermission(
     return;
   }
 
-  const effectiveNode = executionNode || 'master';
-  const { action, rule } = evaluatePermission(
-    buildIsolatedToolRules(agentName, session.id, boundNode, extraRuntimeNodes),
-    {
-      agent: agentName,
-      session: session.id,
-      target_node: effectiveNode,
-      tool_name: toolName,
-      tool_args: toolArgs,
-    },
-  );
+  if (exactRule?.effect === 'allow') return;
+  if (isDefaultIsolatedCapabilityAllowed(identity, agentName, boundNode, session.currentNode, effectiveNode, toolArgs)) return;
+  throw new Error(`Isolated agent sessions cannot use ${identity.source} capability \`${identity.tool}\`.`);
+}
 
-  if (action === 'reject') {
-    if (toolName === 'exec' && effectiveNode === 'master') {
-      throw new Error('Isolated agent sessions cannot run exec on master node. Use the bound node instead.');
+/** Apply only the generic instance policy, without duplicating legacy isolation checks at service boundaries. */
+export async function checkGenericToolAuthorizationForSession(
+  session: Session,
+  rawIdentity: ResolvedToolPermissionIdentity,
+  executionNode?: string,
+  toolArgs?: Record<string, any>,
+  useMainSessionTargetAuthority = false,
+): Promise<void> {
+  const genericIdentity = rawIdentity.source === 'node'
+    ? { source: 'node' as const, name: rawIdentity.tool }
+    : rawIdentity.source === 'mcp'
+      ? { source: 'mcp' as const, server: rawIdentity.server || 'default', name: rawIdentity.tool }
+      : { source: 'builtin' as const, name: rawIdentity.tool };
+  const request = buildToolAuthorizationRequest({
+    session,
+    tool: genericIdentity,
+    targetNode: rawIdentity.source === 'node' ? (rawIdentity.node || executionNode || 'master') : (executionNode || 'master'),
+    args: toolArgs,
+  });
+  const policy = await loadToolAuthorizationPolicy();
+  if (supportsToolAuthorizationSessionTarget(genericIdentity.name)
+    && toolAuthorizationNeedsSessionTarget(policy, request)) {
+    if (useMainSessionTargetAuthority) {
+      const { resolveMainAuthorizationSessionTarget } = await import('./mainManagementTools');
+      const resolved = await resolveMainAuthorizationSessionTarget({ sourceSessionId: session.id, toolName: genericIdentity.name, args: toolArgs || {} });
+      request.sourceParentSessionId = resolved.sourceParentSessionId;
+      request.sessionTargets = { sessionId: resolved.target };
+    } else {
+      populateToolAuthorizationSessionTargets(request, session);
     }
-    throw new Error(rule?.reason || `Isolated agent sessions cannot use ${toolName} on node "${effectiveNode}".`);
   }
+  const genericDecision = evaluateToolAuthorizationPolicy(policy, request);
+  if (genericDecision.action === 'deny') {
+    throw new Error(genericDecision.rule?.reason || `Tool authorization rule denies ${genericIdentity.source} capability \`${genericIdentity.name}\`.`);
+  }
+}
+
+export function isToolVisibleForSession(
+  session: Session | undefined,
+  rawIdentity: ResolvedToolPermissionIdentity,
+  executionNode = 'master',
+): boolean {
+  if (!session) return true;
+  const genericIdentity = rawIdentity.source === 'node'
+    ? { source: 'node' as const, name: rawIdentity.tool }
+    : rawIdentity.source === 'mcp'
+      ? { source: 'mcp' as const, server: rawIdentity.server || 'default', name: rawIdentity.tool }
+      : { source: 'builtin' as const, name: rawIdentity.tool };
+  const genericVisible = isToolAuthorizationPotentiallyVisibleSync(buildToolAuthorizationRequest({
+    session,
+    tool: genericIdentity,
+    targetNode: rawIdentity.source === 'node' ? (rawIdentity.node || executionNode) : executionNode,
+  }));
+  if (!genericVisible) return false;
+  if (!agentMetadata.isSessionEffectivelyIsolated(session)) return true;
+  const agentName = session.agent || 'main';
+  const boundNode = agentMetadata.getAgentIsolationNode(agentName) || session.currentNode || 'master';
+  const identity: ResolvedToolPermissionIdentity = rawIdentity.source === 'node'
+    ? { ...rawIdentity, node: rawIdentity.node || executionNode }
+    : rawIdentity.source === 'mcp'
+      ? { ...rawIdentity, server: rawIdentity.server || 'default' }
+      : rawIdentity;
+  if (identity.source === 'node' && identity.node === 'master' && identity.tool === 'exec') return false;
+  if (identity.source === 'builtin' && ISOLATED_ALWAYS_UNAVAILABLE_BUILTINS.has(identity.tool)) return false;
+  const exactRule = findExactAgentToolRule(agentMetadata.getAgentToolRules(agentName), identity);
+  if (exactRule) return exactRule.effect === 'allow';
+  return isDefaultIsolatedCapabilityAllowed(identity, agentName, boundNode, session.currentNode, executionNode, {}, true);
 }
 
 
@@ -149,7 +253,12 @@ export async function requireNotIsolated(sessionIdOrCtx: string | { sessionId?: 
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
   
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
+  requireNotIsolatedForSession(session, operation);
+}
+
+/** Apply the same non-isolated guard to an already-authoritative current Session. */
+export function requireNotIsolatedForSession(session: Session | undefined, operation: string): void {
   if (sessionManager.isSessionEffectivelyIsolated(session)) {
     throw new Error(`Isolated session cannot use ${operation} tool.`);
   }
@@ -169,14 +278,30 @@ export async function checkArchivedReadPermission(
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const callerAgent = session?.agent || 'main';
   const requested = targetSessionId || sessionId;
-  const targetSession = await sessionManager.getExistingSession(requested);
+  const targetSession = sessionManager.getSessionCatalog(requested);
   const targetAgent = targetSession?.agent || requested.split('/')[0] || callerAgent;
 
+  if (targetAgent !== callerAgent) {
+    throw new Error(`Isolated session can only use ${operation} for sessions under its own agent (${callerAgent}).`);
+  }
+}
+
+/** Check an exact current Session (or one of its persisted aliases) without loading the global session map. */
+export function checkArchivedReadPermissionForSession(
+  session: Session,
+  targetSessionId: string | undefined,
+  operation: 'get_archived_messages' | 'get_archived_blocks' | 'recall',
+): void {
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+  const requested = targetSessionId || session.id;
+  if (requested === session.id || (session.aliases || []).includes(requested)) return;
+  const callerAgent = session.agent || 'main';
+  const targetAgent = requested.split('/')[0] || callerAgent;
   if (targetAgent !== callerAgent) {
     throw new Error(`Isolated session can only use ${operation} for sessions under its own agent (${callerAgent}).`);
   }
@@ -192,7 +317,7 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
   
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const attachedChannels = sessionManager.getChannelsBySession(sessionId);
@@ -216,7 +341,7 @@ export async function checkSendFilePermission(
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   if (options.channelTargetId) {
@@ -246,12 +371,25 @@ export async function checkTimerPermission(
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
 
-  const session = await sessionManager.getExistingSession(sessionId);
-  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+  const session = sessionManager.getSessionCatalog(sessionId);
+  if (!session) return;
+  checkTimerPermissionForSession(session, options);
+}
+
+export function checkTimerPermissionForSession(
+  session: Session,
+  options: {
+    targetSessionId?: string;
+    newSession?: unknown;
+    agentName?: unknown;
+    sessionPrefix?: unknown;
+  } = {},
+): void {
+  if (!agentMetadata.isSessionEffectivelyIsolated(session)) return;
 
   const callerAgent = session?.agent || 'main';
-  const targetSessionId = options.targetSessionId || sessionId;
-  if (targetSessionId !== sessionId) {
+  const targetSessionId = options.targetSessionId || session.id;
+  if (targetSessionId !== session.id) {
     throw new Error('Isolated session can only manage timers for its own current session.');
   }
 

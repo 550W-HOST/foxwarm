@@ -26,28 +26,30 @@ function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = 
   };
 }
 
-test('exec schema exposes timeout with documented range and default', () => {
+test('exec schema permits timeout values above the runtime clamp threshold', () => {
   const def = definitions.find((entry) => entry.name === 'exec');
   assert.ok(def);
   const timeout = (def?.parameters?.properties as any)?.timeout;
   assert.ok(timeout);
   assert.equal(timeout.type, 'number');
   assert.equal(timeout.minimum, execManager.MIN_EXEC_TIMEOUT_SECONDS);
-  assert.equal(timeout.maximum, execManager.MAX_EXEC_TIMEOUT_SECONDS);
-  assert.match(String(timeout.description), /default: 15/i);
-  assert.match(String(timeout.description), /1-60/i);
+  assert.equal(Object.prototype.hasOwnProperty.call(timeout, 'maximum'), false);
 });
 
-test('exec tool rejects timeout values outside the allowed range', async () => {
+test('exec tool still rejects timeout values below the allowed range', async () => {
   await assert.rejects(
     () => exec({ command: 'echo hi', timeout: 0 }, { session: { agent: 'main' } } as any),
     /timeout must be between 1 and 60 seconds/i,
   );
+});
 
-  await assert.rejects(
-    () => exec({ command: 'echo hi', timeout: 61 }, { session: { agent: 'main' } } as any),
-    /timeout must be between 1 and 60 seconds/i,
-  );
+test('exec tool rejects non-finite numeric timeout values', async () => {
+  for (const timeout of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    await assert.rejects(
+      () => exec({ command: 'echo hi', timeout }, { session: { agent: 'main' } } as any),
+      /timeout must be a number between 1 and 60 seconds/i,
+    );
+  }
 });
 
 test('exec tool passes timeout through to waitForExecCompletion and background result builder', async () => {
@@ -87,6 +89,45 @@ test('exec tool passes timeout through to waitForExecCompletion and background r
   }
 });
 
+test('exec tool clamps oversized finite timeouts to 60s and forwards a footer warning', async () => {
+  const originalStartPersistentExec = execManager.startPersistentExec;
+  const originalWaitForExecCompletion = execManager.waitForExecCompletion;
+  const originalReadLiveExecWorkingDirectory = execManager.readLiveExecWorkingDirectory;
+  const originalMarkExecForBackgroundNotification = execManager.markExecForBackgroundNotification;
+  const originalBuildBackgroundTimeoutResult = execManager.buildBackgroundTimeoutResult;
+  const fakeEntry = buildExecEntry('/tmp/exec-timeout-clamp.log', { sessionId: undefined });
+  const seen: Array<{ timeoutMs: number; timeoutSeconds: number; warning?: string }> = [];
+
+  try {
+    (execManager as any).startPersistentExec = async (): Promise<RunningExecEntry> => fakeEntry;
+    (execManager as any).waitForExecCompletion = async (_execId: string, timeoutMs: number): Promise<null> => {
+      seen.push({ timeoutMs, timeoutSeconds: -1 });
+      return null;
+    };
+    (execManager as any).readLiveExecWorkingDirectory = async (): Promise<null> => null;
+    (execManager as any).markExecForBackgroundNotification = async (): Promise<RunningExecEntry> => fakeEntry;
+    (execManager as any).buildBackgroundTimeoutResult = async (_entry: RunningExecEntry, timeoutSeconds: number, warning?: string): Promise<string> => {
+      const current = seen.at(-1)!;
+      current.timeoutSeconds = timeoutSeconds;
+      current.warning = warning;
+      return warning || '';
+    };
+
+    for (const requested of [61, 120, Number.MAX_VALUE]) {
+      const result = String(await exec({ command: 'sleep 1', timeout: requested }, { session: { agent: 'main' } } as any));
+      assert.equal(seen.at(-1)?.timeoutMs, 60_000);
+      assert.equal(seen.at(-1)?.timeoutSeconds, 60);
+      assert.match(result, new RegExp(`^WARNING: Requested timeout ${String(requested).replace('+', '\\+')}s exceeds the 60s maximum; using 60s\\.$`));
+    }
+  } finally {
+    (execManager as any).startPersistentExec = originalStartPersistentExec;
+    (execManager as any).waitForExecCompletion = originalWaitForExecCompletion;
+    (execManager as any).readLiveExecWorkingDirectory = originalReadLiveExecWorkingDirectory;
+    (execManager as any).markExecForBackgroundNotification = originalMarkExecForBackgroundNotification;
+    (execManager as any).buildBackgroundTimeoutResult = originalBuildBackgroundTimeoutResult;
+  }
+});
+
 test('persistent exec expands cwd ~ using local home directory', async () => {
   let execId: string | null = null;
 
@@ -101,7 +142,7 @@ test('persistent exec expands cwd ~ using local home directory', async () => {
     const status = await waitForExecCompletion(entry.id, 5000);
     assert.ok(status, 'exec should finish during test timeout');
     const result = await buildForegroundExecResult(entry, status);
-    assert.equal(result.trim(), os.homedir());
+    assert.match(result, new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
   } finally {
     if (execId) {
       await finalizeForegroundExec(execId).catch(() => {});
@@ -121,11 +162,12 @@ test('persistent exec rejects missing cwd with a friendly cwd-focused error and 
     }),
     (err: any) => {
       const message = String(err?.message || err);
-      assert.match(message, /working directory is invalid/i);
-      assert.match(message, /Source: explicit/i);
-      assert.match(message, /Raw cwd/i);
-      assert.match(message, /Resolved cwd/i);
-      assert.match(message, /not a missing `\/bin\/bash`/i);
+      assert.equal(
+        message,
+        `Cannot start exec on node \`master\`: working directory is invalid (path does not exist). Source: explicit. Raw cwd: \`${missing}\`. Resolved cwd: \`${missing}\`.`,
+      );
+      assert.doesNotMatch(message, /\/bin\/bash/i);
+      assert.doesNotMatch(message, /spawn .*ENOENT/i);
       return true;
     },
   );
@@ -133,7 +175,7 @@ test('persistent exec rejects missing cwd with a friendly cwd-focused error and 
   assert.equal(await fs.pathExists(missing), false, 'missing cwd should not be auto-created');
 });
 
-test('background exec timeout result uses short header, body, then full footer notice with pid and log path', async () => {
+test('background exec timeout result uses partial output followed by a metadata footer, process tree, pid, and log path', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-timeout-'));
   const logPath = path.join(tempDir, 'command.log');
 
@@ -141,17 +183,18 @@ test('background exec timeout result uses short header, body, then full footer n
     await fs.writeFile(logPath, 'hello from partial output\n');
     const result = await buildBackgroundTimeoutResult(buildExecEntry(logPath), 7);
 
-    assert.ok(result.startsWith('[Process running longer than 7s]'));
-    assert.match(result, /\n\nPartial Output:\nhello from partial output/i);
-    assert.match(result, /\n\n\[Process running longer than 7s\] Switched to background\./);
+    assert.ok(result.startsWith('Partial Output:\nhello from partial output'));
+    assert.match(result, /\n---\n\[Process running longer than 7s\] Switched to background\./);
+    assert.match(result, /continue other work, remember this process remains outstanding until its completion message arrives/i);
     assert.ok(result.indexOf('PID: 4321') > result.indexOf('Wait for notification'));
+    assert.match(result, /Process tree \(best-effort live snapshot; managed shell-script root PID 4321\):/);
     assert.ok(result.endsWith(`Log file: ${logPath}`));
   } finally {
     await fs.remove(tempDir);
   }
 });
 
-test('foreground exec truncated output is wrapped with repeated notices and keeps full-output path at the end', async () => {
+test('foreground exec truncated output keeps line-aware excerpt and footer metadata', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-truncated-'));
   const logPath = path.join(tempDir, 'command.log');
   const head = 'A'.repeat(12000);
@@ -164,17 +207,77 @@ test('foreground exec truncated output is wrapped with repeated notices and keep
       { exitCode: 0, finishedAt: new Date().toISOString() },
     );
 
-    assert.ok(result.startsWith('[OUTPUT TOO LONG]'));
-    assert.match(result, /\[\.\.\.TRUNCATED\.\.\.\]/);
+    assert.match(result, /\[foxwarm: line too long/);
     assert.match(result, /A{100}/);
     assert.match(result, /B{100}/);
-    assert.ok(result.endsWith(`[OUTPUT TOO LONG] Full output saved to: ${logPath}`));
+    assert.match(result, new RegExp(`---\nExit code: 0\nCommand output saved to: ${logPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(result, /Foxwarm placeholders above .* are not original output content/);
+    assert.match(result, /Original output: 1 line\(s\), 24000 character\(s\)\./);
   } finally {
     await fs.remove(tempDir);
   }
 });
 
-test('read tool truncated output is wrapped with opening and closing notices', async () => {
+test('foreground exec repeats a decorated line-range omission in its footer', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-line-range-'));
+  const logPath = path.join(tempDir, 'command.log');
+  const output = Array.from({ length: 1000 }, (_, index) => `exec-line-${index + 1}-${'y'.repeat(50)}`).join('\n');
+
+  try {
+    await fs.writeFile(logPath, output);
+    const result = await buildForegroundExecResult(
+      buildExecEntry(logPath),
+      { exitCode: 0, finishedAt: new Date().toISOString() },
+    );
+    const omission = result.match(/^--- \[foxwarm: (\d+) lines \(line range (\d+)-(\d+)\) omitted because (.+)\] ---$/m);
+    assert.ok(omission);
+    assert.match(result, /---\nExit code: 0\nCommand output saved to:/);
+    assert.match(result, /Foxwarm placeholders above \(line-range omission placeholders\) are not original output content\./);
+    assert.ok(result.includes(`Omitted ${omission[1]} line(s) from original line range ${omission[2]}-${omission[3]} because ${omission[4]}.`));
+    assert.match(result, /Original output: 1000 line\(s\), \d+ character\(s\)\./);
+  } finally {
+    await fs.remove(tempDir);
+  }
+});
+
+test('foreground exec warning remains in the footer when command output is truncated', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-warning-truncated-'));
+  const logPath = path.join(tempDir, 'command.log');
+  const warning = 'WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s.';
+
+  try {
+    await fs.writeFile(logPath, 'x'.repeat(24000));
+    const result = await buildForegroundExecResult(
+      buildExecEntry(logPath),
+      { exitCode: 1, finishedAt: new Date().toISOString(), error: 'test failure' },
+      warning,
+    );
+
+    assert.match(result, /---\nExit code: 1\nError: test failure\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
+    assert.match(result, /Command output saved to:/);
+  } finally {
+    await fs.remove(tempDir);
+  }
+});
+
+test('background timeout result includes oversized-timeout warning with final metadata', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-warning-background-'));
+  const logPath = path.join(tempDir, 'command.log');
+  const warning = 'WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s.';
+
+  try {
+    await fs.writeFile(logPath, 'partial\n');
+    const result = await buildBackgroundTimeoutResult(buildExecEntry(logPath), 60, warning);
+    assert.match(result, /\[Process running longer than 60s\]/);
+    assert.match(result, /WARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\./);
+    assert.match(result, /execId: exec_test\nPID: 4321/);
+    assert.ok(result.endsWith(`Log file: ${logPath}`));
+  } finally {
+    await fs.remove(tempDir);
+  }
+});
+
+test('read tool returns full content for unified output guard', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-read-truncated-'));
   const filePath = path.join(tempDir, 'large.txt');
 
@@ -182,9 +285,10 @@ test('read tool truncated output is wrapped with opening and closing notices', a
     await fs.writeFile(filePath, 'a'.repeat(40000));
     const result = await read({ filePath }, { session: { agent: 'main' } } as any);
 
-    assert.match(String(result), /^\[TOO LONG \(~\d+ tokens\)\]\n\n/);
-    assert.match(String(result), /a{100}/);
-    assert.match(String(result), /\n\n\[TOO LONG \(~\d+ tokens\)\] TRUNCATED\. Showing first 10000 chars only\.$/);
+    assert.equal(
+      String(result),
+      `${'a'.repeat(40000)}\n---\nFile has 1 line.\nFile size: 40000 bytes.\nFile has no trailing newline.`,
+    );
   } finally {
     await fs.remove(tempDir);
   }

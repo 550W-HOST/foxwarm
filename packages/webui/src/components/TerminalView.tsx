@@ -1,16 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, FolderOpen } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
+import { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget } from '../terminalTarget'
+import { loadTerminalKeyboardMode, TERMINAL_KEYBOARD_STORAGE_KEY, type TerminalKeyboardMode } from '../terminalVirtualKeyboard'
+import {
+  attachTerminalPinchZoom,
+  clampTerminalFontSize,
+  loadTerminalFontSize,
+  persistTerminalFontSize,
+  terminalFontSizeShortcutDelta,
+  TERMINAL_DEFAULT_FONT_SIZE,
+} from '../terminalPinchZoom'
+import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './TerminalVirtualKeyboard'
+import { terminalThemeFromSnapshot } from '../theme/integrations'
+import { getThemeSnapshot, THEME_CHANGED_EVENT } from '../theme/runtime'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
 type TerminalInfo = {
   id: string
-  sessionId: string
-  agentName: string
   nodeId: string
   shell: string
   cwd: string
@@ -21,40 +32,47 @@ type TerminalInfo = {
 }
 
 interface TerminalViewProps {
-  sessionId: string
   initialCwd?: string
+  initialNodeId?: string
   initialTerminalId?: string
   createMode?: 'new' | 'reuse'
   onBack?: () => void
   onSessionsChanged?: () => void
   onTerminalReady?: (terminal: TerminalInfo) => void
   onTerminalClosed?: (terminalId: string) => void
-  onOpenWorkspace?: (cwd?: string) => void
 }
 
-export default function TerminalView({ sessionId, initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed, onOpenWorkspace }: TerminalViewProps) {
+export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const terminalIdRef = useRef<string | null>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const fitAndNotifyResizeRef = useRef<(() => void) | null>(null)
   const onSessionsChangedRef = useRef(onSessionsChanged)
   const onTerminalReadyRef = useRef(onTerminalReady)
   const onTerminalClosedRef = useRef(onTerminalClosed)
   const suppressCloseCallbackRef = useRef(false)
+  const suppressInputForwardRef = useRef(false)
 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+  const [keyboardResetVersion, setKeyboardResetVersion] = useState(0)
+  const [keyboardMode, setKeyboardMode] = useState<TerminalKeyboardMode>(() => {
+    const coarsePointer = window.matchMedia('(pointer: coarse)').matches
+    try { return loadTerminalKeyboardMode(localStorage, coarsePointer) } catch { return coarsePointer ? 'web' : 'collapsed' }
+  })
 
-  const requestedCwd = useMemo(() => {
-    if (typeof initialCwd === 'string' && initialCwd.trim().length > 0) {
-      return initialCwd.trim()
-    }
-    return undefined
-  }, [initialCwd])
-  const requestedCwdRef = useRef<string | undefined>(requestedCwd)
+  const changeKeyboardMode = (nextMode: TerminalKeyboardMode) => {
+    setKeyboardMode(nextMode)
+    try { localStorage.setItem(TERMINAL_KEYBOARD_STORAGE_KEY, nextMode) } catch {}
+  }
+
+  const requestedTarget = useMemo(() => normalizeTerminalTarget({ nodeId: initialNodeId, cwd: initialCwd }), [initialCwd, initialNodeId])
+  const requestedTargetRef = useRef(requestedTarget)
   const initialTerminalIdRef = useRef<string | undefined>(initialTerminalId)
   const createModeRef = useRef<'new' | 'reuse'>(createMode)
 
@@ -71,28 +89,28 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
   }, [onTerminalClosed])
 
   useEffect(() => {
+    let disposed = false
+    let disposePinchZoom: (() => void) | null = null
+    const scheduledFitHandles: number[] = []
+    let terminalStorage: Storage | null = null
+    try { terminalStorage = window.localStorage } catch {}
+    const initialFontSize = terminalStorage ? loadTerminalFontSize(terminalStorage) : TERMINAL_DEFAULT_FONT_SIZE
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
+      fontSize: initialFontSize,
       convertEol: false,
       scrollback: 5000,
-      theme: {
-        background: '#111827',
-        foreground: '#e5e7eb',
-      },
+      theme: terminalThemeFromSnapshot(getThemeSnapshot()),
     })
+    const syncTheme = () => { term.options.theme = terminalThemeFromSnapshot(getThemeSnapshot()) }
+    window.addEventListener(THEME_CHANGED_EVENT, syncTheme)
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
     xtermRef.current = term
     fitAddonRef.current = fitAddon
 
-    if (hostRef.current) {
-      term.open(hostRef.current)
-      fitAddon.fit()
-    }
-
-    resizeObserverRef.current = new ResizeObserver(() => {
+    const fitAndNotifyResize = () => {
       try {
         fitAddon.fit()
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -105,13 +123,83 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       } catch {
         // ignore fit errors during hidden/unmounted states
       }
+    }
+
+    fitAndNotifyResizeRef.current = fitAndNotifyResize
+
+    const setFontSize = (fontSize: number, persist: boolean) => {
+      const nextFontSize = clampTerminalFontSize(fontSize)
+      const currentFontSize = clampTerminalFontSize(term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE)
+      if (nextFontSize === currentFontSize) return false
+      term.options.fontSize = nextFontSize
+      if (persist && terminalStorage) persistTerminalFontSize(terminalStorage, nextFontSize)
+      return true
+    }
+
+    const applyFontSize = (fontSize: number, persist: boolean) => {
+      if (!setFontSize(fontSize, persist)) return false
+      fitAndNotifyResize()
+      return true
+    }
+
+    term.attachCustomKeyEventHandler((event) => {
+      const delta = terminalFontSizeShortcutDelta(event)
+      if (delta === null) return true
+      event.preventDefault()
+      applyFontSize((term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE) + delta, true)
+      return false
+    })
+
+    const scheduleFit = () => {
+      fitAndNotifyResize()
+      scheduledFitHandles.push(window.setTimeout(fitAndNotifyResize, 50))
+      scheduledFitHandles.push(window.setTimeout(fitAndNotifyResize, 250))
+      window.requestAnimationFrame(() => {
+        if (!disposed) {
+          fitAndNotifyResize()
+        }
+      })
+    }
+
+    if (hostRef.current) {
+      term.open(hostRef.current)
+      setTerminalInstance(term)
+      disposePinchZoom = attachTerminalPinchZoom({
+        target: hostRef.current,
+        getFontSize: () => term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE,
+        setFontSize: (fontSize) => setFontSize(fontSize, true),
+        refit: fitAndNotifyResize,
+      })
+      scheduleFit()
+    }
+
+    resizeObserverRef.current = new ResizeObserver(() => {
+      fitAndNotifyResize()
     })
 
     if (hostRef.current) {
       resizeObserverRef.current.observe(hostRef.current)
     }
 
+    const fontsReady = (document as any).fonts?.ready
+    if (fontsReady && typeof fontsReady.then === 'function') {
+      fontsReady.then(() => {
+        if (!disposed) {
+          fitAndNotifyResize()
+        }
+      }).catch(() => {})
+    }
+
+    window.addEventListener('resize', fitAndNotifyResize)
+
     return () => {
+      disposed = true
+      scheduledFitHandles.forEach((handle) => window.clearTimeout(handle))
+      disposePinchZoom?.()
+      disposePinchZoom = null
+      fitAndNotifyResizeRef.current = null
+      window.removeEventListener('resize', fitAndNotifyResize)
+      window.removeEventListener(THEME_CHANGED_EVENT, syncTheme)
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       wsRef.current?.close()
@@ -119,6 +207,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
       term.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
+      setTerminalInstance(null)
     }
   }, [])
 
@@ -128,8 +217,10 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
     let disposed = false
     let inputDisposable: { dispose: () => void } | null = null
+    let binaryDisposable: { dispose: () => void } | null = null
 
     setStatus('connecting')
+    setKeyboardResetVersion(version => version + 1)
     setError(null)
     setTerminalInfo(null)
     terminalIdRef.current = null
@@ -153,16 +244,14 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         }
 
         if (!terminalId && createModeRef.current !== 'new') {
-          const listRes = await fetch(`${API_BASE_PATH}/terminals?sessionId=${encodeURIComponent(sessionId)}`)
+          const listRes = await fetch(`${API_BASE_PATH}/terminals`)
           const listData = await listRes.json().catch(() => ({}))
           if (!listRes.ok) {
             throw new Error(listData.error || 'Failed to list terminals')
           }
 
           const terminals: TerminalInfo[] = Array.isArray(listData.terminals) ? listData.terminals : []
-          const reused = requestedCwdRef.current
-            ? terminals.find((item) => item.cwd === requestedCwdRef.current)
-            : terminals[0]
+          const reused = findTerminalForTarget(terminals, requestedTargetRef.current)
 
           if (reused) {
             terminalId = reused.id
@@ -173,13 +262,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
           const createRes = await fetch(`${API_BASE_PATH}/terminals`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId,
-              nodeId: 'master',
-              cwd: requestedCwdRef.current,
-              cols,
-              rows,
-            }),
+            body: JSON.stringify(buildTerminalCreateRequest(requestedTargetRef.current, cols, rows)),
           })
           const createData = await createRes.json().catch(() => ({}))
           if (!createRes.ok) {
@@ -199,19 +282,24 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
-        inputDisposable = term.onData((input) => {
+        const forwardInput = (input: string) => {
+          if (suppressInputForwardRef.current) {
+            return
+          }
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'input', data: input }))
           }
+        }
+
+        inputDisposable = term.onData((input) => {
+          forwardInput(input)
+        })
+        binaryDisposable = term.onBinary((input) => {
+          forwardInput(input)
         })
 
         ws.onopen = () => {
-          try {
-            fitAddonRef.current?.fit()
-            ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-          } catch {
-            // ignore
-          }
+          fitAndNotifyResizeRef.current?.()
         }
 
         ws.onmessage = (event) => {
@@ -219,13 +307,21 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
             const payload = JSON.parse(event.data)
             if (payload.type === 'ready') {
               term.reset()
-              if (typeof payload.backlog === 'string' && payload.backlog.length > 0) {
-                term.write(payload.backlog)
-              }
+              setKeyboardResetVersion(version => version + 1)
               suppressCloseCallbackRef.current = false
               setTerminalInfo(payload.terminal)
               setStatus('ready')
               onTerminalReadyRef.current?.(payload.terminal)
+              suppressInputForwardRef.current = true
+              const finishReadyReplay = () => {
+                suppressInputForwardRef.current = false
+                fitAndNotifyResizeRef.current?.()
+              }
+              if (typeof payload.backlog === 'string' && payload.backlog.length > 0) {
+                term.write(payload.backlog, finishReadyReplay)
+              } else {
+                finishReadyReplay()
+              }
               return
             }
 
@@ -263,6 +359,7 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
         ws.onclose = () => {
           wsRef.current = null
+          setKeyboardResetVersion(version => version + 1)
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -276,29 +373,37 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
 
     return () => {
       disposed = true
+      suppressInputForwardRef.current = false
       inputDisposable?.dispose()
+      binaryDisposable?.dispose()
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [sessionId])
+  }, [])
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-gray-100 px-2.5 py-1.5 dark:border-gray-700 dark:bg-gray-900">
+    <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
+      <div className="border-b border-fw-border bg-fw-neutral-surface px-2.5 py-1.5 dark:border-fw-border dark:bg-fw-canvas">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text">
               {onBack && (
                 <button
                   type="button"
                   onClick={onBack}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100 md:hidden"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong md:hidden"
                   aria-label="Back"
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
               <span>status {status}</span>
+              {keyboardMode !== 'web' && (
+                <TerminalKeyboardHeaderControl
+                  nativeMode={keyboardMode === 'native'}
+                  onActivate={() => changeKeyboardMode('web')}
+                />
+              )}
               {terminalInfo && (
                 <>
                   <span>node {terminalInfo.nodeId}</span>
@@ -307,27 +412,23 @@ export default function TerminalView({ sessionId, initialCwd, initialTerminalId,
               )}
             </div>
             {error && (
-              <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+              <div className="mt-2 rounded-md border border-fw-danger-border bg-fw-danger-surface px-2.5 py-1.5 text-xs text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/20 dark:text-fw-danger">
                 {error}
               </div>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              onClick={() => onOpenWorkspace?.(terminalInfo?.cwd || requestedCwd)}
-              className="inline-flex h-6 items-center gap-1 rounded-md border border-gray-200 px-2 text-[11px] text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              title="Open workspace"
-            >
-              <FolderOpen className="h-3 w-3" />
-              <span>Workspace</span>
-            </button>
-          </div>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
+      <div className="min-h-0 flex-1 overflow-hidden bg-fw-terminal-background">
         <div ref={hostRef} className="h-full w-full" />
       </div>
+      <TerminalVirtualKeyboard
+        terminal={terminalInstance}
+        resetToken={`${terminalIdRef.current ?? 'pending'}:${keyboardResetVersion}`}
+        mode={keyboardMode}
+        onModeChange={changeKeyboardMode}
+      />
     </div>
   )
 }

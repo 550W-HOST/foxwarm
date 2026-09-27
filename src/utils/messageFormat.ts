@@ -1,6 +1,7 @@
 import { Message, MessagePart } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { truncateUnicodeSafe } from './unicode';
+import { isFoxwarmMessageCloseLine, parseFoxwarmOpeningTag, parseFoxwarmWrappedContent } from './promptWrappers';
 
 export const DEFAULT_TOOL_CONTENT_CHAR_LIMIT = 200;
 
@@ -23,6 +24,18 @@ const EPHEMERAL_SYSTEM_PREFIXES = [
 ];
 
 function isEphemeralSystemText(text: string): boolean {
+  if (isFoxwarmMessageCloseLine(text)) {
+    return true;
+  }
+  const tag = parseFoxwarmOpeningTag(text);
+  if (tag?.tagName === 'foxwarm-system') {
+    return tag.attrs.kind === 'time'
+      || tag.attrs.kind === 'session'
+      || tag.attrs.kind === 'channel-mode';
+  }
+  if (tag?.tagName === 'foxwarm-message' && !tag.closing) {
+    return tag.attrs.type === 'channel';
+  }
   return EPHEMERAL_SYSTEM_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 
@@ -52,7 +65,7 @@ function formatMultilineText(text: string, continuationPrefix: string = '> '): s
   ].join('\n');
 }
 
-export function formatPrefixedMultilineText(prefix: string, text: string, continuationPrefix: string = '> '): string {
+export function formatPrefixedMultilineText(prefix: string, text: string, _continuationPrefix: string = '> '): string {
   const normalized = text.trim();
   if (!normalized) {
     return prefix;
@@ -95,6 +108,14 @@ function formatPartLines(message: Message, part: MessagePart, options: Required<
   const isBodyRole = message.role === 'user' || message.role === 'model';
 
   if (typeof part.system === 'string') {
+    const wrapped = parseFoxwarmWrappedContent(part.system);
+    if (wrapped?.tagName === 'foxwarm-message' && wrapped.attrs.type === 'channel') {
+      const content = wrapped.content.trim();
+      if (content) {
+        lines.push(formatMultilineText(content, options.continuationPrefix));
+      }
+      return lines;
+    }
     if (!options.skipEphemeralSystem || !isEphemeralSystemText(part.system)) {
       lines.push(`[system] ${part.system}`);
     }
@@ -162,6 +183,26 @@ export function formatMessageText(message: Message, options: FormatMessageTextOp
     formatMultilineText(content, resolved.continuationPrefix),
     resolved.continuationPrefix,
   );
+}
+
+/** Canonical model-visible body text used by semantic/lexical search. */
+export function formatSubstantiveMessageSearchText(message: Message): string {
+  if (message.modelVisible === false || (message.role !== 'user' && message.role !== 'model')) return '';
+  const parts = (message.parts || []).filter(part => (
+    (typeof part.text === 'string' && part.text.trim())
+    || (typeof part.system === 'string' && part.system.trim())
+  )).map(part => ({
+    ...(typeof part.text === 'string' ? { text: part.text } : {}),
+    ...(typeof part.system === 'string' ? { system: part.system } : {}),
+  }));
+  if (parts.length === 0) return '';
+  return formatMessageText({ ...message, parts }, {
+    includeRolePrefix: false,
+    skipEphemeralSystem: true,
+    skipRagMemorySnippets: true,
+    skipThinking: true,
+    toolCharLimit: 0,
+  }).trim();
 }
 
 export function formatMessagePreviewText(

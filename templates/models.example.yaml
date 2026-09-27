@@ -3,8 +3,13 @@
 #
 # Recommended public setup: keep provider connection settings directly in this YAML.
 # App/channel configuration lives in state/config.yaml.
+#
+# Provider `extraFields` and `extraHeaders` support these runtime placeholders:
+# `${SESSION_CACHE_KEY}` is stable for the session's prompt-cache prefix lineage.
+# `${TURN_ID}` is stable for one session turn, including its tool loop, and changes
+# when a later session turn starts.
 
-default: openai/gpt-5.2-codex
+default: openai/gpt-5.6-sol
 providers:
   openai:
     providerType: openai-completions
@@ -14,32 +19,63 @@ providers:
     # asyncCompact: false
     # Optional: enable compressed request bodies for this provider entry.
     # requestCompression: gzip  # or: br
+    # Optional: treat a completed response with no content and no tool calls as
+    # a retryable failure. Default (unset/false) accepts it as a normal turn end.
+    # disallowEmptyResponse: true
     # Optional provider-level defaults for all models in this entry.
     # contextLimit: 200000
+    # streamContentInactivityTimeoutMs: 300000 # Optional: default 60000; model entries can override.
+    # First-class effort defaults to all six levels with `high` selected when omitted.
+    # Model object entries may override this; a model-level `allowed` list replaces
+    # the provider list, and its inherited/default value must remain allowed.
+    # effort:
+    #   allowed: [none, low, medium, high, xhigh, max]
+    #   default: high
     # extraHeaders:
     #   x-provider-default: enabled
-    # extraFields:
-    #   reasoning:
-    #     effort: medium
     models:
-      - gpt-5.2-codex
-      - id: gpt-5.3-codex
-        contextLimit: 400000
-        extraFields:
-          reasoning:
-            effort: high
-      - gpt-5.4
-      - gpt-5.5
+      - gpt-5.6-sol
+      - gpt-5.6-terra
+      - gpt-5.6-luna
 
-  # `openai` and `openai-responses` both use the newer Responses API.
+  # `openai` and `openai-responses` use the newer Responses API over HTTP/SSE.
+  # `openai-ws` uses the same request/event format over a provider WebSocket;
+  # it rejects requestCompression and transport-owned extraFields (`input`,
+  # `previous_response_id`, `stream`, `type`, `background`, `context_management`,
+  # `conversation`, and `stream_id`).
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
+  # To enable hosted web search, first change providerType to openai-responses.
+  # It is not sent for compact/setup-test requests:
+  # webSearch: true  # or false, for default settings
+  # webSearch:
+  #   enabled: true
+  #   toolChoice: auto  # or: required
+  #   searchContextSize: medium  # low, medium, or high
+
+  # Responses models can also use OpenAI's hosted image generation. Images are
+  # returned as authenticated Blobs and can be edited by the same model on a
+  # later turn. Only openai, openai-responses, and openai-ws support this.
+  # imageGeneration: true  # or false, for default settings
+  # imageGeneration:
+  #   enabled: true
+  #   model: gpt-image-1        # optional hosted image model
+  #   action: auto              # auto, generate, or edit
+  #   size: 1024x1024           # optional, provider-defined
+  #   quality: high             # auto, low, medium, high, xhigh, or max
+  #   background: auto          # auto, opaque, or transparent
+  #   outputFormat: png         # png, jpeg, or webp
+  #   outputCompression: 90     # 0-100, used for jpeg and webp
 
   anthropic:
     providerType: anthropic
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
     models:
-      - claude-sonnet-4-5
-      - claude-sonnet-4-6
-      - claude-sonnet-4-5-thinking
-      - claude-sonnet-4-6-thinking
+      - claude-opus-5
+
+  # A non-empty provider string is shorthand for a single-target session-hash
+  # alias. The alias key remains selectable while resolving to this concrete leaf.
+  fast: openai/gpt-5.6-sol
+
+  # For session-hash and failover configuration, see the repository's
+  # docs/virtual-models.md guide.

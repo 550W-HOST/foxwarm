@@ -21,7 +21,10 @@ test('buildNodeBootstrapInfo examples use BASE_URL placeholders and pairing toke
 
   assert.equal(result.examples.chooseBaseUrl, 'BASE_URL=http://YOUR_MASTER:3001');
   assert.match(result.examples.bareMetal, /\$BASE_URL\/node\/run\.sh/);
+  assert.match(result.examples.bareMetal, /--dir=\/opt\/foxwarm-node/);
   assert.match(result.examples.bareMetal, /--pairing=TOKEN123/);
+  assert.match(result.examples.bareMetalBackground, /-d/);
+  assert.match(result.examples.bareMetalInstall, /--install/);
   assert.match(result.examples.explicitHostOverride, /--host="\$BASE_URL"/);
   assert.match(result.examples.manualCompose, /NODE_SOURCE_URL=\$BASE_URL\/node\/source\.tar\.gz/);
 });
