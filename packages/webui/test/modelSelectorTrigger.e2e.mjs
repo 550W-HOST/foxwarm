@@ -59,6 +59,8 @@ await writeFile(entryPath, `
     window.modelSettingsOpens = 0
     const activeProps = mode === 'details'
       ? { ...props, modelOptions: detailOptions, currentModelKey: 'alpha', sessionModel: 'alpha', defaultModelKey: 'alias', childModelDefault: 'beta', effectiveChildModelKey: 'beta', effectiveEffort: 'high', effectiveChildEffort: 'high' }
+      : mode === 'short'
+        ? { ...props, modelOptions: [{ key: 'master', label: 'master', isVirtual: true }, { key: 'thinker', label: 'thinker', isVirtual: true }], currentModelKey: 'master', sessionModel: 'master', defaultModelKey: 'master', childModelDefault: 'thinker', effectiveChildModelKey: 'thinker', effectiveEffort: 'high', childEffortDefault: 'high', effectiveChildEffort: 'high' }
       : mode === 'no-child'
         ? { ...props, childModelDefault: null, effectiveChildModelKey: null }
         : props
@@ -103,7 +105,42 @@ test('model trigger grows to 30rem for long current and child labels', async () 
   assert.ok(geometry.width > 304 && geometry.width <= 480, JSON.stringify(geometry))
 })
 
+test('short current and child model names with child effort fit when composer has room', async () => {
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.evaluate(() => {
+    document.getElementById('host').style.fontFamily = 'monospace'
+    window.renderFixture('short')
+  })
+  await page.waitForFunction(() => document.querySelector('[data-model-trigger-child="true"]')?.textContent?.includes('thinker · High'))
+  const geometry = await page.evaluate(() => {
+    const root = document.querySelector('.foxwarm-model-selector-root')
+    const button = root.querySelector('.foxwarm-model-selector-trigger')
+    const currentName = button.querySelector('[data-model-trigger-name="true"]')
+    const child = button.querySelector('[data-model-trigger-child="true"]')
+    const childText = child.querySelector('span')
+    const send = document.querySelector('button[type="submit"]')
+    const r = element => { const bounds = element.getBoundingClientRect(); return { width: bounds.width, left: bounds.left, right: bounds.right } }
+    return {
+      root: r(root), button: r(button), currentName: r(currentName), child: r(child), send: r(send),
+      childMaxWidth: getComputedStyle(child).maxWidth,
+      childTextScrollWidth: childText.scrollWidth, childTextClientWidth: childText.clientWidth,
+      childText: childText.textContent,
+      documentOverflow: document.documentElement.scrollWidth - innerWidth,
+    }
+  })
+  assert.equal(geometry.currentName.width > 0, true, JSON.stringify(geometry))
+  assert.equal(geometry.childText, 'thinker · High')
+  assert.ok(geometry.root.right - geometry.button.right > 0, JSON.stringify(geometry))
+  assert.ok(geometry.childTextScrollWidth <= geometry.childTextClientWidth + 1, JSON.stringify(geometry))
+  assert.ok(geometry.send.right <= 1000 && geometry.documentOverflow <= 0, JSON.stringify(geometry))
+})
+
 test('model trigger shrinks and ellipsizes without horizontal overflow in a narrow composer', async () => {
+  await page.evaluate(() => {
+    document.getElementById('host').style.fontFamily = ''
+    window.renderFixture()
+  })
+  await page.waitForFunction(() => document.querySelector('[data-model-trigger-name="true"]')?.textContent?.includes('a-very-long-current-model'))
   await page.setViewport({ width: 360, height: 700 })
   await page.evaluate(() => { document.getElementById('host').style.width = '100%' })
   const geometry = await page.evaluate(() => {

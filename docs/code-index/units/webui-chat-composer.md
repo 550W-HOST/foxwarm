@@ -109,7 +109,7 @@ The model popup provides a fresh autofocus filter on every open while reusing th
 
 ### D-composer-unified-model-trigger
 
-[2026-09-27] A configured child summary shares the current model trigger's one button, hover background, focus ring, hit area, and keyboard tab stop. Clicking anywhere in that button toggles the same popup and begins at the current-model filter. The configured child name and effort stay visible with their existing truncation, tooltip, and mobile icon behavior; the child column keeps independent filter, model, and effort controls inside the popup. Escape returns focus to the shared button, including after child-policy changes. Do not create a second clickable child pill just to change initial filter focus.
+[2026-09-27] A configured child summary shares the current model trigger's one button, hover background, focus ring, hit area, and keyboard tab stop. Clicking anywhere in that button toggles the same popup and begins at the current-model filter. The configured child name and effort use their natural width while the composer has room; only actual width pressure truncates them. Do not retain a percentage max-width from the former sibling button inside the shared trigger. The combined trigger still shrinks within its 30rem owner without displacing Send, and the child keeps its tooltip and mobile icon behavior. The child column keeps independent filter, model, and effort controls inside the popup. Escape returns focus to the shared button, including after child-policy changes. Do not create a second clickable child pill just to change initial filter focus.
 
 ### D-composer-model-option-identity
 

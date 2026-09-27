@@ -2013,7 +2013,6 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 }
 .foxwarm-model-child-trigger {
   flex: 0 4 auto;
-  max-width: 45%;
 }
 @media (max-width: 640px) {
   .foxwarm-model-columns[data-model-columns="2"] {
