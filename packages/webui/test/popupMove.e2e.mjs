@@ -5,8 +5,10 @@ import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
-const browserPath = process.env.FOXWARM_E2E_BROWSER || '/usr/bin/chromium'
-const browserKind = browserPath.includes('firefox') ? 'firefox' : 'chrome'
+const browserKind = process.env.FOXWARM_E2E_BROWSER === 'firefox' ? 'firefox' : 'chrome'
+const browserPath = browserKind === 'firefox'
+  ? (process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox')
+  : (process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium')
 const dist = new URL('../dist/', import.meta.url)
 let browser
 let server

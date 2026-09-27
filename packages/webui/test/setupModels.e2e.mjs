@@ -164,6 +164,23 @@ async function attachRequestMocks(targetPage, options = {}) {
     }
   }
   await targetPage.setRequestInterception(true)
+  if (targetPage.browser() === browser) {
+    // Chromium's default '*' interception can pause worker startup requests that
+    // never reach this page's request handler. Intercept only the mocked API, plus
+    // editor assets in the two scenarios that intentionally test the fallback.
+    await targetPage._client().send('Fetch.enable', {
+      handleAuthRequests: true,
+      patterns: [
+        { urlPattern: '*://*/api/*' },
+        ...(options.blockEditorChunks ? [
+          { urlPattern: '*monaco-editor*' },
+          { urlPattern: '*monaco-yaml*' },
+          { urlPattern: '*yaml.worker*' },
+          { urlPattern: '*editor.worker*' },
+        ] : []),
+      ],
+    })
+  }
   targetPage.on('request', (request) => {
     const url = new URL(request.url())
     requestPaths.push(url.pathname)
