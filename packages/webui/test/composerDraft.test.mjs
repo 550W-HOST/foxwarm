@@ -8,7 +8,6 @@ async function loadTypeScriptModule(relativePath) {
 }
 
 const {
-  appendTextToComposerDraft,
   canConvertPasteToBlock,
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -76,15 +75,4 @@ test('structured storage reads old plain strings and writes only the versioned s
   } finally {
     globalThis.localStorage = previousStorage
   }
-})
-
-test('transcripts append after the current ordered draft without rewriting pasted content', () => {
-  const draft = makeComposerDraft([
-    { type: 'text', text: 'context' },
-    { type: 'pasted-text', id: 'p1', text: '  exact pasted bytes  ' },
-  ])
-  assert.equal(
-    serializeComposerDraft(appendTextToComposerDraft(draft, '  transcript  ')),
-    'context<pasted-text>  exact pasted bytes  </pasted-text>\n\ntranscript',
-  )
 })

@@ -22,6 +22,9 @@ export interface InlineComposerEditorHandle {
   flushForSubmit: () => ComposerDraft
   insertAttachments: (files: File[], point?: { x: number; y: number }) => void
   replaceDraft: (draft: ComposerDraft, focusEnd?: boolean) => void
+  beginTranscription: () => boolean
+  updateTranscription: (text: string) => void
+  endTranscription: (focus?: boolean) => void
 }
 
 interface InlineComposerEditorProps {
@@ -42,6 +45,7 @@ type HistoryGroup = { kind: string; at: number } | null
 type SelectionOffsets = { anchor: number; focus: number }
 type EditorState = { draft: ComposerDraft; selection: SelectionOffsets | null }
 type DraftSnapshot = EditorState & { size: number }
+type Transcription = { draftId: string; offset: number; node: Text | null; text: string; base: EditorState; historyRecorded: boolean }
 
 function getDraftByteSize(draft: ComposerDraft): number {
   return new TextEncoder().encode(serializeComposerDraft(draft)).byteLength
@@ -111,6 +115,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   const lastDraftIdRef = useRef('')
   const activeChipRef = useRef<HTMLElement | null>(null)
   const lastSelectionRef = useRef<SelectionOffsets | null>(null)
+  const caretWasPlacedRef = useRef(false)
+  const transcriptionRef = useRef<Transcription | null>(null)
+  const focusAfterTranscriptionRef = useRef(false)
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
   const [activeAttachmentRef, setActiveAttachmentRef] = useState<string | null>(null)
 
@@ -698,6 +705,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [applyHistoryDraft, captureEditorState, trimHistory])
 
   const replaceDraft = useCallback((nextDraft: ComposerDraft, shouldFocusEnd = false) => {
+    transcriptionRef.current = null
     cancelCompositionFinalize()
     compositionBaseRef.current = null
     compositionEndingRef.current = false
@@ -712,6 +720,63 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     setActiveAttachmentRef(null)
     if (shouldFocusEnd) focusEnd()
   }, [cancelCompositionFinalize, focusEnd, renderDraft])
+
+  const beginTranscription = useCallback(() => {
+    if (!editorRef.current || disabledRef.current || transcriptionRef.current) return false
+    // A pointer on the microphone may have blurred an in-progress composition.
+    // Flush its committed text before reserving the transcription position.
+    flushForSubmit()
+    const selection = caretWasPlacedRef.current ? getSelectionOffsets() || lastSelectionRef.current : null
+    const offset = selection?.focus ?? getNodeUnits(editorRef.current)
+    transcriptionRef.current = {
+      draftId, offset, node: null, text: '',
+      base: { draft: cloneDraft(readDraft()), selection: { anchor: offset, focus: offset } },
+      historyRecorded: false,
+    }
+    return true
+  }, [draftId, flushForSubmit, getNodeUnits, getSelectionOffsets, readDraft])
+
+  const updateTranscription = useCallback((text: string) => {
+    const owner = transcriptionRef.current
+    const editor = editorRef.current
+    if (!editor || !owner || owner.draftId !== draftId || owner.text === text) return
+    if (!owner.node || !editor.contains(owner.node)) {
+      if (text) {
+        const point = getCanonicalBoundaryPoint(owner.offset, 1)
+        if (!point) return
+        const range = document.createRange()
+        range.setStart(point.node, point.offset)
+        owner.node = document.createTextNode(text)
+        range.insertNode(owner.node)
+      }
+    } else {
+      owner.node.data = text
+    }
+    owner.text = text
+    // A former trailing-newline scaffold must not create a line break in the
+    // middle of an incoming transcript. Rebuild it once on completion.
+    for (const scaffold of editor.querySelectorAll('[data-composer-trailing-newline]')) scaffold.remove()
+    if (!owner.historyRecorded && !sameDraft(owner.base.draft, readDraft())) {
+      recordHistory(owner.base, 'transcription')
+      owner.historyRecorded = true
+    }
+    emitDraft()
+    if (!editor.contains(owner.node)) owner.node = null
+  }, [draftId, emitDraft, getCanonicalBoundaryPoint, readDraft, recordHistory])
+
+  const endTranscription = useCallback((shouldFocus = false) => {
+    const owner = transcriptionRef.current
+    if (!owner || owner.draftId !== draftId) return
+    transcriptionRef.current = null
+    reconcileCaretAnchors(false)
+    historyGroupRef.current = null
+    const offset = owner.offset + owner.text.length
+    lastSelectionRef.current = { anchor: offset, focus: offset }
+    if (shouldFocus) {
+      if (disabledRef.current) focusAfterTranscriptionRef.current = true
+      else restoreSelection(lastSelectionRef.current)
+    }
+  }, [draftId, reconcileCaretAnchors, restoreSelection])
 
   const insertTextAtSelection = useCallback((text: string) => {
     const editor = editorRef.current
@@ -812,7 +877,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
     flushForSubmit,
     insertAttachments,
     replaceDraft,
-  }), [flushForSubmit, focusEnd, insertAttachments, replaceDraft])
+    beginTranscription,
+    updateTranscription,
+    endTranscription,
+  }), [beginTranscription, endTranscription, flushForSubmit, focusEnd, insertAttachments, replaceDraft, updateTranscription])
 
   const adjacentChip = useCallback((direction: -1 | 1): HTMLElement | null => {
     const editor = editorRef.current
@@ -867,6 +935,10 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   useEffect(() => {
     const draftChanged = lastDraftIdRef.current !== draftId
     if (!draftChanged) return
+    transcriptionRef.current = null
+    lastSelectionRef.current = null
+    caretWasPlacedRef.current = false
+    focusAfterTranscriptionRef.current = false
     const serialized = serializeComposerDraft(value)
     cancelCompositionFinalize()
     compositionBaseRef.current = null
@@ -906,8 +978,11 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
       compositionBaseRef.current = null
       compositionEndingRef.current = false
       composingRef.current = false
+    } else if (focusAfterTranscriptionRef.current) {
+      focusAfterTranscriptionRef.current = false
+      restoreSelection(lastSelectionRef.current)
     }
-  }, [cancelCompositionFinalize, disabled])
+  }, [cancelCompositionFinalize, disabled, restoreSelection])
 
   useEffect(() => cancelCompositionFinalize, [cancelCompositionFinalize])
   useEffect(() => () => {
@@ -1122,8 +1197,9 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
         onPointerDown={() => {
           historyGroupRef.current = null
         }}
+        onFocus={() => { caretWasPlacedRef.current = true }}
         onBlur={(event) => {
-          lastSelectionRef.current = getSelectionOffsets()
+          if (caretWasPlacedRef.current) lastSelectionRef.current = getSelectionOffsets() || lastSelectionRef.current
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onBlur()
         }}
         onKeyUp={() => { lastSelectionRef.current = getSelectionOffsets() }}

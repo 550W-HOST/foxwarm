@@ -52,14 +52,6 @@ function getAsrStreamUrl() {
   return base.replace(/^http/i, 'ws')
 }
 
-type AsrTranscribeResult = {
-  text: string
-  status: number
-  rawLength: number
-  textLength: number
-  responsePreview: string
-}
-
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
@@ -1825,41 +1817,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     void sendSessionCommand('/continue')
   }, [sendSessionCommand])
 
-  const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
-    const formData = new FormData()
-    formData.append('audio', file)
-    const context = buildAsrContext(messages, draftText)
-    if (context.trim()) {
-      formData.append('context', context.trim())
-    }
-
-    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    const responseText = await response.text()
-    let data: any = {}
-    try {
-      data = responseText ? JSON.parse(responseText) : {}
-    } catch {
-      data = { error: responseText || 'ASR request failed' }
-    }
-
-    if (!response.ok) {
-      throw new Error(data?.error || `ASR request failed (${response.status})`)
-    }
-
-    const text = typeof data?.text === 'string' ? data.text : ''
-    return {
-      text,
-      status: response.status,
-      rawLength: responseText.length,
-      textLength: text.length,
-      responsePreview: responseText.slice(0, 200),
-    }
-  }, [messages])
-
   const handleCreateStreamingTranscriber = useCallback(async ({
     draftText,
     onPartial,
@@ -2185,7 +2142,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
-        onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
         onDraftEdited={onDraftEdited}
       />

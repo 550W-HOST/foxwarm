@@ -28,7 +28,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 - `sendSessionCommand(command)` posts `{ text: command }` to the same message route without optimistic user history.
 - `handleStop`, `handleRunQueued`, and `handleContinue` send `/stop`, `/dequeue`, and `/continue` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.
 - There are no current message-index edit/delete/regenerate handlers in this component.
-- ASR appends `/asr/transcribe` or `/asr/stream` to the deployment-relative `API_BASE_PATH`. `getAsrStreamUrl()` builds `${window.location.origin}${API_BASE_PATH}/asr/stream` and switches the HTTP(S) prefix to WS(S); it does not call `makeWebSocketUrl`.
+- The composer's microphone ASR uses the deployment-relative `/asr/stream` endpoint. `getAsrStreamUrl()` builds `${window.location.origin}${API_BASE_PATH}/asr/stream` and switches the HTTP(S) prefix to WS(S); it does not call `makeWebSocketUrl`. The former audio-file transcription UI and its Chat-side `/asr/transcribe` caller are removed; the server endpoint remains available independently.
 
 ## Per-session state and streaming
 
