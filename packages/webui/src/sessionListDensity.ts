@@ -4,7 +4,7 @@ export const SESSION_LIST_COMPACT_KEY = 'foxwarm_session_list_compact_v1'
 const CHANGE_EVENT = 'foxwarm:session-list-density'
 
 export function loadSessionListCompact(storage?: Pick<Storage, 'getItem'>): boolean {
-  try { return (storage ?? localStorage).getItem(SESSION_LIST_COMPACT_KEY) === 'true' } catch { return false }
+  try { return (storage ?? localStorage).getItem(SESSION_LIST_COMPACT_KEY) !== 'false' } catch { return true }
 }
 
 /** Presentation-only preference shared by sidebar, mobile, and embedded list roots. */

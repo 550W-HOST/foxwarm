@@ -33,6 +33,17 @@ async function buildFixtureBundle() {
     window.fixtureHistoryAbortCount = 0
     window.fixtureStateProbeCount = 0
     window.fixtureIgnoreHistoryAbort = false
+    window.fixtureStoppedMicTracks = 0
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [{ stop() { window.fixtureStoppedMicTracks += 1 } }] }) } })
+    window.AudioContext = class {
+      sampleRate = 16000
+      destination = {}
+      createMediaStreamSource() { return { connect() {}, disconnect() {} } }
+      createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null } }
+      createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} } }
+      resume() { return Promise.resolve() }
+      close() { return Promise.resolve() }
+    }
     window.resolveFixtureHistory = (queueLength = 0, messages = [{ role: 'user', parts: [{ text: 'old history row' }], __meta: { seq: 1, timestamp: 10 } }], historyVersion = 0, extras = {}) => {
       const entry = historyResponseResolvers.shift()
       if (!entry) throw new Error('No pending history request')
@@ -99,7 +110,7 @@ async function buildFixtureBundle() {
         : new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit: 1000 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/asr/status')) return bootstrapFailure
         ? new Response('{}', { status: 503 })
-        : new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        : new Response(JSON.stringify({ configured: new URLSearchParams(location.search).has('asrClose'), available: new URLSearchParams(location.search).has('asrClose') }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/commands')) return bootstrapFailure ? new Response('{}', { status: 503 }) : new Response(JSON.stringify({ commands: [
         { name: '/status', description: 'Show status', usage: '/status', requiresSession: true },
         { name: '/session', description: 'Manage sessions', usage: '/session', requiresSession: true },
@@ -112,12 +123,14 @@ async function buildFixtureBundle() {
       static OPEN = 1
       static CLOSED = 3
       static instances = []
-      constructor() {
+      constructor(url) {
+        this.isAsr = String(url).includes('/asr/stream')
+        this.sent = []
         this.readyState = FixtureWebSocket.CONNECTING
         this.opened = false
         this.pending = []
         FixtureWebSocket.instances.push(this)
-        if (!new URLSearchParams(window.location.search).has('manualSse')) queueMicrotask(() => this.open())
+        if (this.isAsr || !new URLSearchParams(window.location.search).has('manualSse')) queueMicrotask(() => this.open())
       }
       open() {
         if (this.readyState === FixtureWebSocket.CLOSED || this.opened) return
@@ -126,9 +139,18 @@ async function buildFixtureBundle() {
         this.onopen?.({})
         queueMicrotask(() => this.pending.splice(0).forEach(payload => this.emit(payload)))
       }
-      close() { this.readyState = FixtureWebSocket.CLOSED }
+      close() {
+        if (this.readyState === FixtureWebSocket.CLOSED) return
+        this.readyState = FixtureWebSocket.CLOSED
+        if (this.isAsr) queueMicrotask(() => this.onclose?.({}))
+      }
       send(raw) {
         const payload = JSON.parse(raw)
+        this.sent.push(payload)
+        if (this.isAsr) {
+          if (payload.type === 'start') queueMicrotask(() => this.emit({ type: 'ready' }))
+          return
+        }
         if (payload.type !== 'set-subscriptions') return
         queueMicrotask(() => {
           this.emit({ type: 'subscriptions-accepted', revision: payload.revision,
@@ -146,6 +168,7 @@ async function buildFixtureBundle() {
       fail() { if (this.readyState === FixtureWebSocket.CLOSED) return; this.readyState = FixtureWebSocket.CLOSED; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
+    window.fixtureAsrSockets = () => FixtureWebSocket.instances.filter(socket => socket.isAsr)
     window.fixtureEventSourceCount = () => FixtureWebSocket.instances.length
     window.openFixtureEventSource = () => FixtureWebSocket.instances.at(-1)?.open()
     window.failFixtureEventSource = () => FixtureWebSocket.instances.at(-1)?.fail()
@@ -224,6 +247,47 @@ before(async () => {
 after(async () => {
   await browser?.close()
   await new Promise(resolve => server?.close(resolve))
+})
+
+test('real Chat ASR WebSocket close after ready unlocks retained partial; final and cancel do not report an error', async () => {
+  page = await browser.newPage()
+  await page.goto(`${fixtureUrl}?asrClose=1`, { waitUntil: 'load' })
+  try {
+    const editor = '[role="textbox"][aria-label="Message"]'
+    await page.waitForSelector('button[aria-label="Start recording"]')
+    await page.type(editor, 'before')
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets().length === 1 && document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'false')
+    await page.evaluate(() => window.fixtureAsrSockets()[0].emit({ type: 'partial', text: ' partial' }))
+    await page.waitForFunction(() => document.querySelector('[role="textbox"][aria-label="Message"]')?.textContent === 'before partial')
+    await page.click('button[aria-label="Stop recording and transcribe"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets()[0].sent.some(payload => payload.type === 'stop'))
+    await page.evaluate(() => window.fixtureAsrSockets()[0].fail())
+    await page.waitForFunction(() => document.querySelector('[role="alert"]')?.textContent.includes('closed before the final transcript')
+      && document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'true')
+    assert.equal(await page.$eval(editor, node => node.textContent), 'before partial')
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments[0].text), 'before partial')
+
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets().length === 2)
+    await page.evaluate(() => window.fixtureAsrSockets()[1].emit({ type: 'final', text: ' final' }))
+    await page.waitForFunction(() => document.querySelector('[role="textbox"][aria-label="Message"]')?.contentEditable === 'true')
+    assert.equal(await page.$('[role="alert"]'), null)
+    assert.equal(await page.$eval(editor, node => node.textContent), 'before partial final')
+
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureAsrSockets().length === 3)
+    await page.evaluate(() => window.renderFixtureChats(0, 1))
+    await page.waitForFunction(() => window.fixtureAsrSockets()[2].readyState === 3)
+    await page.evaluate(() => window.renderFixtureChats(1, 2))
+    await page.waitForSelector(editor)
+    assert.equal(await page.$('[role="alert"]'), null)
+    assert.equal(await page.$eval(editor, node => node.textContent), 'before partial final')
+  } finally {
+    // This fixture deliberately persists the ASR draft; later tests start with a clean composer.
+    await page.evaluate(() => localStorage.removeItem('composer_draft_v1_fixture/main'))
+    await page.close()
+  }
 })
 
 test('page bootstrap endpoints are fetched once across panes, remounts, and model popup opens', async () => {

@@ -19,7 +19,7 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -54,6 +54,7 @@ import {
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
+import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
@@ -251,7 +252,13 @@ function sanitizeWebUiTransportValue(value: any): any {
 }
 
 function buildWebUiMessage(message: Message): Message {
-  return sanitizeWebUiTransportValue(message) as Message;
+  const projected = sanitizeWebUiTransportValue(message) as Message;
+  projected.parts = projected.parts.map(part => {
+    if (!part.functionCall || part.functionCall.argsParseError !== undefined) return part;
+    const { rawArgsText: _rawArgsText, ...functionCall } = part.functionCall;
+    return { ...part, functionCall };
+  });
+  return projected;
 }
 
 async function materializeWebUiMessages(messages: Message[]): Promise<{ messages: Message[]; canonicalMessages: Message[]; changed: boolean }> {
@@ -534,8 +541,8 @@ function sendSessionListQueryError(res: express.Response, error: any, logMessage
   res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
-export function buildWebUiModelsPayload(currentModel?: string) {
-  const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
+export function buildWebUiModelsPayloadFromConfig(modelsConfig: ModelsConfig, currentKey: string = modelsConfig.default) {
+  const defaultKey = modelsConfig.default;
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
   return {
     defaultKey,
@@ -547,6 +554,8 @@ export function buildWebUiModelsPayload(currentModel?: string) {
         label: key,
         isDefault: key === defaultKey,
         contextLimit: entry?.contextLimit || null,
+        providerKey: entry?.providerKey || null,
+        modelId: entry?.model || null,
         providerType: entry?.providerType || null,
         isVirtual: !!entry?.virtualRouting,
         targets: entry?.virtualRouting?.targets || [],
@@ -555,6 +564,11 @@ export function buildWebUiModelsPayload(currentModel?: string) {
       };
     }),
   };
+}
+
+export function buildWebUiModelsPayload(currentModel?: string) {
+  const { modelsConfig, currentKey } = resolveModelConfig(currentModel);
+  return buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey);
 }
 
 function normalizeWebUiEffortSelection(value: unknown): ModelEffort | undefined {
@@ -1092,6 +1106,35 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addRoute({
+        path: '/api/setup/models/list',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          let providerType = '';
+          try {
+            const request = parseProviderModelListRequest(req.body);
+            providerType = request.providerType;
+            const models = await listProviderModels(request);
+            res.json({ models });
+          } catch (error) {
+            if (error instanceof ProviderModelListError) {
+              logger.warn({
+                providerType,
+                code: error.code,
+                upstreamStatus: error.upstreamStatus,
+              }, 'Failed to list provider models');
+              res.status(error.statusCode).json({ error: error.message });
+              return;
+            }
+            logger.error({
+              providerType,
+              errorName: error instanceof Error ? error.name : typeof error,
+            }, 'Unexpected provider model list failure');
+            res.status(500).json({ error: 'Failed to list provider models.' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/setup/models/test',
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
@@ -1443,7 +1486,8 @@ export class WebUIChannel implements Channel {
             for (let index = 0; index < pathContextIds.length; index += 100) {
               pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
             }
-            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
+            const sidebarChildren = children.children.map(({ nextCursor: _nextCursor, ...preview }) => preview);
+            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: sidebarChildren, focus: focus.results,
               presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list sidebar query');

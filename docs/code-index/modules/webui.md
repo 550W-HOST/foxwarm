@@ -29,6 +29,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - `makeApiUrl` returns a URL object; `makeWebSocketUrl` changes its protocol to `ws:`/`wss:`.
 - Code routes remove the `/api` suffix and append deployment-relative `/vscode-web/`.
 - Main WebUI and the persistent Code frame validate exact origin plus window source. Nested Foxwarm leaf iframes post to their parent with `'*'`; the outer Code extension validates exact source plus channel/version/random nonce (not `event.origin`), then sends outer-to-inner messages to the exact leaf `frameOrigin`. These bridges are not API URL transport.
+- Top-level tab popups use a separate versioned same-origin URL mode. They mount one Chat, terminal, Agents, or Setup leaf without the workbench store; Code uses its existing standalone `/vscode-web/` URL. Popup target IDs may be URL parameters, but authentication tokens never are.
 - Download and extension routes preserve reverse-proxy prefixes and do not assume site root.
 
 ## State ownership
@@ -71,6 +72,10 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 [2026-09-19] The WebUI uses its locked React and ReactDOM 18.3.1 packages directly for JSX, hooks, and `createRoot`; Vite does not alias React to Preact. Browser component fixtures also resolve the WebUI's React 18 packages, including when their generated entry files live outside the package directory. Vite deduplicates `react` and `react-dom` so shared imports do not bring a second React runtime into the page. Server-side/CLI renderers retain their own dependency boundaries. This keeps production and browser tests on the same rendering semantics without changing application state, message, or tool contracts.
 
+### D-webui-timeline-time-separators
+
+[2026-09-27] A quiet centered timeline text row uses only each committed message’s persisted `__meta.timestamp`, not ingress wrappers, request intervals, tool execution timing, or render time. The first eligible visible row shows its clock; other eligible rows show only their clock when the adjacent timestamp differs by at least 60 seconds or crosses the browser’s local calendar date. Missing or invalid predecessors can show only the current clock, without estimating a gap. English 24-hour `HH:mm` applies today, `MMM d, HH:mm` otherwise (year across years); the tooltip includes full date, seconds, and time zone. No elapsed suffix or countdown is shown. Tool responses and whole Event wrappers contribute their adjacent persisted timestamp but have no independent divider; an eligible next model call can safely split a historical group only without separating a paired call/result. A divider is a keyed sibling outside collapsed content with no viewport anchor; nested CTX, queued previews, and temporary/synthetic stream or optimistic rows add none. API/token/Seq badge behavior and backend timing data remain independent.
+
 ### D-webui-product-language
 
 [2026-08-16] Normal WebUI surfaces use concise product language rather than source comments, storage-path explanations, protocol details, or developer documentation. User actions, useful status, and actionable errors stay visible; implementation diagnostics belong in explicit debug or documentation surfaces instead of ordinary headings, subtitles, and help copy.
@@ -82,6 +87,10 @@ All REST, SSE, WebSocket, download, Code, extension, and embedded URLs derive fr
 ### D-webui-workbench-shell
 
 Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and Setup are singleton tabs; forced initial Setup is non-closable.
+
+### D-webui-tab-popout
+
+[2026-09-21] Every workbench tab exposes `Move to new window`. A successful synchronous browser popup opens a real same-origin single-leaf URL and then removes the source tab through the ordinary layout-only store action; a blocked popup or cancelled Setup/Agents unsaved-state warning leaves the source tab unchanged. Popup windows do not mount or persist the normal workbench, do not synchronize state back, and do not restore the source tab when closed. Chat relies only on its existing browser draft persistence and does not transfer page-memory files. Terminal popout requires an existing terminal ID, reattaches to that backend PTY, and never uses the terminal-delete close path. Code uses its existing standalone launch URL rather than moving the embedded iframe.
 
 ### D-webui-node-aware-launchers
 

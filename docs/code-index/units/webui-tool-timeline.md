@@ -9,10 +9,10 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Key Exports
 
-- `InterleavedToolGroup` — renders grouped tool call/response pairs from adjacent messages
+- `InterleavedToolGroup` — renders model call/response pairs selected by `timelineRows`, including pairs separated only by event rows
 - `ToolCallsBlock` — renders tool calls from a single message (no responses yet)
 - `ToolResponsesBlock` — renders tool responses from a single message (orphaned)
-- `ToolGroupSummaryCard` — collapsed summary card for a group of tool calls
+- `ToolGroupSummaryCard` — persistent counted-tag header and Tool-style outer card for a historical tool group
 - `OpenCodeFileHandler` / `ToolCodePath` — callback contract and plain-path wrapper with a keyboard-accessible Code icon action for supported direct file-tool paths
 - `ExecCommandText` — syntax-highlighted shell command with heredoc support
 - `ExecOutputText` — syntax-highlighted or ANSI-parsed command output
@@ -25,7 +25,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
 | `ToolDownloadButton({ url, fileName })` | ~15 | Renders a styled download button that triggers browser download |
-| `ToolGroupSummaryCard({ items, onExpand })` | ~15 | Collapsed card showing tool tags counted per tag (`exec ×4`), failed calls counted in their own entry, most frequent first, with expand toggle |
+| `ToolGroupSummaryCard({ items, onExpand, expanded?, children? })` | ~15 | Neutral Tool-style group card with a persistent counted-tag header (`exec ×4`; failures separate, most frequent first), shared header/line toggle, and nested member body when expanded |
 | `getToolDisplayLabel(call)` | ~1 | Formats a human-readable label for a tool call |
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
 | `truncateToolResultPreview(text)` | ~3 | Truncates a collapsed tool result to the shared 800-character sample |
@@ -69,6 +69,9 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ## Behavior
 
+- Tool and counted-group headers publish their own `data-tool-header-tone` for theme-specific surfaces; nested success/error headers are not recolored by a neutral group ancestor.
+
+- Tool cards use the shared one-shot measured height transition for local expand/collapse and return to natural height for streaming content; group-wide collapse controls/transition belong to `ChatTimeline` (see [D-webui-tool-group-collapse](#d-webui-tool-group-collapse)).
 - Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets.
 - A valid persisted `executionTiming` adds a small invocation duration beside the tool tag in the existing header; malformed or legacy responses show none. This is the call-to-return duration, not the lifetime of a background process or the interval between model requests. Collapse behavior and result layout stay unchanged.
 - View mode toggles between "preview" (formatted diff/command) and "raw" (JSON) display
@@ -84,6 +87,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Tool tags carry the shared `data-tool-tag-tone` hook even when they are rendered through `ToolTagList` and have no `.foxwarm-tool-tag` class. Completed-tool tags consume the manifest V2 `tool*` family in both treatments; errors and system tags retain their distinct semantic families.
 - Tool cards and diff previews expose semantic CSS hooks (`foxwarm-tool-card`, `foxwarm-tool-tone-*`, `foxwarm-tool-header`, `foxwarm-tool-tag`, `foxwarm-tool-thread-line`, `foxwarm-tool-action-buttons-*`, `foxwarm-diff-*`) so opt-in UI style layers can map success/error/neutral and diff added/removed states to alternate palettes without changing tool grouping or response rendering logic.
 - Default-view call arguments remain inside the tone-specific `foxwarm-tool-header` region in both collapsed and expanded states. Collapsed arguments use the compact one-line summary; expanded arguments wrap below the tag row inside the same header background. Result previews and expanded results remain on the lighter card surface, without a call/result divider. Separators between multiple result items remain result-local.
+- If a call has both `argsParseError` and a string `rawArgsText`, default-view collapsed and expanded argument regions show raw text instead of parsed args or tool-specific rich previews, including patch/exec/file calls. React text rendering escapes markup; expanded text preserves whitespace. Calls without parse errors use structured args even when an old payload includes raw text; calls missing raw text retain their normal fallback rendering. The full JSON view is unchanged.
 - Banded and tab tool headers paint through the card's horizontal inset to both card boundaries while retaining that inset around their content. Integrated and plate treatments intentionally remain transparent and inset. Both geometries are stable in collapsed and expanded states; result/call content and action hit areas retain their existing spacing.
 - Finalized direct `read`, `write`, and `edit` cards render `filePath` as ordinary text. When the parent supplies a current-node handler, a compact native Code icon button immediately before that text is the only open-file action. Collapsed tool-call headers remain exactly one no-wrap line clipped inside their shrinkable flex slot with an ellipsis; the icon preserves bridge access without making the path intercept the normal header toggle. A `read` path consumes the shrinkable portion while its fixed `(lines …)` suffix stays visible on the same shared header baseline. Direct `apply_patch` uses the existing parsed operation list: single-file collapsed previews and expanded Update/Add headings use the same icon action, while multi-file summaries and deleted-file headings stay non-actionable. `read` forwards its one-based start/end lines. Memory tools and nested unified tool calls keep their existing plain rendering.
 - Collapsed legacy `edit` and `edit_memory` headers count logical old/new payload lines independently: empty text is zero lines, LF/CRLF/CR terminators are equivalent, and a final terminator does not add a phantom line while terminator-only payloads preserve their blank lines. Zero-count sides and their separator are omitted; the path remains visible when both sides are zero. The separate parsed `apply_patch` summary contract is unchanged.
@@ -97,6 +101,14 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Download functionality connects to the authenticated `/download?path=...` route used by WebUI `send_file` results
 
 ## Design Decisions
+
+### D-webui-tool-group-collapse
+
+A counted tool run retains one keyed wrapper even while the final standalone group is forced open. Historical runs use a single neutral Tool-style outer card whose counted-tag header remains present in both states; its own header and `ThreadLineButton` toggle the group, and expanded group-owned tool/result/Reasoning/Event cards nest below the header with a `pl-2` inset. Ordinary model text/system/images from those same rows remain outside the group card in either state, and thinking preceding a text break stays controlled by its prior group. There is no extra "Collapse group" title/rail or duplicate summary within a member row. The first group-row viewport anchor key stays on the stable wrapper, other visible row anchors remain unchanged, and aggregated collapsed usage remains owned by that group's first row/card frame. Member usage badges remain interactive, including outside the nested card edge in rounded/chevron treatments. The last standalone run keeps its direct cards and forced-open rule; when it becomes historical the established default collapse still unmounts its member cards without replacing the wrapper. Group tools off renders ordinary rows without group chrome.
+
+### D-webui-malformed-call-args-display
+
+[2026-09-25] In default tool-call cards, an `argsParseError` with string `rawArgsText` makes the collapsed and expanded argument areas render raw text as escaped text with preserved expanded whitespace, before all tool-specific rich renderers. If raw text is missing, fall back to ordinary args rendering; without a parse error, keep the existing args renderer even if a legacy transport supplied raw text. Full JSON inspection retains its object semantics.
 
 ### D-webui-tool-call-region
 

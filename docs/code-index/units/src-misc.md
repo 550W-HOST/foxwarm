@@ -1,6 +1,6 @@
 # Unit: src-misc
 
-Files: src/common.ts, src/startupUtils.ts, src/jsonObjectArgs.ts, src/asrClient.ts, src/logRotation.ts, src/nodeFileTransfer.ts, src/guestAgent.test.ts, src/session/sessionSystemPromptFiles.test.ts
+Files: src/common.ts, src/common.test.ts, src/startupUtils.ts, src/jsonObjectArgs.ts, src/asrClient.ts, src/logRotation.ts, src/nodeFileTransfer.ts, src/guestAgent.test.ts, src/session/sessionSystemPromptFiles.test.ts
 
 ## Purpose
 
@@ -75,13 +75,13 @@ This unit provides miscellaneous infrastructure utilities: logging setup, startu
 
 ## Behavior
 
-- **Logger** writes to a file always; console output is suppressed when TUI mode or `FOXWARM_NO_CONSOLE_LOG` is set. `FOXWARM_SYNC_FILE_LOG=1` selects a synchronous file destination for short-lived compiled-module consumers such as `foxwarm model`, avoiding transport-worker shutdown hangs while leaving normal server logging unchanged.
+- **Logger** creates its file destination directory and writes to the file on first use; console output is suppressed when TUI mode or `FOXWARM_NO_CONSOLE_LOG` is set. `FOXWARM_SYNC_FILE_LOG=1` selects a synchronous file destination for short-lived compiled-module consumers such as `foxwarm model`, avoiding transport-worker shutdown hangs while leaving normal server logging unchanged.
 - **startWithRetry** attempts a startup function up to N+1 times with a configurable delay, returning null on exhaustion.
 - **JSON args** utilities handle the dual-path pattern where a tool argument can be either a native object or a JSON string, with clear error messages.
 - **ASR client** communicates with an external speech recognition service via HTTP (transcription, health) and WebSocket (streaming), using bearer token auth.
 - **Log rotation** archives date-named directories into tar.gz files, prunes old archives, and cleans up legacy directory structures. Runs on a 10-hour interval.
 - **Node file transfer** enforces path traversal protection (restricts to agent directory by default), computes SHA-256 checksums, and handles base64 encoding/decoding.
-- **Tests** verify guest agent session creation (single and inherited modes, isolated and non-isolated initial-node variants), concurrent first-message provisioning without orphan sessions, inherited guest retry after an archived generated main ID, channel authorization semantics, and systemPromptFiles behavior including isolation enforcement.
+- **Tests** verify async logger directory creation, final-record persistence, and natural process exit; guest agent session creation (single and inherited modes, isolated and non-isolated initial-node variants); concurrent first-message provisioning without orphan sessions; inherited guest retry after an archived generated main ID; channel authorization semantics; and systemPromptFiles behavior including isolation enforcement.
 
 ## Integration
 

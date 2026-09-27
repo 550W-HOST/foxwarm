@@ -36,6 +36,7 @@ import ThreadLineButton from './ThreadLineButton'
 import { formatCompactDuration } from '../usageTiming'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
 
@@ -109,26 +110,37 @@ const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
   error: '-ml-2 bg-fw-danger-surface/85 pl-2 pr-0 py-1 dark:bg-fw-danger-surface-strong/20',
 }
 
-export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand }: { items: ToolTagItem[]; onExpand: () => void }) {
+export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand, expanded = false, children }: {
+  items: ToolTagItem[]
+  onExpand: () => void
+  expanded?: boolean
+  children?: ReactNode
+}) {
   const countedItems = useMemo(() => summarizeToolTagCounts(items), [items])
   return (
     <div
-      className={`foxwarm-tool-card foxwarm-tool-tone-neutral group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
-      onClick={onExpand}
+      data-tool-group-card
+      data-group-expanded={expanded}
+      className={`foxwarm-tool-card foxwarm-tool-group-card foxwarm-tool-tone-neutral group relative min-w-0 max-w-full pl-2 pr-2 text-xs text-fw-text-muted ${expanded ? 'pb-1' : 'cursor-pointer hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer'} ${toolSurfaceToneClasses.neutral}`}
+      onClick={!expanded ? onExpand : undefined}
     >
       <ThreadLineButton
-        expanded={false}
+        expanded={expanded}
         onToggle={onExpand}
-        label="Expand tool group"
+        label={expanded ? 'Collapse tool group' : 'Expand tool group'}
         className={toolThreadLineToneClasses.neutral}
       />
-      <div className={`foxwarm-tool-header flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
+      <div
+        data-tool-header-tone="neutral"
+        className={`foxwarm-tool-header foxwarm-tool-group-header -ml-2 -mr-2 flex min-w-0 items-start gap-2 pr-2 ${toolHeaderToneClasses.neutral} ${expanded ? 'cursor-pointer' : ''}`}
+        onClick={expanded ? (event) => { event.stopPropagation(); onExpand() } : undefined}
+      >
         <ToolTagList items={countedItems} />
       </div>
+      {expanded && <div className="foxwarm-tool-group-body mt-1 min-w-0 max-w-full pl-2">{children}</div>}
     </div>
   )
 })
-
 
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
 
@@ -201,6 +213,10 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
 )
 
 const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
+  if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
+    const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
+    return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
+  }
   if (options.partial) {
     const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
@@ -303,6 +319,9 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 }
 
 const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
+  if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
+    return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
+  }
   if (options.partial) {
     return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : JSON.stringify(call.args, null, 2)}</pre>
   }
@@ -561,6 +580,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onOpenCodeFile?: OpenCodeFileHandler
 }) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && viewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
   const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && viewMode === 'default')
@@ -571,10 +592,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const setToolViewMode = useCallback((mode: ToolViewMode) => {
     if (mode === 'json') {
-      setExpanded(true)
+      if (!expanded) { prepare(); setExpanded(true) }
     }
     setViewMode(mode)
-  }, [])
+  }, [expanded, prepare])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -648,12 +669,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   ) : null
 
   const header = (includeCallPreview = false, includeExpandedCall = false) => (
-    <div className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
+    <div data-tool-header-tone={tagTone} className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
       <div
         className={`foxwarm-tool-header-toggle cursor-pointer ${THREAD_CARD_HEADER_ROW_CLASS}`}
         onClick={(e) => {
           e.stopPropagation()
-          setExpanded(current => !current)
+          toggle()
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
@@ -670,15 +691,16 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   return (
     <div
+      ref={heightRef}
       className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''}`}
     >
       <ThreadLineButton
         expanded={expanded}
-        onToggle={() => setExpanded(current => !current)}
+        onToggle={toggle}
         label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
-      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100`}>
+      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity`}>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>

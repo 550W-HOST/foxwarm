@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -13,11 +13,12 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 
 - `WebUIChannel` — channel implementation and WebUI route registrar.
 - `buildWebUiSessionState(sessionDto)` — canonical single-session runtime/model/effort/node/cwd payload shared by list, history, and streams.
-- `buildWebUiModelsPayload(currentModel?)` — model selector capability payload including virtual routing metadata and allowed/default effort presentation.
+- `buildWebUiModelsPayload(currentModel?)` / `buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey?)` — model selector capability payload including safe concrete identity, virtual routing metadata, and allowed/default effort presentation.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
 - `composeQueuedPreviewProjection(...)` — combines a Worker hot preview with later durable mailbox input while preserving the global preview cap and queue indices.
 - `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — parity delivery to current multiplexed WebSocket and compatibility SSE clients.
 - `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
+- `parseProviderModelListRequest` / `listProviderModels` — validate one transient provider connection and perform a bounded OpenAI-family or Anthropic model-list request without exposing upstream bodies or credentials.
 
 ## Route groups
 
@@ -57,6 +58,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
   focus paths, exact/alias batches, Architecture summaries, descendant preview,
   and explicit JavaScript-compatible search. It does not hydrate semantic
   history or replace the legacy all-list route.
+- Only `/api/session-list/sidebar` omits `nextCursor` from each `children[]` preview. Its top-level root cursor and `/api/session-list/children` continuation cursors remain available; catalog query DTOs and other consumers of child previews are unchanged.
 - Sidebar root/child, exact/by-ID, forced-focus, search, and initial watched-row
   projections attach numeric direct Sidebar child counts through one maintained
   catalog-count batch over the rows in that response. Later state-only SSE
@@ -75,6 +77,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - `GET /api/sessions/:id/history` keeps its query-agnostic full-snapshot compatibility when no recognized range key is present and accepts one mutually exclusive range mode otherwise. `tail` returns the newest bounded rows and a guarded prefix boundary; `prefixLength` plus `historyVersion` returns exactly the older prefix; `afterSeq` plus `historyVersion` returns newly appended sequence-bearing rows while retaining current session/snapshot/queue metadata. Range requests reject unknown/mixed keys, and every form exposes the exact-owner `latestSeq` frontier. Prefix and suffix requests reject a changed history version retryably, and slicing occurs before WebUI image materialization. Queue previews remain separate from committed history; normal Chat bootstrap does not need the full debug-file route.
 - History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Provider-hosted generated images use the same reference-to-API-path materialization, so they reload after refresh, history paging, and server restart without any provider-specific transport. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). It remains an authenticated lightweight state API and compatibility surface; current WebSocket Chat reconnect receives existence/state through its revisioned subscription snapshot.
+- The WebUI message projection omits `functionCall.rawArgsText` only from real `message.parts[].functionCall` values without `argsParseError`. Malformed calls retain raw text, error, and structured args; nested tool/user data with coincidentally named fields remains untouched by this trimming rule. History, context expansion, Debug messages, SSE, and realtime WebSocket/history-append use the same transport projection without rewriting canonical history or archives.
 - `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
 - Each per-session SSE connection sends an immediate SessionRuntime state snapshot, then cloned history/state events plus router-owned transient stream and deletion updates for that session.
 - The global SSE stream sends catalog invalidation without an all-row payload. A client may subscribe with capped repeated `sessionId` parameters; connection sends immediate bounded projections for matching exact/alias rows, and later state/deletion events send `session-list-delta` only for subscribed canonical IDs. This supports loaded/current/open/watch rows without recreating a complete browser mirror.
@@ -88,9 +91,10 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - The Agent registry GET reports inheritance/isolation, inheritance chain, indexed current/active/queued Session counts, and self-owned Markdown memory summary for every persistent Agent directory, including zero-session Agents. Counts come from the Main catalog projection rather than lazy in-memory stubs, so a queued Session remains visible after restart. The memory route walks only the canonical Agent `memory/` tree, ignores symlinks, caps traversal, and returns metadata/validated absolute targets rather than file contents. Agent update delegates inheritance/isolation snapshot refresh to Session Manager. Agent delete requires exact `confirmAgentId` and delegates lifecycle blockers and deletion to `sessionManager.deleteAgent`; confirmation authorizes deletion of idle owned Sessions including queued work.
 - CTX-BLOCK expansion delegates to the read-only archive helper and never queues, saves, or broadcasts session mutations.
 - The model-test endpoint treats request exceptions as failed HTTP results rather than scanning successful model text for an `Error:` prefix.
-- Setup routes are normal authenticated WebUI routes: `GET /api/setup/status`; `POST /api/setup/models`, `/api/setup/models/test`, `/api/setup/config`, `/api/setup/channels`, `/api/setup/weixin/login/start`, and `/api/setup/weixin/login/wait`. OOBE is reported when the models file is absent; there is no separate guest/admin role API at these routes.
+- Setup routes are normal authenticated WebUI routes: `GET /api/setup/status`; `POST /api/setup/models`, `/api/setup/models/list`, `/api/setup/models/test`, `/api/setup/config`, `/api/setup/channels`, `/api/setup/weixin/login/start`, and `/api/setup/weixin/login/wait`. OOBE is reported when the models file is absent; there is no separate guest/admin role API at these routes.
+- `POST /api/setup/models/list` accepts only one transient provider type/base URL/API key/provider-header object. It supports the four known OpenAI protocols through `<api-root>/models` and Anthropic through `<base>/v1/models?limit=1000`; virtual and unknown custom types are rejected rather than guessed. Existing saved app defaults are applied through pure model-config expansion, but no draft YAML is accepted or persisted. The request has a 10-second timeout, a 1 MiB response-body limit, and a 1000-ID result cap; upstream bodies, request headers, and credentials are neither logged nor returned. Failures do not affect Save or provider routing.
 - Setup diagnostics and both raw and retained structured model writes resolve the active models file through the data-directory-only path contract in [D-config-models-data-path](./src-config.md#d-config-models-data-path).
-- Model setup diagnostics expose virtual strategy/targets/failover values and classify a provider string alias as a single-target `session-hash` entry, while session model selection remains the virtual key. `/api/models` exposes ordered allowed efforts and a concrete default or virtual `null`; session projections expose raw/effective current and child effort without materializing defaults. Canonical backend contract: [model routing](../threads/model-routing.md).
+- Model setup diagnostics expose virtual strategy/targets/failover values and classify a provider string alias as a single-target `session-hash` entry, while session model selection remains the virtual key. `/api/models` exposes each option's allowlisted provider key and exact actual model ID in addition to provider type, virtual status, ordered canonical targets, ordered allowed efforts, and a concrete default or virtual `null`; it does not expose connection URLs, credentials, headers, or other provider configuration. Session projections expose raw/effective current and child effort without materializing defaults. Canonical backend contract: [model routing](../threads/model-routing.md).
 - The former custom workspace filesystem routes remain removed; authenticated file download remains available for tool/file affordances.
 - `GET /api/nodes` returns `master` plus approved remote node IDs, public labels/types, current transport state, last-seen time, core protocol compatibility, and only the allowlisted Code/terminal launcher service versions. Quarantined Nodes return no launch services. Pending pairings, credentials, token hashes, model-tool schemas, other backend services, and private configuration are not part of this DTO.
 - `sendFile` is a channel no-op because the browser consumes file information through tool result metadata and authenticated download routes.
@@ -103,6 +107,14 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - Persisted session-list presentation metadata may be lost when the metadata index must be rebuilt from history; it is intentionally not duplicated into history files.
 
 ## Design decisions
+
+### D-webui-message-tool-args-transport
+
+[2026-09-25] WebUI message responses omit `rawArgsText` from a real function-call part unless that call has `argsParseError`. Parse failures retain the raw text alongside structured args and the error. Apply this only when projecting WebUI transport messages, never to canonical Session history, archive/replay, provider requests, or arbitrary nested data fields.
+
+### D-webui-sidebar-preview-cursor
+
+[2026-09-25] `/api/session-list/sidebar` omits `nextCursor` inside child previews at its final transport boundary. Root `nextCursor` and `/api/session-list/children` continuation cursors remain; internal child-preview queries and their other API consumers retain their DTOs.
 
 ### D-webui-channel-queue-preview
 

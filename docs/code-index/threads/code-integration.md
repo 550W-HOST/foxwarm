@@ -30,6 +30,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - Parent/workbench communication is versioned, exact-origin/source checked, and allowlisted to add-folder, open-file, and open-commit request shapes with acknowledgements.
 - Direct `read`, `write`, `edit`, and actionable `apply_patch` tool paths remain plain text; after exact node/cwd/path resolution, an adjacent icon-only Code action may issue the open-file request. See [D-webui-tool-call-region](../units/webui-tool-timeline.md#d-webui-tool-call-region) for the interaction contract. Memory tools, nested descriptors, and ambiguous paths remain inert.
 - New-tab mode carries initial target parameters; it does not control an already-open tab.
+- Moving the WebUI Code tab to a browser window uses this existing standalone new-tab mode with the current launcher node/path. It is a fresh standalone Code launch, not transfer of the running embedded iframe; only after `window.open` succeeds does WebUI remove the source Code tab and destroy its embedded frame.
 
 ## Files, services, and terminals
 

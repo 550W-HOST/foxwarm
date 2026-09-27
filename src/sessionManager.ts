@@ -1759,11 +1759,11 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     verbose: sourceSession.verbose,
     model: spawnedSettings.model,
     effort: spawnedSettings.effort,
-    // Propagate the parent's child policy down the whole subtree: a pin set at
-    // any level keeps applying to every descendant until an explicit child
-    // policy replaces it. The resolved model/effort above stay the child's own.
-    childModelDefault: sourceSession.childModelDefault,
-    childEffortDefault: sourceSession.childEffortDefault,
+    // spawnedSettings consumes the source's child policy once for this fork's
+    // current model/raw effort. Leave future-child defaults unset so the next
+    // spawn's model/effort resolvers fall back to this fork's current pair.
+    // Copying the policy would pin descendants after a current-pair change or
+    // a one-time creation override.
   };
 
   const appendedForkMessages: Message[] = [];
@@ -1975,11 +1975,11 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       currentNode: isolatedNode || options?.node || parentSession.currentNode || 'master',
       model: spawnedSettings.model,
       effort: spawnedSettings.effort,
-      // Propagate the parent's child policy down the whole subtree so a pin set
-      // at any level keeps applying to descendants. This holds for cross-agent
-      // children too, matching how model/effort already flow across agents.
-      childModelDefault: parentSession.childModelDefault,
-      childEffortDefault: parentSession.childEffortDefault,
+      // spawnedSettings consumes the parent's child policy once for this
+      // child's current model/raw effort. Leave future-child defaults unset
+      // so the next spawn's model/effort resolvers fall back to this child's
+      // current pair. Copying the policy would pin descendants after a
+      // current-pair change or a one-time creation override.
     };
 
     const initialMessage: Message = {

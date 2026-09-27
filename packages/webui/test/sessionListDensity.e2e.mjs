@@ -9,7 +9,7 @@ import puppeteer from 'puppeteer-core'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 let server, browser, url
-const toggle = 'button[aria-label="Compact session rows"]'
+const toggle = 'button[aria-label="Detailed session rows"]'
 const row = id => `[data-session-id="demo/${id}"]`
 before(async () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
@@ -94,15 +94,17 @@ async function open(mobile = false) {
   return page
 }
 
-test('compact toggle, persistence, canonical status, theme parity, tree and context menu', async () => {
+test('default normal rows, detailed toggle, persistence, canonical status, themes, tree and context menu', async () => {
   const page = await open()
   try {
     assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'false')
-    const normalHeight = await page.$eval(row('main'), e => e.getBoundingClientRect().height)
-    await page.click(toggle)
-    await page.waitForSelector('[data-session-list-density="compact"]')
+    assert.equal(await page.$eval(toggle, e => e.title), 'Use detailed session rows')
+    assert.equal(await page.$eval(toggle, e => e.classList.contains('bg-fw-accent-surface')), false)
+    assert.equal(await page.$eval(`${toggle} svg`, e => e.classList.contains('lucide-list')), true)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), null)
+    assert.ok(await page.$('[data-session-list-density="normal"]'))
     assert.equal(await page.$eval(row('main'), e => e.getBoundingClientRect().height), 40)
-    assert.ok(40 < normalHeight)
+    assert.equal(await page.$eval(row('main'), e => e.textContent.includes('12 msgs')), false)
     assert.deepEqual(await page.$$eval('[data-session-status]', els => els.map(e => [e.dataset.sessionStatus, e.getAttribute('aria-label')])), [
       ['requesting-model', 'Status: compacting'], ['running-tool', 'Status: tool: exec'], ['waiting', 'Status: waiting: input'], ['requesting-model', 'Status: thinking'],
     ])
@@ -141,7 +143,7 @@ test('compact toggle, persistence, canonical status, theme parity, tree and cont
     await page.waitForSelector('[role="menu"]')
     await page.keyboard.press('Escape')
     await page.reload()
-    await page.waitForSelector('[data-session-list-density="compact"]')
+    await page.waitForSelector('[data-session-list-density="normal"]')
     for (const themeId of ['foxwarm.default', 'foxwarm.550a-mono', 'foxwarm.seaglass']) {
       for (const colorMode of ['light', 'dark']) {
         await page.evaluate(({ themeId, colorMode }) => window.fixtureTheme({ themeId, colorMode }), { themeId, colorMode })
@@ -158,24 +160,38 @@ test('compact toggle, persistence, canonical status, theme parity, tree and cont
     if (output) {
       await mkdir(output, { recursive: true })
       await page.mouse.move(800, 650)
-      await page.screenshot({ path: path.join(output, 'sidebar-compact-mock.png'), clip: { x: 0, y: 0, width: 340, height: 500 } })
+      await page.screenshot({ path: path.join(output, 'sidebar-normal-mock.png'), clip: { x: 0, y: 0, width: 340, height: 500 } })
       await page.evaluate(() => window.fixtureTheme({ themeId: 'foxwarm.550a-mono', colorMode: 'light' }))
-      await page.screenshot({ path: path.join(output, 'sidebar-compact-mono-mock.png'), clip: { x: 0, y: 0, width: 340, height: 500 } })
+      await page.screenshot({ path: path.join(output, 'sidebar-normal-mono-mock.png'), clip: { x: 0, y: 0, width: 340, height: 500 } })
       await page.evaluate(() => window.fixtureTheme({ themeId: 'foxwarm.default', colorMode: 'light' }))
     }
     await page.click(toggle)
-    await page.waitForSelector('[data-session-list-density="normal"]')
-    assert.equal(await page.$eval(row('main'), e => e.getBoundingClientRect().height), normalHeight)
+    await page.waitForSelector('[data-session-list-density="detailed"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'true')
+    assert.equal(await page.$eval(toggle, e => e.title), 'Use normal session rows')
+    assert.equal(await page.$eval(toggle, e => e.classList.contains('bg-fw-accent-surface')), true)
+    assert.ok(await page.$eval(row('main'), e => e.getBoundingClientRect().height) > 40)
+    assert.equal(await page.$eval(row('main'), e => e.textContent.includes('12 msgs')), true)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'false')
     await page.mouse.move(800, 650)
     await page.focus(toggle)
     assert.equal(await page.$eval(`${row('main')} button[aria-expanded]`, e => getComputedStyle(e).opacity), '1')
+    await page.reload()
+    await page.waitForSelector('[data-session-list-density="detailed"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'true')
+    await page.click(toggle)
+    await page.waitForSelector('[data-session-list-density="normal"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'false')
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'true')
+    await page.reload()
+    await page.waitForSelector('[data-session-list-density="normal"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'false')
   } finally { await page.close() }
 })
 
-test('compact drag keeps sibling, child, and root drop targets; touch remains scrollable', async () => {
+test('default normal drag keeps sibling, child, and root drop targets; touch remains scrollable', async () => {
   const page = await open()
   try {
-    await page.click(toggle)
     for (const target of ['before', 'child', 'root']) {
       const source = await (await page.$(row('legacy'))).boundingBox()
       await page.mouse.move(source.x + 170, source.y + source.height / 2)
@@ -194,7 +210,6 @@ test('compact drag keeps sibling, child, and root drop targets; touch remains sc
   } finally { await page.close() }
   const mobile = await open(true)
   try {
-    await mobile.click(toggle)
     assert.equal(await mobile.evaluate(() => matchMedia('(pointer: coarse)').matches), true)
     assert.equal(await mobile.$eval(`${row('main')} .session-compact-pin`, e => getComputedStyle(e).opacity), '1')
     await mobile.tap(`${row('wait')} .session-compact-pin`)
@@ -221,16 +236,18 @@ test('density synchronizes browser tabs and stays independent of search and orde
   try {
     await other.goto(url)
     await other.waitForSelector(toggle)
+    assert.ok(await other.$('[data-session-list-density="normal"]'))
     await page.bringToFront()
     await page.click(toggle)
     await other.bringToFront()
-    await other.waitForSelector('[data-session-list-density="compact"]')
+    await other.waitForSelector('[data-session-list-density="detailed"]')
+    assert.equal(await other.$eval(toggle, e => e.getAttribute('aria-pressed')), 'true')
     await page.bringToFront()
     await page.click('button[aria-label="Session list mode: Default"]')
     await page.waitForSelector('button[aria-label="Session list mode: Time"]')
     await page.click('button[aria-label="Session list mode: Time"]')
     await page.waitForSelector('button[aria-label="Session list mode: Flat"]')
-    assert.ok(await page.$('[data-session-list-density="compact"]'))
+    assert.ok(await page.$('[data-session-list-density="detailed"]'))
     assert.equal(await page.$(`${row('main')} button[aria-expanded]`), null)
     await page.type('input[aria-label="Search sessions"]', 'Waiting for review')
     await page.waitForFunction(() => document.querySelectorAll('[data-session-id]').length === 1)
@@ -241,17 +258,52 @@ test('density synchronizes browser tabs and stays independent of search and orde
     await page.bringToFront()
     await page.waitForSelector('[data-session-list-density="normal"]')
     await page.waitForSelector('button[aria-label="Session list mode: Flat"]')
-    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'false')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'false')
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'true')
   } finally { await page.close(); await other.close() }
 })
 
+test('the legacy explicit false value keeps detailed rows across refresh', async () => {
+  const page = await open()
+  try {
+    await page.evaluate(() => localStorage.setItem('foxwarm_session_list_compact_v1', 'false'))
+    await page.reload()
+    await page.waitForSelector('[data-session-list-density="detailed"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'true')
+    assert.equal(await page.$eval(row('main'), e => e.textContent.includes('12 msgs')), true)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'false')
+  } finally { await page.close() }
+})
 
-test('compact pin actions reserve a right-side slot and isolate navigation and dragging', async () => {
+test('invalid or unreadable saved density defaults to normal in a real browser', async () => {
+  const page = await open()
+  try {
+    await page.evaluate(() => localStorage.setItem('foxwarm_session_list_compact_v1', 'invalid'))
+    await page.reload()
+    await page.waitForSelector('[data-session-list-density="normal"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'false')
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'invalid')
+
+    await page.evaluate(() => localStorage.setItem('foxwarm_session_list_compact_v1', 'false'))
+    await page.evaluateOnNewDocument(() => {
+      const originalGetItem = Storage.prototype.getItem
+      Storage.prototype.getItem = function (key) {
+        if (key === 'foxwarm_session_list_compact_v1') throw new Error('Storage is blocked for density')
+        return originalGetItem.call(this, key)
+      }
+    })
+    await page.reload()
+    await page.waitForSelector('[data-session-list-density="normal"]')
+    assert.equal(await page.$eval(toggle, e => e.getAttribute('aria-pressed')), 'false')
+  } finally { await page.close() }
+})
+
+
+test('normal pin actions reserve a right-side slot and isolate navigation and dragging', async () => {
   const page = await open()
   const pin = `${row('wait')} .session-compact-pin`
   const title = `${row('wait')} span[title]`
   try {
-    await page.click(toggle)
     await page.mouse.move(800, 650)
     const bounds = () => page.$eval(title, e => ({ x: e.getBoundingClientRect().x, width: e.getBoundingClientRect().width }))
     const initialBounds = await bounds()
@@ -299,7 +351,6 @@ test('sections in both density modes partition visible roots without duplicating
   const sectionRows = section => page.$$eval(`[data-session-section="${section}"] [data-session-id]`, els => els.map(e => e.dataset.sessionId))
   try {
     assert.equal((await sectionRows('sessions')).length, 6)
-    await page.click(toggle)
     assert.equal(await page.$('[data-session-section="pinned"]'), null)
     assert.equal((await sectionRows('sessions')).length, 6)
     await page.evaluate(() => window.fixtureSetPinned('demo/main', true))
@@ -342,13 +393,14 @@ test('sections in both density modes partition visible roots without duplicating
   } finally { await page.close() }
 })
 
-test('normal rows share right-side pin actions with stable title space and touch visibility', async () => {
+test('detailed rows share right-side pin actions with stable title space and touch visibility', async () => {
   for (const mobile of [false, true]) {
     const page = await open(mobile)
     const pin = `${row('wait')} .session-pin`
     const title = `${row('wait')} [data-session-title]`
     try {
-      assert.ok(await page.$('[data-session-list-density="normal"]'))
+      await page.click(toggle)
+      assert.ok(await page.$('[data-session-list-density="detailed"]'))
       assert.equal(await page.$('.session-compact-pin'), null)
       const bounds = () => page.$eval(title, e => ({ x: e.getBoundingClientRect().x, width: e.getBoundingClientRect().width }))
       const initialBounds = await bounds()
@@ -393,12 +445,11 @@ test('normal rows share right-side pin actions with stable title space and touch
 })
 
 
-test('compact descendant activity is separate from own status and persists on collapsed unselected ancestors', async () => {
+test('normal descendant activity is separate from own status and persists on collapsed unselected ancestors', async () => {
   const page = await open()
   try {
     await page.goto(url + '?descendants')
     await page.waitForSelector(toggle)
-    await page.click(toggle)
     await page.evaluate(() => {
       window.fixtureSetSessions([
         { id: 'demo/main', displayName: 'A deliberately very long parent title that must remain readable with ellipsis', parentSessionId: null, runtimeState: { state: 'idle' }, childTotal: 1, messageCount: 1 },
@@ -446,12 +497,11 @@ test('compact descendant activity is separate from own status and persists on co
 })
 
 
-test('compact trailing indicators pack to the right without absent-status slots', async () => {
+test('normal trailing indicators pack to the right without absent-status slots', async () => {
   const page = await open()
   try {
     await page.goto(url + '?descendants')
     await page.waitForSelector(toggle)
-    await page.click(toggle)
     const widths = []
     for (const [descendants, own] of [[false, false], [true, false], [false, true], [true, true]]) {
       await page.evaluate(({ descendants, own }) => {
@@ -501,10 +551,8 @@ test('remote node indicator shows only for non-master sessions in both densities
     els => els.map(e => e.matches('.session-pin') ? 'pin' : e.hasAttribute('data-session-node') ? `node:${e.dataset.sessionNode}` : e.hasAttribute('data-descendant-activity') ? 'branch' : 'own'))
   try {
     assert.equal(await page.$('[data-session-node]'), null)
-    await page.click(toggle)
-    assert.equal(await page.$('[data-session-node]'), null)
     await page.goto(url + '?descendants')
-    await page.waitForSelector('[data-session-list-density="compact"]')
+    await page.waitForSelector('[data-session-list-density="normal"]')
     await inject()
     await page.waitForSelector('[data-session-node]')
     assert.equal(await page.$(row('main') + ' [data-session-node]'), null)
@@ -530,7 +578,7 @@ test('remote node indicator shows only for non-master sessions in both densities
     assert.ok(geometry.gaps.every(gap => gap === 6))
     assert.equal(geometry.overflow, false)
     await page.click(toggle)
-    await page.waitForSelector('[data-session-list-density="normal"]')
+    await page.waitForSelector('[data-session-list-density="detailed"]')
     assert.equal(await page.$('.session-compact-pin'), null)
     assert.equal(await page.$(row('main') + ' [data-session-node]'), null)
     const metadata = await page.$eval(`${row('tool')} [data-session-node]`, node => {

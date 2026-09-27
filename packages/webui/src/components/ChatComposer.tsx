@@ -15,11 +15,10 @@ import {
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
-import { filterModelOptions, groupModelOptionsByProvider, resolveModelDisplayName } from './modelFilter'
+import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvider, resolveModelDisplayName, resolveModelTriggerDisplayName } from './modelFilter'
 import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
 import {
-  appendTextToComposerDraft,
   clearComposerDraft,
   getPlainComposerDraftText,
   loadComposerDraft,
@@ -35,6 +34,11 @@ export type ModelOption = {
   label: string
   isDefault?: boolean
   contextLimit?: number | null
+  providerKey?: string | null
+  modelId?: string | null
+  providerType?: string | null
+  isVirtual?: boolean
+  targets?: string[]
   allowedEfforts?: string[]
   defaultEffort?: string | null
 }
@@ -72,13 +76,6 @@ interface ChatComposerProps {
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: Array<{ ref: string; file: File }> }) => Promise<boolean>
-  onTranscribeAudio: (file: File, context: string) => Promise<{
-    text: string
-    status: number
-    rawLength: number
-    textLength: number
-    responsePreview: string
-  }>
   onCreateStreamingTranscriber: (options: {
     draftText: string
     onPartial: (text: string) => void
@@ -289,7 +286,6 @@ function ModelSelector({
   const popupRef = useRef<HTMLDivElement | null>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
   const childFilterInputRef = useRef<HTMLInputElement | null>(null)
-  const childButtonRef = useRef<HTMLButtonElement | null>(null)
   const effortDescriptionId = useId()
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
@@ -330,11 +326,11 @@ function ModelSelector({
   })
   const childStaleFullLabel = childModelState.staleEffortLabel
 
-  const currentDisplayName = resolveModelDisplayName(currentModelKey || defaultModelKey, options) || 'model'
+  const currentDisplayName = resolveModelTriggerDisplayName(currentModelKey || defaultModelKey, options) || 'model'
   const currentKeyFull = currentModelKey || defaultModelKey || 'model'
   const triggerEffort = formatEffortLabel(effectiveEffort || effort || 'default')
-  const currentDefaultTargetName = resolveModelDisplayName(defaultModelKey || currentModelKey, options) || 'model'
-  const childResolvedTargetName = resolveModelDisplayName(
+  const currentDefaultTargetName = resolveModelTriggerDisplayName(defaultModelKey || currentModelKey, options) || 'model'
+  const childResolvedTargetName = resolveModelTriggerDisplayName(
     childModelDefault || effectiveChildModelKey || currentModelKey || defaultModelKey,
     options,
   ) || 'model'
@@ -367,22 +363,19 @@ function ModelSelector({
     }
   }, [childFollows])
 
-  const openScope = useCallback((scope: ModelSelectorScope) => {
-    if (open && activeScope === scope) {
+  const toggleOpen = useCallback(() => {
+    if (open) {
       setOpen(false)
       return
     }
-    if (!open) {
-      setFilterQuery('')
-      setChildFilterQuery('')
-      filterComposingRef.current = false
-      updatePopupPosition()
-      void onRefreshModels()
-    }
-    setActiveScope(scope)
+    setFilterQuery('')
+    setChildFilterQuery('')
+    filterComposingRef.current = false
+    setActiveScope('current')
+    updatePopupPosition()
+    void onRefreshModels()
     setOpen(true)
-    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
-  }, [activeScope, onRefreshModels, open, updatePopupPosition])
+  }, [onRefreshModels, open, updatePopupPosition])
 
   useLayoutEffect(() => {
     if (open) updatePopupPosition()
@@ -429,7 +422,7 @@ function ModelSelector({
         ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
     } else if (!open && wasOpenRef.current) {
-      ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus({ preventScroll: true })
+      buttonRef.current?.focus({ preventScroll: true })
     }
     wasOpenRef.current = open
     return () => {
@@ -481,7 +474,7 @@ function ModelSelector({
     >
       <span className="min-w-0 flex-1 truncate">{params.label}</span>
       {params.resolvedTarget && (
-        <span className="max-w-[45%] shrink-0 truncate text-[11px] text-fw-text-muted" data-model-option-target="true">{params.resolvedTarget}</span>
+        <span className="max-w-[45%] shrink-0 truncate text-[11px] text-fw-text-muted" data-model-option-target="true" title={params.resolvedTarget}>{params.resolvedTarget}</span>
       )}
       <Check aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${params.selected ? 'text-fw-accent' : 'text-transparent'}`} />
     </button>
@@ -502,6 +495,7 @@ function ModelSelector({
             label: resolveModelDisplayName(option.key, [option]),
             selected: selectedKey === option.key,
             title: option.key,
+            resolvedTarget: formatVirtualModelDetail(option),
             onSelect: () => onSelect(option.key),
           }))}
         </div>
@@ -542,7 +536,7 @@ function ModelSelector({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => openScope('current')}
+        onClick={toggleOpen}
         className="foxwarm-model-selector-trigger inline-flex h-8 min-w-0 max-w-full shrink items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-fw-text-muted transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring dark:hover:bg-fw-hover"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -551,25 +545,14 @@ function ModelSelector({
         <span className="h-3.5 w-px shrink-0 bg-fw-border" aria-hidden="true" />
         <span className="shrink-0 text-fw-text-muted" data-model-trigger-effort="true">{triggerEffort}</span>
         {error && <span className="shrink-0 text-fw-danger" aria-hidden="true">!</span>}
+        {!childFollows && (
+          <span title={childModelDefault || undefined} data-model-trigger-child="true" className="foxwarm-model-child-trigger inline-flex min-w-0 items-center gap-1 text-xs text-fw-text-muted">
+            <GitBranch aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{childResolvedTargetName}{childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}</span>
+          </span>
+        )}
         <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-
-      {!childFollows && (
-        <button
-          ref={childButtonRef}
-          type="button"
-          onClick={() => openScope('child')}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-label={`Children: ${childResolvedTargetName}`}
-          title={childModelDefault || undefined}
-          data-model-trigger-child="true"
-          className="foxwarm-model-child-trigger inline-flex h-8 min-w-0 items-center gap-1 rounded-lg px-2 text-xs text-fw-text-muted hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring"
-        >
-          <GitBranch aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{childResolvedTargetName}{childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}</span>
-        </button>
-      )}
 
       {open && createPortal(
         <div
@@ -706,7 +689,6 @@ const ChatComposer = memo(function ChatComposer({
   sendKeyMode = 'modEnter',
   onHeightChange,
   onSend,
-  onTranscribeAudio,
   onCreateStreamingTranscriber,
   onDraftEdited,
 }: ChatComposerProps) {
@@ -719,9 +701,8 @@ const ChatComposer = memo(function ChatComposer({
   const [isDragging, setIsDragging] = useState(false)
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [transcribingAudio, setTranscribingAudio] = useState(false)
+  const [recordingLocked, setRecordingLocked] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
-  const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
-  const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 5 }, () => 0.22))
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -738,12 +719,9 @@ const ChatComposer = memo(function ChatComposer({
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const audioGainRef = useRef<GainNode | null>(null)
-  const audioAnalyserRef = useRef<AnalyserNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
   const audioSampleRateRef = useRef<number>(16000)
   const recordingActiveRef = useRef(false)
-  const waveformFrameRef = useRef<number | null>(null)
-  const waveformPeakRef = useRef<number>(0.12)
   const audioChunkCountRef = useRef(0)
   const audioMaxPeakRef = useRef(0)
   const audioMaxRmsRef = useRef(0)
@@ -759,6 +737,13 @@ const ChatComposer = memo(function ChatComposer({
   const submitInFlightRef = useRef(false)
   const activeSessionIdRef = useRef(sessionId)
   activeSessionIdRef.current = sessionId
+  const recordingGenerationRef = useRef(0)
+  const recordingLockRef = useRef(false)
+  const unlockRecording = useCallback((focus = false) => {
+    recordingLockRef.current = false
+    setRecordingLocked(false)
+    editorRef.current?.endTranscription(focus)
+  }, [])
 
   const persistDraftSafely = useCallback((targetSessionId: string, nextDraft: ComposerDraft) => {
     try {
@@ -825,9 +810,11 @@ const ChatComposer = memo(function ChatComposer({
     setDraftState({ sessionId, draft: savedDraft })
     setDraftPersistenceError(null)
     setIsRecordingAudio(false)
+    setTranscribingAudio(false)
+    recordingGenerationRef.current += 1
+    recordingLockRef.current = false
+    setRecordingLocked(false)
     setTranscribeError(null)
-    setLiveTranscriptionPreview('')
-    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
     submitInFlightRef.current = false
     const frame = requestAnimationFrame(() => {
@@ -838,10 +825,6 @@ const ChatComposer = memo(function ChatComposer({
 
   const cleanupRecording = useCallback(async () => {
     recordingActiveRef.current = false
-    if (waveformFrameRef.current !== null) {
-      cancelAnimationFrame(waveformFrameRef.current)
-      waveformFrameRef.current = null
-    }
     if (streamingFlushTimerRef.current) {
       clearInterval(streamingFlushTimerRef.current)
       streamingFlushTimerRef.current = null
@@ -849,21 +832,17 @@ const ChatComposer = memo(function ChatComposer({
     audioProcessorRef.current?.disconnect()
     audioSourceRef.current?.disconnect()
     audioGainRef.current?.disconnect()
-    audioAnalyserRef.current?.disconnect()
     audioStreamRef.current?.getTracks().forEach(track => track.stop())
 
     audioProcessorRef.current = null
     audioSourceRef.current = null
     audioGainRef.current = null
-    audioAnalyserRef.current = null
     audioStreamRef.current = null
-    waveformPeakRef.current = 0.12
     audioChunkCountRef.current = 0
     audioMaxPeakRef.current = 0
     audioMaxRmsRef.current = 0
     audioRmsSumRef.current = 0
     pendingStreamingChunksRef.current = []
-    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
       await audioContextRef.current.close().catch(() => {})
@@ -873,11 +852,12 @@ const ChatComposer = memo(function ChatComposer({
 
   useEffect(() => {
     return () => {
+      recordingGenerationRef.current += 1
       streamingSessionRef.current?.cancel()
       streamingSessionRef.current = null
       void cleanupRecording()
     }
-  }, [cleanupRecording])
+  }, [cleanupRecording, sessionId])
 
   useEffect(() => {
     const root = rootRef.current
@@ -937,7 +917,7 @@ const ChatComposer = memo(function ChatComposer({
   }, [showSlashCommandMenu, highlightedCommandIndex])
 
   const applySlashCommand = useCallback((suggestion: SlashCommandSuggestion) => {
-    if (!slashCompletion) return
+    if (!slashCompletion || recordingLockRef.current) return
 
     const nextValue = applySlashCommandSuggestion(slashCompletion, suggestion)
     const nextDraft = makePlainComposerDraft(nextValue)
@@ -963,7 +943,7 @@ const ChatComposer = memo(function ChatComposer({
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if (sessionMissing || loading || submitInFlightRef.current) return
+    if (sessionMissing || loading || recordingLockRef.current || submitInFlightRef.current) return
     const submittedDraft = editorRef.current?.flushForSubmit() || draftRef.current
     const submittedInput = serializeComposerDraft(submittedDraft)
     if (!submittedInput.trim() && attachmentSegments.length === 0) return
@@ -1074,26 +1054,13 @@ const ChatComposer = memo(function ChatComposer({
     e.stopPropagation()
     setIsDragging(false)
 
+    if (recordingLockRef.current) return
+
     const files = Array.from(e.dataTransfer.files)
     if (files.length > 0) {
       editorRef.current?.insertAttachments(files, { x: e.clientX, y: e.clientY })
     }
   }, [])
-
-  const appendTranscriptToDraft = useCallback((transcript: string) => {
-    if (!transcript.trim()) return
-    const targetSessionId = sessionId
-    const currentDraft = activeSessionIdRef.current === targetSessionId
-      ? draftRef.current
-      : loadComposerDraft(targetSessionId)
-    const nextDraft = appendTextToComposerDraft(currentDraft, transcript)
-    commitDraft(nextDraft, targetSessionId)
-    if (activeSessionIdRef.current === targetSessionId) editorRef.current?.replaceDraft(nextDraft)
-
-    requestAnimationFrame(() => {
-      if (activeSessionIdRef.current === targetSessionId) editorRef.current?.focusEnd()
-    })
-  }, [commitDraft, sessionId])
 
   const pushAsrDebug = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString([], { hour12: false })
@@ -1181,97 +1148,8 @@ const ChatComposer = memo(function ChatComposer({
     streamingSession.sendAudioChunk(payload)
   }, [mergePcmChunksToBuffer, pushAsrDebug])
 
-  const startWaveformLoop = useCallback(() => {
-    const analyser = audioAnalyserRef.current
-    if (!analyser) return
-
-    const data = new Uint8Array(analyser.frequencyBinCount)
-    const barCount = 5
-    const minVoiceHz = 120
-    const maxVoiceHz = 4000
-
-    const tick = () => {
-      const activeAnalyser = audioAnalyserRef.current
-      if (!recordingActiveRef.current || !activeAnalyser) {
-        waveformFrameRef.current = null
-        return
-      }
-
-      activeAnalyser.getByteFrequencyData(data)
-      const sampleRate = activeAnalyser.context.sampleRate || 16000
-      const binHz = sampleRate / activeAnalyser.fftSize
-      const startBin = Math.max(0, Math.floor(minVoiceHz / binHz))
-      const endBinExclusive = Math.max(startBin + 1, Math.min(data.length, Math.ceil(maxVoiceHz / binHz)))
-      const voiceBinCount = Math.max(1, endBinExclusive - startBin)
-      const binsPerBar = Math.max(1, Math.floor(voiceBinCount / barCount))
-
-      const rawBars = Array.from({ length: barCount }, (_, index) => {
-        const start = startBin + index * binsPerBar
-        const end = index === barCount - 1
-          ? endBinExclusive
-          : Math.min(endBinExclusive, start + binsPerBar)
-        let sum = 0
-        for (let i = start; i < end; i++) {
-          sum += data[i]
-        }
-        const avg = end > start ? sum / (end - start) : 0
-        return avg / 255
-      })
-
-      const framePeak = rawBars.reduce((max, value) => Math.max(max, value), 0)
-      waveformPeakRef.current = Math.max(framePeak, waveformPeakRef.current * 0.92, 0.06)
-
-      // Auto-normalize quiet input for display only, capped at +20 dB (~10x amplitude).
-      const targetPeak = 0.78
-      const normalizationScale = Math.min(10, targetPeak / waveformPeakRef.current)
-      const centerWeight = [0.72, 0.88, 1, 0.88, 0.72]
-      const nextBars = rawBars.map((value, index) => {
-        const weighted = value * normalizationScale * centerWeight[index]
-        return Math.max(0.22, Math.min(1, weighted))
-      })
-
-      setWaveformBars(nextBars)
-      waveformFrameRef.current = requestAnimationFrame(tick)
-    }
-
-    if (waveformFrameRef.current !== null) {
-      cancelAnimationFrame(waveformFrameRef.current)
-    }
-    waveformFrameRef.current = requestAnimationFrame(tick)
-  }, [])
-
-  const handleAudioPick = useCallback(async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-
-    const file = files[0]
-    setTranscribeError(null)
-    setTranscribingAudio(true)
-    pushAsrDebug(`file start; name=${file.name} size=${file.size} type=${file.type || 'unknown'}`)
-
-    try {
-      const result = await onTranscribeAudio(file, input)
-      pushAsrDebug(`file response; status=${result.status} rawLength=${result.rawLength} textLength=${result.textLength}`)
-      if (result.responsePreview) {
-        pushAsrDebug(`file preview=${JSON.stringify(result.responsePreview)}`)
-      }
-      const transcript = result.text
-      if (!transcript.trim()) {
-        throw new Error(`ASR returned empty text (status=${result.status}, rawLength=${result.rawLength}, textLength=${result.textLength})`)
-      }
-
-      appendTranscriptToDraft(transcript)
-      pushAsrDebug(`file append success; trimmedLength=${transcript.trim().length}`)
-    } catch (e) {
-      console.error('ASR transcription failed:', e)
-      setTranscribeError(e instanceof Error ? e.message : 'ASR transcription failed')
-      pushAsrDebug(`file error; ${e instanceof Error ? e.message : 'ASR transcription failed'}`)
-    } finally {
-      setTranscribingAudio(false)
-    }
-  }, [appendTranscriptToDraft, input, onTranscribeAudio, pushAsrDebug])
-
   const handleRecordToggle = useCallback(async () => {
-    if (transcribingAudio) return
+    if (transcribingAudio || (recordingLockRef.current && !isRecordingAudio)) return
 
     if (isRecordingAudio) {
       setIsRecordingAudio(false)
@@ -1290,67 +1168,85 @@ const ChatComposer = memo(function ChatComposer({
       try {
         flushPendingStreamingChunks('stop')
         await cleanupRecording()
-        streamingSessionRef.current?.stop()
+        if (activeSessionIdRef.current === sessionId) streamingSessionRef.current?.stop()
       } catch (e) {
+        if (activeSessionIdRef.current !== sessionId) return
         console.error('Failed to stop streaming audio recording:', e)
         setTranscribeError(e instanceof Error ? e.message : 'Failed to stop streaming audio recording')
         pushAsrDebug(`rec stop error; ${e instanceof Error ? e.message : 'Failed to stop streaming audio recording'}`)
         setTranscribingAudio(false)
+        recordingGenerationRef.current += 1
+        streamingSessionRef.current?.cancel()
+        streamingSessionRef.current = null
+        unlockRecording()
       }
       return
     }
 
+    if (loading || sessionMissing || !editorRef.current?.beginTranscription()) return
+    const generation = ++recordingGenerationRef.current
+    const isCurrent = () => recordingGenerationRef.current === generation && activeSessionIdRef.current === sessionId
+    recordingLockRef.current = true
+    setRecordingLocked(true)
+
     if (!navigator.mediaDevices?.getUserMedia) {
       setTranscribeError('Current browser does not support microphone recording')
+      unlockRecording()
       return
     }
 
+    let pendingStream: MediaStream | null = null
     try {
       setTranscribeError(null)
-      setLiveTranscriptionPreview('')
       pushAsrDebug('rec start requested')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      pendingStream = stream
+      if (!isCurrent()) { stream.getTracks().forEach(track => track.stop()); return }
       pushAsrDebug('mic stream granted')
       const streamingSession = await onCreateStreamingTranscriber({
-        draftText: input,
+        draftText: serializeComposerDraft(draftRef.current),
         onPartial: (text) => {
-          setLiveTranscriptionPreview(text)
+          if (isCurrent()) editorRef.current?.updateTranscription(text)
         },
         onFinal: (text) => {
-          setLiveTranscriptionPreview(text)
-          if (text.trim()) {
-            appendTranscriptToDraft(text)
-            pushAsrDebug(`rec append success; trimmedLength=${text.trim().length}`)
-          } else {
+          if (!isCurrent()) return
+          if (text.trim()) editorRef.current?.updateTranscription(text)
+          else {
             pushAsrDebug('rec final text empty after trim')
           }
+          recordingGenerationRef.current += 1
+          unlockRecording(true)
           setTranscribingAudio(false)
           setIsRecordingAudio(false)
           streamingSessionRef.current = null
-          setTimeout(() => {
-            setLiveTranscriptionPreview('')
-          }, 1200)
+          void cleanupRecording()
         },
         onError: (message) => {
+          if (!isCurrent()) return
+          recordingGenerationRef.current += 1
           setTranscribeError(message)
           setTranscribingAudio(false)
           setIsRecordingAudio(false)
-          setLiveTranscriptionPreview('')
+          unlockRecording()
           streamingSessionRef.current = null
           void cleanupRecording()
         },
         onDebug: pushAsrDebug,
       })
+      if (!isCurrent()) { streamingSession.cancel(); stream.getTracks().forEach(track => track.stop()); return }
 
       const audioContext = new AudioContext()
       await audioContext.resume().catch(() => {})
+      if (!isCurrent()) {
+        streamingSession.cancel()
+        stream.getTracks().forEach(track => track.stop())
+        void audioContext.close()
+        return
+      }
       const source = audioContext.createMediaStreamSource(stream)
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
       const gain = audioContext.createGain()
-      const analyser = audioContext.createAnalyser()
       gain.gain.value = 0
-      analyser.fftSize = 512
-      analyser.smoothingTimeConstant = 0.82
 
       audioSampleRateRef.current = audioContext.sampleRate
       recordingActiveRef.current = true
@@ -1382,7 +1278,6 @@ const ChatComposer = memo(function ChatComposer({
         }
       }
 
-      source.connect(analyser)
       source.connect(processor)
       processor.connect(gain)
       gain.connect(audioContext.destination)
@@ -1391,21 +1286,24 @@ const ChatComposer = memo(function ChatComposer({
       audioSourceRef.current = source
       audioProcessorRef.current = processor
       audioGainRef.current = gain
-      audioAnalyserRef.current = analyser
       audioStreamRef.current = stream
       setIsRecordingAudio(true)
       pushAsrDebug(`rec started; audioContextSampleRate=${audioContext.sampleRate}; streaming batched by 600ms window`)
-      startWaveformLoop()
     } catch (e) {
+      pendingStream?.getTracks().forEach(track => track.stop())
+      if (!isCurrent()) return
       console.error('Failed to start microphone recording:', e)
       setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
       pushAsrDebug(`rec start error; ${e instanceof Error ? e.message : 'Failed to start microphone recording'}`)
+      recordingGenerationRef.current += 1
       streamingSessionRef.current?.cancel()
       streamingSessionRef.current = null
       await cleanupRecording()
       setIsRecordingAudio(false)
+      setTranscribingAudio(false)
+      if (activeSessionIdRef.current === sessionId) unlockRecording()
     }
-  }, [analyzeAudioChunk, appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, flushPendingStreamingChunks, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribingAudio])
+  }, [analyzeAudioChunk, cleanupRecording, floatChunkToPcm16Buffer, flushPendingStreamingChunks, isRecordingAudio, loading, onCreateStreamingTranscriber, pushAsrDebug, sessionId, sessionMissing, transcribingAudio, unlockRecording])
 
   return (
     <div
@@ -1428,23 +1326,10 @@ const ChatComposer = memo(function ChatComposer({
         onDrop={handleDrop}
       >
         {transcribeError && (
-          <div className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
-            ASR 实验入口失败：{transcribeError}
+          <div role="alert" className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
+            Transcription failed: {transcribeError}
           </div>
         )}
-        {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
-          <div className="mb-3 flex justify-start">
-            <div className="max-w-[min(100%,32rem)] rounded-2xl border border-fw-accent-border bg-fw-accent-surface px-4 py-3 text-sm text-fw-accent shadow-sm dark:border-fw-accent-border/80 dark:bg-fw-accent-surface-strong/20 dark:text-fw-accent">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-fw-accent dark:text-fw-accent">
-                <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
-              </div>
-              <div className="whitespace-pre-wrap break-words">
-                {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
-              </div>
-            </div>
-          </div>
-        )}
-
         {sessionMissing && (
           <div className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
             Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
@@ -1524,19 +1409,9 @@ const ChatComposer = memo(function ChatComposer({
           id="file-upload"
           multiple
           onChange={(e) => {
-            if (e.target.files) {
+            if (!recordingLockRef.current && e.target.files) {
               editorRef.current?.insertAttachments(Array.from(e.target.files))
-              e.currentTarget.value = ''
             }
-          }}
-          className="hidden"
-        />
-        <input
-          type="file"
-          id="audio-upload"
-          accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm"
-          onChange={(e) => {
-            void handleAudioPick(e.target.files)
             e.currentTarget.value = ''
           }}
           className="hidden"
@@ -1545,7 +1420,7 @@ const ChatComposer = memo(function ChatComposer({
           ref={editorRef}
           draftId={sessionId}
           value={draft}
-          disabled={loading || sessionMissing}
+          disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
             : 'Ask Foxwarm anything, + to add files, / for commands'}
@@ -1571,50 +1446,24 @@ const ChatComposer = memo(function ChatComposer({
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
               <label
                 htmlFor="file-upload"
-                className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+                onClick={(event) => { if (recordingLockRef.current) event.preventDefault() }}
+                className={`inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse ${recordingLocked ? 'pointer-events-none opacity-50' : ''}`}
                 title="Attach files"
                 aria-label="Attach files"
               >
                 <Plus size={18} />
               </label>
               {asrAvailable && (
-                <div className="inline-flex shrink-0 items-center rounded-full bg-transparent">
-                  <button
-                    type="button"
-                    onClick={() => void handleRecordToggle()}
-                    disabled={transcribingAudio}
-                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-l-full rounded-r-none px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger hover:bg-fw-danger-surface-strong dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/60' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : ''}`}
-                    title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
-                  >
-                    {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
-                    {!isRecordingAudio && (
-                      <span className="leading-none">Rec</span>
-                    )}
-                    {(isRecordingAudio || transcribingAudio) && (
-                      <span className="ml-1 inline-flex h-[14px] items-center gap-[2px] self-center">
-                        {waveformBars.map((value, index) => (
-                          <span
-                            key={index}
-                            className={`w-[3px] rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-current opacity-90' : 'bg-current opacity-60'}`}
-                            style={{ height: `${Math.max(4, Math.round(value * 14))}px` }}
-                          />
-                        ))}
-                      </span>
-                    )}
-                  </button>
-                  <label
-                    htmlFor="audio-upload"
-                    onClick={(e) => {
-                      if (isRecordingAudio || transcribingAudio) {
-                        e.preventDefault()
-                      }
-                    }}
-                    className={`inline-flex h-8 shrink-0 items-center justify-center rounded-r-full rounded-l-none px-3 text-[13px] font-medium transition ${isRecordingAudio || transcribingAudio ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger' : ''}`}
-                    title="Upload audio file and append transcript to draft"
-                  >
-                    <span>file</span>
-                  </label>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRecordToggle()}
+                  disabled={transcribingAudio}
+                  className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger hover:bg-fw-danger-surface-strong dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/60' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : ''}`}
+                  title={transcribingAudio ? 'Finalizing transcription' : isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                  aria-label={transcribingAudio ? 'Finalizing transcription' : isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                >
+                  {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
+                </button>
               )}
             </div>
             <ModelSelector
@@ -1647,7 +1496,7 @@ const ChatComposer = memo(function ChatComposer({
           </div>
           <button
             type="submit"
-            disabled={loading || sessionMissing || (!input.trim() && attachmentSegments.length === 0)}
+            disabled={loading || sessionMissing || recordingLocked || (!input.trim() && attachmentSegments.length === 0)}
             className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             aria-label="Send message"
             title="Send message"

@@ -26,6 +26,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `computeUnifiedDiffLines` — generates unified diff output from two strings
 - `formatCompactObjectPreview` — compact object serialization
 - Interfaces: `Message`, `MessagePart`, `OpenAIResponsesAnnotation`, `FunctionCall`, `FunctionResponse`, `SlashCommandOption`, `SlashCommandCompletion`, `PatchPreviewOperation`, `SessionStreamEvent`, `ViewMode`, `ToolViewMode`
+- The browser-facing `FunctionCall` interface includes optional `rawArgsText` and `argsParseError` from the WebUI message transport; canonical Session types and parser behavior live in the backend.
 - `SessionStreamEvent` mirrors both legacy cumulative stream fields and version-2 offset delta/tool-argument fields.
 - `ContextBlockMessageMeta` — frontend mirror of rendered CTX-BLOCK metadata placed on `message.__meta.contextBlock`
 - `toolMeta` — metadata map (icon, color, label) for known tool and thread-card tag names, including the non-tool Web Search tag

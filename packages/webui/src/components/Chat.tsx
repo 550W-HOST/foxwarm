@@ -13,6 +13,7 @@ import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from
 import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
@@ -49,14 +50,6 @@ import {
 function getAsrStreamUrl() {
   const base = `${window.location.origin}${API_BASE_PATH}/asr/stream`
   return base.replace(/^http/i, 'ws')
-}
-
-type AsrTranscribeResult = {
-  text: string
-  status: number
-  rawLength: number
-  textLength: number
-  responsePreview: string
 }
 
 const ASR_CONTEXT_MAX_CHARS = 2400
@@ -283,6 +276,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const heightFollowHoldsRef = useRef(new Set<object>())
+  const heightFollowAnimatingRef = useRef(new Set<object>())
+  const heightFollowPendingContentRef = useRef(false)
+  const heightFollowPreparesRef = useRef(new Set<object>())
+  const heightFollowReleaseTimersRef = useRef(new Set<number>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
@@ -418,6 +416,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
+      // Explicit bottom navigation and independent new content win over a card-only hold.
+      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+      heightFollowReleaseTimersRef.current.clear()
+      heightFollowHoldsRef.current.clear()
+      heightFollowAnimatingRef.current.clear()
+      heightFollowPendingContentRef.current = false
+      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
       container.scrollTop = container.scrollHeight
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
@@ -427,6 +432,77 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       storeChatViewportState(viewportSessionId, state)
     }
   }, [viewportSessionId])
+
+  const prepareCardHeight = useCallback(() => {
+    const token = {}
+    heightFollowPreparesRef.current.add(token)
+    const container = messagesContainerRef.current
+    if (container) container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowPreparesRef.current.delete(token)
+      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
+        container?.style.removeProperty('overflow-anchor')
+      }
+    }
+  }, [])
+
+  const holdTallCardFollow = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
+    const container = messagesContainerRef.current
+    // Clicking a disclosure is viewport interaction, not a request to detach. Re-arm
+    // the existing ResizeObserver generation after its pointerdown invalidation.
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    if (!container || !shouldAutoScrollRef.current || pendingUserLeaveBottomRef.current || targetHeight <= startHeight) return () => {}
+    const viewport = container.getBoundingClientRect()
+    // Predict the card's top after bottom alignment, including the unscrolled distance
+    // below the current viewport. No fixed card-height cutoff or scrollTop snapshot.
+    const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
+    if (card.getBoundingClientRect().top - bottomAlignmentDelta >= viewport.top) return () => {}
+    const hold = {}
+    heightFollowHoldsRef.current.add(hold)
+    heightFollowAnimatingRef.current.add(hold)
+    // An initial bottom restoration still pending when the user opens a card must
+    // not reassert bottom after the temporary hold expires.
+    if (pendingViewportRestoreRef.current?.kind === 'state' && pendingViewportRestoreRef.current.state.kind === 'bottom') {
+      pendingViewportRestoreRef.current = null
+    }
+    container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowAnimatingRef.current.delete(hold)
+      // A stream/history update while a tall card is still moving is distinct
+      // from the card's own resize. Follow once after the last active transition,
+      // without letting an earlier reversal release another card's hold.
+      if (heightFollowPendingContentRef.current) queueMicrotask(() => {
+        if (!heightFollowPendingContentRef.current || heightFollowAnimatingRef.current.size) return
+        heightFollowPendingContentRef.current = false
+        if (shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current && !pendingViewportRestoreRef.current) {
+          scrollToBottom()
+        }
+      })
+      // The final auto-height cleanup can deliver a ResizeObserver notification
+      // after transitionend. Drain that notification before normal follow resumes;
+      // a later token/layout update can use the unchanged follow latch as usual.
+      const timer = window.setTimeout(() => {
+        heightFollowReleaseTimersRef.current.delete(timer)
+        heightFollowHoldsRef.current.delete(hold)
+        if (heightFollowHoldsRef.current.size === 0 && heightFollowPreparesRef.current.size === 0 && messagesContainerRef.current === container) {
+          container.style.removeProperty('overflow-anchor')
+        }
+      }, 200)
+      heightFollowReleaseTimersRef.current.add(timer)
+    }
+  }, [scrollToBottom])
+
+  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
+
+  useEffect(() => () => {
+    heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+    heightFollowReleaseTimersRef.current.clear()
+    heightFollowHoldsRef.current.clear()
+    heightFollowAnimatingRef.current.clear()
+    heightFollowPendingContentRef.current = false
+    heightFollowPreparesRef.current.clear()
+    messagesContainerRef.current?.style.removeProperty('overflow-anchor')
+  }, [sessionId])
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(0, Math.round(height))
@@ -480,6 +556,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    if (heightFollowHoldsRef.current.size && shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current) return currentViewportStateRef.current
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
@@ -501,6 +578,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (!container) return false
 
     if (state.kind === 'bottom') {
+      if (heightFollowHoldsRef.current.size) return false
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
@@ -1421,9 +1499,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [subscribeRealtime])
 
   useEffect(() => {
-    if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current) {
-      scrollToBottom()
+    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
+    if (heightFollowAnimatingRef.current.size) {
+      heightFollowPendingContentRef.current = true
+      return
     }
+    // A fresh message/draft during only the final observer-settling grace is
+    // independent content: resume the existing follow immediately.
+    scrollToBottom()
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
@@ -1561,6 +1644,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
 
         const pending = pendingViewportRestoreRef.current
+        if (heightFollowHoldsRef.current.size && !pending) {
+          setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
+          return
+        }
         if (pending) {
           if (pending.interactionVersion === userInteractionVersionRef.current) {
             if (pending.kind === 'state') {
@@ -1730,41 +1817,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     void sendSessionCommand('/continue')
   }, [sendSessionCommand])
 
-  const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
-    const formData = new FormData()
-    formData.append('audio', file)
-    const context = buildAsrContext(messages, draftText)
-    if (context.trim()) {
-      formData.append('context', context.trim())
-    }
-
-    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    const responseText = await response.text()
-    let data: any = {}
-    try {
-      data = responseText ? JSON.parse(responseText) : {}
-    } catch {
-      data = { error: responseText || 'ASR request failed' }
-    }
-
-    if (!response.ok) {
-      throw new Error(data?.error || `ASR request failed (${response.status})`)
-    }
-
-    const text = typeof data?.text === 'string' ? data.text : ''
-    return {
-      text,
-      status: response.status,
-      rawLength: responseText.length,
-      textLength: text.length,
-      responsePreview: responseText.slice(0, 200),
-    }
-  }, [messages])
-
   const handleCreateStreamingTranscriber = useCallback(async ({
     draftText,
     onPartial,
@@ -1784,8 +1836,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const socket = new WebSocket(getAsrStreamUrl())
       let resolved = false
       let settled = false
+      let terminal = false
 
       const fail = (message: string) => {
+        if (terminal) return
+        terminal = true
         onError(message)
         if (!settled) {
           settled = true
@@ -1801,6 +1856,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
+        if (terminal) return
         onDebug(`ws open; contextLength=${context.length} language=auto`)
         socket.send(JSON.stringify({
           type: 'start',
@@ -1810,6 +1866,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
 
       socket.onmessage = (event) => {
+        if (terminal) return
         try {
           const payload = JSON.parse(String(event.data))
           if (payload.type === 'ready') {
@@ -1837,6 +1894,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 }
               },
               cancel: () => {
+                terminal = true
                 onDebug('ws cancel called')
                 try {
                   socket.close()
@@ -1853,6 +1911,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           }
 
           if (payload.type === 'final') {
+            terminal = true
             onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
@@ -1877,8 +1936,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
 
       socket.onclose = () => {
-        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)}`)
-        if (!resolved && !settled) {
+        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)} terminal=${String(terminal)}`)
+        if (terminal) return
+        if (resolved) fail('Streaming ASR connection closed before the final transcript')
+        else {
+          terminal = true
+          settled = true
           reject(new Error('Streaming ASR connection closed before ready'))
         }
       }
@@ -2005,9 +2068,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               </div>
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
-              <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
-              </ToolScriptProgressContext.Provider>
+              <ThreadCardHeightContext.Provider value={cardHeightContext}>
+                <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                </ToolScriptProgressContext.Provider>
+              </ThreadCardHeightContext.Provider>
             </div>
             <ProcessingStatus
               sessionBusy={sessionBusy}
@@ -2022,7 +2087,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -2088,7 +2153,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
-        onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
         onDraftEdited={onDraftEdited}
       />

@@ -44,8 +44,7 @@ async function clickContextMenuItem(label) {
 async function openModelPopup() {
   await page.waitForFunction(() => {
     if (document.querySelector('[data-model-selector-popup="true"]')) return true
-    const button = Array.from(document.querySelectorAll('button[aria-haspopup="dialog"]'))
-      .find((candidate) => candidate.isConnected && candidate.getClientRects().length > 0)
+    const button = document.querySelector('.foxwarm-model-selector-trigger')
     button?.click()
     return false
   }, { polling: 100, timeout: 15_000 })
@@ -118,12 +117,12 @@ test('model popup reuses page models and opens the singleton Setup models editor
   await page.setViewport({ width: 1440, height: 900 })
   const sessionId = 'e2e-model-settings-session'
   await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
-  await page.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+  await page.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
   const previousRequests = modelListRequestCount
   await openModelPopup()
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.keyboard.press('Escape')
-  await page.waitForFunction(() => document.activeElement?.matches('button[aria-haspopup="dialog"]'))
+  await page.waitForFunction(() => document.activeElement?.matches('.foxwarm-model-selector-trigger'))
   await openModelPopup()
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))

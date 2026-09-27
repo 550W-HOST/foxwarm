@@ -267,71 +267,50 @@ const guestAgent = {
   },
 }
 
-const channelEntry = {
-  type: 'object',
-  additionalProperties: true,
-  properties: {
-    type: {
-      anyOf: [
-        { enum: ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'] },
-        { type: 'string' },
-      ],
-      description: 'Known managed channel type or a custom channel type.',
-    },
-    enabled: { type: 'boolean' },
-    channelProgress: {
-      oneOf: [
-        { const: false },
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['intervalMs'],
-          properties: {
-            intervalMs: { type: 'integer', minimum: 30000, maximum: 1800000 },
-          },
+const channelCommonProperties = {
+  type: {
+    anyOf: [
+      { enum: ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'] },
+      { type: 'string' },
+    ],
+    description: 'Known managed channel type or a custom channel type.',
+  },
+  enabled: { type: 'boolean' },
+  channelProgress: {
+    oneOf: [
+      { const: false },
+      {
+        type: 'object',
+        additionalProperties: false,
+        required: ['intervalMs'],
+        properties: {
+          intervalMs: { type: 'integer', minimum: 30000, maximum: 1800000 },
         },
-      ],
-      description: 'Best-effort ordinary-text tool progress. Omission or false disables it.',
-    },
-    appId: { type: 'string' },
-    clientSecret: { type: 'string' },
-    requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
-    groupContextLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Prior QQ group messages retained as untrusted context; defaults to 10.' },
-    groupBatchWindowMs: {
-      anyOf: [
-        { const: 0 },
-        { type: 'integer', minimum: 250, maximum: 30000 },
-      ],
-      description: 'Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching.',
-    },
-    media: {
-      type: 'object',
-      additionalProperties: true,
-      properties: {
-        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 20971520, description: 'Safe inline-image threshold; larger images fall back to generic files.' },
-        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200, description: 'Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB.' },
-        maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
-        maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
       },
-    },
-    allowedUsers: { type: 'array', items: { type: 'string' } },
-    guestAgent,
+    ],
+    description: 'Best-effort ordinary-text tool progress. Omission or false disables it.',
+  },
+  allowedUsers: { type: 'array', items: { type: 'string' } },
+  guestAgent,
+}
+
+const channelPropertiesByType = {
+  telegram: {
     botToken: { type: 'string' },
     mainAttachUser: { type: 'string' },
+  },
+  matrix: {
     homeserver: { type: 'string' },
     accessToken: { type: 'string' },
     botUserId: { type: 'string' },
+  },
+  wework: {
     webhookUrl: { type: 'string' },
     token: { type: 'string' },
     encodingAESKey: { type: 'string' },
     listenPort: { type: 'integer', minimum: 1, maximum: 65535 },
     listenPath: { type: 'string' },
     selfName: { type: 'string' },
-    baseUrl: { type: 'string' },
-    routeTag: { type: 'string' },
-    allowAllUsers: { type: 'boolean' },
-    longPollTimeoutMs: { type: 'integer', minimum: 1 },
-    loginBotType: { type: 'string' },
     aibot: {
       type: 'object',
       additionalProperties: true,
@@ -353,7 +332,74 @@ const channelEntry = {
       },
     },
   },
+  weixin: {
+    baseUrl: { type: 'string' },
+    token: { type: 'string' },
+    routeTag: { type: 'string' },
+    allowAllUsers: { type: 'boolean' },
+    longPollTimeoutMs: { type: 'integer', minimum: 1 },
+    loginBotType: { type: 'string' },
+  },
+  qqbot: {
+    appId: { type: 'string' },
+    clientSecret: { type: 'string' },
+    requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
+    groupContextLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Prior QQ group messages retained as untrusted context; defaults to 10.' },
+    groupBatchWindowMs: {
+      anyOf: [
+        { const: 0 },
+        { type: 'integer', minimum: 250, maximum: 30000 },
+      ],
+      description: 'Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching.',
+    },
+    allowAllUsers: { type: 'boolean' },
+    media: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 20971520, description: 'Safe inline-image threshold; larger images fall back to generic files.' },
+        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200, description: 'Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB.' },
+        maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
+      },
+    },
+  },
+} as const
+
+type KnownChannelType = keyof typeof channelPropertiesByType
+
+const channelTypeCondition = (channelType: KnownChannelType) => ({
+  required: ['type'],
+  properties: {
+    type: { type: 'string', pattern: `^\\s*${channelType}\\s*$` },
+  },
+})
+
+const channelEntry = {
+  type: 'object',
+  additionalProperties: true,
+  properties: channelCommonProperties,
+  allOf: (Object.keys(channelPropertiesByType) as KnownChannelType[]).map((channelType) => ({
+    if: channelTypeCondition(channelType),
+    then: { properties: channelPropertiesByType[channelType] },
+  })),
 }
+
+const channelEntryWithKeyFallback = (channelType: KnownChannelType) => ({
+  ...channelEntry,
+  allOf: [
+    ...channelEntry.allOf,
+    {
+      if: {
+        anyOf: [
+          { not: { required: ['type'] } },
+          { required: ['type'], properties: { type: { type: 'string', pattern: '^\\s*$' } } },
+        ],
+      },
+      then: { properties: channelPropertiesByType[channelType] },
+    },
+  ],
+})
 
 export const APP_CONFIG_SCHEMA = {
   $id: 'https://foxwarm.dev/schemas/app-config.json',
@@ -493,6 +539,12 @@ export const APP_CONFIG_SCHEMA = {
     },
     channels: {
       type: 'object',
+      patternProperties: Object.fromEntries(
+        (Object.keys(channelPropertiesByType) as KnownChannelType[]).map((channelType) => [
+          `^${channelType}$`,
+          channelEntryWithKeyFallback(channelType),
+        ]),
+      ),
       additionalProperties: channelEntry,
     },
     asrService: {

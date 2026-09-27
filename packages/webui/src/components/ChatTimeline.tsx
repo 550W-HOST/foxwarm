@@ -1,5 +1,5 @@
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Code, FileJson, Copy, Check, Hourglass, Cloud } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, Cloud } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -28,6 +28,7 @@ import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
 import { splitCommitMarkers } from '../commitMarker'
 import {
@@ -41,6 +42,7 @@ import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
 import PastedTextBlock from './PastedTextBlock'
 import { PASTED_TEXT_CLOSE, PASTED_TEXT_OPEN, parsePastedTextSegments, type PastedTextSegment } from '../pastedText'
+import { formatTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
 import { splitGeneratedAttachmentName } from '../attachmentRefs'
 import {
   formatCompactDuration,
@@ -50,8 +52,10 @@ import {
 } from '../usageTiming'
 import {
   buildTimelineRows,
+  getGroupContentPartIndex,
   type NormalizedTokenUsage,
   type TimelineRowView,
+  type TimelineGroupView,
   type TimelineRowsCache,
   type UsageAttribution,
 } from './timelineRows'
@@ -62,6 +66,7 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  showTimeDividers?: boolean
   showUserMessageMetadata?: boolean
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
@@ -81,8 +86,7 @@ const formatTokenCount = (count: number): string => {
 const formatUsageTitle = (usage: NormalizedTokenUsage, attribution: UsageAttribution, callCount?: number) => {
   const total = getUsageTotalTokens(usage)
   const api = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
-  const between = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
-  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}${between === null ? '' : ` • between ${formatDetailedDuration(between)}`}${api === null ? '' : ` • API ${formatDetailedDuration(api)}`}`
+  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}${api === null ? '' : ` • API ${formatDetailedDuration(api)}`}`
 }
 
 const formatUsageTime = (timestamp: number): string => new Intl.DateTimeFormat(undefined, {
@@ -107,6 +111,21 @@ const formatUsageTimes = (timestamps: UsageAttribution['timestamps']): string =>
   return labels.join(' • ') || 'unavailable'
 }
 
+const formatUsageMessageSeq = (seqs: UsageAttribution['messageSeqs']): { label: string; target: string } | null => {
+  if (seqs.length === 0) return null
+  let first = Infinity
+  let last = 0
+  for (const seq of seqs) {
+    // An incomplete aggregate cannot be attributed to just the known messages.
+    if (seq === null) return null
+    first = Math.min(first, seq)
+    last = Math.max(last, seq)
+  }
+  return first === last
+    ? { label: String(first), target: String(first) }
+    : { label: `${first} ~ ${last}`, target: `${first}-${last}` }
+}
+
 const formatDurationSummary = (samples: DurationSample[]): string => {
   const summary = summarizeDurationSamples(samples)
   const labels: string[] = []
@@ -115,8 +134,6 @@ const formatDurationSummary = (samples: DurationSample[]): string => {
   if (summary.invalidCount > 0) labels.push('invalid timing')
   return labels.join(' • ') || 'unavailable'
 }
-
-const MIN_COLLAPSED_BETWEEN_REQUESTS_MS = 60_000
 
 const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
@@ -138,29 +155,60 @@ const ModelUsageTextRow = ({ label, value }: { label: string; value: string }) =
   </span>
 )
 
-const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, expanded, onToggle }: {
+const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, sessionId, expanded, onToggle }: {
   usage: NormalizedTokenUsage
   isMobile: boolean
   callCount?: number
   attribution: UsageAttribution
+  sessionId: string
   expanded: boolean
   onToggle: () => void
 }) {
+  const [copied, setCopied] = useState(false)
+  const copyResetTimeoutRef = useRef<number | null>(null)
+  const messageSeq = formatUsageMessageSeq(attribution.messageSeqs)
+  const reference = messageSeq ? `sessionId=${sessionId} msg#${messageSeq.target}` : null
+  const currentReferenceRef = useRef(reference)
+  currentReferenceRef.current = reference
+
+  useEffect(() => {
+    setCopied(false)
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+        copyResetTimeoutRef.current = null
+      }
+    }
+  }, [reference])
+
+  const copyReference = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!reference) return
+    try {
+      await copyTextToClipboard(reference)
+      if (currentReferenceRef.current !== reference) return
+      setCopied(true)
+      if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copyResetTimeoutRef.current = null
+      }, 1500)
+    } catch (error) {
+      setCopied(false)
+      console.error('Failed to copy message reference:', error)
+    }
+  }
+
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
   const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
-  const betweenRequestsMs = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
-  const collapsedBetweenRequestsMs = betweenRequestsMs !== null && betweenRequestsMs >= MIN_COLLAPSED_BETWEEN_REQUESTS_MS
-    ? betweenRequestsMs
-    : null
 
   return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
+    <div
       data-usage-badge
-      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} pointer-events-auto rounded-md border border-fw-border bg-fw-surface/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-fw-border dark:bg-fw-canvas/85 ${expanded ? 'w-fit' : ''} cursor-pointer appearance-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring`}
-      title={formatUsageTitle(usage, attribution, callCount)}
+      role="group"
+      aria-label="Request usage"
+      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left w-fit' : 'inline-flex flex-row items-center'} pointer-events-auto rounded-md border border-fw-border bg-fw-surface/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-fw-border dark:bg-fw-canvas/85`}
       onPointerDown={stopUsageBadgeEvent}
       onClick={(event) => {
         event.preventDefault()
@@ -168,61 +216,73 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
         onToggle()
       }}
     >
-      {expanded ? (
-        <>
+      <button
+        type="button"
+        data-usage-badge-toggle
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
+        className={`${expanded ? 'flex w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} min-w-0 cursor-pointer appearance-none font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring`}
+        title={formatUsageTitle(usage, attribution, callCount)}
+      >
+        {expanded ? <>
           {callCount ? <ModelUsageRow label="Calls" value={callCount} tone="normal" /> : null}
           <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-          <ModelUsageTextRow label="Between" value={formatDurationSummary(attribution.betweenRequestsMs)} />
           <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
           <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
           <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
-        </>
-      ) : (
-        <>
+        </> : <>
           {callCount ? <ModelUsageRow label="×" value={callCount} tone="normal" /> : null}
           <ModelUsageRow label="C" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-          {(collapsedBetweenRequestsMs !== null || apiDurationMs !== null) ? (
+          {apiDurationMs !== null ? (
             <span
               data-usage-timing-summary
               className="inline-flex items-center gap-2 border-l border-fw-border pl-2"
             >
-              {collapsedBetweenRequestsMs !== null ? (
-                <span
-                  data-usage-timing-kind="between"
-                  className="inline-flex items-center gap-1 text-fw-text-subtle"
-                  title={`Between requests: ${formatDetailedDuration(collapsedBetweenRequestsMs)}`}
-                >
-                  <Hourglass aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
-                  <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(collapsedBetweenRequestsMs)}</span>
-                </span>
-              ) : null}
-              {apiDurationMs !== null ? (
-                <span
-                  data-usage-timing-kind="api"
-                  className="inline-flex items-center gap-1 text-fw-text"
-                  title={`API response: ${formatDetailedDuration(apiDurationMs)}`}
-                >
-                  <Cloud aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
-                  <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(apiDurationMs)}</span>
-                </span>
-              ) : null}
+              <span
+                data-usage-timing-kind="api"
+                className="inline-flex items-center gap-1 text-fw-text"
+                title={`API response: ${formatDetailedDuration(apiDurationMs)}`}
+              >
+                <Cloud aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
+                <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(apiDurationMs)}</span>
+              </span>
             </span>
           ) : null}
-        </>
+        </>}
+      </button>
+      {expanded && (
+        <div data-usage-seq-row className="flex min-w-0 items-center justify-between gap-2 text-fw-text-muted">
+          <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Seq</span>
+          <span data-usage-seq-value className="ml-auto min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{messageSeq?.label || 'unavailable'}</span>
+          {reference && (
+            <button
+              type="button"
+              data-usage-seq-copy
+              aria-label={copied ? 'Copied message reference' : 'Copy message reference'}
+              title={copied ? 'Copied message reference' : 'Copy message reference'}
+              className="shrink-0 rounded p-0.5 text-fw-text-muted hover:bg-fw-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring"
+              onPointerDown={stopUsageBadgeEvent}
+              onClick={copyReference}
+            >
+              {copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}
+            </button>
+          )}
+        </div>
       )}
-    </button>
+    </div>
   )
 })
 
-const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount, attribution }: {
+const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callCount, attribution, sessionId }: {
   usage: NormalizedTokenUsage
   isMobile: boolean
   callCount?: number
   attribution: UsageAttribution
+  sessionId: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const [expandedClampOffset, setExpandedClampOffset] = useState(0)
@@ -263,7 +323,7 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   if (isMobile) {
     return (
       <div data-usage-badge-anchor className="pointer-events-none mb-2 mt-1 flex justify-end pr-1">
-        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
+        <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} sessionId={sessionId} expanded={expanded} onToggle={toggleExpanded} />
       </div>
     )
   }
@@ -275,7 +335,7 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
       className={`pointer-events-none absolute bottom-0 right-0 z-10 translate-x-[calc(100%+0.5rem)] ${expanded ? 'max-w-full' : ''}`}
       style={expanded ? { transform: `translateX(calc(100% + 0.5rem - ${expandedClampOffset}px))` } : undefined}
     >
-      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} expanded={expanded} onToggle={toggleExpanded} />
+      <ModelUsageBadge usage={usage} isMobile={isMobile} callCount={callCount} attribution={attribution} sessionId={sessionId} expanded={expanded} onToggle={toggleExpanded} />
     </div>
   )
 })
@@ -550,6 +610,8 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ part, showUserMe
 
 const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, messageKey }: { msg: Message; messageKey: string }) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
   const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
   const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
   const allLines = useMemo(() => msg.parts.flatMap((part) => {
@@ -582,21 +644,22 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   return (
     <div className="w-full min-w-0">
       <div
+        ref={heightRef}
         data-system-message-card
         data-system-message-kind={messageKind.kind}
         data-system-message-tone="system"
         className={`foxwarm-system-message-card relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClass} ${expanded || interAgentPreview ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''} my-0.5`}
-        onClick={!expanded ? () => setExpanded(true) : undefined}
+        onClick={!expanded ? toggle : undefined}
       >
         <ThreadLineButton
           expanded={expanded}
-          onToggle={() => setExpanded(current => !current)}
+          onToggle={toggle}
           label={expanded ? `Collapse ${messageKind.kind} message` : `Expand ${messageKind.kind} message`}
           className={`foxwarm-system-message-thread-line ${threadLineClass}`}
         />
         <div
           className={`foxwarm-system-message-header -ml-2 -mr-2 ${THREAD_CARD_HEADER_ROW_CLASS} px-2 py-1 ${headerClass} ${expanded ? `mb-1 cursor-pointer ${headerHoverClass}` : ''}`}
-          onClick={expanded ? (event) => { event.stopPropagation(); setExpanded(false) } : undefined}
+          onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
         >
           <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
@@ -717,7 +780,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
 
   return (
     <div className="foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border px-2 py-2 rounded-lg cursor-text relative group">
-      <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="foxwarm-assistant-action-buttons absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
         </IconToggleButton>
@@ -762,32 +825,32 @@ interface MessageRowProps {
   row: TimelineRowView
   isMobile: boolean
   showUserMessageMetadata: boolean
-  onExpandGroup: (groupKey: string) => void
   sessionId: string
   nestedDepth: number
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
+  groupFirst?: boolean
+  surface?: 'all' | 'ordinary' | 'grouped'
 }
 
 const MessageRow = memo(function MessageRow({
   row,
   isMobile,
   showUserMessageMetadata,
-  onExpandGroup,
   sessionId,
   nestedDepth,
   onOpenCodeFile,
   onOpenCodeCommit,
   renderNestedMessages,
+  groupFirst = false,
+  surface = 'all',
 }: MessageRowProps) {
   const {
     key: messageKey,
     msg,
-    nextMsg,
-    group,
+    pairedToolResponse,
     collapsedGroup,
-    renderSummary,
     hideFoldedThinking,
     suppressWebSearchCards,
     usageBadge,
@@ -827,15 +890,32 @@ const MessageRow = memo(function MessageRow({
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
   const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
   const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
+  const firstGroupContentPartIndex = useMemo(() => getGroupContentPartIndex(msg), [msg])
+  // A row may contain both ordinary model content and a call in one persisted message.
+  // Grouping the row does not make its text/images (or thinking owned by the previous
+  // group) content of this group's card. The existing row flags still own visibility.
+  const belongsToOrdinarySurface = (item: typeof visibleModelParts[number]) => {
+    if (msg.role !== 'model') return false // Tool/result and event rows remain group content.
+    if (item.webSearchAction) return hasVisibleTextContent // Preserve the text-bearing hosted-search exception.
+    if (item.part.thinking) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
+    return true
+  }
+  const ordinaryParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(belongsToOrdinarySurface)
+  const groupedParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(item => !belongsToOrdinarySurface(item))
+  const displayedParts = surface === 'ordinary' ? ordinaryParts : groupedParts
+  const ordinaryContent = msg.role === 'model' && (ordinaryParts.length > 0 || imageParts.length > 0)
+  if (surface === 'ordinary' && !ordinaryContent) return null
+  if (surface === 'grouped' && msg.role === 'model' && groupedParts.length === 0 && !msg.parts.some(part => part.functionCall || part.functionResponse)) return null
+  const suppressAnchor = groupFirst || (surface === 'grouped' && ordinaryContent)
 
   return (
     <div
-      className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${marginClass}`}
-      data-chat-message-anchor-key={anchorKey}
-      data-context-scrollbar-anchor-key={scrollbarAnchorKey}
+      className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${groupFirst ? '' : marginClass}`}
+      data-chat-message-anchor-key={suppressAnchor ? undefined : anchorKey}
+      data-context-scrollbar-anchor-key={suppressAnchor ? undefined : scrollbarAnchorKey}
     >
       <div
-        className={`min-w-0 ${widthClass} ${
+        className={`min-w-0 ${surface !== 'all' ? 'w-full' : widthClass} ${
           !systemLikeMessage && msg.role === 'user'
             ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
             : ''
@@ -860,7 +940,7 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
-            {visibleModelParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
+            {displayedParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
               if (webSearchAction) {
                 if (suppressWebSearchCards && !hasVisibleTextContent) {
                   return null
@@ -871,10 +951,9 @@ const MessageRow = memo(function MessageRow({
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               if (part.thinking) {
-                // A model text splits the group: thinking before the text belongs to the group
-                // that ends there, so it follows that group's expansion, while thinking after
-                // the text (and in text-free messages) follows this message's own group.
-                const foldedIntoGroupAbove = firstTextPartIndex !== -1 && partIndex < firstTextPartIndex
+                // Ordinary model output splits a group: thinking before that content belongs
+                // to the group that ends there; later thinking belongs to this row's group.
+                const foldedIntoGroupAbove = firstGroupContentPartIndex !== -1 && partIndex < firstGroupContentPartIndex
                 const folded = foldedIntoGroupAbove ? hideFoldedThinking : collapsedGroup
                 if (folded) {
                   return null
@@ -888,13 +967,10 @@ const MessageRow = memo(function MessageRow({
               }
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
             })}
-            <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
-            {renderSummary && group && (
-              <ToolGroupSummaryCard items={group.summaryItems} onExpand={() => onExpandGroup(group.key)} />
-            )}
-            {collapsedGroup ? null : (interleavedToolGroup && nextMsg ? <InterleavedToolGroup msg={msg} nextMsg={nextMsg} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
-            {collapsedGroup ? null : (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
-            {usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} />}
+            {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} />)}
+            {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} sessionId={sessionId} />}
           </div>
         )}
       </div>
@@ -904,7 +980,8 @@ const MessageRow = memo(function MessageRow({
   prev.row === next.row &&
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
-  prev.onExpandGroup === next.onExpandGroup &&
+  prev.groupFirst === next.groupFirst &&
+  prev.surface === next.surface &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
@@ -912,7 +989,63 @@ const MessageRow = memo(function MessageRow({
   (!getContextBlockMetaFromMessage(prev.row.msg) || prev.renderNestedMessages === next.renderNestedMessages)
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+type TimelineGroupRows = { key: string; group: TimelineGroupView | null; rows: TimelineRowView[] }
+
+interface TimelineGroupProps {
+  group: TimelineGroupView
+  rows: TimelineRowView[]
+  rowProps: Omit<MessageRowProps, 'row'>
+  onToggle: (key: string, expanded: boolean) => void
+}
+
+const TimelineGroup = memo(function TimelineGroup({ group, rows, rowProps, onToggle }: TimelineGroupProps) {
+  const expanded = group.keepExpanded || !rows[0].collapsedGroup
+  const { ref, prepare } = useThreadCardHeightTransition(expanded)
+  const expand = useCallback(() => { prepare(); onToggle(group.key, true) }, [group.key, onToggle, prepare])
+  const collapse = useCallback(() => { prepare(); onToggle(group.key, false) }, [group.key, onToggle, prepare])
+  const first = rows[0]
+  return (
+    <div className="foxwarm-tool-group-slot min-w-0 max-w-full">
+      <div
+        ref={ref}
+        className={`foxwarm-tool-group relative min-w-0 ${group.keepExpanded ? 'max-w-full' : first.widthClass} ${first.marginClass}`}
+        data-tool-group={group.key}
+        data-tool-group-expanded={expanded}
+        data-chat-message-anchor-key={first.anchorKey}
+        data-context-scrollbar-anchor-key={first.scrollbarAnchorKey}
+      >
+        {group.keepExpanded ? rows.map((row, index) => (
+          <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} />
+        )) : (
+          <>
+            {rows.map((row, index) => <MessageRow key={`${row.key}-ordinary`} row={row} {...rowProps} groupFirst={index === 0} surface="ordinary" />)}
+            <div className="foxwarm-tool-group-card-frame relative min-w-0 max-w-full">
+              <ToolGroupSummaryCard items={group.summaryItems} onExpand={expanded ? collapse : expand} expanded={expanded}>
+                {rows.map((row, index) => (
+                  <MessageRow key={row.key} row={row} {...rowProps} groupFirst={index === 0} surface="grouped" />
+                ))}
+              </ToolGroupSummaryCard>
+              {!expanded && first.usageBadge && (
+                <ModelUsageAnchor usage={first.usageBadge.usage} isMobile={rowProps.isMobile} callCount={first.usageBadge.callCount} attribution={first.usageBadge.attribution} sessionId={rowProps.sessionId} />
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+})
+
+const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { marker: TimelineTimeMarker }) {
+  const { text, title } = formatTimelineTimeMarker(marker)
+  return (
+    <div data-timeline-time-separator className="my-3 w-full text-center text-[11px] text-fw-text-subtle">
+      <time dateTime={new Date(marker.timestamp).toISOString()} title={title} className="tabular-nums">{text}</time>
+    </div>
+  )
+})
+
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
 
@@ -924,6 +1057,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       isMobile={isMobile}
       groupTools={groupTools}
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
+      showTimeDividers={false}
       showUserMessageMetadata={showUserMessageMetadata}
       onOpenCodeFile={onOpenCodeFile}
       onOpenCodeCommit={onOpenCodeCommit}
@@ -933,38 +1067,47 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
 
   const rows = useMemo(() => {
     const result = buildTimelineRows(
-      { messages, isMobile, groupTools, showUsageBadge, nestedDepth, expandedGroupKeys: expandedToolGroups },
+      { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys: expandedToolGroups },
       rowsCacheRef.current,
     )
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, groupTools, isMobile, messages, nestedDepth, showUsageBadge])
+  }, [expandedToolGroups, groupTools, isMobile, messages, nestedDepth, showUsageBadge, showTimeDividers])
 
 
-  const handleExpandGroup = useCallback((groupKey: string) => {
+  const groupedRows = useMemo(() => {
+    const result: TimelineGroupRows[] = []
+    for (const row of rows) {
+      const group = groupTools && row.group && row.group.summaryItems.length > 0 ? row.group : null
+      const previous = result[result.length - 1]
+      if (group && previous?.group?.key === group.key) {
+        previous.rows.push(row)
+      } else {
+        result.push({ key: group?.key || row.key, group, rows: [row] })
+      }
+    }
+    return result
+  }, [groupTools, rows])
+
+  const handleGroupToggle = useCallback((groupKey: string, expanded: boolean) => {
     setExpandedToolGroups(prev => {
       const next = new Set(prev)
-      next.add(groupKey)
+      if (expanded) next.add(groupKey)
+      else next.delete(groupKey)
       return next
     })
   }, [])
 
+  const rowProps = { isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages }
+
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
-      {rows.map((row) => (
-        <MessageRow
-          key={row.key}
-          row={row}
-          isMobile={isMobile}
-          showUserMessageMetadata={showUserMessageMetadata}
-          onExpandGroup={handleExpandGroup}
-          sessionId={sessionId}
-          nestedDepth={nestedDepth}
-          onOpenCodeFile={onOpenCodeFile}
-          onOpenCodeCommit={onOpenCodeCommit}
-          renderNestedMessages={renderNestedMessages}
-        />
-      ))}
+      {groupedRows.flatMap(item => [
+        ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
+        item.group
+          ? <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
+          : <MessageRow key={item.key} row={item.rows[0]} {...rowProps} />,
+      ])}
     </div>
   )
 })

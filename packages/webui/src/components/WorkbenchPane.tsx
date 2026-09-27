@@ -18,6 +18,8 @@ interface WorkbenchPaneProps {
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
+  onMoveTabToNewWindow: (tabId: string) => void
+  canMoveTabToNewWindow: (tabId: string) => boolean
   onCloseOtherTabs: (tabId: string) => void
   onCloseAllTabs: () => void
   onSplitRight: () => void
@@ -60,6 +62,8 @@ export default function WorkbenchPane({
   onSelectTab,
   onCloseTab,
   onKeepTab,
+  onMoveTabToNewWindow,
+  canMoveTabToNewWindow,
   onCloseOtherTabs,
   onCloseAllTabs,
   onSplitRight,
@@ -101,6 +105,8 @@ export default function WorkbenchPane({
         onSelectTab={onSelectTab}
         onCloseTab={onCloseTab}
         onKeepTab={onKeepTab}
+        onMoveTabToNewWindow={onMoveTabToNewWindow}
+        canMoveTabToNewWindow={canMoveTabToNewWindow}
         onCloseOtherTabs={onCloseOtherTabs}
         onCloseAllTabs={onCloseAllTabs}
       />
