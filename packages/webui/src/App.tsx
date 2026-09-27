@@ -1561,6 +1561,7 @@ function App() {
         emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
         showPaneControls={!isMobile}
+        hideTabStrip={paneIds.length === 1 && paneTabs.length === 1}
         canClosePane={paneIds.length > 1}
         content={content}
         onFocusPane={handleFocus}

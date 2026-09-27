@@ -248,7 +248,7 @@ test('Sidebar drag into a tab row Keeps the Session; docking a preview to a pane
 })
 
 test('direct Chat link opens a preview; close does not rehydrate until explicit navigation', async () => {
-  const page = await openFixture({ tabs: [system], activeTabId: 'system:agents', hash: '#tab/chat:e2e-b' })
+  const page = await openFixture({ activeTabId: 'system:agents', hash: '#tab/chat:e2e-b' })
   try {
     await page.waitForSelector('[data-tab-id="chat:e2e-b"][title$="(preview)"]')
     await page.click('[data-tab-id="chat:e2e-b"] button[title="Close tab"]')
@@ -261,7 +261,7 @@ test('direct Chat link opens a preview; close does not rehydrate until explicit 
 })
 
 test('Keep after a direct Session link changes only preview state, not the current hash', async () => {
-  const page = await openFixture({ tabs: [system], activeTabId: 'system:agents', hash: '#session/e2e-b' })
+  const page = await openFixture({ activeTabId: 'system:agents', hash: '#session/e2e-b' })
   try {
     await page.waitForSelector('[data-tab-id="chat:e2e-b"][title$="(preview)"]')
     const beforeHash = (await state(page)).hash
@@ -271,6 +271,66 @@ test('Keep after a direct Session link changes only preview state, not the curre
     await page.waitForFunction(() => document.querySelector('[data-tab-id="chat:e2e-b"]')?.title === 'e2e-b')
     assert.equal((await state(page)).hash, beforeHash)
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
+  } finally { await page.close() }
+})
+
+const paneButtons = '[title="Split right with active tab"], [title="Split down with active tab"], [title="Close pane"]'
+
+test('single pane with one tab omits its strip without leaving header height; Sidebar drag restores tabs and controls', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a')] })
+  try {
+    await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+    assert.equal(await page.$('[data-pane-id="pane-main"] [data-tab-id]'), null)
+    assert.equal(await page.$(paneButtons), null)
+    const geometry = await page.$eval('[data-pane-id="pane-main"]', pane => {
+      const content = pane.querySelector('.min-h-0.flex-1')
+      return { contentTop: content.getBoundingClientRect().top, paneTop: pane.getBoundingClientRect().top, contentHeight: content.getBoundingClientRect().height, paneHeight: pane.getBoundingClientRect().height }
+    })
+    assert.ok(geometry.contentTop - geometry.paneTop <= 2, JSON.stringify(geometry))
+    assert.ok(geometry.paneHeight - geometry.contentHeight <= 3, JSON.stringify(geometry))
+    await page.waitForSelector('[data-session-id="e2e-b"]')
+    const source = await (await page.$('[data-session-id="e2e-b"]')).boundingBox()
+    const target = await (await page.$('[data-pane-id="pane-main"]')).boundingBox()
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(source.x + source.width / 2 + 12, source.y + source.height / 2, { steps: 4 })
+    await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 20 })
+    await new Promise(resolve => setTimeout(resolve, 120))
+    await page.mouse.up()
+    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]')
+    assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
+    assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 3)
+    assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
+    await page.click('[data-tab-id="chat:e2e-b"] button[title="Close tab"]')
+    await page.waitForFunction(() => {
+      const state = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state
+      return state.root.tabIds.length === 1 && state.root.activeTabId === 'chat:e2e-a'
+        && !document.querySelector('[data-tab-id]')
+        && !!document.querySelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+    })
+    assert.equal(await page.$(paneButtons), null)
+  } finally { await page.close() }
+})
+
+test('multi-pane single-tab strips remain visible while pane controls follow each tab count', async () => {
+  const page = await openFixture({ split: true })
+  try {
+    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-a"]')
+    await page.waitForSelector('[data-pane-id="pane-other"] [data-tab-id="system:agents"]')
+    assert.equal(await page.$(paneButtons), null)
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
+    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]')
+    assert.equal(await page.$(paneButtons), null, 'replacing the preview keeps one tab in the pane')
+    await page.click('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]', { clickCount: 2 })
+    await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-c'))
+    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"]')
+    assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
+    assert.equal(await page.$$eval('[data-pane-id="pane-main"] button[title="Split right with active tab"], [data-pane-id="pane-main"] button[title="Split down with active tab"], [data-pane-id="pane-main"] button[title="Close pane"]', nodes => nodes.length), 3)
+    assert.equal(await page.$('[data-pane-id="pane-other"] ' + paneButtons.split(', ').join(', [data-pane-id="pane-other"] ')), null)
+    await page.click('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"] button[title="Close tab"]')
+    await page.waitForFunction(() => !document.querySelector('[data-tab-id="chat:e2e-c"]'))
+    assert.ok(await page.$('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]'))
+    assert.equal(await page.$(paneButtons), null)
   } finally { await page.close() }
 })
 
