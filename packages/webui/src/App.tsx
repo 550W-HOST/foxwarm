@@ -1698,7 +1698,7 @@ function App() {
       if (sourcePane.id === targetPane.id) {
         const from = targetPane.tabIds.indexOf(activeId)
         const to = targetPane.tabIds.indexOf(overId)
-        if (from < 0 || from === to || (from < to && from + 1 === to)) return
+        if (from < 0 || from === to) return
         const tabId = promotePreviewTab(activeId)
         if (tabId) {
           reorderTabs(targetPane.id, tabId, overId)

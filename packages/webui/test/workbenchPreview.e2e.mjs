@@ -199,12 +199,12 @@ test('cancel and no-op drag preserve preview; real reorder and cross-pane drop K
     await page.mouse.up()
     assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true, 'canceled active drag does not Keep')
     await new Promise(resolve => setTimeout(resolve, 650))
-    await drag(page, '[data-tab-id="chat:e2e-a"]', '[data-tab-id="system:setup"]')
-    assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true, 'moving immediately before next tab leaves order unchanged')
+    await drag(page, '[data-tab-id="chat:e2e-a"]', '[data-tab-id="chat:e2e-a"]')
+    assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true, 'dropping on the original tab leaves its position unchanged')
     await new Promise(resolve => setTimeout(resolve, 650))
-    await drag(page, '[data-tab-id="chat:e2e-a"]', '[data-tab-id="system:agents"]')
+    await drag(page, '[data-tab-id="chat:e2e-a"]', '[data-tab-id="system:setup"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:e2e-a']?.preview === false)
-    assert.deepEqual((await state(page)).root.tabIds, ['chat:e2e-a', 'system:agents', 'system:setup'])
+    assert.deepEqual((await state(page)).root.tabIds, ['system:agents', 'system:setup', 'chat:e2e-a'], 'dropping on the immediate right neighbor uses existing reorderTabs semantics')
   } finally { await page.close() }
 
   const otherPage = await openFixture({ split: true })
