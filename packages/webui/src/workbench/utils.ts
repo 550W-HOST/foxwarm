@@ -283,6 +283,10 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
   return Object.fromEntries(Object.entries(tabsById).flatMap(([tabId, tab]) => {
     if (!referencedIds.has(tabId) || !isSupportedWorkbenchTab(tab)) return []
 
+    // Pre-canonical preview IDs cannot identify their Session from the URL.
+    // Keep only preview records whose ID names their current Session.
+    if (tab.type === 'chat' && tab.preview && tabId !== `chat:${tab.sessionId}`) return []
+
     // Older workbench state may contain the removed tab-level `pinned` flag.
     // Read it tolerantly, but strip it so all future persisted writes use the
     // current single-row tab model.

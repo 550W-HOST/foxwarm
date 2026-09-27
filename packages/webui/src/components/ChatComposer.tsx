@@ -87,7 +87,6 @@ interface ChatComposerProps {
     stop: () => void
     cancel: () => void
   }>
-  onDraftEdited?: (draftText: string) => void
 }
 
 function formatEffortLabel(value: string): string {
@@ -690,7 +689,6 @@ const ChatComposer = memo(function ChatComposer({
   onHeightChange,
   onSend,
   onCreateStreamingTranscriber,
-  onDraftEdited,
 }: ChatComposerProps) {
   const loadedDraft = useMemo(() => loadComposerDraft(sessionId), [sessionId])
   const [draftState, setDraftState] = useState<{ sessionId: string; draft: ComposerDraft }>(() => ({ sessionId, draft: loadedDraft }))
@@ -764,8 +762,7 @@ const ChatComposer = memo(function ChatComposer({
     if (activeSessionIdRef.current !== targetSessionId) return
     draftRef.current = nextDraft
     setDraftState({ sessionId: targetSessionId, draft: nextDraft })
-    onDraftEdited?.(serializeComposerDraft(nextDraft))
-  }, [onDraftEdited, persistDraftSafely, sessionId])
+  }, [persistDraftSafely, sessionId])
 
   useEffect(() => {
     let cancelled = false
