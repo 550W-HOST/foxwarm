@@ -26,6 +26,7 @@ await writeFile(entryPath, `
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [] }) })
   const noop = async () => {}
   window.modelSelections = []
+  window.childModelSelections = []
   const props = {
     sessionId: 'fixture/main', sessionMissing: false, loading: false, asrAvailable: false,
     modelOptions: [
@@ -38,7 +39,7 @@ await writeFile(entryPath, `
     childModelDefault: 'provider/an-equally-long-child-model-label-that-must-not-overflow',
     effectiveChildModelKey: 'provider/an-equally-long-child-model-label-that-must-not-overflow',
     effectiveEffort: 'xhigh', effectiveChildEffort: 'medium',
-    onChangeModel: async model => { window.modelSelections.push(model) }, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
+    onChangeModel: async model => { window.modelSelections.push(model) }, onChangeChildModel: async model => { window.childModelSelections.push(model) }, onChangeEffort: noop, onChangeChildEffort: noop,
     onRefreshModels: noop, onOpenModelSettings: () => { window.modelSettingsOpens += 1 }, onSend: async () => false,
     onTranscribeAudio: async () => ({ text: '', status: 200, rawLength: 0, textLength: 0, responsePreview: '' }),
     onCreateStreamingTranscriber: async () => ({ sendAudioChunk() {}, stop() {}, cancel() {} }),
@@ -54,10 +55,13 @@ await writeFile(entryPath, `
   const root = createRoot(document.getElementById('root'))
   window.renderFixture = (mode = 'default') => {
     window.modelSelections = []
+    window.childModelSelections = []
     window.modelSettingsOpens = 0
     const activeProps = mode === 'details'
       ? { ...props, modelOptions: detailOptions, currentModelKey: 'alpha', sessionModel: 'alpha', defaultModelKey: 'alias', childModelDefault: 'beta', effectiveChildModelKey: 'beta', effectiveEffort: 'high', effectiveChildEffort: 'high' }
-      : props
+      : mode === 'no-child'
+        ? { ...props, childModelDefault: null, effectiveChildModelKey: null }
+        : props
     root.render(<div id="host" style={{ width: '900px', maxWidth: '100%' }}><ChatComposer {...activeProps} /></div>)
   }
   window.renderFixture()
@@ -76,7 +80,7 @@ before(async () => {
   server = createServer(async (request, response) => {
     if (request.url === '/fixture.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(await readFile(path.join(outputDirectory, 'fixture.js'))); return }
     response.writeHead(200, { 'Content-Type': 'text/html' })
-    response.end(`<!doctype html><html><head><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
+    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -120,6 +124,11 @@ test('model trigger shrinks and ellipsizes without horizontal overflow in a narr
   assert.equal(geometry.labelClipped, true)
   assert.ok(geometry.documentOverflow <= 0, JSON.stringify(geometry))
   assert.equal(geometry.sendVisible, true)
+  await page.click('[data-model-trigger-child="true"]')
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 2)
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-model-selector-trigger')), true)
 })
 
 test('model popup is fixed before first paint and preserves page and composer scroll on first and remounted opens', async () => {
@@ -276,4 +285,102 @@ test('model picker disambiguates duplicate concrete ids and describes virtual ro
   assert.equal((await page.$eval('[data-model-trigger-name="true"]', element => element.textContent || '')).trim(), 'alpha/Alpha Custom')
   await page.click('[data-model-column="current"] [data-model-option-key="beta"]')
   assert.deepEqual(await page.evaluate(() => window.modelSelections), ['beta'])
+})
+
+test('current and child summary share one hover, focus, and keyboard-operable picker trigger', async () => {
+  await page.reload({ waitUntil: 'load' })
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.waitForSelector('.foxwarm-model-selector-trigger')
+  await page.evaluate(() => window.renderFixture('details'))
+  await page.waitForFunction(() => document.querySelector('[data-model-trigger-child="true"]')?.textContent?.includes('beta/Beta Custom'))
+
+  const layout = await page.evaluate(() => {
+    const button = document.querySelector('.foxwarm-model-selector-trigger')
+    const label = button.querySelector('[data-model-trigger-name="true"]')
+    const effort = button.querySelector('[data-model-trigger-effort="true"]')
+    const child = button.querySelector('[data-model-trigger-child="true"]')
+    const rect = element => { const bounds = element.getBoundingClientRect(); return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } }
+    return {
+      buttons: document.querySelectorAll('.foxwarm-model-selector-root button[aria-haspopup="dialog"]').length,
+      childIsButton: child instanceof HTMLButtonElement,
+      button: rect(button), label: rect(label), effort: rect(effort), child: rect(child),
+    }
+  })
+  assert.equal(layout.buttons, 1)
+  assert.equal(layout.childIsButton, false)
+  assert.ok(layout.child.x > layout.effort.x + layout.effort.width, JSON.stringify(layout))
+
+  const hoverAt = async (x, y) => {
+    await page.mouse.move(x, y)
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 180)))
+    return page.evaluate(({ x: px, y: py }) => {
+      const button = document.querySelector('.foxwarm-model-selector-trigger')
+      return {
+        background: getComputedStyle(button).backgroundColor,
+        hovered: button.matches(':hover'),
+        hit: document.elementFromPoint(px, py)?.closest('button') === button,
+      }
+    }, { x, y })
+  }
+  const centerY = layout.button.y + layout.button.height / 2
+  const outside = await hoverAt(2, 2)
+  const mainHover = await hoverAt(layout.label.x + layout.label.width / 2, centerY)
+  const gapHover = await hoverAt((layout.effort.x + layout.effort.width + layout.child.x) / 2, centerY)
+  const childHover = await hoverAt(layout.child.x + layout.child.width / 2, centerY)
+  assert.equal(mainHover.hovered, true)
+  assert.equal(gapHover.hovered, true)
+  assert.equal(childHover.hovered, true)
+  assert.equal(mainHover.hit, true)
+  assert.equal(gapHover.hit, true)
+  assert.equal(childHover.hit, true)
+  assert.notEqual(mainHover.background, outside.background)
+  assert.equal(mainHover.background, gapHover.background)
+  assert.equal(mainHover.background, childHover.background)
+
+  await page.mouse.click(layout.child.x + layout.child.width / 2, centerY)
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 2)
+  await page.mouse.click(layout.child.x + layout.child.width / 2, centerY)
+  await page.waitForSelector('[data-model-selector-popup="true"]', { hidden: true })
+  await page.focus('.foxwarm-model-selector-trigger')
+  await page.keyboard.press('Tab')
+  assert.equal(await page.evaluate(() => document.activeElement?.closest('.foxwarm-model-selector-root') !== null), false)
+
+  await page.focus('.foxwarm-model-selector-trigger')
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-model-selector-popup="true"]', { hidden: true })
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-model-selector-trigger')), true)
+  await page.keyboard.press('Space')
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  await page.click('[data-model-column="child"] [data-model-option-key="route"]')
+  assert.deepEqual(await page.evaluate(() => window.childModelSelections), ['route'])
+  assert.deepEqual(await page.evaluate(() => window.modelSelections), [])
+  await page.click('[data-model-column="current"] [data-model-option-key="unique"]')
+  assert.deepEqual(await page.evaluate(() => window.modelSelections), ['unique'])
+  assert.ok(await page.$('input[type="range"][aria-label="Child effort"]'))
+  assert.ok(await page.$('input[type="range"][aria-label="Current effort"]'))
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-model-selector-trigger')), true)
+})
+
+test('without a configured child the trigger stays compact and the popup has only the current column', async () => {
+  await page.reload({ waitUntil: 'load' })
+  await page.setViewport({ width: 390, height: 700 })
+  await page.waitForSelector('.foxwarm-model-selector-trigger')
+  await page.evaluate(() => window.renderFixture('no-child'))
+  await page.waitForFunction(() => !document.querySelector('[data-model-trigger-child="true"]'))
+  const geometry = await page.evaluate(() => {
+    const button = document.querySelector('.foxwarm-model-selector-trigger')
+    const bounds = button.getBoundingClientRect()
+    return { width: bounds.width, viewportOverflow: document.documentElement.scrollWidth - innerWidth }
+  })
+  assert.ok(geometry.width > 0 && geometry.width <= 390, JSON.stringify(geometry))
+  assert.ok(geometry.viewportOverflow <= 0, JSON.stringify(geometry))
+  await page.click('.foxwarm-model-selector-trigger')
+  await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+  assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 1)
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-model-selector-trigger')), true)
 })

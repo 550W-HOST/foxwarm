@@ -1820,6 +1820,8 @@ test('model columns preserve child policy and commit effort only after dragging 
     assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
     await desktopPage.keyboard.press('Escape')
     await desktopPage.click('[data-model-trigger-child="true"]')
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await desktopPage.click('input[aria-label="Filter child models"]')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter child models"]'))
     assert.ok(await desktopPage.$('[data-model-column="child"]'))
     const slider = await desktopPage.$('input[type="range"][aria-label="Child effort"]')

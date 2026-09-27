@@ -286,7 +286,6 @@ function ModelSelector({
   const popupRef = useRef<HTMLDivElement | null>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
   const childFilterInputRef = useRef<HTMLInputElement | null>(null)
-  const childButtonRef = useRef<HTMLButtonElement | null>(null)
   const effortDescriptionId = useId()
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
@@ -364,22 +363,19 @@ function ModelSelector({
     }
   }, [childFollows])
 
-  const openScope = useCallback((scope: ModelSelectorScope) => {
-    if (open && activeScope === scope) {
+  const toggleOpen = useCallback(() => {
+    if (open) {
       setOpen(false)
       return
     }
-    if (!open) {
-      setFilterQuery('')
-      setChildFilterQuery('')
-      filterComposingRef.current = false
-      updatePopupPosition()
-      void onRefreshModels()
-    }
-    setActiveScope(scope)
+    setFilterQuery('')
+    setChildFilterQuery('')
+    filterComposingRef.current = false
+    setActiveScope('current')
+    updatePopupPosition()
+    void onRefreshModels()
     setOpen(true)
-    requestAnimationFrame(() => (scope === 'child' ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true }))
-  }, [activeScope, onRefreshModels, open, updatePopupPosition])
+  }, [onRefreshModels, open, updatePopupPosition])
 
   useLayoutEffect(() => {
     if (open) updatePopupPosition()
@@ -426,7 +422,7 @@ function ModelSelector({
         ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
     } else if (!open && wasOpenRef.current) {
-      ;(activeScope === 'child' && !childFollows ? childButtonRef : buttonRef).current?.focus({ preventScroll: true })
+      buttonRef.current?.focus({ preventScroll: true })
     }
     wasOpenRef.current = open
     return () => {
@@ -540,7 +536,7 @@ function ModelSelector({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => openScope('current')}
+        onClick={toggleOpen}
         className="foxwarm-model-selector-trigger inline-flex h-8 min-w-0 max-w-full shrink items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-fw-text-muted transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring dark:hover:bg-fw-hover"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -549,25 +545,14 @@ function ModelSelector({
         <span className="h-3.5 w-px shrink-0 bg-fw-border" aria-hidden="true" />
         <span className="shrink-0 text-fw-text-muted" data-model-trigger-effort="true">{triggerEffort}</span>
         {error && <span className="shrink-0 text-fw-danger" aria-hidden="true">!</span>}
+        {!childFollows && (
+          <span title={childModelDefault || undefined} data-model-trigger-child="true" className="foxwarm-model-child-trigger inline-flex min-w-0 items-center gap-1 text-xs text-fw-text-muted">
+            <GitBranch aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{childResolvedTargetName}{childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}</span>
+          </span>
+        )}
         <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-
-      {!childFollows && (
-        <button
-          ref={childButtonRef}
-          type="button"
-          onClick={() => openScope('child')}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-label={`Children: ${childResolvedTargetName}`}
-          title={childModelDefault || undefined}
-          data-model-trigger-child="true"
-          className="foxwarm-model-child-trigger inline-flex h-8 min-w-0 items-center gap-1 rounded-lg px-2 text-xs text-fw-text-muted hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring"
-        >
-          <GitBranch aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{childResolvedTargetName}{childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}</span>
-        </button>
-      )}
 
       {open && createPortal(
         <div
