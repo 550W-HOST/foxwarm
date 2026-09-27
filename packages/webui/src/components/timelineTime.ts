@@ -2,7 +2,6 @@ import type { Message } from './chatShared'
 
 export interface TimelineTimeMarker {
   timestamp: number
-  laterMs: number | null
 }
 
 const validTimestamp = (value: unknown): number | null => (
@@ -25,13 +24,11 @@ export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupe
     let marker: TimelineTimeMarker | null = null
     if (eligible && current !== null) {
       if (!showedClock || previous === null) {
-        marker = { timestamp: current, laterMs: null }
+        marker = { timestamp: current }
       } else {
         const gap = current - previous
-        if (gap > 0 && (gap >= 60_000 || !sameLocalDay(current, previous))) {
-          marker = { timestamp: current, laterMs: gap }
-        } else if (gap < 0 && (Math.abs(gap) >= 60_000 || !sameLocalDay(current, previous))) {
-          marker = { timestamp: current, laterMs: null }
+        if (Math.abs(gap) >= 60_000 || (gap !== 0 && !sameLocalDay(current, previous))) {
+          marker = { timestamp: current }
         }
       }
       showedClock = true
@@ -39,17 +36,6 @@ export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupe
     previous = current
     return marker
   })
-}
-
-const formatLater = (durationMs: number): string => {
-  let seconds = Math.floor(durationMs / 1000)
-  const parts: string[] = []
-  for (const [unit, length] of [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]] as const) {
-    const count = Math.floor(seconds / length)
-    if (count > 0) { parts.push(`${count}${unit}`); seconds %= length }
-    if (parts.length === 2) break
-  }
-  return parts.join(' ')
 }
 
 export const formatTimelineTimeMarker = (marker: TimelineTimeMarker, now = Date.now()): { text: string; title: string } => {
@@ -62,10 +48,9 @@ export const formatTimelineTimeMarker = (marker: TimelineTimeMarker, now = Date.
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }
   const clock = new Intl.DateTimeFormat('en-US', options).format(date)
-  const later = marker.laterMs !== null && marker.laterMs >= 1000 ? formatLater(marker.laterMs) : ''
   const title = new Intl.DateTimeFormat('en-US', {
     year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
     hourCycle: 'h23', timeZoneName: 'shortOffset',
   }).format(date)
-  return { text: later ? `${clock} · ${later} later` : clock, title }
+  return { text: clock, title }
 }

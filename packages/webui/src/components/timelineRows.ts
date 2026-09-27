@@ -449,7 +449,7 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.anchorKey === b.anchorKey
   && a.scrollbarAnchorKey === b.scrollbarAnchorKey
   && a.usageAnchorRelative === b.usageAnchorRelative
-  && (a.timeMarker === b.timeMarker || (a.timeMarker?.timestamp === b.timeMarker?.timestamp && a.timeMarker?.laterMs === b.timeMarker?.laterMs))
+  && (a.timeMarker === b.timeMarker || a.timeMarker?.timestamp === b.timeMarker?.timestamp)
   && sameRequestTiming(a.requestTiming, b.requestTiming)
   && sameUsageBadge(a.usageBadge, b.usageBadge)
 )
