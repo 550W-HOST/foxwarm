@@ -867,7 +867,8 @@ export class WebUIChannel implements Channel {
   }
 
   private guestCanAccessSession(auth: HttpAuthContext, sessionId: string): boolean {
-    return auth.role === 'admin' || auth.sessionIds.includes(sessionId);
+    return auth.role === 'admin' || (auth.sessionIds.includes(sessionId)
+      && sessionManager.getSessionCatalog(sessionId)?.id === sessionId);
   }
 
   private async requireSessionAccess(req: express.Request, res: express.Response, sessionId: string): Promise<HttpAuthContext | null> {
@@ -884,7 +885,7 @@ export class WebUIChannel implements Channel {
   }
 
   private isSlashCommandText(text: string): boolean {
-    return /^\s*\//.test(text);
+    return /^\s*(?:@[a-zA-Z_\-.]+\s+)?\//.test(text);
   }
 
   private async refreshPresentationSubscription(sessionId: string): Promise<void> {
@@ -1076,7 +1077,7 @@ export class WebUIChannel implements Channel {
 
             const missing: string[] = [];
             for (const sessionId of sessionIds) {
-              if (!sessionManager.getSessionCatalog(sessionId)) {
+              if (sessionManager.getSessionCatalog(sessionId)?.id !== sessionId) {
                 missing.push(sessionId);
               }
             }
@@ -1765,7 +1766,7 @@ export class WebUIChannel implements Channel {
             if (!auth) return res.status(401).json({ error: 'Unauthorized' });
             const runtimeSessions = await sessionRuntime.listSessions();
             if (auth.role === 'guest') {
-              return res.json({ sessions: runtimeSessions.filter(session => auth.sessionIds.includes(session.id))
+              return res.json({ sessions: runtimeSessions.filter(session => this.guestCanAccessSession(auth, session.id))
                 .map(session => ({ id: session.id, displayName: session.displayName || null, busy: session.busy })) });
             }
             const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
@@ -2117,6 +2118,9 @@ export class WebUIChannel implements Channel {
             if (auth.role === 'guest') {
               const snapshot = await sessionRuntime.getHistory(sessionId);
               if (!snapshot) return res.status(404).json({ error: 'Session not found' });
+              if (snapshot.session.id !== sessionId || !this.guestCanAccessSession(auth, sessionId)) {
+                return res.status(403).json({ error: 'Guest session binding changed.' });
+              }
               if (!snapshot.messages.some(message => message.parts.some(part => part.inlineDataRef?.blobId === blobId))) {
                 return res.status(403).json({ error: 'Image is not part of this guest session.' });
               }
@@ -2254,6 +2258,9 @@ export class WebUIChannel implements Channel {
             const snapshot = await sessionRuntime.getHistory(sessionId);
             if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
+            }
+            if (auth.role === 'guest' && (snapshot.session.id !== sessionId || !this.guestCanAccessSession(auth, sessionId))) {
+              return res.status(403).json({ error: 'Guest session binding changed.' });
             }
             const historyVersion = snapshot.session.historyVersion;
             if (expectedHistoryVersion !== undefined && expectedHistoryVersion !== historyVersion) {
@@ -2865,6 +2872,9 @@ export class WebUIChannel implements Channel {
             res.status(404).json({ error: 'Session not found' });
             return;
           }
+          if (auth.role === 'guest' && (session.id !== requestedSessionId || !this.guestCanAccessSession(auth, requestedSessionId))) {
+            return res.status(403).json({ error: 'Guest session binding changed.' });
+          }
           const sessionId = session.id;
           
           // Set SSE headers
@@ -3247,6 +3257,9 @@ export class WebUIChannel implements Channel {
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }
+            if (auth.role === 'guest' && existingSession.id !== sessionId) {
+              return res.status(403).json({ error: 'Guest session binding changed.' });
+            }
 
             // Support both old format (text) and new format (parts)
             let finalParts = parts || (text ? [{ text }] : []);
@@ -3327,6 +3340,9 @@ export class WebUIChannel implements Channel {
                 if (!tempPath) continue;
 
                 try {
+                  if (auth.role === 'guest' && !this.guestCanAccessSession(auth, sessionId)) {
+                    return res.status(403).json({ error: 'Guest session binding changed.' });
+                  }
                   const stats = await fs.stat(tempPath);
                   if (!stats.isFile()) continue;
 
@@ -3372,6 +3388,10 @@ export class WebUIChannel implements Channel {
             }
             
             if (finalParts.length === 0) throw new Error('Missing message content');
+
+            if (auth.role === 'guest' && !this.guestCanAccessSession(auth, sessionId)) {
+              return res.status(403).json({ error: 'Guest session binding changed.' });
+            }
 
             // Attach webui channel if not already attached
             // Use sessionId as channelUserId so each session has its own channel

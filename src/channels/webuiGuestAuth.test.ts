@@ -6,9 +6,11 @@ import path from 'path';
 import { WebUIChannel } from './webuiChannel';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
-import { getWebUiGuestTokensPath, setWebUiGuestTokenStorePathForTests } from '../webuiGuestTokens';
+import { createWebUiGuestToken, getWebUiGuestTokensPath, setWebUiGuestTokenStorePathForTests } from '../webuiGuestTokens';
+import { MessageRouter } from '../messageRouter';
+import type { QueueItem } from '../types';
 
-async function withWebUiServer(run: (baseUrl: string, token: string, calls: { count: number }) => Promise<void>): Promise<void> {
+async function withWebUiServer(run: (baseUrl: string, token: string, calls: { count: number }) => Promise<void>, router?: MessageRouter): Promise<void> {
   const port = 34100 + Math.floor(Math.random() * 1000);
   const adminToken = `admin-${Math.random().toString(36).slice(2)}`;
   const server = new HttpServer(port, adminToken);
@@ -21,7 +23,7 @@ async function withWebUiServer(run: (baseUrl: string, token: string, calls: { co
   const channel = new WebUIChannel({
     token: adminToken,
     enableTrigger: false,
-    router: {
+    router: router || {
       handleMessage: async () => {
         calls.count += 1;
       },
@@ -171,5 +173,128 @@ test('webui guest token filters sessions and denies admin-only APIs', async () =
   } finally {
     await sessionManager.deleteSession(boundSessionId).catch(() => {});
     await sessionManager.deleteSession(unboundSessionId).catch(() => {});
+  }
+});
+
+
+test('guest bindings require exact Session IDs at creation and after alias retargeting', async () => {
+  await sessionManager.loadSessions();
+  const suffix = Math.random().toString(36).slice(2, 9);
+  const firstId = `guest_exact_first_${suffix}`;
+  const secondId = `guest_exact_second_${suffix}`;
+  const alias = `guest_shared_alias_${suffix}`;
+  await sessionManager.createEmptySession(firstId);
+  await sessionManager.createEmptySession(secondId);
+  try {
+    const first = sessionManager.getSessionCatalog(firstId)!;
+    const second = sessionManager.getSessionCatalog(secondId)!;
+    first.aliases = [alias];
+    await sessionManager.saveSessionCatalogEntries([firstId]);
+    await sessionManager.appendSessionMessage(firstId, { role: 'model', parts: [{ text: 'FIRST-ONLY' }] });
+    await sessionManager.appendSessionMessage(secondId, { role: 'model', parts: [{ text: 'SECOND-ONLY' }] });
+
+    await withWebUiServer(async (baseUrl, adminToken, calls) => {
+      const request = (route: string, token: string) => fetch(`${baseUrl}${route}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const create = (sessionIds: string[]) => fetch(`${baseUrl}/api/guest-tokens`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionIds }),
+      });
+      const aliasIssue = await create([alias]);
+      assert.equal(aliasIssue.status, 400, 'an alias is not an exact token binding');
+      const { token: guestToken } = await (await create([firstId])).json() as { token: string };
+      const legacyAlias = (await createWebUiGuestToken({ sessionIds: [alias] })).token;
+      assert.equal((await request(`/api/sessions/${alias}/history`, legacyAlias)).status, 403, 'previously persisted alias binding fails closed');
+      const initial = await request(`/api/sessions/${firstId}/history`, guestToken);
+      assert.equal(initial.status, 200);
+      assert.equal((await initial.json() as any).messages[0].parts[0].text, 'FIRST-ONLY');
+      assert.equal((await request(`/api/sessions/${alias}/history`, adminToken)).status, 200);
+
+      first.aliases = [];
+      second.aliases = [alias];
+      await sessionManager.saveSessionCatalogEntries([firstId, secondId]);
+      const reboundAlias = await request(`/api/sessions/${alias}/history`, adminToken);
+      assert.equal((await reboundAlias.json() as any).messages[0].parts[0].text, 'SECOND-ONLY', 'administrator aliases retain existing behavior');
+      assert.equal((await request(`/api/sessions/${alias}/history`, legacyAlias)).status, 403);
+
+      await sessionManager.deleteSession(firstId);
+      second.aliases = [alias, firstId];
+      await sessionManager.saveSessionCatalogEntries([secondId]);
+      assert.equal((await request(`/api/sessions/${firstId}/history`, adminToken)).status, 200, 'administrator may resolve a moved alias');
+      for (const route of [
+        `/api/sessions/${firstId}/history`,
+        `/api/sessions/${firstId}/stream`,
+        `/api/sessions/${firstId}/blobs/${'0'.repeat(64)}.png`,
+      ]) {
+        const response = await request(route, guestToken);
+        assert.equal(response.status, 403, route);
+      }
+      const message = await fetch(`${baseUrl}/api/sessions/${firstId}/message`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${guestToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'must not reach second Session' }),
+      });
+      assert.equal(message.status, 403);
+      assert.equal(calls.count, 0);
+      const form = new FormData();
+      form.append('file', new Blob(['safe'], { type: 'text/plain' }), 'safe.txt');
+      form.append('sessionId', firstId);
+      const upload = await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${guestToken}` }, body: form,
+      });
+      assert.equal(upload.status, 403);
+      const list = await request('/api/sessions', guestToken);
+      assert.deepEqual((await list.json() as any).sessions, [], 'a deleted exact ID does not list an alias target');
+      assert.equal((await request(`/api/sessions/${secondId}/history`, guestToken)).status, 403);
+    });
+  } finally {
+    await sessionManager.deleteSession(firstId).catch(() => {});
+    await sessionManager.deleteSession(secondId).catch(() => {});
+  }
+});
+
+test('guest messages cannot dispatch mention-prefixed slash commands through the real router', async () => {
+  await sessionManager.loadSessions();
+  const sessionId = `guest_command_${Math.random().toString(36).slice(2, 9)}`;
+  await sessionManager.createEmptySession(sessionId);
+  const commands: string[] = [];
+  const queued: QueueItem[] = [];
+  const router = new MessageRouter(undefined, async (_sessionId, item) => {
+    queued.push(item);
+    return { accepted: true, mailboxIntentId: 1, generation: 1, lastAppliedMailboxId: 1,
+      messageCount: queued.length, busy: false };
+  });
+  router.setCommandHandler(async (_ctx, command) => { commands.push(command); return true; });
+  try {
+    await withWebUiServer(async (baseUrl, adminToken) => {
+      const created = await fetch(`${baseUrl}/api/guest-tokens`, {
+        method: 'POST', headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionIds: [sessionId] }),
+      });
+      assert.equal(created.status, 200);
+      const guestToken = (await created.json() as { token: string }).token;
+      const send = (token: string, body: object) => fetch(`${baseUrl}/api/sessions/${sessionId}/message`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      for (const body of [{ text: '/help' }, { text: '@bot /help' }, { parts: [{ text: '@bot /help' }] },
+        { parts: [{ text: '@bot' }, { text: ' /help' }] }]) {
+        assert.equal((await send(guestToken, body)).status, 403, JSON.stringify(body));
+      }
+      assert.deepEqual(commands, []);
+      assert.equal(queued.length, 0);
+      for (const text of ['@bot ordinary words', 'https://example.test/docs/path', 'A paragraph mentions /help inside.']) {
+        assert.equal((await send(guestToken, { text })).status, 200, text);
+      }
+      for (let attempt = 0; queued.length < 3 && attempt < 50; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(queued.length, 3, 'ordinary guest text reaches the real router queue');
+      assert.deepEqual(commands, []);
+      assert.equal((await send(adminToken, { text: '@bot /help' })).status, 200, 'administrator command behavior is unchanged');
+      for (let attempt = 0; commands.length < 1 && attempt < 50; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.deepEqual(commands, ['/help']);
+    }, router);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });

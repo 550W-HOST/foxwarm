@@ -5,7 +5,7 @@ Secondary files: src/httpServer.ts, src/channels/webuiChannel.ts, src/channels/w
 
 ## Purpose
 
-Persists hashed WebUI guest credentials with exact existing Session ID bindings. A guest token is browser-channel authority only and never creates a Session, Agent, or agent tool policy.
+Persists hashed WebUI guest credentials with exact existing canonical Session ID bindings; issue-time aliases and retargeted persisted aliases are not guest authority. A guest token is browser-channel authority only and never creates a Session, Agent, or agent tool policy.
 
 ## Public functions
 

@@ -291,7 +291,7 @@ test('guest realtime periodically revalidates revoked credentials and releases p
     checkToken: () => false,
     getAuthContext: async () => valid ? { role: 'guest' as const, tokenId: 'revocable', sessionIds: ['guest/main'] } : null,
     resolveIds: ids => ({ canonicalIds: ids, missingIds: [], requestedToCanonical: Object.fromEntries(ids.map(id => [id, id])) }),
-    loadSessionState: async sessionId => ({ type: 'session-state', sessionId }),
+    loadSessionState: async sessionId => ({ type: 'session-state', sessionId, session: { id: sessionId } }),
     loadSessionList: async () => ({ type: 'session-list-delta' }),
     keepaliveIntervalMs: 10,
   });
@@ -305,4 +305,54 @@ test('guest realtime periodically revalidates revoked credentials and releases p
   assert.equal(socket.closes[0]?.code, 1008);
   assert.equal(hub.hasSessionSubscribers('guest/main'), false);
   assert.equal(hub.getConnectionCount(), 0);
+});
+
+test('guest realtime drops a snapshot if a bound ID becomes an alias during initialization', async () => {
+  let target = 'guest/main';
+  let release!: () => void;
+  const loading = new Promise<void>(resolve => { release = resolve; });
+  const hub = new WebUiRealtimeHub({
+    checkToken: () => false,
+    getAuthContext: async () => ({ role: 'guest' as const, tokenId: 'alias-retarget', sessionIds: ['guest/main'] }),
+    resolveIds: ids => ({ canonicalIds: ids.map(() => target), missingIds: [],
+      requestedToCanonical: Object.fromEntries(ids.map(id => [id, target])) }),
+    loadSessionState: async sessionId => {
+      await loading;
+      return { type: 'session-state', sessionId, session: { id: target } };
+    },
+    loadSessionList: async () => { throw new Error('Guest list must not be loaded'); },
+    keepaliveIntervalMs: 60_000,
+  });
+  const socket = new FakeSocket();
+  await hub.handleConnection(socket as any, {} as http.IncomingMessage);
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  await flush();
+  target = 'private/main';
+  release();
+  await flush();
+  assert.equal(socket.sent.some(event => event.type === 'session-state'), false);
+  assert.equal(hub.hasSessionSubscribers('guest/main'), false);
+  assert.equal(socket.closes[0]?.code, 1011);
+});
+
+test('guest realtime closes a connected bound stream when its ID is retargeted to an alias', async () => {
+  let target = 'guest/main';
+  const hub = new WebUiRealtimeHub({
+    checkToken: () => false,
+    getAuthContext: async () => ({ role: 'guest' as const, tokenId: 'alias-retarget', sessionIds: ['guest/main'] }),
+    resolveIds: ids => ({ canonicalIds: ids.map(() => target), missingIds: [],
+      requestedToCanonical: Object.fromEntries(ids.map(id => [id, target])) }),
+    loadSessionState: async sessionId => ({ type: 'session-state', sessionId, session: { id: sessionId } }),
+    loadSessionList: async () => { throw new Error('Guest list must not be loaded'); },
+    keepaliveIntervalMs: 10,
+  });
+  const socket = new FakeSocket();
+  await hub.handleConnection(socket as any, {} as http.IncomingMessage);
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['guest/main'] });
+  await flush();
+  assert.equal(hub.hasSessionSubscribers('guest/main'), true);
+  target = 'private/main';
+  for (let attempt = 0; attempt < 20 && socket.closes.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(socket.closes[0]?.code, 1008);
+  assert.equal(hub.hasSessionSubscribers('guest/main'), false);
 });

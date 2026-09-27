@@ -238,6 +238,14 @@ export class WebUiRealtimeHub {
     if (client.closed || client.revision !== revision || client.requestedRevision !== revision) {
       return;
     }
+    if (client.auth.role === 'guest') {
+      const latest = this.dependencies.resolveIds(message.sessionIds);
+      if (message.sessionIds.some(id => latest.requestedToCanonical[id] !== id)
+        || sessionSnapshots.some((snapshot, index) => snapshot.type === 'session-state'
+          && (snapshot.session as { id?: string } | undefined)?.id !== resolvedSessions.canonicalIds[index])) {
+        throw new Error('Guest session binding changed during subscription.');
+      }
+    }
 
     if (listSnapshot) this.safeSend(client, listSnapshot);
     for (const missingId of resolvedSessions.missingIds) {
@@ -300,7 +308,8 @@ export class WebUiRealtimeHub {
       void this.dependencies.getAuthContext(client.request).then(auth => {
         if (client.closed) return;
         if (auth?.role !== 'guest' || auth.tokenId !== tokenId
-          || [...client.sessionIds].some(id => !auth.sessionIds.includes(id))) {
+          || [...client.sessionIds].some(id => !auth.sessionIds.includes(id)
+            || this.dependencies.resolveIds([id]).requestedToCanonical[id] !== id)) {
           try { client.socket.close(1008, 'Unauthorized'); } catch {}
           this.cleanupClient(client);
           return;
