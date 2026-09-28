@@ -28,12 +28,14 @@ import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
 import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
 import {
     buildOpenAIImageGenerationTool,
+    createGeneratedImageExternalizationBudget,
     externalizeGeneratedImageItems,
     formatGeneratedImageFailureNote,
     formatGeneratedImageModelPlaceholder,
     GeneratedImageReplayError,
     isImageGenerationCallItem,
     isCompletedImageGenerationItem,
+    type GeneratedImageExternalizationBudget,
 } from './llmProviders/openaiImages';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
@@ -2952,7 +2954,8 @@ function buildConcreteRequestPlan(options: {
     };
 }
 
-async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any, allowEmptySuffix = false): Promise<ChatResult> {
+async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any, allowEmptySuffix = false,
+    generatedImageBudget?: GeneratedImageExternalizationBudget, outputIndexStart = 0): Promise<ChatResult> {
     let responseText = '';
     const allParts: Message['parts'] = [];
     let messageProviderMeta: ChatResult['providerMeta'];
@@ -2964,7 +2967,9 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
         // Externalize hosted image results before any logging or journaling so
         // only Blob references survive past this await boundary.
-        const generatedImages = await externalizeGeneratedImageItems(outputItems, { sourceModelId: plan.modelId });
+        const generatedImages = await externalizeGeneratedImageItems(outputItems, {
+            sourceModelId: plan.modelId, budget: generatedImageBudget, outputIndexStart,
+        });
         const generatedImagePartByIndex = new Map(generatedImages.images.map(entry => [entry.index, entry.part]));
         for (let outputIndex = 0; outputIndex < outputItems.length; outputIndex += 1) {
             const item = outputItems[outputIndex];
@@ -3041,7 +3046,7 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
                 allParts.push({ functionCall: { id: callId, name: item.name, ...parsedArgs } });
             }
         }
-        successfulImageCount = generatedImages.images.length;
+        successfulImageCount = generatedImageBudget?.externalizedCount ?? generatedImages.images.length;
         imageFailureCount = generatedImages.failures.length;
         imageFailureNote = formatGeneratedImageFailureNote(generatedImages.failures);
         if (successfulImageCount > 0 && imageFailureNote) {
@@ -3193,6 +3198,7 @@ function createResponsesPrefixCommitLane(args: {
     virtualModelKey?: string;
     abortController: AbortController;
     emitter: ReturnType<typeof createModelStreamEventEmitter>;
+    generatedImageBudget: GeneratedImageExternalizationBudget;
     onCommit: NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>;
     onDelivered?: RequestLlmOnceOptions['onPartialAssistantDelivered'];
 }) {
@@ -3227,7 +3233,7 @@ function createResponsesPrefixCommitLane(args: {
         scheduledEnd = end;
         tail = tail.then(async () => {
             if (args.abortController.signal.aborted || failure) return;
-            const parsed = await parseConcreteProviderResponse(args.plan, { output });
+            const parsed = await parseConcreteProviderResponse(args.plan, { output }, false, args.generatedImageBudget, start);
             if (!parsed.allParts?.length) throw new Error('Completed commentary prefix had no replayable assistant content.');
             args.emitter.flush();
             const message = await args.onCommit({
@@ -3493,12 +3499,13 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             let responseHeaders: any;
             let cleanupStreamingAttempt = () => {};
             let streamingTimeoutError: Error | undefined;
+            const generatedImageBudget = createGeneratedImageExternalizationBudget();
             const prefixLane = (plan.useOpenAIResponsesApi && (plan.useStreamingApi || plan.useOpenAIResponsesWs)
                 && options.purpose === 'normal-turn' && options.onPartialAssistantCommit && options.getCommittedHistoryForRetry)
                 ? createResponsesPrefixCommitLane({
                     plan, requestId, attempt: journalAttempt,
                     ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
-                    abortController, emitter: modelStreamEmitter,
+                    abortController, emitter: modelStreamEmitter, generatedImageBudget,
                     onCommit: options.onPartialAssistantCommit,
                     onDelivered: options.onPartialAssistantDelivered,
                 }) : undefined;
@@ -3660,7 +3667,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 await prefixLane?.settle();
                 const result = await parseConcreteProviderResponse(plan,
                     prefixLane?.committedEnd ? { ...resp, output: resp.output.slice(prefixLane.committedEnd) } : resp,
-                    !!prefixLane?.committedEnd);
+                    !!prefixLane?.committedEnd, generatedImageBudget, prefixLane?.committedEnd || 0);
                 const completedAt = Date.now();
                 const durationMs = Math.max(0, performance.now() - requestStartedAt);
                 if (virtualRoutingRequest && selection) {

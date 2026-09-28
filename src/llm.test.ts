@@ -51,6 +51,13 @@ const TEST_MODELS_CONFIG = loadModelsConfigFromObject({
       apiKey: 'test-key',
       models: ['model'],
     },
+    'responses-image-fixture': {
+      providerType: 'openai-responses',
+      baseUrl: 'https://responses-image.test/v1',
+      apiKey: 'test-key',
+      imageGeneration: { enabled: true },
+      models: ['model'],
+    },
     'responses-ws-fixture': {
       providerType: 'openai-ws',
       baseUrl: 'https://responses-ws.test/v1',
@@ -1892,6 +1899,81 @@ test('native image in a committed commentary prefix is externalized and delivere
       .filter(part => part.inlineDataRef?.blobId)
       .map(part => fs.remove(resolveImageBlobPath(part.inlineDataRef!.blobId!))));
   }
+});
+
+test('streamed commentary segments share the physical image-count and decoded-byte budgets', async () => {
+  const originalPost = axios.post;
+  const tiny = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#123456' } }).png().toBuffer();
+  const large = await sharp({ create: { width: 2500, height: 2500, channels: 4,
+    background: { r: 4, g: 8, b: 12, alpha: 1 } } }).png({ compressionLevel: 0 }).toBuffer();
+  assert.ok(large.length < 32 * 1024 * 1024 && large.length * 3 > 64 * 1024 * 1024);
+
+  async function runScenario(image: Buffer, batches: number[], expectedImages: number, reason: string) {
+    const session = createOpenAITestSession(makeId('responses_segmented_image_budget'));
+    session.model = 'responses-image-fixture/model';
+    session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-image-fixture/model" />\n\nsystem prompt';
+    const stream = new PassThrough();
+    const media: Message[] = [];
+    let requestCount = 0;
+    (axios as any).post = async (_url: string, body: any) => {
+      requestCount++;
+      assert.ok(body.tools?.some((tool: any) => tool.type === 'image_generation'));
+      return { status: 200, statusText: 'OK', headers: {}, data: stream };
+    };
+    const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+    let outputIndex = 0;
+    const emitBatch = (section: number) => {
+      for (let itemNumber = 0; itemNumber < batches[section]; itemNumber++) {
+        const index = outputIndex++;
+        frame({ type: 'response.output_item.added', output_index: index,
+          item: { type: 'image_generation_call', status: 'in_progress' } });
+        frame({ type: 'response.output_item.done', output_index: index,
+          item: { type: 'image_generation_call', status: 'completed', output_format: 'png', result: image.toString('base64') } });
+      }
+      const index = outputIndex++;
+      frame({ type: 'response.output_item.added', output_index: index,
+        item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+      frame({ type: 'response.output_item.done', output_index: index,
+        item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: `batch ${section}` }] } });
+    };
+    try {
+      const pending = chat([{ text: 'draw images' }], session, 0, {
+        toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 1,
+        appendMessage: async message => { session.history.push(message); },
+        onIntermediateAssistantText: () => {},
+        onCommittedAssistantMessage: message => {
+          if (message.parts.some(part => part.imageMeta?.origin === 'generated')) media.push(message);
+        },
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      emitBatch(0);
+      for (let tries = 0; tries < 250 && media.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(media.length, 1, 'first completed commentary segment delivered its images while the stream stayed open');
+      emitBatch(1);
+      frame({ type: 'response.completed', response: { output: [], usage: { input_tokens: 4, output_tokens: 8 } } });
+      stream.end();
+      await pending;
+      const persisted = session.history.filter(message => message.role === 'model').flatMap(message => message.parts);
+      const imageParts = persisted.filter(part => part.imageMeta?.origin === 'generated');
+      const delivered = media.flatMap(message => message.parts).filter(part => part.imageMeta?.origin === 'generated');
+      assert.equal(requestCount, 1);
+      assert.equal(imageParts.length, expectedImages);
+      assert.equal(delivered.length, expectedImages);
+      assert.equal(new Set(imageParts.map(part => part.imageMeta?.imageId)).size, expectedImages,
+        'fallback image identities use absolute provider output indices across commits');
+      assert.ok(persisted.some(part => part.text?.includes(reason)), 'excess image is reported without a Blob');
+    } finally {
+      stream.destroy();
+      await Promise.all([...new Set(session.history.flatMap(message => message.parts)
+        .map(part => part.inlineDataRef?.blobId).filter((id): id is string => !!id))]
+        .map(id => fs.remove(resolveImageBlobPath(id))));
+    }
+  }
+
+  try {
+    await runScenario(tiny, [4, 5], 8, '8-image limit');
+    await runScenario(large, [2, 1], 2, 'cumulative limit');
+  } finally { (axios as any).post = originalPost; }
 });
 
 test('a non-image WebSocket completion reuses the chain after two assistant segments are committed in output order', async () => {
