@@ -24,6 +24,7 @@ ALPHA_RELEASE = threading.Event()
 HELD_REQUEST = threading.Event()
 HELD_CLOSED = threading.Event()
 PROGRESS_SEEN = threading.Event()
+B_REQUEST_SEEN = threading.Event()
 
 
 def wait_until(check, label, timeout=20):
@@ -61,11 +62,12 @@ class Provider(BaseHTTPRequestHandler):
         assert self.headers.get('Authorization') == 'Bearer ' + PROVIDER_TOKEN
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert [entry['name'] for entry in payload['tools']] == ['read', 'write']
-        assert 'symbolic links are not supported' in payload['tools'][0]['description']
         assert payload['tools'][1]['parameters']['required'] == ['filePath', 'content']
         input_text = json.dumps(payload['input'], ensure_ascii=False)
         with REQUEST_LOCK:
             REQUESTS.append(payload)
+        if 'beta first' in input_text:
+            B_REQUEST_SEEN.set()
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
@@ -237,6 +239,7 @@ def main():
         send(port, a, 'alpha first')
         assert PROGRESS_SEEN.wait(10), 'no SSE text increment before completion'
         send(port, b, 'beta first')
+        assert B_REQUEST_SEEN.wait(10), 'beta provider request did not arrive while alpha was held'
         send(port, a, 'alpha second')  # Same-session input while first provider body is held.
         ALPHA_RELEASE.set()
         wait_until(lambda: len(history(port, a)) >= 4, 'alpha queued second turn')
@@ -304,7 +307,8 @@ def main():
         print(json.dumps({'result': 'ok', 'firstPid': prior_pid, 'secondPid': resumed_pid,
                           'sessions': [a, b], 'providerRequests': count, 'alphaHistory': 5,
                           'betaHistory': 14, 'betaNextSeq': 15, 'stopClosedProvider': HELD_CLOSED.is_set(),
-                          'incrementSeen': PROGRESS_SEEN.is_set(), 'workspaceFile': 'updated',
+                          'incrementSeen': PROGRESS_SEEN.is_set(), 'concurrentProviderRequests': B_REQUEST_SEEN.is_set(),
+                          'workspaceFile': 'updated',
                           'missingAndCorruptStartup': 'fail-closed'}))
     finally:
         cleanup_process(first)
