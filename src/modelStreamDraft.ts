@@ -1,4 +1,4 @@
-import type { ModelStreamToolCall } from './types';
+import type { ModelStreamPart, ModelStreamToolCall } from './types';
 
 export type ModelStreamDraftSnapshot = {
   streamId: string;
@@ -9,6 +9,7 @@ export type ModelStreamDraftSnapshot = {
   reasoning: string;
   text: string;
   toolCalls: ModelStreamToolCall[];
+  parts?: ModelStreamPart[];
 };
 
 const drafts = new Map<string, ModelStreamDraftSnapshot>();

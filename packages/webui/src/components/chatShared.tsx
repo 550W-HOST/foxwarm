@@ -226,6 +226,21 @@ export interface ModelStreamToolCallDelta {
   argumentsDelta?: ModelStreamTextDelta
 }
 
+export interface ModelStreamPart {
+  outputIndex: number
+  kind: 'reasoning' | 'text' | 'tool-call' | 'image-generation'
+  contentIndex?: number
+  summaryIndex?: number
+  text?: string
+  phase?: 'commentary' | 'final_answer'
+  status?: string
+}
+
+export interface ModelStreamPartDelta extends Omit<ModelStreamPart, 'text'> {
+  added?: true
+  textDelta?: ModelStreamTextDelta
+}
+
 export interface ContextBlockMessageMeta {
   id: number
   level: number
@@ -254,6 +269,7 @@ export interface SessionStreamEvent {
   reasoningDelta?: ModelStreamTextDelta
   textDelta?: ModelStreamTextDelta
   toolCallDeltas?: ModelStreamToolCallDelta[]
+  partDeltas?: ModelStreamPartDelta[]
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]

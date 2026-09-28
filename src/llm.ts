@@ -7,7 +7,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
@@ -364,6 +364,7 @@ type ModelStreamProgressSnapshot = {
     reasoning?: string;
     text?: string;
     toolCalls?: ModelStreamToolCall[];
+    parts?: ModelStreamPart[];
 };
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
@@ -558,6 +559,40 @@ function makeModelStreamTextDelta(previous: string, current: string) {
     return { offset: 0, text: current };
 }
 
+function modelStreamPartKey(part: ModelStreamPart): string {
+    return `${part.outputIndex}:${part.kind}:${part.contentIndex ?? ''}:${part.summaryIndex ?? ''}`;
+}
+
+function areModelStreamPartsEqual(left?: ModelStreamPart[], right?: ModelStreamPart[]): boolean {
+    if (left === right) return true;
+    if (!left || !right || left.length !== right.length) return false;
+    return left.every((part, index) => {
+        const other = right[index];
+        return part.outputIndex === other.outputIndex && part.kind === other.kind
+            && part.contentIndex === other.contentIndex && part.summaryIndex === other.summaryIndex
+            && part.text === other.text && part.phase === other.phase && part.status === other.status;
+    });
+}
+
+function makeModelStreamPartDeltas(previous: ModelStreamPart[], current: ModelStreamPart[]): ModelStreamPartDelta[] {
+    const previousByKey = new Map(previous.map(part => [modelStreamPartKey(part), part]));
+    return current.flatMap(part => {
+        const old = previousByKey.get(modelStreamPartKey(part));
+        const textDelta = part.text !== undefined ? makeModelStreamTextDelta(old?.text || '', part.text) : undefined;
+        if (old && !textDelta && old.phase === part.phase && old.status === part.status) return [];
+        return [{
+            outputIndex: part.outputIndex,
+            kind: part.kind,
+            ...(part.contentIndex !== undefined ? { contentIndex: part.contentIndex } : {}),
+            ...(part.summaryIndex !== undefined ? { summaryIndex: part.summaryIndex } : {}),
+            ...(!old ? { added: true as const } : {}),
+            ...(textDelta ? { textDelta } : {}),
+            ...(part.phase ? { phase: part.phase } : {}),
+            ...(part.status ? { status: part.status } : {}),
+        }];
+    });
+}
+
 export function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
@@ -614,7 +649,10 @@ export function createModelStreamEventEmitter(args: {
         });
         const reasoningDelta = makeModelStreamTextDelta(previousReasoning, reasoning);
         const textDelta = makeModelStreamTextDelta(previousText, text);
-        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0) return;
+        const partDeltas = latestSnapshot.parts
+            ? makeModelStreamPartDeltas(emittedSnapshot.parts || [], latestSnapshot.parts)
+            : [];
+        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0 && partDeltas.length === 0) return;
         notifySessionEvent({
             type: 'model-stream-update',
             streamId,
@@ -627,6 +665,7 @@ export function createModelStreamEventEmitter(args: {
             ...(reasoningDelta ? { reasoningDelta } : {}),
             ...(textDelta ? { textDelta } : {}),
             ...(toolCallDeltas.length ? { toolCallDeltas } : {}),
+            ...(partDeltas.length ? { partDeltas } : {}),
         });
         emittedSnapshot = {
             reasoning,
@@ -635,6 +674,7 @@ export function createModelStreamEventEmitter(args: {
                 ...call,
                 arguments: toolArgsDue ? call.arguments : previousByIndex.get(call.index)?.arguments,
             })),
+            ...(latestSnapshot.parts ? { parts: latestSnapshot.parts } : {}),
         };
         updateModelStreamDraft(args.sessionId, {
             streamId,
@@ -645,6 +685,7 @@ export function createModelStreamEventEmitter(args: {
             reasoning,
             text,
             toolCalls: currentToolCalls,
+            ...(latestSnapshot.parts ? { parts: latestSnapshot.parts } : {}),
         });
         lastSentAt = now();
         if (toolArgsDue && toolCallDeltas.some(call => call.argumentsDelta)) lastToolArgsSentAt = lastSentAt;
@@ -710,11 +751,13 @@ export function createModelStreamEventEmitter(args: {
                 reasoning: snapshot.reasoning ?? latestSnapshot.reasoning ?? '',
                 text: snapshot.text ?? latestSnapshot.text ?? '',
                 toolCalls: normalizeModelStreamToolCalls(snapshot.toolCalls ?? latestSnapshot.toolCalls),
+                ...(snapshot.parts ? { parts: snapshot.parts } : {}),
             };
             const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
             if ((latestSnapshot.reasoning || '') === nextSnapshot.reasoning
                 && (latestSnapshot.text || '') === nextSnapshot.text
-                && areModelStreamToolCallsEqual(currentToolCalls, nextSnapshot.toolCalls)) {
+                && areModelStreamToolCallsEqual(currentToolCalls, nextSnapshot.toolCalls)
+                && areModelStreamPartsEqual(latestSnapshot.parts, nextSnapshot.parts)) {
                 return;
             }
 
@@ -729,6 +772,7 @@ export function createModelStreamEventEmitter(args: {
                     reasoning: nextSnapshot.reasoning || '',
                     text: nextSnapshot.text || '',
                     toolCalls: nextSnapshot.toolCalls || [],
+                    ...(nextSnapshot.parts ? { parts: nextSnapshot.parts } : {}),
                 });
             }
             scheduleNotify();

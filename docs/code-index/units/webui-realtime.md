@@ -37,7 +37,7 @@ Server messages:
 - `connected` — authenticated physical socket exists;
 - `subscriptions-accepted` — requested/canonical maps are installed for this revision;
 - existing `session-list-delta`, `sessions-updated`, `session-state`, `session-event`, `message`, `typing`, and `session-deleted` payloads, with `sessionId` on session-scoped envelopes;
-- `model-stream-snapshot` — exact-owner cumulative transient draft with stream/iteration/sequence watermark, server `startedAt`, and the existing outer `llmRequestId`, or `draft:null`; following live events carry the same request identity and inclusive sequence coverage ranges so the browser can distinguish Worker coalescing from presentation loss and reconcile exact canonical history rows;
+- `model-stream-snapshot` — exact-owner cumulative transient draft with stream/iteration/sequence watermark, server `startedAt`, existing outer `llmRequestId`, and optional indexed Responses `parts`, or `draft:null`; following live events carry the same request identity and inclusive sequence coverage ranges so the browser can distinguish Worker coalescing from presentation loss and reconcile exact canonical history rows;
 - `subscriptions-applied` — snapshot plus buffered-live initialization completed;
 - `protocol-error` — invalid subscription or initialization failure; the connection is then failed rather than left partially initialized.
 

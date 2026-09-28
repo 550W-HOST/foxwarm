@@ -188,6 +188,22 @@ export interface ModelStreamToolCallDelta {
   argumentsDelta?: ModelStreamTextDelta;
 }
 
+/** One provider output slice; reasoning summaries retain their own indices within an output item. */
+export interface ModelStreamPart {
+  outputIndex: number;
+  kind: 'reasoning' | 'text' | 'tool-call' | 'image-generation';
+  contentIndex?: number;
+  summaryIndex?: number;
+  text?: string;
+  phase?: 'commentary' | 'final_answer';
+  status?: string;
+}
+
+export interface ModelStreamPartDelta extends Omit<ModelStreamPart, 'text'> {
+  added?: true;
+  textDelta?: ModelStreamTextDelta;
+}
+
 export type ChannelTurnToolStatus = 'running' | 'success' | 'error';
 
 export interface ChannelTurnToolRef {
@@ -221,6 +237,8 @@ export interface SessionStreamEvent {
   reasoningDelta?: ModelStreamTextDelta;
   textDelta?: ModelStreamTextDelta;
   toolCallDeltas?: ModelStreamToolCallDelta[];
+  /** Responses-only ordered output slices; flat fields below remain a compatibility projection. */
+  partDeltas?: ModelStreamPartDelta[];
   /** Legacy cumulative fields retained for tolerant readers only. */
   reasoning?: string;
   text?: string;
