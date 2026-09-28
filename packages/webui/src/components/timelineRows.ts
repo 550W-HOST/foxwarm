@@ -165,23 +165,26 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
   messageSeqs: [getValidMessageSeq(msg)],
 })
 
-/** Only a whole event wrapper represents a timeline event; quoted tags inside authored text do not. */
-const isGroupableEventMessage = (msg: Message): boolean => {
-  if (msg.role !== 'user' || msg.parts.length !== 1) return false
+/** Only a whole event/reminder wrapper may join a tool run; quoted tags do not. */
+const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | null => {
+  if (msg.role !== 'user' || msg.parts.length !== 1) return null
   const part = msg.parts[0]
   const value = part.system || part.text || ''
   const opening = value.match(/^\s*(<foxwarm-system\b[^>]*>)/i)?.[1]
-  if (!opening) return false
+  if (!opening) return null
   const tag = parseFoxwarmMetadataLine(opening)
-  if (tag?.tagName !== 'foxwarm-system' || tag.closing || tag.attrs.kind !== 'event') return false
+  const kind = tag?.attrs.kind
+  if (tag?.tagName !== 'foxwarm-system' || tag.closing || (kind !== 'event' && kind !== 'goal-reminder')) return null
   const wrapper = value.trim()
-  if (/\/\s*>$/.test(opening)) return wrapper === opening
+  if (/\/\s*>$/.test(opening)) return wrapper === opening ? kind : null
   // Text-backed history uses standalone wrapper lines. A direct-user inline quote is not one.
-  if (part.text && !/^\r?\n/.test(wrapper.slice(opening.length))) return false
-  return wrapper.slice(opening.length).trimEnd().endsWith('</foxwarm-system>')
+  if (part.text && !/^\r?\n/.test(wrapper.slice(opening.length))) return null
+  return wrapper.slice(opening.length).trimEnd().endsWith('</foxwarm-system>') ? kind : null
 }
 
-const isToolGroupableMessage = (msg: Message): boolean => msg.role === 'model' || msg.role === 'tool' || isGroupableEventMessage(msg)
+const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKind(msg) !== null
+
+const isToolGroupableMessage = (msg: Message): boolean => msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg)
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
   if (message.role === 'model') return false
@@ -206,18 +209,18 @@ const hasToolCalls = (msg: Message): boolean => msg.parts.some((part) => part.fu
 
 const hasToolResponses = (msg: Message): boolean => msg.parts.some((part) => part.functionResponse)
 
-/** Event rows may sit between a call and its result without changing their tool-use pairing. */
+/** Whole system event/reminder rows may sit between a call and result without changing pairing. */
 const nextPairedToolResponse = (messages: Message[], index: number): Message | null => {
   if (messages[index].role !== 'model' || !hasToolCalls(messages[index])) return null
   let nextIndex = index + 1
-  while (nextIndex < messages.length && isGroupableEventMessage(messages[nextIndex])) nextIndex++
+  while (nextIndex < messages.length && isGroupableSystemMessage(messages[nextIndex])) nextIndex++
   const next = messages[nextIndex]
   return next?.role === 'tool' && hasToolResponses(next) ? next : null
 }
 
 const precedingPairedModelCallIndex = (messages: Message[], index: number): number => {
   let previousIndex = index - 1
-  while (previousIndex >= 0 && isGroupableEventMessage(messages[previousIndex])) previousIndex--
+  while (previousIndex >= 0 && isGroupableSystemMessage(messages[previousIndex])) previousIndex--
   return previousIndex >= 0 && messages[previousIndex].role === 'model' && hasToolCalls(messages[previousIndex])
     ? previousIndex
     : -1
@@ -230,7 +233,7 @@ const isHandledByPreviousGroup = (messages: Message[], index: number): boolean =
 
 const getFinalStandaloneStartIdx = (messages: Message[]): number => {
   let lastIdx = messages.length - 1
-  while (lastIdx >= 0 && isGroupableEventMessage(messages[lastIdx])) lastIdx--
+  while (lastIdx >= 0 && isGroupableSystemMessage(messages[lastIdx])) lastIdx--
   if (lastIdx < 0) return -1
 
   const lastMsg = messages[lastIdx]
@@ -258,8 +261,8 @@ interface GroupScan {
 const scanGroup = (messages: Message[], start: number, finalStandaloneStartIdx: number, timeMarkers: readonly (TimelineTimeMarker | null)[]): GroupScan => {
   const startMsg = messages[start]
 
-  // A standalone event cannot capture a later tool run; it can only join a run already underway.
-  if (isGroupableEventMessage(startMsg)) return { start, end: start + 1, contentBreakIdx: -1 }
+  // A standalone system notice cannot capture a later tool run; it only joins an existing one.
+  if (isGroupableSystemMessage(startMsg)) return { start, end: start + 1, contentBreakIdx: -1 }
 
   // A message that only carries ordinary output does not own the tool run that follows it: that run forms its
   // own group with the same messages, so counting them here would render the same summary twice.
@@ -323,8 +326,9 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
 
   for (let index = start; index < end; index++) {
     const msg = messages[index]
-    if (groupHasToolCalls && isGroupableEventMessage(msg)) {
-      items.push({ name: 'system-event', label: 'Event', tone: 'system' })
+    const systemKind = groupHasToolCalls ? getGroupableSystemKind(msg) : null
+    if (systemKind) {
+      items.push({ name: `system-${systemKind}`, label: systemKind === 'event' ? 'Event' : 'Goal reminder', tone: 'system' })
     }
     const parts = index === start ? msg.parts.slice(startPartFrom) : msg.parts
     parts.forEach((part) => {
@@ -461,7 +465,7 @@ const reuseWhenEqual = <T,>(previous: T | undefined, next: T, isEqual: (a: T, b:
 export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRowsCache | null): TimelineRowsResult => {
   const { messages, isMobile, groupTools, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys } = input
   const requestTimings = deriveRequestTimings(messages)
-  const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableEventMessage) : []
+  const timeMarkers = showTimeDividers && nestedDepth === 0 ? deriveTimelineTimeMarkers(messages, isGroupableSystemMessage) : []
   const messageKeys = messages.map((msg, index) => getMessageStableKey(msg, index))
   const finalStandaloneStartIdx = getFinalStandaloneStartIdx(messages)
 
@@ -488,7 +492,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const activeGroup = group !== null && group.summaryItems.length > 0 ? group : null
     const groupExpanded = group !== null && expandedGroupKeys.has(group.key)
     const collapsedGroup = groupTools && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded
-    if (collapsedGroup && isGroupableEventMessage(msg)) return
+    if (collapsedGroup && isGroupableSystemMessage(msg)) return
     const requestTiming = requestTimings[index]
     const ownUsage = getModelMessageUsage(msg)
     const usageBadge: TimelineUsageBadgeView | null = !showUsageBadge

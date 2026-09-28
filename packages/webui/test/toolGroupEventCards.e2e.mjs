@@ -11,6 +11,9 @@ const result = (id, seq) => ({ role: 'tool', parts: [{ functionResponse: { tool_
 const event = (id, seq, field = 'system') => ({
   role: 'user', parts: [{ [field]: `<foxwarm-system kind="event" type="${id}">\nEVENT BODY ${id}\n</foxwarm-system>` }], __meta: { seq },
 })
+const goalReminder = (id, seq, field = 'system') => ({
+  role: 'user', parts: [{ [field]: `<foxwarm-system kind="goal-reminder">\nGOAL BODY ${id}\n</foxwarm-system>` }], __meta: { seq },
+})
 const direct = (text, seq) => ({ role: 'user', parts: [{ text }], __meta: { seq } })
 const final = (seq) => ({ role: 'model', parts: [{ text: 'FINAL ANSWER' }], __meta: { seq } })
 
@@ -25,8 +28,15 @@ const CASES = {
   noTools: { messages: [event('alone', 30), event('still-alone', 31, 'text')], groupTools: true },
   direct: { messages: [call('before', 40), result('before', 41), direct('Please explain the text <foxwarm-system kind="event" type="quote"> inside this message.', 42), call('after', 43), result('after', 44), final(45)], groupTools: true },
   external: { messages: [call('external-before', 50), result('external-before', 51), { role: 'user', parts: [{ system: '<foxwarm-system kind="external-input" />' }, { text: 'actual external user input' }], __meta: { seq: 52 } }, call('external-after', 53), result('external-after', 54), final(55)], groupTools: true },
-  otherKind: { messages: [call('other-before', 60), result('other-before', 61), { role: 'user', parts: [{ system: '<foxwarm-system kind="goal-reminder">\nRemember the goal.\n</foxwarm-system>' }], __meta: { seq: 62 } }, call('other-after', 63), result('other-after', 64), final(65)], groupTools: true },
+  otherKind: { messages: [call('other-before', 60), result('other-before', 61), { role: 'user', parts: [{ system: '<foxwarm-system kind="child-reminder">\nOther system reminder.\n</foxwarm-system>' }], __meta: { seq: 62 } }, call('other-after', 63), result('other-after', 64), final(65)], groupTools: true },
   userBoundary: { messages: [call('boundary', 70), result('boundary', 71), event('before-user', 72), direct('NEW USER INPUT', 73), final(74)], groupTools: true },
+  goal: { messages: [call('goal-one', 100), goalReminder('one', 101), result('goal-one', 102), goalReminder('two', 103, 'text'), goalReminder('three', 104), call('goal-two', 105), result('goal-two', 106), final(107)], groupTools: true },
+  goalUngrouped: { messages: [call('goal-one', 100), goalReminder('one', 101), result('goal-one', 102), goalReminder('two', 103, 'text'), call('goal-two', 105), result('goal-two', 106)], groupTools: false },
+  goalTail: { messages: [call('goal-tail', 110), goalReminder('tail-first', 111), result('goal-tail', 112), goalReminder('tail-last', 113, 'text')], groupTools: true },
+  goalStandalone: { messages: [goalReminder('outside', 120, 'text'), call('goal-standalone', 121), result('goal-standalone', 122), final(123)], groupTools: true },
+  goalNoTools: { messages: [goalReminder('alone', 130), goalReminder('still-alone', 131, 'text')], groupTools: true },
+  quotedGoal: { messages: [call('quoted-before', 140), result('quoted-before', 141), direct('Please explain <foxwarm-system kind="goal-reminder"> inside this message.', 142), call('quoted-after', 143), result('quoted-after', 144), final(145)], groupTools: true },
+  mixedGoal: { messages: [call('mixed-before', 150), result('mixed-before', 151), { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" />' }, { system: '<foxwarm-system kind="goal-reminder">\nMIXED REMINDER\n</foxwarm-system>' }], __meta: { seq: 152, goalReminder: true, goalReminderKind: 'compact-completion' } }, call('mixed-after', 153), result('mixed-after', 154), final(155)], groupTools: true },
 }
 
 let browser, page, server
@@ -64,7 +74,12 @@ before(async () => {
     response.end(`<!doctype html><html><body>${Object.keys(CASES).map(name => `<div id="${name}"></div>`).join('')}<script>${bundle.outputFiles[0].text}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  const isFirefox = process.env.FOXWARM_E2E_BROWSER === 'firefox'
+  browser = await puppeteer.launch({
+    browser: isFirefox ? 'firefox' : 'chrome',
+    executablePath: isFirefox ? (process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox') : chromiumPath,
+    headless: true, args: isFirefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'],
+  })
   page = await browser.newPage()
   await page.goto(`http://127.0.0.1:${server.address().port}`, { waitUntil: 'load' })
   await page.waitForSelector('#collapsed [aria-label="Expand tool group"]')
@@ -79,6 +94,7 @@ const snapshot = async (name) => page.$eval(`#${name}`, element => ({
   summaries: element.querySelectorAll('[aria-label="Expand tool group"]').length,
   summaryTags: [...element.querySelectorAll('.foxwarm-tool-card:has([aria-label="Expand tool group"]) [data-tool-tag-tone]')].map(tag => [tag.querySelector('span:last-child')?.textContent, tag.getAttribute('data-tool-tag-tone')]),
   eventCards: [...element.querySelectorAll('[data-system-message-kind="event"]')].map(card => card.textContent),
+  goalCards: [...element.querySelectorAll('[data-system-message-kind="goal-reminder"]')].map(card => card.textContent),
   toolCards: element.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card):not(:has([aria-label="Expand tool group"]))').length,
   toolText: [...element.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card):not(:has([aria-label="Expand tool group"]))')].map(card => card.textContent),
   rows: [...element.querySelectorAll('.foxwarm-chat-timeline [data-chat-message-anchor-key]')].map(row => row.getAttribute('data-chat-message-anchor-key')),
@@ -105,6 +121,47 @@ test('event wrappers between tool calls collapse into counted tags; expanding re
   await page.waitForFunction(() => !document.querySelector('#collapsed [data-tool-group]')?.style.height)
   await page.click('#collapsed [data-system-message-kind="event"] [aria-label="Expand event message"]')
   assert.equal(await page.$eval('#collapsed', el => !!el.querySelector('.foxwarm-system-message-body') && el.querySelector('.foxwarm-system-message-body').textContent.includes('EVENT BODY one')), true, JSON.stringify(await page.$eval('#collapsed', el => [...el.querySelectorAll('[data-system-message-kind=event] button')].map(b => [b.getAttribute('aria-label'), b.getAttribute('aria-expanded')]))))
+})
+
+test('whole goal reminders join tool runs with their own counted icon/tag and full original cards', async () => {
+  const collapsed = await snapshot('goal')
+  assert.deepEqual(collapsed.summaryTags, [['Goal reminder ×3', 'system'], ['exec ×2', 'success']])
+  assert.equal(collapsed.summaries, 1)
+  assert.equal(collapsed.goalCards.length, 0)
+  assert.equal(collapsed.toolCards, 0)
+  assert.ok(collapsed.fullText.includes('FINAL ANSWER'))
+  await page.click('#goal [aria-label="Expand tool group"]')
+  const expanded = await snapshot('goal')
+  assert.equal(expanded.summaries, 0)
+  assert.equal(expanded.goalCards.length, 3)
+  assert.equal(expanded.toolCards, 2)
+  assert.ok(expanded.toolText[0].includes('RESULT goal-one'))
+  assert.ok(expanded.toolText[1].includes('RESULT goal-two'))
+  assert.deepEqual(expanded.rows, ['seq-local-100', 'seq-local-101', 'seq-local-103', 'seq-local-104', 'seq-local-105', 'seq-local-107'])
+  await page.waitForFunction(() => !document.querySelector('#goal [data-tool-group]')?.style.height)
+  await page.click('#goal [data-system-message-kind="goal-reminder"] [aria-label="Expand goal-reminder message"]')
+  assert.ok((await page.$eval('#goal [data-system-message-kind="goal-reminder"] .foxwarm-system-message-body', node => node.textContent)).includes('GOAL BODY one'))
+})
+
+test('goal reminders retain the forced-open tail, stay visible with grouping disabled or no preceding call', async () => {
+  const tail = await snapshot('goalTail')
+  assert.equal(tail.summaries, 0)
+  assert.equal(tail.toolCards, 1)
+  assert.equal(tail.goalCards.length, 2)
+  assert.ok(tail.toolText[0].includes('RESULT goal-tail'))
+  assert.deepEqual(tail.rows, ['seq-local-110', 'seq-local-111', 'seq-local-113'])
+
+  const ungrouped = await snapshot('goalUngrouped')
+  assert.equal(ungrouped.summaries, 0)
+  assert.equal(ungrouped.toolCards, 2)
+  assert.equal(ungrouped.goalCards.length, 2)
+
+  const outside = await snapshot('goalStandalone')
+  assert.equal(outside.goalCards.length, 1)
+  assert.deepEqual(outside.summaryTags, [['exec ×1', 'success']])
+  const alone = await snapshot('goalNoTools')
+  assert.equal(alone.summaries, 0)
+  assert.equal(alone.goalCards.length, 2)
 })
 
 test('a final tool run with a trailing event stays expanded, including a result separated from its call by an event', async () => {
@@ -137,11 +194,13 @@ test('standalone events do not claim a following tool run or disappear without a
 
 test('quoted event text, external input, other system kinds, and a new user turn stay visible and split tool runs', async () => {
   for (const [name, visibleText] of [
-    ['direct', 'Please explain the text'], ['external', 'actual external user input'], ['otherKind', 'Remember the goal.'],
+    ['direct', 'Please explain the text'], ['external', 'actual external user input'], ['otherKind', 'Other system reminder.'],
+    ['quotedGoal', 'Please explain'], ['mixedGoal', 'MIXED REMINDER'],
   ]) {
     const view = await snapshot(name)
     assert.equal(view.summaries, 2, name)
     assert.equal(view.eventCards.length, 0, name)
+    assert.equal(view.summaryTags.some(([label]) => label?.includes('Goal reminder')), false, name)
     assert.ok(view.fullText.includes(visibleText), name)
   }
   const boundary = await snapshot('userBoundary')
