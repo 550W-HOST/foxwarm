@@ -12,8 +12,8 @@ import puppeteer from 'puppeteer-core'
 const token = 'local-browser-test-api-token'
 const providerToken = 'local-browser-test-provider-token'
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
-const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL
-assert(dll && process.env.DOTNET_ROOT, 'Set DOTNET_ROOT and FOXWARM_EXPERIMENT_HOST_DLL to the built host.')
+const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
+assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
 const dist = resolve('packages/webui/dist')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-chat-browser-'))
 let provider, browser, host

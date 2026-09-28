@@ -13,9 +13,9 @@ import { startScriptedProvider } from './experimentHostModelCompact.provider.mjs
 const token = 'local-multimodel-test-api-token'
 const alphaToken = 'local-alpha-provider-secret'
 const betaToken = 'local-beta-provider-secret'
-const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL
+const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
-assert(dll && process.env.DOTNET_ROOT, 'Set DOTNET_ROOT and FOXWARM_EXPERIMENT_HOST_DLL to the built host.')
+assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
 const dist = resolve('packages/webui/dist')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-model-compact-browser-'))
 let provider, browser, host

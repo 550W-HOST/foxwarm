@@ -1,0 +1,119 @@
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace Foxwarm.Sessions;
+
+public enum AtomicJsonWriteStage
+{
+    BeforeTempWrite,
+    AfterTempFileSync,
+    BeforeRename,
+    AfterRenameBeforeDirectorySync,
+    AfterDirectorySync
+}
+
+public enum DirectorySyncResult
+{
+    Synced,
+    Unsupported
+}
+
+public sealed class AuthorityCommittedException : IOException
+{
+    public AuthorityCommittedException(string message, Exception cause) : base(message, cause) { }
+    public bool AuthorityCommitted => true;
+}
+
+public sealed class LinuxAtomicJsonFile
+{
+    private readonly string root;
+    private readonly string filePath;
+    private readonly Action<AtomicJsonWriteStage>? stageHook;
+
+    public LinuxAtomicJsonFile(string root, string relativePath, Action<AtomicJsonWriteStage>? stageHook = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        this.root = Path.GetFullPath(root);
+        filePath = Path.GetFullPath(Path.Combine(this.root, relativePath));
+        if (!filePath.StartsWith(this.root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new ArgumentException("Authority path must remain under the supplied root.", nameof(relativePath));
+        this.stageHook = stageHook;
+    }
+
+    public string FilePath => filePath;
+    public DirectorySyncResult LastDirectorySyncResult { get; private set; }
+
+    public void Write(SessionAuthorityDocument document)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        var tempPath = Path.Combine(Path.GetDirectoryName(filePath)!, $"{Path.GetFileName(filePath)}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var renamed = false;
+        try
+        {
+            stageHook?.Invoke(AtomicJsonWriteStage.BeforeTempWrite);
+            var bytes = new UTF8Encoding(false).GetBytes(document.ToJson(indented: true));
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            stageHook?.Invoke(AtomicJsonWriteStage.AfterTempFileSync);
+            stageHook?.Invoke(AtomicJsonWriteStage.BeforeRename);
+            File.Move(tempPath, filePath, overwrite: true);
+            renamed = true;
+            stageHook?.Invoke(AtomicJsonWriteStage.AfterRenameBeforeDirectorySync);
+            LastDirectorySyncResult = LinuxDirectorySync.Sync(Path.GetDirectoryName(filePath)!);
+            stageHook?.Invoke(AtomicJsonWriteStage.AfterDirectorySync);
+        }
+        catch (Exception error)
+        {
+            if (!renamed)
+            {
+                try { File.Delete(tempPath); } catch { }
+                throw;
+            }
+            throw new AuthorityCommittedException("Session authority was renamed into place before a later durability step failed.", error);
+        }
+    }
+
+    public SessionAuthorityDocument Read(string sessionId, string agent = "main") =>
+        SessionAuthorityDocument.Load(filePath, sessionId, agent);
+
+    internal static class LinuxDirectorySync
+    {
+        private const int O_RDONLY = 0;
+        private const int O_DIRECTORY = 0x10000;
+        private static readonly HashSet<int> UnsupportedErrnos = [1, 21, 22, 38, 95]; // EPERM,EISDIR,EINVAL,ENOSYS,ENOTSUP
+
+        public static DirectorySyncResult Sync(string directoryPath)
+        {
+            if (!OperatingSystem.IsLinux()) return DirectorySyncResult.Unsupported;
+            var descriptor = open(directoryPath, O_RDONLY | O_DIRECTORY);
+            if (descriptor < 0)
+            {
+                var error = Marshal.GetLastPInvokeError();
+                if (UnsupportedErrnos.Contains(error)) return DirectorySyncResult.Unsupported;
+                throw new IOException($"Unable to open authority directory for fsync (errno {error}).");
+            }
+            try
+            {
+                if (fsync(descriptor) == 0) return DirectorySyncResult.Synced;
+                var error = Marshal.GetLastPInvokeError();
+                if (UnsupportedErrnos.Contains(error)) return DirectorySyncResult.Unsupported;
+                throw new IOException($"Unable to fsync authority directory (errno {error}).");
+            }
+            finally
+            {
+                _ = close(descriptor);
+            }
+        }
+
+        [DllImport("libc", SetLastError = true)]
+        private static extern int open(string pathname, int flags);
+        [DllImport("libc", SetLastError = true)]
+        private static extern int fsync(int fd);
+        [DllImport("libc", SetLastError = true)]
+        private static extern int close(int fd);
+    }
+}

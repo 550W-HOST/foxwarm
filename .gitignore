@@ -28,8 +28,8 @@ __pycache__/
 /test/sandbox-workspace-node
 /test/.temp
 /.temp/
-experiments/dotnet/**/bin/
-experiments/dotnet/**/obj/
+/dotnet/**/bin/
+/dotnet/**/obj/
 
 # CLI node package build output
 /packages/cli-node/dist
