@@ -1,12 +1,12 @@
 import { getChannelId, getConversationId } from './channel';
 import { logger } from './common';
 import { nodesManager } from './nodes/manager';
-import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
+import { approvePendingPairing, createApprovedNode, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as skills from './skills';
 import * as tools from './tools';
-import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
+import { APP_CONFIG_PATH, PUBLIC_BASE_URL, HTTP_PORT, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
 import { BTW_USAGE } from './btw';
@@ -35,7 +35,7 @@ import { handleTimerCommand } from './commands/timerCmd';
 import { handleChannelCommand } from './commands/channelCmd';
 
 // Import helpers
-import { handleCompactCommand, getDisplayModelKeys, resolveCommandModelSelection, buildNodePairHelp, buildNodeListReply, parseEffortFlag } from './commands/helpers';
+import { handleCompactCommand, getDisplayModelKeys, resolveCommandModelSelection, buildNodePairHelp, buildNodeListReply, parseEffortFlag, shellQuote } from './commands/helpers';
 
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
@@ -312,7 +312,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/node': {
-    description: 'Manage nodes: list, approve/reject pairings, remove/move approved nodes, pair-help, or switch with `/node <node-id>`.',
+    description: 'Manage nodes: list, create, approve/reject pairings, remove/move approved nodes, pair-help, or switch with `/node <node-id>`.',
     requiresSession: true,
     autocomplete: { children: NODE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
@@ -329,6 +329,32 @@ export const COMMANDS: Record<string, CommandDef> = {
           const token = await ensureNodePairingToken()
           ctx.reply(buildNodePairHelp(token))
         } catch (e: any) { ctx.reply(`❌ Failed to build node pairing help: ${e.message}`) }
+        return
+      }
+      if (args[0] === 'create') {
+        if (args.length !== 2) { ctx.reply('Usage: `/node create <node-id>`'); return }
+        try {
+          if (nodesManager.getNode(args[1])) throw new Error(`Node id \`${args[1]}\` is currently online/registered`)
+          const created = await createApprovedNode(args[1])
+          const baseUrl = PUBLIC_BASE_URL ? shellQuote(PUBLIC_BASE_URL) : `http://YOUR_MASTER:${HTTP_PORT}`
+          const hostFlag = PUBLIC_BASE_URL && new URL(PUBLIC_BASE_URL).pathname !== '/' ? ['  --host="$BASE_URL"'] : []
+          const lines = [
+            'curl -fsSL "$BASE_URL/node/run.sh" | bash -s --',
+            '  --dir=/opt/foxwarm-node',
+            ...hostFlag,
+            `  --node-id=${created.nodeId}`,
+            `  --auth-token=${created.authToken}`,
+          ]
+          ctx.reply([
+            `✅ Created node \`${created.nodeId}\`. Its per-node auth token is in the command below. Save it now; it will not be shown again.`,
+            '',
+            'Start the Node directly, without a pending approval:',
+            '```bash',
+            `BASE_URL=${baseUrl}`,
+            lines.join(' \\\n'),
+            '```',
+          ].join('\n'))
+        } catch (e: any) { ctx.reply(`❌ Failed to create node: ${e.message}`) }
         return
       }
       if (args[0] === 'approve') {

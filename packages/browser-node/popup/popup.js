@@ -26,7 +26,7 @@ const disconnectBtn = $('#disconnect-btn');
 const resetBtn = $('#reset-btn');
 const statusBadge = $('#status-badge');
 const pairingInfo = $('#pairing-info');
-const pairCode = $('#pair-code');
+const approvalCommand = $('#approval-command');
 const registeredInfo = $('#registered-info');
 const nodeIdDisplay = $('#node-id-display');
 
@@ -59,9 +59,9 @@ function updateStatusBadge(state, detail = {}) {
   nameInput.disabled = isConnected;
 
   // Pairing info
-  if (state === 'pair_pending' && detail.pairCode) {
+  if (state === 'pair_pending' && detail.pendingId) {
     pairingInfo.style.display = '';
-    pairCode.textContent = detail.pairCode;
+    approvalCommand.textContent = `/node approve ${detail.pendingId}`;
     registeredInfo.style.display = 'none';
   } else if (state === 'registered' && detail.nodeId) {
     pairingInfo.style.display = 'none';
@@ -318,6 +318,7 @@ async function init() {
   const state = await sendMessage({ type: 'get_state' });
   updateStatusBadge(state.state, {
     nodeId: state.nodeId,
+    pendingId: state.pendingId,
     hasCredentials: !!(conn.nodeId && conn.authToken),
   });
 

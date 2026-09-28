@@ -11,6 +11,7 @@ import {
   normalizeDbWorkersEnabled,
   normalizeHandoffConfirmationEnabled,
   normalizeMcpInboundConfig,
+  normalizePublicUrl,
   normalizeCompactionConfig,
   normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
@@ -98,6 +99,7 @@ export function readRawAppConfigFile(filePath: string = APP_CONFIG_PATH): string
 
 export function validateAppConfigYaml(rawYaml: string): AppConfig {
   const config = parseYamlObject(rawYaml, 'app config') as AppConfig;
+  normalizePublicUrl(config.url);
   normalizeMcpInboundConfig(config.mcpInbound);
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');

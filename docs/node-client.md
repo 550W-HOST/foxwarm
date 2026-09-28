@@ -11,7 +11,15 @@ Foxwarm can expose helper endpoints for bootstrapping a generic node client from
 
 ## Base URL principle
 
-Foxwarm does **not** reliably know one universally correct external base URL for every node.
+Optionally set a public URL at the **top level** of the application config (not under `bot`):
+
+```yaml
+url: https://foxwarm.example.invalid/foxwarm
+```
+
+`/node pair-help` and `node_bootstrap_info` use this URL in their examples and download endpoints. The URL must be an absolute HTTP(S) address with no username, password, query, or fragment. A trailing slash is removed; a deployment path is retained. Restart the server after editing config. If omitted, the examples keep a `BASE_URL` placeholder for the operator to fill in.
+
+Without a configured URL, Foxwarm does **not** reliably know one universally correct external base URL for every node.
 The reachable URL depends on where the node runs:
 
 - same machine: `http://localhost:3002`
@@ -20,11 +28,12 @@ The reachable URL depends on where the node runs:
 - reverse-proxy/public domain
 - other environment-specific routing
 
-What Foxwarm can do is fill a **request-derived default** into the downloaded bootstrap script based on the current HTTP request (`Host` / forwarded proto).
+The downloaded bootstrap script always receives a **request-derived default** based on its actual HTTP request (`Host` / forwarded proto), even when `url` is configured. This allows a script fetched from a LAN address to use that LAN address by default. The request alone cannot reveal a reverse-proxy deployment path.
 
 So the practical rule is:
 
 - if you fetch `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1` from the same reachable URL the node should later use, you usually do **not** need to pass `--host`
+- if `url` includes a path such as `/foxwarm`, pass `--host="$BASE_URL"` (or PowerShell `-HostUrl $BASE_URL`) so the Node connects through that path
 - if you fetched the script through one address but the node should connect through another, pass `--host=...` explicitly
 
 Use a placeholder like this in examples:
@@ -32,6 +41,31 @@ Use a placeholder like this in examples:
 ```bash
 BASE_URL=http://YOUR_MASTER:3002
 ```
+
+When a public URL is configured, `/node pair-help` provides the corresponding `BASE_URL` assignment and explicit host flag when the path requires it.
+
+## Start a Node with a pre-created credential
+
+Run this **master-side command** before starting the Node:
+
+```text
+/node create my-node
+```
+
+It reserves `my-node` and returns its per-node auth token **once**. Save it privately. It is different from the global pairing token and the removed six-digit display code. The server stores only its hash. Then on the new Node:
+
+```bash
+BASE_URL=https://foxwarm.example.invalid/foxwarm
+curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+  --dir=/opt/foxwarm-node \
+  --host="$BASE_URL" \
+  --node-id=my-node \
+  --auth-token=YOUR_PER_NODE_AUTH_TOKEN
+```
+
+For an origin-only URL omit `--host`; the downloaded script infers its default from the request. Docker and interactive launchers accept the same `--node-id` and `--auth-token` flags; on Windows use `-NodeId` and `-AuthToken`, plus `-HostUrl` for a deployment path. Initial authenticated registration writes an owner-only credentials file; later restarts can use that file without either command-line token. `/node remove my-node` revokes it.
+
+Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node create`.
 
 ## Bare-metal one-command bootstrap
 
@@ -55,10 +89,9 @@ Important persisted path:
 
 - `<dir>/data/state/node_credentials.json`
 
-Then approve the pending node from the master:
+When pairing starts, the Node log prints the exact approval command. Run it on the master; the optional node ID shown here assigns a particular final ID:
 
 ```text
-/node
 /node approve <pending-id> my-node
 ```
 
@@ -178,13 +211,15 @@ curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
 
 ```bash
 curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml
-cat > .env <<'EOF'
-NODE_HOST=$BASE_URL
-NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz
+COMPOSE_BASE_URL=$(printf '%s' "$BASE_URL" | sed "s/'/\\\\'/g")
+cat > .env <<EOF
+NODE_HOST='$COMPOSE_BASE_URL'
+NODE_SOURCE_URL='$COMPOSE_BASE_URL/node/source.tar.gz'
 NODE_PAIRING_TOKEN=YOUR_PAIRING_TOKEN
 NODE_ID=my-node
 NODE_DATA_DIR=./data
 EOF
+chmod 600 .env
 
 docker compose up -d --build
 ```

@@ -4,6 +4,7 @@ set -eu
 
 HOST="__FOXWARM_DEFAULT_BASE_URL__"
 PAIRING=""
+AUTH_TOKEN=""
 NODE_ID="node-$(hostname 2>/dev/null || echo foxwarm-node)"
 STATE_DIR="./data"
 SOURCE_DIR="./foxwarm-node"
@@ -26,6 +27,7 @@ Pass `--host=...` only when the node should connect to a different reachable mas
 Options:
   --host=URL              Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN         Pairing token for first-time setup
+  --auth-token=TOKEN      Per-node auth token from /node create (use with --node-id)
   --node-id=ID            Node name (default: node-<hostname>)
   --state-dir=DIR         Persistent data dir (default: ./data)
   --source-dir=DIR        Source dir for node client (default: ./foxwarm-node)
@@ -50,6 +52,7 @@ for arg in "$@"; do
   case "$arg" in
     --host=*) HOST="${arg#*=}" ;;
     --pairing=*) PAIRING="${arg#*=}" ;;
+    --auth-token=*) AUTH_TOKEN="${arg#*=}" ;;
     --node-id=*) NODE_ID="${arg#*=}" ;;
     --state-dir=*) STATE_DIR="${arg#*=}" ;;
     --source-dir=*) SOURCE_DIR="${arg#*=}" ;;
@@ -59,6 +62,11 @@ for arg in "$@"; do
     *) echo "Unknown argument: $arg" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+if [ -n "$PAIRING" ] && [ -n "$AUTH_TOKEN" ]; then
+  echo "Error: use either --pairing or --auth-token, not both" >&2
+  exit 1
+fi
 
 if [ -z "$HOST" ]; then
   echo "Error: --host is required" >&2
@@ -78,8 +86,8 @@ CREDENTIALS_FILE="$STATE_DIR/state/node_credentials.json"
 
 mkdir -p "$STATE_DIR/state" "$STATE_DIR/agents" "$STATE_DIR/logs" "$SOURCE_DIR"
 
-if [ -z "$PAIRING" ] && [ ! -s "$CREDENTIALS_FILE" ]; then
-  echo "Error: --pairing is required for first-time setup (no stored credentials at $CREDENTIALS_FILE)" >&2
+if [ -z "$PAIRING" ] && [ -z "$AUTH_TOKEN" ] && [ ! -s "$CREDENTIALS_FILE" ]; then
+  echo "Error: --pairing or --auth-token is required for first-time setup (no stored credentials at $CREDENTIALS_FILE)" >&2
   exit 1
 fi
 
@@ -114,20 +122,24 @@ if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
 fi
 
 # ─── Build command ───
-CMD="node '$NODE_TUI_ENTRYPOINT' --host '$HOST' --id '$NODE_ID'"
+set -- "$NODE_TUI_ENTRYPOINT" --host "$HOST" --id "$NODE_ID"
 
 if [ -n "$PAIRING" ]; then
-  CMD="$CMD --token '$PAIRING'"
+  set -- "$@" --token "$PAIRING"
 fi
 
-CMD="$CMD --credentials-file '$ABS_STATE_DIR/state/node_credentials.json'"
+if [ -n "$AUTH_TOKEN" ]; then
+  set -- "$@" --auth-token "$AUTH_TOKEN"
+fi
+
+set -- "$@" --credentials-file "$ABS_STATE_DIR/state/node_credentials.json"
 
 if [ -n "$AUTO_APPROVE" ]; then
-  CMD="$CMD --auto-approve '$AUTO_APPROVE'"
+  set -- "$@" --auto-approve "$AUTO_APPROVE"
 fi
 
 if [ -n "$TIMEOUT" ]; then
-  CMD="$CMD --timeout '$TIMEOUT'"
+  set -- "$@" --timeout "$TIMEOUT"
 fi
 
 echo ""
@@ -137,7 +149,9 @@ echo "  State:       $ABS_STATE_DIR"
 echo "  Credentials: $ABS_STATE_DIR/state/node_credentials.json"
 echo ""
 
-if [ -z "$PAIRING" ] || [ -s "$ABS_STATE_DIR/state/node_credentials.json" ]; then
+if [ -n "$AUTH_TOKEN" ]; then
+  echo "Using per-node auth token."
+elif [ -z "$PAIRING" ] || [ -s "$ABS_STATE_DIR/state/node_credentials.json" ]; then
   echo "Using stored credentials."
 else
   echo "First run — after startup, approve on master:"
@@ -148,4 +162,4 @@ fi
 echo ""
 
 # Run interactively (foreground, stdin attached)
-exec sh -c "$CMD"
+exec node "$@"

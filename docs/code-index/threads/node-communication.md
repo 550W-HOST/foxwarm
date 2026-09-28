@@ -77,6 +77,12 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 
 ## Design decisions
 
+### D-node-thread-onboarding-options
+
+[2026-09-28] Node onboarding supports both the existing shared-pairing-token request/approve/claim lifecycle and authorized `/node create <node-id>` pre-creation. Direct creation immediately persists a per-node token hash and returns plaintext once to that command caller; it does not create a pending pairing or reuse the shared token. Both paths authenticate through the same per-node WebSocket identity and register before capabilities are available. The pending request's full ID, not an unrelated six-digit display code, is the approval reference. Old pending registry records are readable while new writes drop the old code without losing unclaimed approved credentials. No core protocol generation change is required; existing registered Node credentials remain valid.
+
+The optional top-level `url` supplies public bootstrap instruction/download examples, including an optional deployment path, but never changes the listen address, internal API origin, or actual downloaded script's request-derived default host. A path-prefixed example passes explicit `--host`/`-HostUrl` so the Node preserves that route. The exact startup, credential-file, and client-display behavior is indexed in the registry, bootstrap, and CLI Node units.
+
 ### D-node-thread-tool-service-split
 
 Model tools are agent-callable and may pass client approval. Backend services are fixed capability-versioned protocols for trusted master features.

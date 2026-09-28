@@ -7,15 +7,21 @@ NODE_IDENTIFIER="${NODE_ID:-sandbox-node}"
 NODE_TOKEN_PATH="${NODE_TOKEN_FILE:-/app/state/node_token}"
 NODE_CREDENTIALS_PATH="${NODE_CREDENTIALS_FILE:-/app/state/node_credentials.json}"
 EXPLICIT_NODE_TOKEN="${NODE_TOKEN:-}"
+DIRECT_AUTH_TOKEN="${NODE_AUTH_TOKEN:-}"
 
-if [ -n "$EXPLICIT_NODE_TOKEN" ] && [ "$EXPLICIT_NODE_TOKEN" != "PLACEHOLDER_TOKEN" ]; then
-  RESOLVED_NODE_TOKEN="$EXPLICIT_NODE_TOKEN"
+set --
+if [ -n "$DIRECT_AUTH_TOKEN" ]; then
+  set -- --auth-token "$DIRECT_AUTH_TOKEN"
+elif [ -s "$NODE_CREDENTIALS_PATH" ]; then
+  : # The client loads its previously stored per-node credentials.
+elif [ -n "$EXPLICIT_NODE_TOKEN" ] && [ "$EXPLICIT_NODE_TOKEN" != "PLACEHOLDER_TOKEN" ]; then
+  set -- --token "$EXPLICIT_NODE_TOKEN"
 else
   echo "Waiting for node token at $NODE_TOKEN_PATH..."
   while [ ! -s "$NODE_TOKEN_PATH" ]; do
     sleep 1
   done
-  RESOLVED_NODE_TOKEN="$(tr -d '\r\n' < "$NODE_TOKEN_PATH")"
+  set -- --token "$(tr -d '\r\n' < "$NODE_TOKEN_PATH")"
 fi
 
 echo "Waiting for foxwarm master at $NODE_MASTER_URL..."
@@ -31,5 +37,5 @@ fi
 exec node "$NODE_CLIENT_ENTRYPOINT" \
   --host "$NODE_MASTER_URL" \
   --id "$NODE_IDENTIFIER" \
-  --token "$RESOLVED_NODE_TOKEN" \
-  --credentials-file "$NODE_CREDENTIALS_PATH"
+  --credentials-file "$NODE_CREDENTIALS_PATH" \
+  "$@"

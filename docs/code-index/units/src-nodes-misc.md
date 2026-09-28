@@ -1,6 +1,6 @@
 # Unit: src-nodes-misc
 
-Files: src/nodes/websocket.ts, src/nodes/websocketProtocol.test.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/runPs1.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts, templates/node/run.sh, templates/node/run.ps1
+Files: src/nodes/websocket.ts, src/nodes/websocketProtocol.test.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/runPs1.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts, templates/node/run.sh, templates/node/run-docker.sh, templates/node/run-interactive.sh, templates/node/run.ps1, templates/node/docker-compose.yaml, scripts/start-sandbox-node.sh
 
 ## Purpose
 
@@ -14,7 +14,8 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 - `renderNodeTemplateText(templateText, req)` — replaces placeholder in template text with inferred base URL
 - `NODE_TEMPLATE_BASE_URL_PLACEHOLDER` — the placeholder string used in templates
 - `NODE_SOURCE_FILES` — list of paths included in the source tarball
-- `buildNodeBootstrapInfo(options)` — constructs a `NodeBootstrapInfo` object with endpoints and examples
+- `buildNodeBootstrapInfo(options)` — constructs a `NodeBootstrapInfo` object with configured public URL or `$BASE_URL` examples
+- `buildNodeManualComposeExample(token)` — generates shell-safe Compose `.env` setup instructions for either base URL source
 - `ensureNodePairingToken()` — reads or generates the persistent pairing token
 - `NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER` — placeholder constant (`$BASE_URL`)
 - `NodeBootstrapInfo` (interface) — shape of the bootstrap info response
@@ -37,6 +38,7 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 | `registerNodeHttpRoutes(httpServer)` | ~40 | Registers all node HTTP routes including source tarball |
 | `buildEndpointUrls(baseUrlPlaceholder)` | ~20 | Constructs endpoint path/URL map from a base URL |
 | `buildNodeBootstrapInfo(options)` | ~40 | Assembles full bootstrap info with examples and explanations |
+| `buildNodeManualComposeExample(token)` | ~15 | Renders Compose bootstrap commands with quoted public URL values |
 | `ensureNodePairingToken()` | ~15 | Reads token from file or generates and persists a new one |
 | `makeRequest(headers, protocol)` (test) | ~6 | Test helper to create a mock request object |
 | `makeId(prefix)` (test) | ~5 | Test helper generating unique IDs |
@@ -57,18 +59,18 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 
 ## Behavior
 
-- WebSocket supports two connection modes: **pairing** (new node presents a shared token, sends `pair_request`, waits for approval) and **approved** (returning node authenticates with node ID + auth token, then registers).
+- WebSocket supports two connection modes: **pairing** (new node presents a shared token, sends `pair_request`, waits for approval) and **approved** (returning or pre-created node authenticates with node ID + auth token, then registers). `pair_pending` carries the complete pending ID without a six-digit display code; rejected-credential diagnostics never log query strings.
 - Pairing persists the offered core protocol range. Approved registration negotiates it before capability admission; omitted metadata is executable legacy generation 1, current peers select generation 3, and only malformed/disjoint authenticated peers receive a structured upgrade-required response while remaining connected under a message quarantine. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Heartbeat pings every 30s; terminates the socket if no pong within 10s. Activity is recorded in both the in-memory manager and the persistent registry.
 - Messages received before authentication completes are queued and replayed once ready.
 - Authenticated message dispatch forwards `node_service_response`, `node_service_error`, `node_service_event` and external exec registration/completion/query responses to the manager with the actual socket's node identity. Signed external receipts are context/Node-scoped and do not enter Session events.
-- HTTP routes serve shell scripts, PowerShell scripts, docker-compose YAML, and a gzipped source tarball. The tarball includes the separately locked `packages/cli-node-runtime` package but excludes its platform-installed node_modules. Text routes replace a placeholder with the request-derived base URL.
+- HTTP routes serve shell scripts, PowerShell scripts, docker-compose YAML, and a gzipped source tarball. The tarball includes the separately locked `packages/cli-node-runtime` package but excludes its platform-installed node_modules. Text routes replace a placeholder with the request-derived HTTP origin even if a public config URL is set; a deployment path requires an explicit launcher host flag.
 - Bare-metal `run.sh` requires an explicit `--dir` and derives its source, env, data, log, PID/mode, launcher, and generated-unit paths beneath that root. `-d` prefers tmux and falls back to nohup; `--install` installs a root system service or non-root user service and runs the foreground launcher directly under systemd supervision.
 - Windows `run.ps1` binds node agent storage to the absolute `<StateDir>\agents` path through `FOXWARM_AGENTS_DIR`, clears the higher-precedence single-agent override, and starts Node from the script directory, so inherited environment or invoking a saved bootstrap script from another project cannot relocate node-owned capture state into the caller cwd.
 - Source-distribution regression coverage builds the same allowlisted tar archive with package node_modules excluded and starts the real prebuilt client bundle through `run.sh` in a clean temporary root, preventing externalized bundle modules from accidentally relying on the master checkout's dependencies.
 - Docker node bootstrap uses pinned Node 24 and installs the runtime package strictly. Shell/PowerShell bootstrap installs only that package after extracting the prebuilt JS bundle and continues without PTY capability if npm/native installation is unavailable.
 - `ensureNodePairingToken` lazily generates a 32-byte hex token on first use and persists it to disk.
-- `buildNodeBootstrapInfo` intentionally uses a `$BASE_URL` placeholder rather than guessing the external address, with operator instructions.
+- `buildNodeBootstrapInfo` uses configured top-level `url` in endpoint/examples when present and otherwise leaves `$BASE_URL` for the operator. Path-prefixed examples pass `--host`/`-HostUrl`; origin-only downloads use the request-derived script default. Its Windows example assigns a PowerShell `$BASE_URL` independently of the Bash example before downloading and running `run.ps1`.
 
 ## Integration
 

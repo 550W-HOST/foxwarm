@@ -1,18 +1,20 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { HTTP_PORT, NODE_TOKEN_FILE } from '../config';
+import { HTTP_PORT, NODE_TOKEN_FILE, PUBLIC_BASE_URL } from '../config';
 
 export const NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER = '$BASE_URL';
 
 export interface NodeBootstrapInfoOptions {
   pairingToken: string;
+  publicUrl?: string;
 }
 
 export interface NodeBootstrapInfo {
   pairingToken: string;
   baseUrl: {
     placeholder: '$BASE_URL';
+    configuredUrl?: string;
     shellAssignmentExample: string;
     requestDerivedDefaultInDownloadedScripts: '$BASE_URL';
     canSystemKnowUniqueExternalBaseUrl: false;
@@ -43,7 +45,38 @@ export interface NodeBootstrapInfo {
     interactive: string;
     explicitHostOverride: string;
     manualCompose: string;
+    windows: string;
   };
+}
+
+function shellCommand(lines: string[]): string {
+  return lines.join(' \\\n');
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function powershellQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Generate a Compose .env without re-interpreting a URL path as interpolation. */
+export function buildNodeManualComposeExample(pairingToken: string): string {
+  return [
+    'curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml',
+    String.raw`COMPOSE_BASE_URL=$(printf '%s' "$BASE_URL" | sed "s/'/\\\\'/g")`,
+    'cat > .env <<EOF',
+    "NODE_HOST='$COMPOSE_BASE_URL'",
+    "NODE_SOURCE_URL='$COMPOSE_BASE_URL/node/source.tar.gz'",
+    `NODE_PAIRING_TOKEN=${pairingToken}`,
+    'NODE_ID=my-node',
+    'NODE_DATA_DIR=./data',
+    'EOF',
+    'chmod 600 .env',
+    '',
+    'docker compose up -d --build',
+  ].join('\n');
 }
 
 function buildEndpointUrls(baseUrlPlaceholder: string) {
@@ -71,48 +104,50 @@ function buildEndpointUrls(baseUrlPlaceholder: string) {
 }
 
 export function buildNodeBootstrapInfo(options: NodeBootstrapInfoOptions): NodeBootstrapInfo {
-  const endpoints = buildEndpointUrls(NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER);
+  const configuredUrl = options.publicUrl ?? PUBLIC_BASE_URL;
+  const baseUrl = configuredUrl || NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER;
+  const endpoints = buildEndpointUrls(baseUrl);
+  const pathPrefix = !!configuredUrl && new URL(configuredUrl).pathname !== '/';
+  const hostFlag = pathPrefix ? ['  --host="$BASE_URL"'] : [];
+  const chooseBaseUrl = configuredUrl ? `BASE_URL=${shellQuote(configuredUrl)}` : `BASE_URL=http://YOUR_MASTER:${HTTP_PORT}`;
 
   return {
     pairingToken: options.pairingToken,
     baseUrl: {
       placeholder: NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER,
-      shellAssignmentExample: `BASE_URL=http://YOUR_MASTER:${HTTP_PORT}`,
+      ...(configuredUrl ? { configuredUrl } : {}),
+      shellAssignmentExample: chooseBaseUrl,
       requestDerivedDefaultInDownloadedScripts: NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER,
       canSystemKnowUniqueExternalBaseUrl: false,
-      explanation: 'Foxwarm cannot reliably know one universally correct external master URL for every node. The reachable URL depends on where the node runs: localhost, LAN IP, Docker host IP, reverse-proxy domain, and so on. This tool therefore uses $BASE_URL as an explicit placeholder instead of pretending to know the unique correct address.',
-      operatorAction: 'Choose BASE_URL from the node\'s point of view before running the bootstrap commands below.',
-      overrideHint: 'If you fetch a bootstrap script through one address but the node should connect through another, pass --host="$BASE_URL" explicitly when running the script.',
+      explanation: configuredUrl
+        ? 'The configured public URL is used as the bootstrap base URL. Downloaded scripts still default to the origin inferred from their own HTTP request.'
+        : 'Foxwarm cannot reliably know one universally correct external master URL for every node. The reachable URL depends on where the node runs: localhost, LAN IP, Docker host IP, reverse-proxy domain, and so on. This tool therefore uses $BASE_URL as an explicit placeholder instead of pretending to know the unique correct address.',
+      operatorAction: configuredUrl
+        ? 'Check that this URL is reachable from the new Node; override BASE_URL if needed.'
+        : 'Choose BASE_URL from the node\'s point of view before running the bootstrap commands below.',
+      overrideHint: pathPrefix
+        ? 'A URL with a path prefix is passed explicitly as --host so the Node keeps that prefix. If fetched through another address, override --host as needed.'
+        : 'If you fetch a bootstrap script through one address but the node should connect through another, pass --host="$BASE_URL" explicitly when running the script.',
     },
     endpoints,
     examples: {
-      chooseBaseUrl: `BASE_URL=http://YOUR_MASTER:${HTTP_PORT}`,
-      bareMetal: `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \\
-  --dir=/opt/foxwarm-node \\
-  --pairing=${options.pairingToken} \\
-  --node-id=my-node`,
-      bareMetalBackground: `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \\
-  --dir=/opt/foxwarm-node \\
-  --pairing=${options.pairingToken} \\
-  --node-id=my-node \\
-  -d`,
-      bareMetalInstall: `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \\
-  --dir=/opt/foxwarm-node \\
-  --pairing=${options.pairingToken} \\
-  --node-id=my-node \\
-  --install`,
-      docker: `curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \\
-  --pairing=${options.pairingToken} \\
-  --node-id=my-node`,
-      interactive: `curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \\
-  --pairing=${options.pairingToken} \\
-  --node-id=my-cli-node`,
+      chooseBaseUrl,
+      bareMetal: shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-node']),
+      bareMetalBackground: shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-node', '  -d']),
+      bareMetalInstall: shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-node', '  --install']),
+      docker: shellCommand(['curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s --', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-node']),
+      interactive: shellCommand(['curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s --', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-cli-node']),
       explicitHostOverride: `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \\
   --dir=/opt/foxwarm-node \\
   --host="$BASE_URL" \\
   --pairing=${options.pairingToken} \\
   --node-id=my-node`,
-      manualCompose: `curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml\ncat > .env <<'EOF'\nNODE_HOST=$BASE_URL\nNODE_SOURCE_URL=$BASE_URL/node/source.tar.gz\nNODE_PAIRING_TOKEN=${options.pairingToken}\nNODE_ID=my-node\nNODE_DATA_DIR=./data\nEOF\n\ndocker compose up -d --build`,
+      manualCompose: buildNodeManualComposeExample(options.pairingToken),
+      windows: [
+        `$BASE_URL = ${powershellQuote(configuredUrl || `http://YOUR_MASTER:${HTTP_PORT}`)}`,
+        'Invoke-WebRequest "$BASE_URL/node/run.ps1" -OutFile .\\run.ps1',
+        `.\\run.ps1 ${pathPrefix ? '-HostUrl "$BASE_URL" ' : ''}-Pairing ${powershellQuote(options.pairingToken)} -NodeId my-node`,
+      ].join('\n'),
     },
   };
 }
