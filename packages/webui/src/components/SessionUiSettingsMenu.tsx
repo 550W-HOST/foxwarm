@@ -14,7 +14,7 @@ interface SessionUiSettingsMenuProps {
   onShowUsageBadgeChange: (enabled: boolean) => void
   showUserMessageMetadata: boolean
   onShowUserMessageMetadataChange: (enabled: boolean) => void
-  onOpenDebugInfo: () => void
+  onOpenDebugInfo?: () => void
 }
 
 export default function SessionUiSettingsMenu({
@@ -177,7 +177,7 @@ export default function SessionUiSettingsMenu({
             </div>
           </div>
 
-          <div className="px-4 py-3">
+          {onOpenDebugInfo && <div className="px-4 py-3">
             <button
               type="button"
               onClick={() => {
@@ -188,7 +188,7 @@ export default function SessionUiSettingsMenu({
             >
               debug info
             </button>
-          </div>
+          </div>}
         </div>
       )}
     </div>

@@ -138,6 +138,7 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 
 interface ChatProps {
   sessionId: string
+  experimentalTextOnly?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
   onBack?: () => void
@@ -198,7 +199,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -2011,7 +2012,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               showUserMessageMetadata={showUserMessageMetadata}
               onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
-              onOpenDebugInfo={handleOpenDebugInfo}
+              onOpenDebugInfo={experimentalTextOnly ? undefined : handleOpenDebugInfo}
             />
           </>
         )}
@@ -2077,12 +2078,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
-              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
+              turnIncomplete={!experimentalTextOnly && sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
               onStop={handleStop}
-              onRunQueued={handleRunQueued}
-              onContinue={handleContinue}
+              onRunQueued={experimentalTextOnly ? undefined : handleRunQueued}
+              onContinue={experimentalTextOnly ? undefined : handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
@@ -2120,6 +2121,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       </div>
 
       <ChatComposer
+        experimentalTextOnly={experimentalTextOnly}
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
@@ -2184,6 +2186,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   )
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
+  prev.experimentalTextOnly === next.experimentalTextOnly &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenTerminal === next.onOpenTerminal

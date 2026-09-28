@@ -10,6 +10,7 @@ Renders the compact global UI dropdown for color mode, Setup, and reload plus th
 
 - `GlobalUiSettingsMenu` — default-exported React component rendering the global UI settings dropdown
 - `SessionUiSettingsMenu` — per-Chat header menu for send behavior, tool grouping, usage badges, minimap visibility, direct-user metadata visibility, and Debug
+- An omitted optional Debug handler hides Debug only for the experimental Chat leaf; ordinary Chat continues to provide the handler and unchanged menu behavior.
 - `clampAnchoredMenuHorizontally` — pure preferred-alignment + viewport-gutter clamp helper
 - `readHorizontalViewportBounds` — intersects the layout/body bounds with the current visual viewport
 - Both menus use the existing send-mode union (`'modEnter' | 'enter'`) at their component boundary.

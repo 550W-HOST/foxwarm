@@ -45,6 +45,7 @@ export type ModelOption = {
 
 interface ChatComposerProps {
   sessionId: string
+  experimentalTextOnly?: boolean
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -660,6 +661,7 @@ const ChatComposer = memo(function ChatComposer({
   sessionMissing,
   loading,
   asrAvailable,
+  experimentalTextOnly = false,
   modelOptions,
   currentModelKey,
   sessionModel,
@@ -1307,7 +1309,7 @@ const ChatComposer = memo(function ChatComposer({
       ref={rootRef}
       className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
     >
-      {isDragging && (
+      {isDragging && !experimentalTextOnly && (
         <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">
           <div className="inline-flex items-center gap-2 rounded-lg border border-fw-accent-border dark:border-fw-accent-border bg-fw-surface/90 dark:bg-fw-canvas/80 px-4 py-3 text-fw-accent dark:text-fw-accent text-base font-semibold shadow-sm">
             <Paperclip size={18} />
@@ -1318,9 +1320,9 @@ const ChatComposer = memo(function ChatComposer({
 
       <div
         className="foxwarm-chat-composer-inner pointer-events-auto mx-auto max-w-5xl"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={experimentalTextOnly ? undefined : handleDragOver}
+        onDragLeave={experimentalTextOnly ? undefined : handleDragLeave}
+        onDrop={experimentalTextOnly ? undefined : handleDrop}
       >
         {transcribeError && (
           <div role="alert" className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
@@ -1401,7 +1403,7 @@ const ChatComposer = memo(function ChatComposer({
               isDragging ? 'border-fw-accent-border dark:border-fw-accent-border' : ''
             }`}
           >
-        <input
+        {!experimentalTextOnly && <input
           type="file"
           id="file-upload"
           multiple
@@ -1412,7 +1414,7 @@ const ChatComposer = memo(function ChatComposer({
             e.currentTarget.value = ''
           }}
           className="hidden"
-        />
+        />}
         <InlineComposerEditor
           ref={editorRef}
           draftId={sessionId}
@@ -1420,13 +1422,13 @@ const ChatComposer = memo(function ChatComposer({
           disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
-            : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : experimentalTextOnly ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
           }}
           onBlur={() => persistDraftSafely(sessionId, draftRef.current)}
-          onAttachFiles={(files) => createMessageAttachmentDrafts(sessionId, files, draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
+          onAttachFiles={(files) => experimentalTextOnly ? [] : createMessageAttachmentDrafts(sessionId, files, draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
             type: 'attachment',
             ref,
             name: file.name || 'attachment',
@@ -1441,7 +1443,7 @@ const ChatComposer = memo(function ChatComposer({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
-              <label
+              {!experimentalTextOnly && <label
                 htmlFor="file-upload"
                 onClick={(event) => { if (recordingLockRef.current) event.preventDefault() }}
                 className={`inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse ${recordingLocked ? 'pointer-events-none opacity-50' : ''}`}
@@ -1449,7 +1451,7 @@ const ChatComposer = memo(function ChatComposer({
                 aria-label="Attach files"
               >
                 <Plus size={18} />
-              </label>
+              </label>}
               {asrAvailable && (
                 <button
                   type="button"
@@ -1463,7 +1465,7 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               )}
             </div>
-            <ModelSelector
+            {experimentalTextOnly ? <span className="px-2 text-xs text-fw-text-muted">{sessionModel || currentModelKey || defaultModelKey || 'Configured model'}</span> : <ModelSelector
               options={modelOptions}
               currentModelKey={currentModelKey}
               sessionModel={sessionModel}
@@ -1489,7 +1491,7 @@ const ChatComposer = memo(function ChatComposer({
               onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
-            />
+            />}
           </div>
           <button
             type="submit"

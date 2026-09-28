@@ -11,6 +11,7 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 ## Key Exports
 
 - `ChatComposer` — memoized React component (default export) providing the full chat input experience
+- In the separate experiment-only Chat leaf, `experimentalTextOnly` removes attachment affordances/drop, keeps the original contenteditable text/command entry and displays the configured model as a fixed label rather than opening unsupported model/child/effort settings. Default callers retain the full composer.
 - `InlineComposerEditor` — imperative contenteditable surface for native text flow plus atomic pasted-text and attachment segments
 - `makeComposerDraft` / `serializeComposerDraft` / `loadComposerDraft` / `persistComposerDraft` — normalized segment model, literal wrapper/reference serialization, and versioned browser persistence with legacy plain-string reads
 - `ModelOption` — type describing a selectable model plus allowed/default effort capability metadata

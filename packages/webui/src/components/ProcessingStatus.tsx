@@ -96,7 +96,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
                     {isActive && (
                       <button type="button" onClick={onStop} className={controlButtonClass}>Stop</button>
                     )}
-                    {sessionQueueLength > 0 && (
+                    {sessionQueueLength > 0 && onRunQueued && (
                       <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>
                     )}
                   </div>
@@ -117,8 +117,8 @@ const ProcessingStatus = memo(function ProcessingStatus({
               {turnIncomplete && <span className="w-2 h-2 bg-fw-warning dark:bg-fw-warning rounded-full" data-processing-status-dot="static" />}
               <span>{turnIncomplete ? `Turn interrupted${sessionQueueLength > 0 ? ` • ${queuedLabel} pending` : ''}` : `${queuedLabel} pending`}</span>
               <div className="flex items-center gap-1 text-fw-warning dark:text-fw-warning">
-                {turnIncomplete && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
-                {sessionQueueLength > 0 && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
+                {turnIncomplete && onContinue && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
+                {sessionQueueLength > 0 && onRunQueued && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
               </div>
             </div>
           </div>
