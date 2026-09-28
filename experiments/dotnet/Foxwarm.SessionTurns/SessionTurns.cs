@@ -72,6 +72,22 @@ public sealed class SessionState
 
     public SessionState(string id) => Id = id;
 
+    // Invoked only after the staged Archive→JSON rewrite has committed, while
+    // SessionEntry owns the short publication gate. Queue/Stop/model metadata
+    // are deliberately not replaced by the older compaction snapshot.
+    public void PublishCommittedHistoryRewrite(IReadOnlyList<JsonObject> history,
+        long expectedHistoryVersion, long expectedNextSeq, long nextSeq, long? nextBlockId = null)
+    {
+        if (HistoryVersion != expectedHistoryVersion || NextMessageSeq != expectedNextSeq)
+            throw new InvalidOperationException("History rewrite publication base changed after authority commit.");
+        History.Clear();
+        History.AddRange(history.Select(row => (JsonObject)row.DeepClone()));
+        NextMessageSeq = nextSeq;
+        HistoryVersion++;
+        Meta["messageCount"] = History.Count;
+        if (nextBlockId is not null) AuthorityEnvelope["nextBlockId"] = nextBlockId.Value;
+    }
+
     internal SessionState Clone()
     {
         var clone = new SessionState(Id)
@@ -137,6 +153,15 @@ public interface ICanonicalAppendAuthorityStore
         IReadOnlyList<JsonObject> appendedMessages,
         CancellationToken cancellationToken = default);
 }
+
+public interface ICompactionAuthorityStore
+{
+    Task CommitCompactionAsync(SessionSnapshot stagedSnapshot, IReadOnlyList<ArchiveBlockRecord> blocks,
+        IReadOnlyList<JsonObject> messages, CancellationToken cancellationToken = default);
+}
+
+public sealed record CompactionPreparation(SessionSnapshot StagedSnapshot,
+    IReadOnlyList<ArchiveBlockRecord> Blocks, IReadOnlyList<JsonObject> ArchivedMessages, Action<SessionState> Publish);
 
 internal sealed record CanonicalAppendPreparation(
     SessionSnapshot StagedSnapshot,
@@ -233,6 +258,40 @@ public sealed class SessionSaveLane
         catch (Exception error) { entry.RecordBestEffortFailure(error); }
     }
 
+    public Task CommitAuthoritySettingsAsync(string? model, bool setModel, string? effort, bool setEffort) =>
+        EnqueueOperationAsync(async () =>
+        {
+            var staged = entry.WithState(state =>
+            {
+                var snapshot = state.Snapshot();
+                var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+                Set(envelope, "model", setModel, model);
+                Set(envelope, "effort", setEffort, effort);
+                return snapshot with { AuthorityEnvelope = envelope };
+            });
+            void Publish(SessionState state)
+            {
+                Set(state.AuthorityEnvelope, "model", setModel, model);
+                Set(state.AuthorityEnvelope, "effort", setEffort, effort);
+            }
+            try { await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false); }
+            catch (AuthorityCommittedException)
+            {
+                entry.WithState(Publish);
+                entry.InvokeCommitted(entry.Snapshot());
+                throw;
+            }
+            entry.WithState(Publish);
+            entry.InvokeCommitted(entry.Snapshot());
+        });
+
+    private static void Set(JsonObject root, string key, bool supplied, string? value)
+    {
+        if (!supplied) return;
+        if (value is null) root.Remove(key);
+        else root[key] = value;
+    }
+
     internal Task CommitCanonicalAppendAsync(
         Func<SessionState, CanonicalAppendPreparation> prepare,
         CancellationToken cancellationToken = default) =>
@@ -252,6 +311,27 @@ public sealed class SessionSaveLane
                 throw;
             }
             entry.WithState(operation.Publish);
+        });
+
+    public Task CommitCompactionAsync(Func<SessionState, CompactionPreparation> prepare, CancellationToken cancellationToken = default) =>
+        EnqueueOperationAsync(async () =>
+        {
+            var operation = entry.WithState(prepare);
+            try
+            {
+                if (store is not ICompactionAuthorityStore compact)
+                    throw new UnsupportedSessionTurnException("persistent compact authority");
+                await compact.CommitCompactionAsync(operation.StagedSnapshot, operation.Blocks,
+                    operation.ArchivedMessages, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AuthorityCommittedException)
+            {
+                entry.WithState(operation.Publish);
+                entry.InvokeCommitted(entry.Snapshot());
+                throw;
+            }
+            entry.WithState(operation.Publish);
+            entry.InvokeCommitted(entry.Snapshot());
         });
 
     private Task EnqueueAsync(SaveKind kind, CancellationToken cancellationToken)
@@ -966,7 +1046,9 @@ public sealed class SessionTurnRunner
                 await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
                 try
                 {
-                    await host.ChatAsync($"turn-{Interlocked.Increment(ref turnSequence)}").ConfigureAwait(false);
+                    var result = await host.ChatAsync($"turn-{Interlocked.Increment(ref turnSequence)}").ConfigureAwait(false);
+                    if (result.AssistantMessage is not null && registry.OnTurnCompleted is not null)
+                        await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
                 {
@@ -1072,7 +1154,9 @@ public sealed class SessionRegistry
     public SessionIngress Ingress => ingress;
     public SessionControl Control => control;
     public SessionTurnRunner Runner => runner;
+    public LocalSessionTurnHost HostFor(string sessionId) => hosts.For(GetRequired(sessionId));
     public Func<string, Task>? TriggerOverride { get; set; }
+    public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
     internal ISessionAuthorityStore Store { get; }
 
     public SessionEntry Add(string sessionId, SessionSnapshot? snapshot = null)

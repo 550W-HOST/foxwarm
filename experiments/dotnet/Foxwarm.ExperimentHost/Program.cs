@@ -13,8 +13,12 @@ static string Required(string name) => Environment.GetEnvironmentVariable(name) 
 
 var dataRoot = Required("FOXWARM_EXPERIMENT_DATA_ROOT");
 var workspaceRoot = Required("FOXWARM_EXPERIMENT_TOOL_ROOT");
-var providerUri = new Uri(Required("FOXWARM_EXPERIMENT_RESPONSES_BASE_URI"), UriKind.Absolute);
-var providerToken = Required("FOXWARM_EXPERIMENT_PROVIDER_TOKEN");
+var modelsFile = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_MODELS_FILE");
+if (string.IsNullOrWhiteSpace(modelsFile)) modelsFile = null;
+var providerUri = new Uri(modelsFile is null ? Required("FOXWARM_EXPERIMENT_RESPONSES_BASE_URI")
+    : Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_RESPONSES_BASE_URI") ?? "http://127.0.0.1:1/v1", UriKind.Absolute);
+var providerToken = modelsFile is null ? Required("FOXWARM_EXPERIMENT_PROVIDER_TOKEN")
+    : Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_PROVIDER_TOKEN") ?? "";
 var apiToken = Required("FOXWARM_EXPERIMENT_API_TOKEN");
 var browserCookie = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(apiToken),
     Encoding.UTF8.GetBytes("foxwarm-experiment-cookie-v1"))).ToLowerInvariant();
@@ -27,11 +31,12 @@ if (distRoot is not null)
 }
 var port = int.Parse(Required("FOXWARM_EXPERIMENT_PORT"));
 if (port is <= 0 or > 65535) throw new ArgumentException("Port must be between 1 and 65535.");
-var options = new ResponsesClientOptions(providerUri, Required("FOXWARM_EXPERIMENT_REQUEST_MODEL"),
-    Required("FOXWARM_EXPERIMENT_CONCRETE_MODEL"), providerToken,
+var options = new ResponsesClientOptions(providerUri, modelsFile is null ? Required("FOXWARM_EXPERIMENT_REQUEST_MODEL") : "placeholder",
+    modelsFile is null ? Required("FOXWARM_EXPERIMENT_CONCRETE_MODEL") : "placeholder", providerToken,
     Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_INSTRUCTIONS") ?? "",
     int.TryParse(Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_MAX_OUTPUT_TOKENS"), out var limit) ? limit : 1024);
-await using var sessions = new HostSessions(dataRoot, workspaceRoot, options);
+var models = HostModels.Load(modelsFile, options);
+await using var sessions = new HostSessions(dataRoot, workspaceRoot, options, models);
 await sessions.LoadAsync();
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
@@ -98,14 +103,25 @@ app.MapPost("/api/auth", async (HttpContext context) =>
     return Results.Ok(new { success = true });
 });
 app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
-app.MapGet("/api/models", () => Results.Ok(new
+app.MapGet("/api/models", () => Results.Ok(models.ToWebUiPayload()));
+app.MapPost("/api/sessions/{id}/model", async (string id, HttpRequest request) =>
 {
-    models = new[] { new { key = sessions.RequestModel, label = sessions.ConcreteModel,
-        modelId = sessions.ConcreteModel, isDefault = true } }
-}));
+    var hosted = sessions.Find(id);
+    if (hosted is null) return Results.NotFound(new { error = "Session not found" });
+    if (!sessions.Accepting) return Results.StatusCode(503);
+    try
+    {
+        var body = await JsonNode.ParseAsync(request.Body) as JsonObject
+            ?? throw new InvalidDataException("Model settings must be an object.");
+        return Results.Ok(await hosted.UpdateModelAsync(body));
+    }
+    catch (Exception error) when (error is JsonException or InvalidDataException or InvalidOperationException)
+    { return Results.BadRequest(new { error = error.Message }); }
+});
 app.MapGet("/api/commands", () => Results.Ok(new { commands = new[]
 {
-    new { name = "stop", description = "Stop the current response.", usage = "/stop", requiresSession = true }
+    new { name = "stop", description = "Stop current run, or use `/stop compact` to cancel compaction only", usage = "/stop [compact]", requiresSession = true },
+    new { name = "compact", description = "Compact history.", usage = "/compact", requiresSession = true }
 } }));
 app.MapGet("/api/asr/status", () => Results.Ok(new { configured = false, available = false }));
 app.MapGet("/api/sessions", () => Results.Ok(new { sessions = sessions.List() }));
@@ -141,6 +157,33 @@ app.MapGet("/api/sessions/{id}/history", (string id, HttpRequest request) =>
             retryable = true, historyVersion = snapshot.HistoryVersion });
     return Results.Ok(hosted.WebUiHistory(snapshot, tail, prefix, after));
 });
+app.MapGet("/api/sessions/{id}/archive/messages/{seq}", (string id, string seq) =>
+{
+    var hosted = sessions.Find(id);
+    if (hosted is null) return Results.NotFound(new { error = "Session not found" });
+    if (!long.TryParse(seq, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+        || index is <= 0 or > 9007199254740991L)
+        return Results.BadRequest(new { error = "seq must be a positive safe integer." });
+    var record = hosted.Archive.ReadMessageBySeq(index);
+    return record is null ? Results.NotFound(new { error = "Archived message not found" })
+        : Results.Ok(new { seq = record.Seq, message = record.Message, messageJson = record.MessageJson });
+});
+app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", (string id, string blockId, HttpRequest request) =>
+{
+    var hosted = sessions.Find(id);
+    if (hosted is null) return Results.NotFound(new { error = "Session not found" });
+    if (!long.TryParse(blockId, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+        || index is <= 0 or > 9007199254740991L)
+        return Results.BadRequest(new { error = "blockId must be a positive integer.", code = "INVALID_CONTEXT_BLOCK_ID" });
+    var preview = 6000;
+    if (request.Query.TryGetValue("previewLength", out var rawPreview)
+        && (!int.TryParse(rawPreview, NumberStyles.None, CultureInfo.InvariantCulture, out preview)
+            || preview is < 1 or > 20000))
+        return Results.BadRequest(new { error = "previewLength must be a positive integer at most 20000." });
+    var result = ContextBlockExpansion.Render(hosted.Archive, id, index, preview);
+    return result is null ? Results.NotFound(new { error = $"CTX-BLOCK B#{index} not found.", code = "CTX_BLOCK_NOT_FOUND" })
+        : Results.Ok(result);
+});
 app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
 {
     var hosted = sessions.Find(id);
@@ -164,7 +207,19 @@ app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request)
         return Results.BadRequest(new { error = "Invalid clientMessageId" });
     if (text.TrimStart().StartsWith("/", StringComparison.Ordinal))
     {
+        if (text.Trim() == "/compact")
+        {
+            if (await hosted.Compactor.StartManualAsync())
+                return Results.Accepted(value: new { accepted = true, compacting = true });
+            return Results.Conflict(new { error = "Compaction requires an idle Session." });
+        }
+        if (text.Trim() == "/stop compact")
+        {
+            var cancelled = await hosted.Compactor.StopAsync();
+            return Results.Ok(new { success = true, stoppedCompact = cancelled.Cancelled, tooLate = cancelled.TooLate });
+        }
         if (text.Trim() != "/stop") return Results.UnprocessableEntity(new { error = "Unsupported experimental Session command." });
+        if (hosted.Compactor.Active) return Results.Conflict(new { error = "Use /stop compact to cancel compaction only." });
         if (!hosted.Entry.Snapshot().Busy) return Results.Ok(new { success = true, stoppedCurrent = false });
         var stopped = await hosted.Registry.Control.StopAsync(id);
         await hosted.DrainAsync();
@@ -188,6 +243,7 @@ app.MapPost("/api/sessions/{id}/stop", async (string id) =>
 {
     var hosted = sessions.Find(id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
+    if (hosted.Compactor.Active) return Results.Conflict(new { error = "Use /stop compact to cancel compaction only." });
     if (!hosted.Entry.Snapshot().Busy) return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
     try
     {

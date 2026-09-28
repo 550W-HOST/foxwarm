@@ -7,7 +7,7 @@ namespace Foxwarm.SessionTurns;
 /// Bounded C2 adapter: active JSON remains authoritative while Archive rows are immutable audit records.
 /// All calls are expected to be serialized by one SessionSaveLane.
 /// </summary>
-public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, ICanonicalAppendAuthorityStore
+public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, ICanonicalAppendAuthorityStore, ICompactionAuthorityStore
 {
     private readonly string sessionId;
     private readonly string agent;
@@ -75,6 +75,34 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             }
             throw;
         }
+    }
+
+    public Task CommitCompactionAsync(SessionSnapshot stagedSnapshot, IReadOnlyList<ArchiveBlockRecord> blocks,
+        IReadOnlyList<JsonObject> messages, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateBoundSnapshot(stagedSnapshot);
+        IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
+        IReadOnlyList<ArchiveMessageRecord> newMessages = [];
+        try
+        {
+            newBlocks = archive.WriteBlocks(blocks);
+            newMessages = archive.WriteMessages(messages.Select(ToArchiveRecord).ToArray());
+            cancellationToken.ThrowIfCancellationRequested();
+            authorityFile.Write(ToAuthority(stagedSnapshot));
+        }
+        catch (AuthorityCommittedException) { throw; }
+        catch (Exception error)
+        {
+            try
+            {
+                archive.RollbackInsertedMessages(newMessages);
+                archive.RollbackInsertedBlocks(newBlocks);
+            }
+            catch (Exception rollback) { throw new AggregateException("Compact precommit rollback failed.", error, rollback); }
+            throw;
+        }
+        return Task.CompletedTask;
     }
 
     public Task<SessionSnapshot?> LoadAsync(string requestedSessionId, CancellationToken cancellationToken = default)

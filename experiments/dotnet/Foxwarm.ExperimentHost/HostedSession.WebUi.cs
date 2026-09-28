@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.OpenAIResponses.Client;
 using Foxwarm.OpenAIResponses.Streaming;
 using Foxwarm.SessionTurns;
 
@@ -9,6 +10,43 @@ internal sealed partial class HostedSession
     private readonly object draftGate = new();
     private JsonObject? draft;
     private volatile bool toolActive;
+    private volatile bool compacting;
+
+    public void SetCompacting(bool value)
+    {
+        compacting = value;
+        BroadcastState();
+    }
+
+    public async Task<JsonObject> UpdateModelAsync(JsonObject patch)
+    {
+        if (patch.Count == 0 || patch.Any(pair => pair.Key is not ("model" or "effort" or "clear")))
+            throw new InvalidDataException("model and/or effort is required.");
+        var setModel = patch.ContainsKey("model") || patch["clear"]?.GetValue<bool>() == true;
+        string? model = null;
+        if (patch.ContainsKey("model") && patch["model"] is not null)
+        {
+            if (patch["model"] is not JsonValue raw || !raw.TryGetValue<string>(out model) || !models.Contains(model))
+                throw new InvalidDataException("Unknown or unsupported model key.");
+        }
+        var setEffort = patch.ContainsKey("effort");
+        string? effort = null;
+        if (setEffort && patch["effort"] is not null)
+        {
+            if (patch["effort"] is not JsonValue raw || !raw.TryGetValue<string>(out effort)
+                || effort is not ("none" or "low" or "medium" or "high" or "xhigh" or "max"))
+                throw new InvalidDataException("Invalid model effort.");
+        }
+        if (!setModel && !setEffort) throw new InvalidDataException("model and/or effort is required.");
+        var selected = models.Resolve(setModel ? model : models.Select(Entry.Snapshot()).RawModel);
+        if (effort is not null && !selected.AllowedEfforts.Contains(effort, StringComparer.Ordinal))
+            throw new InvalidDataException("Effort is not allowed by the selected model.");
+        await Entry.SaveLane.CommitAuthoritySettingsAsync(model, setModel, effort, setEffort);
+        var status = WebUiState();
+        status["success"] = true;
+        status["sessionId"] = Id;
+        return status;
+    }
 
     public JsonObject DraftSnapshot()
     {
@@ -170,12 +208,37 @@ internal sealed class WebUiChatService(IChatService inner, HostedSession hosted)
     }
 }
 
+internal sealed class HostModelChatService(
+    HttpClient http, ResponsesClientOptions baseOptions, HostedSession hosted, HostModels models,
+    Action<string, ResponsesStreamProgress> progress) : IChatService
+{
+    public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
+    {
+        var selected = models.Select(hosted.Entry.Snapshot());
+        var options = baseOptions with
+        {
+            BaseUri = selected.Model.BaseUri,
+            RequestModel = selected.Model.ModelId,
+            ConcreteModelId = selected.Model.Key,
+            Token = selected.Model.Token,
+            Effort = selected.EffectiveEffort
+        };
+        return new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
+    }
+}
+
 internal sealed class WebUiToolExecutor(ITurnToolExecutor inner, HostedSession hosted) : ITurnToolExecutor
 {
     public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
     {
         hosted.SetToolActive(true);
-        try { return await inner.ExecuteAsync(functionCall, cancellationToken); }
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (functionCall["name"]?.GetValue<string>() == "recall")
+                return ArchiveRecallTool.Execute(hosted.Archive, functionCall["args"] as JsonObject);
+            return await inner.ExecuteAsync(functionCall, cancellationToken);
+        }
         finally { hosted.SetToolActive(false); }
     }
 }

@@ -49,7 +49,7 @@ public sealed class SessionAuthorityDocument
         WriteIndented = indented
     });
 
-    internal static void ValidateMessage(JsonObject message, int expectedSeq, string label)
+    internal static void ValidateMessage(JsonObject message, long? expectedSeq, string label)
     {
         var role = RequiredString(message, "role", label);
         if (role is not ("user" or "model" or "tool"))
@@ -71,10 +71,37 @@ public sealed class SessionAuthorityDocument
 
         var meta = message["__meta"] as JsonObject
             ?? throw new InvalidDataException($"{label}.__meta must be an object.");
-        if (meta.ContainsKey("contextBlock") || meta.ContainsKey("contextFrontierItem") || meta.ContainsKey("preservedFromBlockId"))
-            throw new UnsupportedSessionAuthorityException($"{label} contains unsupported context block/frontier/preserved-message state.");
-        var seq = RequiredSafeInteger(meta, "seq", $"{label}.__meta");
-        if (seq != expectedSeq) throw new UnsupportedSessionAuthorityException($"{label} seq must be the contiguous value {expectedSeq}.");
+        if (meta.ContainsKey("contextFrontierItem"))
+            throw new UnsupportedSessionAuthorityException($"{label} contains unsupported context frontier state.");
+        if (meta["contextBlock"] is JsonObject block)
+        {
+            if (expectedSeq is not null || role != "model" || meta.ContainsKey("seq"))
+                throw new UnsupportedSessionAuthorityException($"{label} context block cannot be an Archive raw message.");
+            var id = RequiredSafeInteger(block, "id", $"{label} contextBlock");
+            var level = RequiredSafeInteger(block, "level", $"{label} contextBlock");
+            var start = RequiredSafeInteger(block, "sourceStart", $"{label} contextBlock");
+            var end = RequiredSafeInteger(block, "sourceEnd", $"{label} contextBlock");
+            var rawStart = RequiredSafeInteger(block, "rawStartSeq", $"{label} contextBlock");
+            var rawEnd = RequiredSafeInteger(block, "rawEndSeq", $"{label} contextBlock");
+            var kind = RequiredString(block, "sourceKind", $"{label} contextBlock");
+            if (id == 0 || level == 0 || start == 0 || end == 0 || rawStart == 0 || rawEnd < rawStart
+                || kind is not ("message" or "block")
+                || kind == "message" && (level != 1 || start != rawStart || end != rawEnd)
+                || kind == "block" && (level <= 1 || block["sourceBlockIds"] is not JsonArray { Count: > 0 }))
+                throw new InvalidDataException($"{label} context block shape is invalid.");
+            if (block["sourceBlockIds"] is JsonArray ids && ids.Any(item => item is not JsonValue value
+                || !TryReadNumber(value, out var number) || number <= 0 || Math.Truncate(number) != number))
+                throw new InvalidDataException($"{label} source block ids are invalid.");
+        }
+        else
+        {
+            if (meta.ContainsKey("contextBlock")) throw new InvalidDataException($"{label} contextBlock must be an object.");
+            var seq = RequiredSafeInteger(meta, "seq", $"{label}.__meta");
+            if (seq == 0 || expectedSeq is not null && seq != expectedSeq)
+                throw new InvalidDataException($"{label} seq is invalid.");
+            if (meta.ContainsKey("preservedFromBlockId") && RequiredSafeInteger(meta, "preservedFromBlockId", $"{label}.__meta") == 0)
+                throw new InvalidDataException($"{label} preservedFromBlockId is invalid.");
+        }
         _ = RequiredFiniteNumber(meta, "timestamp", $"{label}.__meta");
     }
 
@@ -113,8 +140,8 @@ public sealed class SessionAuthorityDocument
             throw new InvalidDataException("Session authority historyVersion must be non-negative.");
         if (RequiredSafeInteger(root, "lastAppliedMailboxId", "Session authority") != 0)
             throw new UnsupportedSessionAuthorityException("Session worker mailbox state is unsupported.");
-        if (root.ContainsKey("nextBlockId") && RequiredSafeInteger(root, "nextBlockId", "Session authority") != 1)
-            throw new UnsupportedSessionAuthorityException("Archive block state is unsupported.");
+        if (root.ContainsKey("nextBlockId") && RequiredSafeInteger(root, "nextBlockId", "Session authority") < 1)
+            throw new InvalidDataException("Session authority nextBlockId must be positive.");
         if (root.ContainsKey("agent"))
         {
             if (root["agent"] is not JsonValue agentValue || !agentValue.TryGetValue<string>(out var storedAgent))
@@ -140,10 +167,9 @@ public sealed class SessionAuthorityDocument
 
         for (var index = 0; index < history.Count; index++)
             ValidateMessage(history[index] as JsonObject
-                ?? throw new InvalidDataException($"Session authority history[{index}] must be an object."), index + 1, $"history[{index}]");
+                ?? throw new InvalidDataException($"Session authority history[{index}] must be an object."), null, $"history[{index}]");
         var nextMessageSeq = RequiredSafeInteger(root, "nextMessageSeq", "Session authority");
-        if (nextMessageSeq != history.Count + 1)
-            throw new UnsupportedSessionAuthorityException("Slice C1 requires contiguous history and nextMessageSeq == history.length + 1.");
+        if (nextMessageSeq < 1) throw new InvalidDataException("Session authority nextMessageSeq must be positive.");
     }
 
     private static string RequiredString(JsonObject value, string property, string label) =>

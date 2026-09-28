@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Foxwarm.OpenAIResponses.Client;
 using Foxwarm.OpenAIResponses.Streaming;
+using Foxwarm.SessionPersistence;
 using Foxwarm.SessionTurns;
 using Microsoft.Data.Sqlite;
 
@@ -12,13 +13,14 @@ internal sealed class HostSessions : IAsyncDisposable
 {
     private readonly string root;
     private readonly ResponsesClientOptions clientOptions;
+    private readonly HostModels models;
     private readonly WorkspaceTools tools;
     private readonly HttpClient http = new();
     private readonly ConcurrentDictionary<string, HostedSession> sessions = new();
     private volatile bool accepting = true;
     private readonly object lifecycle = new();
 
-    public HostSessions(string root, string workspace, ResponsesClientOptions options)
+    public HostSessions(string root, string workspace, ResponsesClientOptions options, HostModels models)
     {
         this.root = Path.GetFullPath(root);
         var workspaceRoot = Path.GetFullPath(workspace);
@@ -27,7 +29,11 @@ internal sealed class HostSessions : IAsyncDisposable
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
         Directory.CreateDirectory(this.root);
         tools = new WorkspaceTools(workspaceRoot);
-        clientOptions = options with { Tools = WorkspaceTools.Definitions() };
+        var definitions = WorkspaceTools.Definitions();
+        definitions.Add(ArchiveRecallTool.Definition());
+        definitions.Add(CompactPrompt.ToolDefinition());
+        clientOptions = options with { Tools = definitions };
+        this.models = models;
     }
 
     public async Task LoadAsync()
@@ -71,8 +77,7 @@ internal sealed class HostSessions : IAsyncDisposable
     public IEnumerable<object> List() => sessions.OrderBy(pair => pair.Key).Select(pair => pair.Value.State());
 
     public bool Accepting => accepting;
-    public string RequestModel => clientOptions.RequestModel;
-    public string ConcreteModel => clientOptions.ConcreteModelId;
+    public HostModels Models => models;
 
     public HostedSession? Find(string id) => IsOwnedId(id) && sessions.TryGetValue(id, out var value) ? value : null;
 
@@ -95,8 +100,9 @@ internal sealed class HostSessions : IAsyncDisposable
 
     private HostedSession MakeSession(string id, PersistentSessionAuthorityStore store)
     {
-        var hosted = new HostedSession(id, clientOptions.RequestModel, clientOptions.ConcreteModelId);
-        var chat = new ResponsesChatService(http, clientOptions, (sessionId, update) =>
+        var hosted = new HostedSession(id, models);
+        hosted.Archive = store.Archive;
+        var chat = new HostModelChatService(http, clientOptions, hosted, models, (sessionId, update) =>
         {
             hosted.PublishDraftProgress(update);
             hosted.Broadcast(new JsonObject
@@ -107,6 +113,8 @@ internal sealed class HostSessions : IAsyncDisposable
         });
         var registry = new SessionRegistry(store, new WebUiChatService(chat, hosted), new WebUiToolExecutor(tools, hosted));
         hosted.Registry = registry;
+        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http);
+        registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.TriggerOverride = _ => hosted.StartProcessing();
         return hosted;
     }
@@ -117,6 +125,9 @@ internal sealed class HostSessions : IAsyncDisposable
         lock (lifecycle) { accepting = false; current = sessions.Values.ToArray(); }
         // Each Stop takes and cancels its own active handle synchronously before
         // the host waits on any Session's best-effort persistence lane.
+        var compactStops = current.Where(session => session.Compactor.Active)
+            .Select(session => session.Compactor.StopAsync()).ToArray();
+        await Task.WhenAll(compactStops);
         var stops = current.Where(session => session.Entry.Snapshot().Busy)
             .Select(session => session.Registry.Control.StopAsync(session.Id)).ToArray();
         await Task.WhenAll(stops);
@@ -148,22 +159,22 @@ internal sealed partial class HostedSession
     private long nextRun;
     private long lastNotifiedSeq;
     private int lastReportedFailureCount;
-    private readonly string requestModel;
-    private readonly string concreteModel;
+    private readonly HostModels models;
     public string Id { get; }
     public SessionRegistry Registry { get; set; } = null!;
+    public SessionCompactor Compactor { get; set; } = null!;
+    public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public SessionEntry Entry => Registry.GetRequired(Id);
 
-    public HostedSession(string id, string requestModel, string concreteModel)
+    public HostedSession(string id, HostModels models)
     {
         Id = id;
-        this.requestModel = requestModel;
-        this.concreteModel = concreteModel;
+        this.models = models;
     }
 
-    public JsonObject WebUiState() => WebUiContract.Session(Entry.Snapshot(), requestModel, concreteModel, toolActive);
+    public JsonObject WebUiState() => WebUiContract.Session(Entry.Snapshot(), models, toolActive, compacting);
     public JsonObject WebUiHistory(SessionSnapshot snapshot, int? tail, int? prefix, long? afterSeq) =>
-        WebUiContract.History(snapshot, requestModel, concreteModel, toolActive, tail, prefix, afterSeq);
+        WebUiContract.History(snapshot, models, toolActive, compacting, tail, prefix, afterSeq);
 
     public object State()
     {
@@ -236,6 +247,7 @@ internal sealed partial class HostedSession
     public async Task DrainAsync()
     {
         while (running.Count > 0) await Task.WhenAll(running.Values.ToArray());
+        await Compactor.DrainAsync();
     }
 
     public (long Id, ChannelReader<JsonObject> Reader) Subscribe()
@@ -263,4 +275,13 @@ internal sealed partial class HostedSession
     {
         foreach (var channel in listeners.Values) channel.Writer.TryWrite((JsonObject)value.DeepClone());
     }
+
+    public void BroadcastState()
+    {
+        Broadcast(new JsonObject { ["type"] = "session-state", ["session"] = JsonSerializerNode(State()) });
+        Broadcast(new JsonObject { ["type"] = "webui-session-state", ["sessionId"] = Id, ["session"] = WebUiState() });
+    }
+
+    public void PublishCompactError(Exception error) =>
+        Broadcast(new JsonObject { ["type"] = "processing-error", ["message"] = error.Message });
 }

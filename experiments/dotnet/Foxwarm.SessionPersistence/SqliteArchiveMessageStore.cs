@@ -94,7 +94,7 @@ public sealed record ArchiveMessageRecord(
     }
 }
 
-public sealed class SqliteArchiveMessageStore
+public sealed partial class SqliteArchiveMessageStore
 {
     private readonly string databasePath;
     private readonly string sessionId;
@@ -129,6 +129,7 @@ public sealed class SqliteArchiveMessageStore
             )
             """);
         ValidateSchema(connection);
+        InitializeBlocks(connection);
         ValidateSupportedAncillaryState(connection);
     }
 
@@ -219,7 +220,7 @@ public sealed class SqliteArchiveMessageStore
 
     public IReadOnlyList<ArchiveMessageRecord> ReadMessages()
     {
-        using var connection = OpenConfigured();
+        using var connection = OpenExistingReadOnly();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session ORDER BY seq";
         command.Parameters.AddWithValue("$session", sessionId);
@@ -228,6 +229,38 @@ public sealed class SqliteArchiveMessageStore
         while (reader.Read())
             records.Add(ArchiveMessageRecord.FromStored(sessionId, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
         return records;
+    }
+
+    public IReadOnlyList<ArchiveMessageRecord> ReadMessagesRange(long startSeq, long endSeq)
+    {
+        if (startSeq <= 0 || endSeq < startSeq || endSeq > 9007199254740991L)
+            throw new ArgumentOutOfRangeException(nameof(startSeq), "Archive message range must be positive and ordered.");
+        using var connection = OpenExistingReadOnly();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND seq BETWEEN $first AND $last ORDER BY seq";
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$first", startSeq);
+        command.Parameters.AddWithValue("$last", endSeq);
+        using var reader = command.ExecuteReader();
+        var records = new List<ArchiveMessageRecord>();
+        while (reader.Read())
+            records.Add(ArchiveMessageRecord.FromStored(sessionId, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
+        return records;
+    }
+
+    public ArchiveMessageRecord? ReadMessageBySeq(long seq)
+    {
+        if (seq is <= 0 or > 9007199254740991L)
+            throw new ArgumentOutOfRangeException(nameof(seq), "Archive message sequence must be a positive safe integer.");
+        if (!File.Exists(databasePath)) return null;
+        using var connection = OpenExistingReadOnly();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND seq=$seq";
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$seq", seq);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ArchiveMessageRecord.FromStored(sessionId, reader.GetString(0), reader.GetInt64(1),
+            reader.GetDouble(2), reader.GetString(3), reader.GetString(4)) : null;
     }
 
     private SqliteConnection OpenConfigured()
@@ -245,6 +278,16 @@ public sealed class SqliteArchiveMessageStore
             connection.Dispose();
             throw;
         }
+    }
+
+    private SqliteConnection OpenExistingReadOnly()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 5
+        }.ToString());
+        connection.Open();
+        return connection;
     }
 
     private SqliteConnection Open()
@@ -316,7 +359,6 @@ public sealed class SqliteArchiveMessageStore
             if (reader.Read() && (!reader.IsDBNull(0) || reader.GetInt64(1) != 0 || reader.GetInt64(2) != 0))
                 throw new UnsupportedSessionAuthorityException("Archive fork/parent lineage is unsupported.");
         }
-        RejectRows(connection, "archive_blocks", "session_id=$session", "Archive blocks are unsupported.");
         RejectRows(connection, "archive_session_id_reservations", "session_id=$session OR canonical_session_id=$session", "Archive aliases/reservations are unsupported.");
     }
 

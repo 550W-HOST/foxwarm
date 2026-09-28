@@ -18,7 +18,8 @@ public sealed record ResponsesClientOptions(
     string Token,
     string Instructions,
     int MaxOutputTokens,
-    JsonArray? Tools = null)
+    JsonArray? Tools = null,
+    string? Effort = null)
 {
     public Uri ResponsesUri => new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
 }
@@ -163,10 +164,11 @@ public static partial class ResponsesRequestSerializer
         string concreteModelId,
         string instructions,
         int maxOutputTokens,
-        JsonArray? tools = null)
+        JsonArray? tools = null,
+        string? effort = null)
     {
         if (maxOutputTokens <= 0) throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
-        return new JsonObject
+        var data = new JsonObject
         {
             ["model"] = requestModel,
             ["instructions"] = instructions,
@@ -178,6 +180,17 @@ public static partial class ResponsesRequestSerializer
             ["store"] = false,
             ["stream"] = true
         };
+        if (effort is not null)
+        {
+            var reasoning = new JsonObject { ["effort"] = effort };
+            if (effort != "none")
+            {
+                reasoning["summary"] = "auto";
+                data["include"] = new JsonArray("reasoning.encrypted_content");
+            }
+            data["reasoning"] = reasoning;
+        }
+        return data;
     }
 
     private static JsonArray BuildToolDefinitions() => new(new JsonObject
@@ -257,6 +270,13 @@ public static partial class ResponsesRequestSerializer
             var message = String(error, "message") ?? "Tool execution failed";
             return $"error: {{type: {YamlScalar(type)}, message: {YamlScalar(message)}}}";
         }
+        if (response.Count is >= 4 and <= 5 && response["target"] is JsonValue target
+            && target.TryGetValue<string>(out var reference) && reference.StartsWith("msg#", StringComparison.Ordinal)
+            && response["offset"] is JsonValue && response["text"] is JsonValue recallPage
+            && recallPage.TryGetValue<string>(out var page) && page.EnumerateRunes().Count() <= 12000
+            && response["totalCharacters"] is JsonValue
+            && response.All(item => item.Key is "target" or "offset" or "text" or "totalCharacters" or "nextOffset"))
+            return response.ToJsonString();
         throw new UnsupportedResponsesFeatureException("non-bounded tool response formatting");
     }
 
@@ -625,7 +645,8 @@ public sealed class ResponsesChatService : IChatService
             options.ConcreteModelId,
             options.Instructions,
             options.MaxOutputTokens,
-            options.Tools);
+            options.Tools,
+            options.Effort);
         using var request = new HttpRequestMessage(HttpMethod.Post, options.ResponsesUri)
         {
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")

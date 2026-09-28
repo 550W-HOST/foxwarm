@@ -5,8 +5,9 @@ namespace Foxwarm.ExperimentHost;
 
 internal static class WebUiContract
 {
-    public static JsonObject Session(SessionSnapshot snapshot, string requestModel, string concreteModel, bool toolActive)
+    public static JsonObject Session(SessionSnapshot snapshot, HostModels models, bool toolActive, bool compacting)
     {
+        var selected = models.Select(snapshot);
         var queueLength = snapshot.Queue.Count;
         var runtime = new JsonObject
         {
@@ -14,6 +15,7 @@ internal static class WebUiContract
             ["busy"] = snapshot.Busy, ["queueLength"] = queueLength
         };
         if (snapshot.BusyStartedAt is long since) runtime["since"] = since;
+        if (compacting) runtime["active"] = new JsonObject { ["phase"] = "compaction" };
         return new JsonObject
         {
             ["id"] = snapshot.Id,
@@ -23,13 +25,17 @@ internal static class WebUiContract
             ["messageCount"] = snapshot.History.Count,
             ["historyVersion"] = snapshot.HistoryVersion,
             ["runtimeState"] = runtime,
-            ["model"] = concreteModel,
-            ["modelKey"] = requestModel,
-            ["defaultModelKey"] = requestModel
+            ["model"] = selected.RawModel,
+            ["modelKey"] = selected.Model.Key,
+            ["defaultModelKey"] = models.DefaultKey,
+            ["effort"] = selected.RawEffort,
+            ["effectiveEffort"] = selected.EffectiveEffort,
+            ["effortAllowed"] = new JsonArray(selected.Model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
+            ["effortDefault"] = selected.Model.DefaultEffort
         };
     }
 
-    public static JsonObject History(SessionSnapshot snapshot, string requestModel, string concreteModel, bool toolActive,
+    public static JsonObject History(SessionSnapshot snapshot, HostModels models, bool toolActive, bool compacting,
         int? tail, int? prefixLength, long? afterSeq)
     {
         IReadOnlyList<JsonObject> selected = snapshot.History;
@@ -68,7 +74,7 @@ internal static class WebUiContract
         }
         var result = new JsonObject
         {
-            ["session"] = Session(snapshot, requestModel, concreteModel, toolActive),
+            ["session"] = Session(snapshot, models, toolActive, compacting),
             ["messages"] = new JsonArray(selected.Select(message => (JsonNode?)message.DeepClone()).ToArray()),
             ["persistentMemorySnapshot"] = "",
             ["queuedMessages"] = preview,
