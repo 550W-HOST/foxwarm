@@ -9,6 +9,42 @@ This directory is a manual migration experiment and is not part of the Node.js b
 - `Foxwarm.SessionTurns` ports the first bounded Main-local Session-turn seams: owned Message JSON state, source-blind ordinary queue batching, ordered authority snapshot saves, one processor claim, one active cancellation handle, Stop finalization, and an in-process fake chat host. It has no production runtime integration.
 - `Foxwarm.SessionPersistence` provides the accepted C1 current-v1 authority validator, exact six-column `archive_messages` store, and Linux atomic JSON writer over test-owned roots. Slice C2 connects those primitives to `SessionTurns` through one bounded persistent authority adapter while retaining the in-memory test substitute.
 - `Foxwarm.SessionRestartHarness` is a test-only CLI with narrow process-A, process-B, and fail-closed load-check modes for Slice D. It is not a product entry point.
+- `Foxwarm.ExperimentHost` is an independent single-process, multi-Session HTTP host for one explicitly configured Responses model and a separate local tool workspace; it is not the Foxwarm production backend.
+
+## Interactive experimental HTTP host
+
+Build `Foxwarm.ExperimentHost`, choose **new separate** data/workspace directories, and set explicit environment variables. Do not point the data root at a Foxwarm production/test installation. The host binds only to `127.0.0.1`; use a local scripted Responses server when validating without provider spend:
+
+```sh
+export FOXWARM_EXPERIMENT_DATA_ROOT=/path/to/new/experiment-data
+export FOXWARM_EXPERIMENT_TOOL_ROOT=/path/to/new/tool-workspace
+export FOXWARM_EXPERIMENT_PORT=39091
+export FOXWARM_EXPERIMENT_API_TOKEN='private-local-api-token'
+export FOXWARM_EXPERIMENT_RESPONSES_BASE_URI='http://127.0.0.1:39092'
+export FOXWARM_EXPERIMENT_PROVIDER_TOKEN='private-provider-token'
+export FOXWARM_EXPERIMENT_REQUEST_MODEL='local-scripted-model'
+export FOXWARM_EXPERIMENT_CONCRETE_MODEL='local-scripted-model'
+# Optional: FOXWARM_EXPERIMENT_INSTRUCTIONS and FOXWARM_EXPERIMENT_MAX_OUTPUT_TOKENS.
+dotnet run --no-build --project experiments/dotnet/Foxwarm.ExperimentHost
+```
+
+The API is an **experiment subset**, not a full WebUI protocol. All requests, including `/health`, require `Authorization: Bearer $FOXWARM_EXPERIMENT_API_TOKEN`. A minimal local interaction after startup is:
+
+```sh
+curl -H "Authorization: Bearer $FOXWARM_EXPERIMENT_API_TOKEN" -H 'Content-Type: application/json' \
+  -X POST "http://127.0.0.1:$FOXWARM_EXPERIMENT_PORT/api/sessions"
+# Use the returned safe generated sessionId as ID:
+curl -H "Authorization: Bearer $FOXWARM_EXPERIMENT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"text":"hello"}' "http://127.0.0.1:$FOXWARM_EXPERIMENT_PORT/api/sessions/ID/message"
+curl -N -H "Authorization: Bearer $FOXWARM_EXPERIMENT_API_TOKEN" \
+  "http://127.0.0.1:$FOXWARM_EXPERIMENT_PORT/api/sessions/ID/stream"
+```
+
+Supported routes: `GET/POST /api/sessions`, `GET /api/sessions/{id}/state|history|stream`, `POST /api/sessions/{id}/message|stop`, `POST /admin/shutdown`, and `GET /health`. Message accepts only nonempty `text` and optional `clientMessageId`; HTTP 202 means an ingress queue-save **attempt** was acknowledged, not that it was durable or processed. State includes busy, queue and failure status; history includes owned canonical messages. SSE emits `connected`, `session-state`, cumulative `model-progress`, `message-committed`, and `processing-error`; it does not implement the full WebUI stream/version/replay contract. Stop cancels an active request and waits for finalization. Graceful shutdown stops admission, closes streams, cancels active requests, awaits processor/save completion and fails rather than reporting clean shutdown when an authority save fails. On normal restart, only the host-owned Session JSON files are loaded; Archive IDs detect disappeared authority but never reconstruct it. Busy/stopping persisted states fail closed rather than attempting crash repair.
+
+The only exposed model tools are `read` and `write`, with the exact approved Responses function definitions. They accept relative UTF-8 regular files in the separate tool workspace, forbid absolute/parent traversal and symbolic-link components, limit content/read to 1 MiB, require an existing parent directory, and protect existing files unless `overwrite:true`. These are application-level path limits, **not** an OS sandbox or protection against a hostile concurrent filesystem actor. Existing `write_fixture` remains available to the older test harness but is not advertised or executed by this host. No production provider/configuration, Agent/catalog platform, Channels, Worker, Node, MCP, general tool registry, image input, retry/routing, crash/busy recovery, receipts, or full WebUI frontend compatibility is claimed.
+
+The single end-to-end driver `experiments/dotnet/host-e2e.py` runs only against its own temporary root and local scripted Responses provider. It starts two host PIDs sequentially, exercises two concurrent Sessions and one queued second turn, genuine incremental SSE, real read/write and overwrite protection, path escape rejection, held-provider Stop, clean restart, continued seq/Archive rows without replaying the old tool effect, and fail-closed missing/corrupt authority startup. Run the compiled host and driver inside a bounded process-tree runner; the driver has per-wait limits and kills/waits for its exact child process group on errors.
 
 ## Build and tests
 

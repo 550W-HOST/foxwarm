@@ -33,6 +33,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foxwarm.SessionPersistence.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foxwarm.SessionRestartHarness", "Foxwarm.SessionRestartHarness\Foxwarm.SessionRestartHarness.csproj", "{2563F991-FAE8-45AA-A5E7-CEC3F2647F78}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foxwarm.ExperimentHost", "Foxwarm.ExperimentHost\Foxwarm.ExperimentHost.csproj", "{A73F8012-797B-41DF-8B0D-C973168ABCC4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -223,6 +225,18 @@ Global
 		{2563F991-FAE8-45AA-A5E7-CEC3F2647F78}.Release|x64.Build.0 = Release|Any CPU
 		{2563F991-FAE8-45AA-A5E7-CEC3F2647F78}.Release|x86.ActiveCfg = Release|Any CPU
 		{2563F991-FAE8-45AA-A5E7-CEC3F2647F78}.Release|x86.Build.0 = Release|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Debug|x64.Build.0 = Debug|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Debug|x86.Build.0 = Debug|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Release|x64.ActiveCfg = Release|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Release|x64.Build.0 = Release|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Release|x86.ActiveCfg = Release|Any CPU
+		{A73F8012-797B-41DF-8B0D-C973168ABCC4}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

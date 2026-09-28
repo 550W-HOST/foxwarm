@@ -323,7 +323,7 @@ public sealed class SessionEntry
         Volatile.Write(ref lastPostCommitNotificationFailure, error);
         Interlocked.Increment(ref postCommitNotificationFailures);
     }
-    internal void RecordBackgroundProcessorFailure(Exception error)
+    public void RecordBackgroundProcessorFailure(Exception error)
     {
         Volatile.Write(ref lastBackgroundProcessorFailure, error);
         Interlocked.Increment(ref backgroundProcessorFailures);
@@ -978,8 +978,11 @@ public sealed class SessionTurnRunner
                 {
                     throw;
                 }
-                catch
+                catch (Exception error)
                 {
+                    // The current turn does not auto-retry a chat failure, but an HTTP host
+                    // must be able to report its terminal outcome rather than imply success.
+                    entry.RecordBackgroundProcessorFailure(error);
                     break;
                 }
             }

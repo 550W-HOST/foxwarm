@@ -17,7 +17,8 @@ public sealed record ResponsesClientOptions(
     string ConcreteModelId,
     string Token,
     string Instructions,
-    int MaxOutputTokens)
+    int MaxOutputTokens,
+    JsonArray? Tools = null)
 {
     public Uri ResponsesUri => new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
 }
@@ -161,7 +162,8 @@ public static partial class ResponsesRequestSerializer
         string requestModel,
         string concreteModelId,
         string instructions,
-        int maxOutputTokens)
+        int maxOutputTokens,
+        JsonArray? tools = null)
     {
         if (maxOutputTokens <= 0) throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
         return new JsonObject
@@ -169,7 +171,7 @@ public static partial class ResponsesRequestSerializer
             ["model"] = requestModel,
             ["instructions"] = instructions,
             ["input"] = ConvertHistory(history, concreteModelId),
-            ["tools"] = BuildToolDefinitions(),
+            ["tools"] = tools is null ? BuildToolDefinitions() : tools.DeepClone(),
             ["tool_choice"] = "auto",
             ["parallel_tool_calls"] = true,
             ["max_output_tokens"] = maxOutputTokens,
@@ -602,11 +604,14 @@ public sealed class ResponsesChatService : IChatService
     private const int MaxErrorBodyBytes = 64 * 1024;
     private readonly HttpClient httpClient;
     private readonly ResponsesClientOptions options;
+    private readonly Action<string, ResponsesStreamProgress>? progress;
 
-    public ResponsesChatService(HttpClient httpClient, ResponsesClientOptions options)
+    public ResponsesChatService(HttpClient httpClient, ResponsesClientOptions options,
+        Action<string, ResponsesStreamProgress>? progress = null)
     {
         this.httpClient = httpClient;
         this.options = options;
+        this.progress = progress;
     }
 
     public async Task<ChatResult> ChatAsync(
@@ -619,7 +624,8 @@ public sealed class ResponsesChatService : IChatService
             options.RequestModel,
             options.ConcreteModelId,
             options.Instructions,
-            options.MaxOutputTokens);
+            options.MaxOutputTokens,
+            options.Tools);
         using var request = new HttpRequestMessage(HttpMethod.Post, options.ResponsesUri)
         {
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
@@ -642,6 +648,10 @@ public sealed class ResponsesChatService : IChatService
         var completed = await ResponsesSseCollector.CollectAsync(
             stream,
             cancellationToken,
+            callbacks: progress is null ? null : new ResponsesStreamCallbacks
+            {
+                OnProgress = update => progress(sessionId, update)
+            },
             ownership: StreamOwnership.Dispose).ConfigureAwait(false);
         var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
