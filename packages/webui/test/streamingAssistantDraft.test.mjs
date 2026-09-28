@@ -4,7 +4,7 @@ import { build } from 'esbuild'
 
 const sourcePath = new URL('../src/streamingAssistantDraft.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+const { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
 test('synthetic assistant messages retain the canonical request identity for render reconciliation', () => {
   const message = buildStreamingAssistantMessage({
@@ -88,6 +88,36 @@ test('Responses ordered slices keep separate reasoning items around commentary a
   assert.equal(shouldClearDraftAfterHistory({ draftAtRequestStart: draft, currentDraft: draft,
     hasNewerStreamEvent: false, snapshotMessages: [{ role: 'model', parts: [{ text: 'Drawing' }], __meta: { llmRequestId: 'request-ordered' } }],
   }), true)
+})
+
+test('a committed commentary range removes only its draft prefix and late events cannot resurrect it', () => {
+  const draft = applyModelStreamSnapshot({
+    streamId: 'partial', iteration: 0, sequence: 3, startedAt: 100, llmRequestId: 'one-request',
+    reasoning: 'before\nafter', text: 'Drawing', toolCalls: [], parts: [
+      { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, text: 'before' },
+      { outputIndex: 1, kind: 'text', contentIndex: 0, phase: 'commentary', text: 'Drawing' },
+      { outputIndex: 2, kind: 'reasoning', summaryIndex: 0, text: 'after' },
+    ],
+  })
+  const committed = { role: 'model', parts: [{ thinking: 'before' }, { text: 'Drawing', phase: 'commentary' }],
+    __meta: { llmRequestId: 'one-request', llmSegment: { outputStart: 0, outputEndExclusive: 2, complete: false }, timestamp: 101 },
+  }
+  const remaining = reconcileCommittedModelDraft(draft, committed)
+  assert.deepEqual(buildStreamingAssistantMessage(remaining).parts, [{ thinking: 'after' }])
+  assert.equal(buildStreamingAssistantMessage(remaining).__meta.llmSegment.outputStart, 2)
+  assert.equal(shouldClearDraftAfterHistory({ draftAtRequestStart: draft, currentDraft: remaining,
+    hasNewerStreamEvent: false, snapshotMessages: [committed] }), false)
+  const late = applyModelStreamEvent(remaining, { type: 'model-stream-update', streamVersion: 2,
+    streamId: 'partial', sequenceStart: 4, sequence: 4,
+    partDeltas: [{ outputIndex: 1, kind: 'text', contentIndex: 0, added: true, textDelta: { offset: 0, text: 'Wrong duplicate' } }],
+  })
+  assert.deepEqual(buildStreamingAssistantMessage(late).parts, [{ thinking: 'after' }])
+  const final = { role: 'model', parts: [{ thinking: 'after' }], __meta: {
+    llmRequestId: 'one-request', llmSegment: { outputStart: 2, outputEndExclusive: 3, complete: true }, timestamp: 102,
+  } }
+  assert.equal(reconcileCommittedModelDraft(late, final), null)
+  const nextRequest = { ...late, llmRequestId: 'next-request' }
+  assert.equal(reconcileCommittedModelDraft(nextRequest, final), nextRequest)
 })
 
 test('midstream delta subscription is marked incomplete instead of presented as a full prefix', () => {

@@ -887,6 +887,9 @@ export class SessionTurnRunner {
         try {
           result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
+            onIntermediateAssistantText: async text => {
+              await this.deliverIntermediateModelText(session, text, broadcast, turnId);
+            },
             onCommittedAssistantMessage: async message => {
               const images = message.parts
                 .filter(part => part.imageMeta?.origin === 'generated' && !!part.inlineDataRef?.blobId)

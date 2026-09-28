@@ -204,6 +204,33 @@ async function start(): Promise<void> {
       await options.appendMessage({ role: 'model', parts: [{ thinking: 'Starting the process' }, { functionCall: call }] });
       return { toolCalls: [call], allParts: [{ thinking: 'Starting the process' }, { functionCall: call }] };
     }
+    if (process.env.FOXWARM_TEST_STREAM_COMMITTED_PREFIX === '1'
+      && chatCount === Number(process.env.FOXWARM_TEST_STREAM_COMMITTED_PREFIX_AT || '1')) {
+      const base = { streamVersion: 2, streamId: 'committed-prefix-stream', iteration: 0,
+        startedAt: Date.now(), llmRequestId: 'worker-prefix-request' };
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', ...base, sequenceStart: 1, sequence: 1,
+        partDeltas: [{ outputIndex: 0, kind: 'text', contentIndex: 0, added: true,
+          phase: 'commentary', textDelta: { offset: 0, text: 'Drawing' } }],
+        textDelta: { offset: 0, text: 'Drawing' },
+      } as any);
+      await options.appendMessage({ role: 'model', parts: [{ text: 'Drawing', phase: 'commentary' }],
+        __meta: { llmRequestId: 'worker-prefix-request', llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } });
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', ...base, sequenceStart: 2, sequence: 2,
+        trimBeforeOutputIndex: 1, textDelta: { offset: 0, text: '' },
+      } as any);
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', ...base, sequenceStart: 3, sequence: 3,
+        partDeltas: [{ outputIndex: 1, kind: 'reasoning', summaryIndex: 0, added: true,
+          textDelta: { offset: 0, text: 'After' } }, { outputIndex: 2, kind: 'text', contentIndex: 0,
+          added: true, phase: 'final_answer', textDelta: { offset: 0, text: 'Final' } }],
+        reasoningDelta: { offset: 0, text: 'After' }, textDelta: { offset: 0, text: 'Final' },
+      } as any);
+      await options.appendMessage({ role: 'model', parts: [{ thinking: 'After' }, { text: 'Final', phase: 'final_answer' }],
+        __meta: { llmRequestId: 'worker-prefix-request', llmSegment: { outputStart: 1, outputEndExclusive: 3, complete: true } } });
+      return { text: 'Final', allParts: [{ thinking: 'After' }, { text: 'Final', phase: 'final_answer' }] };
+    }
     // Simulates a slow provider request that honors its abort signal, like the
     // real runner: the controller is registered for the in-flight request and
     // the request rejects AbortError when interrupted.

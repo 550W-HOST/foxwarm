@@ -653,10 +653,10 @@ export class SessionWorkerHost {
 
   private forwardSessionStreamEvent(event: SessionStreamEvent): void {
     if (!this.presentationSubscribed || !this.dependencies.publishPresentationStream) return;
-    if (event.type === 'model-stream-reset') {
-      // A retry/reset is a structural draft boundary. Preserve any already
-      // emitted cumulative frame before it, and cancel its coalescer timer so
-      // an older update can never reappear after the reset.
+    if (event.type === 'model-stream-reset' || (event.type === 'model-stream-update' && event.trimBeforeOutputIndex !== undefined)) {
+      // A reset or committed-prefix trim is a structural draft boundary.
+      // Flush earlier frames and cancel the coalescer timer before forwarding
+      // it, so an older update cannot reappear after the boundary.
       this.flushCoalescedStreamEvents();
       const copy = JSON.parse(JSON.stringify(event)) as SessionStreamEvent;
       this.forwardPresentation(() => this.dependencies.publishPresentationStream!(copy));

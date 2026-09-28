@@ -10,7 +10,7 @@ import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
 import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
-import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
+import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
@@ -922,6 +922,18 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         return hasNewerMismatchedQueue
       }
       const maybeClearDraft = (snapshotMessages: Message[]) => {
+        const current = streamingAssistantDraftRef.current
+        if (current) {
+          const reconciled = snapshotMessages
+            .filter(message => message.role === 'model' && message.__meta?.llmSegment
+              && message.__meta?.llmRequestId === current.llmRequestId)
+            .sort((a, b) => (a.__meta?.llmSegment?.outputEndExclusive || 0) - (b.__meta?.llmSegment?.outputEndExclusive || 0))
+            .reduce<StreamingAssistantDraft | null>(reconcileCommittedModelDraft, current)
+          if (reconciled !== current) {
+            streamingAssistantDraftRef.current = reconciled
+            setStreamingAssistantDraft(reconciled)
+          }
+        }
         if (shouldClearDraftAfterHistory({
           draftAtRequestStart: modelStreamDraftAtStart,
           currentDraft: streamingAssistantDraftRef.current,
@@ -1340,8 +1352,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           const isUpdateExisting = data.message.__meta?.updateExisting
 
           if (data.message.role === 'model') {
-            if (shouldClearDraftForCommittedModel(streamingAssistantDraftRef.current, data.message.__meta?.timestamp)) {
-              clearStreamingAssistantDraft()
+            const next = reconcileCommittedModelDraft(streamingAssistantDraftRef.current, incomingMessage)
+            if (next !== streamingAssistantDraftRef.current) {
+              streamingAssistantDraftRef.current = next
+              setStreamingAssistantDraft(next)
             }
           }
 

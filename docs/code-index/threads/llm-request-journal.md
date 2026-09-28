@@ -16,7 +16,7 @@ The journal uses `state/llm-request-journal.sqlite` as its sole runtime authorit
 - Reconstruction follows only the bounded manifest chain and verifies every referenced object exists.
 - Each physical provider attempt has an append-only start record with the selected concrete model, protocol, virtual key when applicable, and a hash of the semantic provider payload. The request prompt is the first attempt's effective prompt; a later attempt may reference a different content-addressed prompt object, while an absent reference inherits the request prompt.
 - Attempt results contain normalized success output or bounded failure/abort metadata. Auth headers and provider-hydrated request bodies are never stored.
-- Successful normal assistant messages carry `llmRequestId` and `llmAttempt` metadata linking them to the journal. Ephemeral compact, BTW, ToolScript, CLI, and setup outputs remain reconstructable through attempt results even though they do not all become ordinary session assistant rows.
+- Successful normal assistant messages carry `llmRequestId` and `llmAttempt` metadata linking them to the journal. If a normal Responses stream fails after a commentary prefix was committed, the next bounded physical attempt starts a new logical request ID and manifest built from current committed history; the prior attempt records its failure. [Canonical streaming contract](./streaming-pipeline.md#d-streaming-early-commentary-commit). Ephemeral compact, BTW, ToolScript, CLI, and setup outputs remain reconstructable through attempt results even though they do not all become ordinary session assistant rows.
 
 ## Request flow
 

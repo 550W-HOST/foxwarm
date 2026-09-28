@@ -20,21 +20,22 @@ const reactFixture = `
   import React from 'react'
   import { createRoot } from 'react-dom/client'
   import ChatTimeline from ${JSON.stringify(path.join(packageDir, 'src/components/ChatTimeline.tsx'))}
-  import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage } from ${JSON.stringify(path.join(packageDir, 'src/streamingAssistantDraft.ts'))}
+  import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, reconcileCommittedModelDraft } from ${JSON.stringify(path.join(packageDir, 'src/streamingAssistantDraft.ts'))}
   let draft = null
-  let committed = null
+  const committed = []
   const root = createRoot(document.getElementById('root'))
   function render() {
     const synthetic = buildStreamingAssistantMessage(draft)
     root.render(React.createElement(ChatTimeline, {
-      sessionId: 'fixture/main', messages: committed ? [committed] : synthetic ? [synthetic] : [],
+      sessionId: 'fixture/main', messages: [...committed, ...(synthetic ? [synthetic] : [])],
       isMobile: false, groupTools: false, showUsageBadge: false,
     }))
   }
   window.fixture = {
     install(snapshot) { draft = applyModelStreamSnapshot(snapshot); render() },
     update(event) { draft = applyModelStreamEvent(draft, event); render() },
-    commit(message) { draft = null; committed = message; render() },
+    commitPrefix(message) { committed.push(message); draft = reconcileCommittedModelDraft(draft, message); render() },
+    commit(message) { committed.push(message); draft = null; render() },
     parts() { return buildStreamingAssistantMessage(draft)?.parts },
   }
   render()
@@ -60,6 +61,7 @@ async function emitSseFrames() {
   await new Promise(resolve => setImmediate(resolve))
   const snapshot = getModelStreamDraft('browser-fixture/main')
   assert.ok(snapshot?.parts?.length)
+  emitter.commitPrefix(2)
   frame({ type: 'response.output_item.added', output_index: 2, item: { type: 'image_generation_call', status: 'in_progress' } })
   frame({ type: 'response.image_generation_call.generating', output_index: 2 })
   frame({ type: 'response.reasoning_summary_text.delta', output_index: 3, summary_index: 0, delta: 'After drawing' })
@@ -68,14 +70,17 @@ async function emitSseFrames() {
   frame({ type: 'response.completed', response: { id: 'synthetic', output: [], usage: { input_tokens: 1, output_tokens: 2 } } })
   frames.end()
   const completed = await collecting
+  const lateSnapshot = getModelStreamDraft('browser-fixture/main')
   emitter.close()
-  const tail = events.filter(event => event.type === 'model-stream-update' && event.sequence > snapshot.sequence)
+  const trim = events.find(event => event.type === 'model-stream-update' && event.trimBeforeOutputIndex === 2)
+  assert.ok(trim)
+  const tail = events.filter(event => event.type === 'model-stream-update' && event.sequence > trim.sequence)
   const mergedTail = tail.reduce((previous, next) => mergeModelStreamDeltaEvents(previous, next), undefined)
-  return { snapshot, mergedTail, completed }
+  return { snapshot, trim, mergedTail, lateSnapshot, completed }
 }
 
 test('actual Responses SSE stream preserves browser reasoning boundaries across snapshot and canonical commit', async () => {
-  const { snapshot, mergedTail, completed } = await emitSseFrames()
+  const { snapshot, trim, mergedTail, lateSnapshot, completed } = await emitSseFrames()
   const bundle = await build({
     stdin: { contents: reactFixture, resolveDir: packageDir, sourcefile: 'ordered-responses-fixture.tsx' },
     bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false,
@@ -96,14 +101,26 @@ test('actual Responses SSE stream preserves browser reasoning boundaries across 
     await page.waitForFunction(() => document.querySelector('[data-model-thread-card="reasoning"]'))
     assert.deepEqual(await page.evaluate(() => window.fixture.parts().map(part => part.thinking || part.text)),
       ['Before drawing', 'Drawing'])
+    const prefix = { role: 'model', __meta: { seq: 1, timestamp: Date.now(), llmRequestId: 'browser-fixture-request',
+      llmSegment: { outputStart: 0, outputEndExclusive: 2, complete: false } },
+    parts: [{ thinking: 'Before drawing' }, { text: 'Drawing', phase: 'commentary' }] }
+    await page.evaluate(message => window.fixture.commitPrefix(message), prefix)
+    assert.equal(await page.evaluate(() => window.fixture.parts()), undefined)
+    await page.evaluate(event => window.fixture.update(event), trim)
     await page.evaluate(event => window.fixture.update(event), mergedTail)
     await page.waitForFunction(() => document.querySelectorAll('[data-model-thread-card="reasoning"]').length === 2)
     assert.deepEqual(await page.evaluate(() => window.fixture.parts().map(part => part.thinking || part.text || part.system)),
-      ['Before drawing', 'Drawing', 'Generating image…', 'After drawing', 'Done'])
+      ['Generating image…', 'After drawing', 'Done'])
+    // A late subscriber receives the already committed history row and only
+    // the owner snapshot's uncommitted suffix; buffered covered deltas stay ignored.
+    await page.evaluate(snapshot => window.fixture.install(snapshot), lateSnapshot)
+    await page.evaluate(event => window.fixture.update(event), mergedTail)
+    assert.deepEqual(await page.evaluate(() => window.fixture.parts().map(part => part.thinking || part.text || part.system)),
+      ['Generating image…', 'After drawing', 'Done'])
     const final = { role: 'model', __meta: { seq: 2, timestamp: Date.now(), llmRequestId: 'browser-fixture-request' }, parts: [
-      { thinking: completed.output[0].summary[0].text }, { text: completed.output[1].content[0].text, phase: 'commentary' },
       { thinking: completed.output[3].summary[0].text }, { text: completed.output[4].content[0].text, phase: 'final_answer' },
     ] }
+    final.__meta.llmSegment = { outputStart: 2, outputEndExclusive: 5, complete: true }
     await page.evaluate(message => window.fixture.commit(message), final)
     await page.waitForFunction(() => document.querySelector('[data-chat-message-anchor-key="seq-local-2"]'))
     assert.equal(await page.$$eval('[data-model-thread-card="reasoning"]', nodes => nodes.length), 2)

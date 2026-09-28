@@ -215,6 +215,21 @@ type RequestLlmOnceOptions = {
     compactPlanBackground?: boolean;
     currentSessionEffects?: CurrentSessionEffects;
     resolveSystemPromptForModel?: (modelId: string) => Promise<string>;
+    /** Normal-turn Responses only: canonical append and delivery owned by chat(). */
+    onPartialAssistantCommit?: (segment: {
+        parts: MessagePart[];
+        text: string;
+        providerMeta?: ChatResult['providerMeta'];
+        modelId: string;
+        virtualModelKey?: string;
+        llmRequestId: string;
+        llmAttempt: number;
+        outputStart: number;
+        outputEndExclusive: number;
+    }) => Promise<Message>;
+    onPartialAssistantDelivered?: (message: Message, text: string) => Promise<void>;
+    /** Rebuild the next logical request after a partial completion failed upstream. */
+    getCommittedHistoryForRetry?: () => Message[];
 };
 
 function resolveProviderPromptCacheKey(
@@ -232,6 +247,9 @@ function resolveProviderPromptCacheKey(
 
 type InternalLlmResult = {
     result: ChatResult;
+    committedSegments?: Message[];
+    committedOutputEnd?: number;
+    outputEndExclusive?: number;
     /**
      * Provider-local completion held outside the reusable pool until the
      * exact assistant Message has crossed the canonical history boundary.
@@ -593,6 +611,23 @@ function makeModelStreamPartDeltas(previous: ModelStreamPart[], current: ModelSt
     });
 }
 
+function projectModelStreamParts(parts: ModelStreamPart[], committedThrough: number): ModelStreamProgressSnapshot {
+    const remaining = parts.filter(part => part.outputIndex >= committedThrough);
+    const summaries = new Map<number, string[]>();
+    for (const part of remaining) {
+        if (part.kind !== 'reasoning' || !part.text) continue;
+        const values = summaries.get(part.outputIndex) || [];
+        values[part.summaryIndex || 0] = part.text;
+        summaries.set(part.outputIndex, values);
+    }
+    return {
+        parts: remaining,
+        reasoning: [...summaries.entries()].sort(([left], [right]) => left - right)
+            .map(([, values]) => values.filter(Boolean).join('\n')).filter(Boolean).join('\n'),
+        text: remaining.filter(part => part.kind === 'text').map(part => part.text || '').join(''),
+    };
+}
+
 export function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
@@ -614,6 +649,7 @@ export function createModelStreamEventEmitter(args: {
     let lastSentAt = 0;
     let lastToolArgsSentAt = 0;
     let sequence = 0;
+    let committedThrough = 0;
     let startedAt = now();
     const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
         if (!args.sessionId) return;
@@ -686,6 +722,7 @@ export function createModelStreamEventEmitter(args: {
             text,
             toolCalls: currentToolCalls,
             ...(latestSnapshot.parts ? { parts: latestSnapshot.parts } : {}),
+            ...(committedThrough ? { committedThrough } : {}),
         });
         lastSentAt = now();
         if (toolArgsDue && toolCallDeltas.some(call => call.argumentsDelta)) lastToolArgsSentAt = lastSentAt;
@@ -723,6 +760,7 @@ export function createModelStreamEventEmitter(args: {
 
             latestSnapshot = { reasoning: '', text: '', toolCalls: [] };
             emittedSnapshot = { reasoning: '', text: '', toolCalls: [] };
+            committedThrough = 0;
             startedAt = now();
             if (timer) {
                 clearTimer(timer);
@@ -747,11 +785,14 @@ export function createModelStreamEventEmitter(args: {
             lastToolArgsSentAt = lastSentAt;
         },
         emit(snapshot: ModelStreamProgressSnapshot) {
+            const projected = snapshot.parts && committedThrough > 0
+                ? projectModelStreamParts(snapshot.parts, committedThrough)
+                : snapshot;
             const nextSnapshot = {
-                reasoning: snapshot.reasoning ?? latestSnapshot.reasoning ?? '',
-                text: snapshot.text ?? latestSnapshot.text ?? '',
-                toolCalls: normalizeModelStreamToolCalls(snapshot.toolCalls ?? latestSnapshot.toolCalls),
-                ...(snapshot.parts ? { parts: snapshot.parts } : {}),
+                reasoning: projected.reasoning ?? latestSnapshot.reasoning ?? '',
+                text: projected.text ?? latestSnapshot.text ?? '',
+                toolCalls: normalizeModelStreamToolCalls(projected.toolCalls ?? latestSnapshot.toolCalls),
+                ...(projected.parts ? { parts: projected.parts } : {}),
             };
             const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
             if ((latestSnapshot.reasoning || '') === nextSnapshot.reasoning
@@ -773,9 +814,38 @@ export function createModelStreamEventEmitter(args: {
                     text: nextSnapshot.text || '',
                     toolCalls: nextSnapshot.toolCalls || [],
                     ...(nextSnapshot.parts ? { parts: nextSnapshot.parts } : {}),
+                    ...(committedThrough ? { committedThrough } : {}),
                 });
             }
             scheduleNotify();
+        },
+        commitPrefix(outputEndExclusive: number) {
+            if (outputEndExclusive <= committedThrough) return;
+            this.flush();
+            committedThrough = outputEndExclusive;
+            if (!latestSnapshot.parts) return;
+            const projected = projectModelStreamParts(latestSnapshot.parts, committedThrough);
+            const reasoningDelta = makeModelStreamTextDelta(emittedSnapshot.reasoning || '', projected.reasoning || '');
+            const textDelta = makeModelStreamTextDelta(emittedSnapshot.text || '', projected.text || '');
+            latestSnapshot = { ...latestSnapshot, ...projected };
+            emittedSnapshot = { ...emittedSnapshot, ...projected };
+            if (args.enabled && args.sessionId) {
+                const trimEvent: import('./types').SessionStreamEvent = {
+                    type: 'model-stream-update', streamVersion: 2, streamId, iteration: args.iteration,
+                    sequenceStart: sequence + 1, sequence: ++sequence,
+                    startedAt, llmRequestId: args.llmRequestId,
+                    trimBeforeOutputIndex: outputEndExclusive,
+                    ...(reasoningDelta ? { reasoningDelta } : {}),
+                    ...(textDelta ? { textDelta } : {}),
+                };
+                updateModelStreamDraft(args.sessionId, {
+                    streamId, iteration: args.iteration, sequence, startedAt, llmRequestId: args.llmRequestId,
+                    reasoning: projected.reasoning || '', text: projected.text || '',
+                    toolCalls: latestSnapshot.toolCalls || [], parts: projected.parts || [],
+                    committedThrough,
+                });
+                notifySessionEvent(trimEvent);
+            }
         },
         flush() {
             if (timer) {
@@ -2213,12 +2283,14 @@ export async function chat(
         registerAbortController?: boolean;
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+        maxRetries?: number;
         purpose?: LlmRequestPurpose;
         compactPlanBackground?: boolean;
         turnId?: string;
         currentSessionEffects?: CurrentSessionEffects;
         snapshotAuthority?: 'authoritative' | 'detached';
         onCommittedAssistantMessage?: (message: Message) => void | Promise<void>;
+        onIntermediateAssistantText?: (text: string) => void | Promise<void>;
     },
 ): Promise<ChatResult> {
     const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
@@ -2272,13 +2344,16 @@ export async function chat(
     }
     
     // Convert to appropriate format based on provider
-    const contentsForLlm = session.history
+    const getCommittedHistoryForRetry = () => session.history
         .filter(isModelVisibleMessage)
         .map((message: Message): Message => {
             const { __meta, ...msg } = message;
             const modelId = getHistoricalConcreteModelId(message);
             return modelId ? { ...msg, __meta: { modelId } } : msg;
         });
+    const contentsForLlm = getCommittedHistoryForRetry();
+    const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
+        && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
     const availableToolDefinitions = options?.toolDefinitions
         ?? tools.modelFacingDefinitions;
     const previousPromptCacheKey = session.promptCacheKey;
@@ -2300,10 +2375,38 @@ export async function chat(
         registerAbortController: options?.registerAbortController,
         abortSignal: options?.abortSignal,
         onRetry: options?.onRetry,
+        maxRetries: options?.maxRetries,
         purpose: options?.purpose || 'normal-turn',
         compactPlanBackground: options?.compactPlanBackground,
         currentSessionEffects: options?.currentSessionEffects,
         resolveSystemPromptForModel,
+        ...(partialCommitEnabled ? {
+            getCommittedHistoryForRetry,
+            onPartialAssistantCommit: async (segment: Parameters<NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>>[0]) => {
+                const message: Message = {
+                    role: 'model', parts: segment.parts,
+                    ...(segment.providerMeta ? { providerMeta: segment.providerMeta } : {}),
+                    __meta: {
+                        modelId: segment.modelId,
+                        ...(segment.virtualModelKey ? { virtualModelKey: segment.virtualModelKey } : {}),
+                        llmRequestId: segment.llmRequestId, llmAttempt: segment.llmAttempt,
+                        llmSegment: { outputStart: segment.outputStart, outputEndExclusive: segment.outputEndExclusive, complete: false },
+                    },
+                };
+                await appendMessage(message);
+                return message;
+            },
+            onPartialAssistantDelivered: async (message: Message, text: string) => {
+                if (text) {
+                    try { await options!.onIntermediateAssistantText!(text); }
+                    catch (error) { logger.error({ err: error, sessionId: session.id }, 'Committed assistant progress delivery failed'); }
+                }
+                if (options?.onCommittedAssistantMessage) {
+                    try { await options.onCommittedAssistantMessage(message); }
+                    catch (error) { logger.error({ err: error, sessionId: session.id }, 'Committed assistant media delivery failed'); }
+                }
+            },
+        } : {}),
     });
     const result = completion.result;
     let committedAssistantMessage: Message | undefined;
@@ -2320,7 +2423,7 @@ export async function chat(
 
         // Add assistant message to history. A stateful provider completion is
         // deliberately not reusable until this exact object has committed.
-        if (result.allParts && result.allParts.length > 0) {
+        if ((result.allParts && result.allParts.length > 0) || completion.committedSegments?.length) {
             const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
             const assistantMeta = {
                 ...(result.modelId ? { modelId: result.modelId } : {}),
@@ -2328,17 +2431,24 @@ export async function chat(
                 ...(result.usage ? { usage: result.usage } : {}),
                 ...(llmRequestTiming ? { llmRequestTiming } : {}),
                 ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
+                ...(completion.committedOutputEnd !== undefined ? {
+                    llmSegment: {
+                        outputStart: completion.committedOutputEnd,
+                        outputEndExclusive: completion.outputEndExclusive ?? completion.committedOutputEnd,
+                        complete: true,
+                    },
+                } : {}),
             };
             const assistantMsg: Message = {
                 role: 'model',
-                parts: result.allParts,
+                parts: result.allParts || [],
                 ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
                 ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
             };
             await appendMessage(assistantMsg);
             settleHistoryAppendFinalizer(
                 completion.finalizeHistoryAppend,
-                { appended: true, message: assistantMsg },
+                { appended: true, messages: [...(completion.committedSegments || []), assistantMsg] },
                 'Failed to finalize provider state after assistant history commit',
             );
             committedAssistantMessage = assistantMsg;
@@ -2842,7 +2952,7 @@ function buildConcreteRequestPlan(options: {
     };
 }
 
-async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Promise<ChatResult> {
+async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any, allowEmptySuffix = false): Promise<ChatResult> {
     let responseText = '';
     const allParts: Message['parts'] = [];
     let messageProviderMeta: ChatResult['providerMeta'];
@@ -3015,7 +3125,7 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
                 countable: false,
             });
         }
-        if (plan.modelEntry.disallowEmptyResponse === true) {
+        if (plan.modelEntry.disallowEmptyResponse === true && !allowEmptySuffix) {
             throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
                 kind: 'response-error',
                 retryable: true,
@@ -3075,11 +3185,88 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
     };
 }
 
+/** A single provider attempt's ordered, completed output prefix. Only chat() supplies the commit callback. */
+function createResponsesPrefixCommitLane(args: {
+    plan: ConcreteRequestPlan;
+    requestId: string;
+    attempt: number;
+    virtualModelKey?: string;
+    abortController: AbortController;
+    emitter: ReturnType<typeof createModelStreamEventEmitter>;
+    onCommit: NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>;
+    onDelivered?: RequestLlmOnceOptions['onPartialAssistantDelivered'];
+}) {
+    const completed = new Map<number, any>();
+    const committedMessages: Message[] = [];
+    let scheduledEnd = 0;
+    let committedEnd = 0;
+    let failure: unknown;
+    let tail: Promise<void> = Promise.resolve();
+
+    const onOutputItemDone = ({ outputIndex, item }: { outputIndex: number; item: any }) => {
+        if (args.abortController.signal.aborted || failure || !Number.isSafeInteger(outputIndex) || outputIndex < 0) return;
+        completed.set(outputIndex, item);
+        let cursor = scheduledEnd;
+        let commentaryEnd = scheduledEnd;
+        while (completed.has(cursor)) {
+            const next = completed.get(cursor);
+            if ((next.status && next.status !== 'completed')
+                || !['reasoning', 'message', 'image_generation_call', 'web_search_call'].includes(next.type)) break;
+            if (next.type === 'message' && next.phase !== 'commentary') break;
+            if (next.type === 'message' && next.role !== 'assistant') break;
+            if (next.type === 'message' && next.content?.some((part: any) => part?.type !== 'output_text')) break;
+            cursor += 1;
+            if (next.type === 'message' && next.content?.some((part: any) => typeof part?.text === 'string' && part.text.length > 0)) {
+                commentaryEnd = cursor;
+            }
+        }
+        if (commentaryEnd === scheduledEnd) return;
+        const start = scheduledEnd;
+        const end = commentaryEnd;
+        const output = Array.from({ length: end - start }, (_, offset) => completed.get(start + offset));
+        scheduledEnd = end;
+        tail = tail.then(async () => {
+            if (args.abortController.signal.aborted || failure) return;
+            const parsed = await parseConcreteProviderResponse(args.plan, { output });
+            if (!parsed.allParts?.length) throw new Error('Completed commentary prefix had no replayable assistant content.');
+            args.emitter.flush();
+            const message = await args.onCommit({
+                parts: parsed.allParts,
+                text: parsed.text,
+                ...(parsed.providerMeta ? { providerMeta: parsed.providerMeta } : {}),
+                modelId: args.plan.modelId,
+                ...(args.virtualModelKey ? { virtualModelKey: args.virtualModelKey } : {}),
+                llmRequestId: args.requestId,
+                llmAttempt: args.attempt,
+                outputStart: start,
+                outputEndExclusive: end,
+            });
+            committedMessages.push(message);
+            committedEnd = end;
+            try { args.emitter.commitPrefix(end); }
+            catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant draft trim failed'); }
+            try { await args.onDelivered?.(message, parsed.text); }
+            catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant channel delivery failed'); }
+        }).catch(error => {
+            failure = error;
+            args.abortController.abort();
+        });
+    };
+
+    return {
+        onOutputItemDone,
+        async settle() { await tail; if (failure) throw failure; },
+        get failure() { return failure; },
+        get committedEnd() { return committedEnd; },
+        get committedMessages() { return [...committedMessages]; },
+    };
+}
+
 async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    const canonicalContents = stripReservedProviderImageHelperFields(
+    let canonicalContents = stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
     );
     const resolvedModel = options.modelsConfigOverride
@@ -3129,7 +3316,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     // Allocate the stable outer-request identity before streaming setup. The
     // manifest is written after attempt 1 selects its concrete model and
     // resolves the exact effective prompt, but still before provider send.
-    const requestId = randomUUID();
+    let requestId = randomUUID();
     let requestJournalStarted = false;
     const requestedMaxAttempts = options.maxRetries ?? DEFAULT_LLM_MAX_ATTEMPTS;
     const maxAttempts = Number.isFinite(requestedMaxAttempts)
@@ -3143,13 +3330,16 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     else options.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
-    const modelStreamEmitter = createModelStreamEventEmitter({
+    const makeModelStreamEmitter = (llmRequestId: string) => createModelStreamEventEmitter({
         enabled: shouldNotifySessionEvents,
         sessionId: options.sessionId,
         iteration,
-        llmRequestId: requestId,
+        llmRequestId,
         currentSessionEffects: options.currentSessionEffects,
     });
+    let modelStreamEmitter = makeModelStreamEmitter(requestId);
+    let journalAttempt = 0;
+    let resumeFromCommittedHistory = false;
     let logFiles: LlmInteractionLogFiles | null = null;
     const virtualRequestSelections: Array<{
         attempt: number;
@@ -3177,7 +3367,23 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
 
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-            if (attempt > 1 && shouldNotifySessionEvents) modelStreamEmitter.reset();
+            if (attempt > 1) {
+                if (resumeFromCommittedHistory) {
+                    modelStreamEmitter.close();
+                    canonicalContents = stripReservedProviderImageHelperFields(
+                        fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
+                    );
+                    requestId = randomUUID();
+                    requestJournalStarted = false;
+                    journalAttempt = 0;
+                    requestStartedAt = undefined;
+                    logFiles = null;
+                    modelStreamEmitter = makeModelStreamEmitter(requestId);
+                    resumeFromCommittedHistory = false;
+                }
+                if (shouldNotifySessionEvents) modelStreamEmitter.reset();
+            }
+            journalAttempt += 1;
 
             let selection: VirtualTargetSelection | undefined;
             let modelEntry = routeEntry;
@@ -3236,7 +3442,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             }
             await appendLlmAttemptStart({
                 requestId,
-                attempt,
+                attempt: journalAttempt,
                 concreteModelId: plan.modelId,
                 ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                 providerType: plan.providerType,
@@ -3287,6 +3493,15 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             let responseHeaders: any;
             let cleanupStreamingAttempt = () => {};
             let streamingTimeoutError: Error | undefined;
+            const prefixLane = (plan.useOpenAIResponsesApi && (plan.useStreamingApi || plan.useOpenAIResponsesWs)
+                && options.purpose === 'normal-turn' && options.onPartialAssistantCommit && options.getCommittedHistoryForRetry)
+                ? createResponsesPrefixCommitLane({
+                    plan, requestId, attempt: journalAttempt,
+                    ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                    abortController, emitter: modelStreamEmitter,
+                    onCommit: options.onPartialAssistantCommit,
+                    onDelivered: options.onPartialAssistantDelivered,
+                }) : undefined;
             try {
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
@@ -3337,6 +3552,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     onProgress: shouldNotifySessionEvents
                         ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
                         : undefined,
+                    onOutputItemDone: prefixLane?.onOutputItemDone,
                     onMeaningfulProgress: markMeaningfulProgress,
                     onSafetyBuffering: handleSafetyBuffering,
                     onImageGenerationActivity: () => {
@@ -3365,6 +3581,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             attempt,
                         },
                         onProgress: streamCollectOptions.onProgress,
+                        onOutputItemDone: streamCollectOptions.onOutputItemDone,
                         onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
                         onRawFrame: frame => {
                             attemptRawStreamLog?.appendChunk(`${frame}\n`);
@@ -3398,7 +3615,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             return;
                         }
                         try {
-                            const replayMessage = prepareHistoryForConcreteModel([outcome.message], plan.modelId);
+                            const replayMessage = prepareHistoryForConcreteModel(outcome.messages, plan.modelId);
                             const replayItems = convertToOpenAIResponsesFormatProvider(replayMessage, plan.modelId);
                             pending.finalize(replayItems);
                         } catch (error) {
@@ -3440,7 +3657,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 }
 
                 cleanupStreamingAttempt();
-                const result = await parseConcreteProviderResponse(plan, resp);
+                await prefixLane?.settle();
+                const result = await parseConcreteProviderResponse(plan,
+                    prefixLane?.committedEnd ? { ...resp, output: resp.output.slice(prefixLane.committedEnd) } : resp,
+                    !!prefixLane?.committedEnd);
                 const completedAt = Date.now();
                 const durationMs = Math.max(0, performance.now() - requestStartedAt);
                 if (virtualRoutingRequest && selection) {
@@ -3459,26 +3679,47 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 // result; normal session delivery proceeds.
                 const previousLlmRequest = { completedAt, durationMs };
                 const completedResult: ChatResult = virtualRoutingRequest
-                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt }
-                    : { ...result, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt };
+                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest, llmRequestId: requestId, llmAttempt: journalAttempt }
+                    : { ...result, previousLlmRequest, llmRequestId: requestId, llmAttempt: journalAttempt };
+                const prefixParts = prefixLane?.committedMessages.flatMap(message => message.parts) || [];
+                const journalResult = prefixParts.length ? {
+                    ...completedResult,
+                    text: `${prefixParts.map(part => part.text || '').join('')}${completedResult.text || ''}`,
+                    allParts: [...prefixParts, ...(completedResult.allParts || [])],
+                } : completedResult;
                 await appendLlmAttemptResult({
                     requestId,
-                    attempt,
+                    attempt: journalAttempt,
                     outcome: 'success',
-                    result: completedResult,
+                    result: journalResult,
                 }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
                 return {
                     result: completedResult,
+                    ...(prefixLane?.committedMessages.length ? { committedSegments: prefixLane.committedMessages } : {}),
+                    ...(prefixLane?.committedEnd ? {
+                        committedOutputEnd: prefixLane.committedEnd,
+                        outputEndExclusive: Array.isArray(resp?.output) ? resp.output.length : prefixLane.committedEnd,
+                    } : {}),
                     ...(attemptHistoryAppendFinalizer ? { finalizeHistoryAppend: attemptHistoryAppendFinalizer } : {}),
                 };
             } catch (error: any) {
                 cleanupStreamingAttempt();
-                if (streamingTimeoutError) error = streamingTimeoutError;
+                try { await prefixLane?.settle(); }
+                catch (commitError) { error = commitError; }
+                if (streamingTimeoutError && !prefixLane?.failure) error = streamingTimeoutError;
                 settleHistoryAppendFinalizer(
                     attemptHistoryAppendFinalizer,
                     { appended: false },
                     'Failed to discard provider state after LLM attempt failure',
                 );
+                if (prefixLane?.failure) {
+                    await appendLlmAttemptResult({
+                        requestId, attempt: journalAttempt, outcome: 'failure',
+                        error: { kind: 'session-commit', message: String((error as Error)?.message || error), retryable: false, countable: false },
+                    }).catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to journal local assistant commit failure'));
+                    await moveInteractionLogsToErrorDir(logFiles).catch(() => {});
+                    throw error;
+                }
                 if (isAbortError(error)) {
                     responseAttempts.push({
                         attempt,
@@ -3494,7 +3735,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     });
                     await logResponse({ attempts: responseAttempts }, logFiles);
-                    await appendLlmAttemptResult({ requestId, attempt, outcome: 'abort', error: { message: error?.message || String(error), code: error?.code, name: error?.name } })
+                    await appendLlmAttemptResult({ requestId, attempt: journalAttempt, outcome: 'abort', error: { message: error?.message || String(error), code: error?.code, name: error?.name } })
                         .catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append aborted LLM attempt result'));
                     await moveInteractionLogsToErrorDir(logFiles);
                     throw error;
@@ -3544,7 +3785,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 await logResponse({ attempts: responseAttempts }, logFiles);
                 await appendLlmAttemptResult({
                     requestId,
-                    attempt,
+                    attempt: journalAttempt,
                     outcome: 'failure',
                     error: { kind: failure.kind, status: failure.status, message: failure.message, retryable: failure.retryable, countable: failure.countable },
                 }).catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append failed LLM attempt result'));
@@ -3560,6 +3801,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     routeTerminal = recordVirtualTargetFailure(virtualRoutingRequest, selection).terminal;
                 }
                 const final = !failure.retryable || routeTerminal || attempt === maxAttempts;
+                if (!final && prefixLane?.committedEnd) resumeFromCommittedHistory = true;
                 const retryEvent: LlmRetryEvent = {
                     attempt,
                     maxRetries: maxAttempts,

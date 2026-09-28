@@ -2,6 +2,9 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
+import { EventEmitter } from 'node:events';
+import WebSocket from 'ws';
+import sharp from 'sharp';
 import path from 'path';
 
 import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
@@ -20,8 +23,10 @@ import * as tools from './tools';
 import * as llmModule from './llm';
 import { nodesManager } from './nodes/manager';
 import { getModelStreamDraft } from './modelStreamDraft';
-import { collectOpenAIResponsesStream } from './llmProviders/openai';
+import { collectOpenAIResponsesStream, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
+import { isSessionTurnIncomplete } from './sessionContinuation';
+import { clearOpenAIWsCompletedChains, getOpenAIWsCompletedChainCountForTests, setOpenAIWsTransportTestHooks } from './llmProviders/openaiWsTransport';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -43,6 +48,12 @@ const TEST_MODELS_CONFIG = loadModelsConfigFromObject({
     'responses-fixture': {
       providerType: 'openai-responses',
       baseUrl: 'https://responses.test/v1',
+      apiKey: 'test-key',
+      models: ['model'],
+    },
+    'responses-ws-fixture': {
+      providerType: 'openai-ws',
+      baseUrl: 'https://responses-ws.test/v1',
       apiKey: 'test-key',
       models: ['model'],
     },
@@ -1651,6 +1662,470 @@ test('assistant post-commit hook runs once only after append and its failure can
   } finally {
     (axios as any).post = originalPost;
   }
+});
+
+test('normal Responses commentary commits before later reasoning and completes with only its uncommitted suffix', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_live_commentary'));
+  session.model = 'responses-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+  const stream = new PassThrough();
+  const deliveries: string[] = [];
+  const appended: Message[] = [];
+  let requestCount = 0;
+  (axios as any).post = async () => {
+    requestCount++;
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'draw a figure' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false,
+      appendMessage: async message => { appended.push(message); session.history.push(message); },
+      onIntermediateAssistantText: text => {
+        assert.equal(session.history.filter(message => message.role === 'model').length, 1);
+        deliveries.push(text);
+      },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], encrypted_content: 'opaque' } });
+    frame({ type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: 'before' });
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'before' }], encrypted_content: 'opaque' } });
+    frame({ type: 'response.output_item.added', output_index: 1, item: { type: 'message', role: 'assistant', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 1, content_index: 0, text: 'Drawing now' });
+    frame({ type: 'response.output_item.done', output_index: 1,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Drawing now' }] } });
+    for (let tries = 0; tries < 60 && deliveries.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(deliveries, ['Drawing now']);
+    assert.equal(requestCount, 1);
+    assert.deepEqual(appended.filter(message => message.role === 'model')[0].parts.map(part => part.thinking || part.text), ['before', 'Drawing now']);
+    assert.deepEqual(appended.filter(message => message.role === 'model')[0].__meta?.llmSegment,
+      { outputStart: 0, outputEndExclusive: 2, complete: false });
+    assert.deepEqual(getModelStreamDraft(session.id)?.parts?.map(part => part.outputIndex), []);
+    frame({ type: 'response.output_item.added', output_index: 2, item: { type: 'reasoning', summary: [] } });
+    frame({ type: 'response.reasoning_summary_text.done', output_index: 2, summary_index: 0, text: 'after' });
+    frame({ type: 'response.output_item.done', output_index: 2,
+      item: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'after' }] } });
+    frame({ type: 'response.output_item.added', output_index: 3, item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 3, content_index: 0, text: '' });
+    frame({ type: 'response.output_item.done', output_index: 3,
+      item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '' }] } });
+    frame({ type: 'response.completed', response: { output: [], usage: { input_tokens: 5, output_tokens: 9 } } });
+    stream.end();
+    const result = await pending;
+    assert.equal(result.text, '');
+    assert.equal(appended.filter(message => message.role === 'model').length, 2);
+    const finalMessage = appended.at(-1)!;
+    assert.deepEqual(finalMessage.parts.map(part => part.thinking ?? part.text), ['after', '']);
+    assert.deepEqual(finalMessage.__meta?.llmSegment, { outputStart: 2, outputEndExclusive: 4, complete: true });
+    assert.deepEqual(finalMessage.__meta?.usage, { inputTokens: 5, outputTokens: 9, cachedTokens: 0 });
+    assert.equal(appended.filter(message => message.__meta?.usage).length, 1);
+    assert.equal(session.stats.totalOutputTokens, 9);
+  } finally {
+    (axios as any).post = originalPost;
+    stream.destroy();
+  }
+});
+
+test('partial Responses failure retries as a new journaled request from committed history within the original budget', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_partial_retry'));
+  session.model = 'responses-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+  const firstStream = new PassThrough();
+  const requestBodies: any[] = [];
+  const retryEvents: any[] = [];
+  const deliveries: string[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    requestBodies.push(body);
+    return { status: 200, statusText: 'OK', headers: {},
+      data: requestBodies.length === 1 ? firstStream : makeResponsesStream('Final after retry'),
+    };
+  };
+  const frame = (event: any) => firstStream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'continue after progress' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: text => { deliveries.push(text); },
+      onRetry: event => { retryEvents.push(event); },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.added', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'First committed' });
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'First committed' }] } });
+    for (let tries = 0; tries < 60 && deliveries.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(deliveries, ['First committed']);
+    firstStream.destroy(new Error('synthetic upstream stream loss'));
+    const result = await pending;
+    assert.equal(result.text, 'Final after retry');
+    assert.equal(requestBodies.length, 2);
+    assert.equal(retryEvents.length, 1);
+    assert.equal(retryEvents[0].nextAttempt, 2);
+    assert.equal(JSON.stringify(requestBodies[0].input).includes('First committed'), false);
+    assert.equal(JSON.stringify(requestBodies[1].input).includes('First committed'), true);
+    const modelMessages = session.history.filter(message => message.role === 'model');
+    assert.equal(modelMessages.length, 2);
+    const firstRequestId = modelMessages[0].__meta?.llmRequestId as string;
+    const nextRequestId = modelMessages[1].__meta?.llmRequestId as string;
+    assert.notEqual(firstRequestId, nextRequestId);
+    assert.equal(modelMessages[1].__meta?.llmAttempt, 1);
+    const firstJournal = await reconstructLlmRequest(firstRequestId);
+    const nextJournal = await reconstructLlmRequest(nextRequestId);
+    assert.equal(firstJournal.completeness, 'complete');
+    assert.equal(nextJournal.completeness, 'complete');
+    if (firstJournal.completeness === 'complete' && nextJournal.completeness === 'complete') {
+      assert.equal(firstJournal.attempts[0].result?.outcome, 'failure');
+      assert.equal(nextJournal.attempts[0].result?.outcome, 'success');
+      assert.equal(JSON.stringify(nextJournal.messages).includes('First committed'), true);
+    }
+  } finally {
+    (axios as any).post = originalPost;
+    firstStream.destroy();
+  }
+});
+
+test('Responses commentary followed by no further items commits usage-only completion without invented final text', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_metadata_completion'));
+  session.model = 'responses-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+  (axios as any).post = async () => {
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      for (const event of [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } },
+        { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'Still working' },
+        { type: 'response.output_item.done', output_index: 0,
+          item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Still working' }] } },
+        { type: 'response.completed', response: { output: [] as any[], usage: { input_tokens: 3, output_tokens: 4 } } },
+      ]) stream.write(`data: ${JSON.stringify(event)}\n\n`);
+      stream.end();
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  try {
+    const texts: string[] = [];
+    const result = await chat([{ text: 'one item' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: text => { texts.push(text); },
+    });
+    const models = session.history.filter(message => message.role === 'model');
+    assert.deepEqual(texts, ['Still working']);
+    assert.equal(result.text, '');
+    assert.equal(models.length, 2);
+    assert.deepEqual(models[1].parts, []);
+    assert.deepEqual(models[1].__meta?.llmSegment, { outputStart: 1, outputEndExclusive: 1, complete: true });
+    assert.deepEqual(models[1].__meta?.usage, { inputTokens: 3, outputTokens: 4, cachedTokens: 0 });
+    assert.equal(convertToOpenAIResponsesFormat([models[1]], 'responses-fixture/model').length, 0);
+    assert.equal(isSessionTurnIncomplete(session.history), false);
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('native image in a committed commentary prefix is externalized and delivered once, not replayed by the final suffix', async () => {
+  const originalPost = axios.post;
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#123456' } }).png().toBuffer();
+  const session = createOpenAITestSession(makeId('responses_prefix_image'));
+  session.model = 'responses-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+  const media: Message[] = [];
+  const text: string[] = [];
+  const stream = new PassThrough();
+  let providerCalls = 0;
+  (axios as any).post = async () => {
+    providerCalls++;
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'draw' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: value => { text.push(value); },
+      onCommittedAssistantMessage: message => {
+        if (message.parts.some(part => part.imageMeta?.origin === 'generated')) {
+          assert.ok(session.history.includes(message));
+          media.push(message);
+        }
+      },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'Drawing' });
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Drawing' }] } });
+    for (let tries = 0; tries < 60 && text.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(text, ['Drawing']);
+    frame({ type: 'response.output_item.added', output_index: 1, item: { type: 'image_generation_call', id: 'ig_fixture', status: 'in_progress' } });
+    frame({ type: 'response.image_generation_call.partial_image', output_index: 1, partial_image_b64: 'do-not-send' });
+    frame({ type: 'response.output_item.done', output_index: 1,
+      item: { type: 'image_generation_call', id: 'ig_fixture', status: 'completed', output_format: 'png', result: png.toString('base64') } });
+    frame({ type: 'response.output_item.added', output_index: 2, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 2, content_index: 0, text: 'Ready' });
+    frame({ type: 'response.output_item.done', output_index: 2,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Ready' }] } });
+    for (let tries = 0; tries < 60 && media.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(media.length, 1);
+    assert.deepEqual(text, ['Drawing', 'Ready']);
+    assert.equal(media[0].parts.filter(part => part.imageMeta?.origin === 'generated').length, 1);
+    frame({ type: 'response.output_item.added', output_index: 3, item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 3, content_index: 0, text: '' });
+    frame({ type: 'response.output_item.done', output_index: 3,
+      item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '' }] } });
+    frame({ type: 'response.completed', response: { output: [], usage: { input_tokens: 4, output_tokens: 9 } } });
+    stream.end();
+    const result = await pending;
+    assert.equal(result.text, '');
+    assert.equal(providerCalls, 1);
+    assert.equal(media.length, 1);
+    assert.equal(session.history.filter(message => message.role === 'model').length, 3);
+    assert.deepEqual(session.history.at(-1)?.parts, [{ text: '', phase: 'final_answer' }]);
+    assert.equal(session.history.filter(message => message.__meta?.usage).length, 1);
+  } finally {
+    (axios as any).post = originalPost;
+    stream.destroy();
+    await Promise.all(media.flatMap(message => message.parts)
+      .filter(part => part.inlineDataRef?.blobId)
+      .map(part => fs.remove(resolveImageBlobPath(part.inlineDataRef!.blobId!))));
+  }
+});
+
+test('a non-image WebSocket completion reuses the chain after two assistant segments are committed in output order', async () => {
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#123456' } }).png().toBuffer();
+  class TestSocket extends EventEmitter {
+    readyState: number = WebSocket.CONNECTING;
+    sent: any[] = [];
+    _socket = { ref() {}, unref() {} };
+    constructor(private readonly respond: (request: any, socket: TestSocket) => void) {
+      super();
+      process.nextTick(() => { this.readyState = WebSocket.OPEN; this.emit('open'); });
+    }
+    send(raw: string) { const request = JSON.parse(raw); this.sent.push(request); process.nextTick(() => this.respond(request, this)); }
+    frame(event: any) { this.emit('message', Buffer.from(JSON.stringify(event))); }
+    close() { this.readyState = WebSocket.CLOSED; this.emit('close', 1000, Buffer.alloc(0)); }
+    terminate() { this.close(); }
+  }
+  const session = createOpenAITestSession(makeId('responses_ws_segments'));
+  session.model = 'responses-ws-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-ws-fixture/model" />\n\nsystem prompt';
+  const sockets: TestSocket[] = [];
+  let finishFirst: (() => void) | undefined;
+  const intermediate: string[] = [];
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    const socket = new TestSocket((_request, current) => {
+      const number = current.sent.length;
+      if (number === 1) {
+        for (const event of [
+          { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], encrypted_content: 'opaque' } },
+          { type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: 'before' },
+          { type: 'response.output_item.done', output_index: 0, item: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'before' }], encrypted_content: 'opaque' } },
+          { type: 'response.output_item.added', output_index: 1, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } },
+          { type: 'response.output_text.done', output_index: 1, content_index: 0, text: 'Drawing' },
+          { type: 'response.output_item.done', output_index: 1, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Drawing' }] } },
+        ]) current.frame(event);
+        finishFirst = () => {
+          current.frame({ type: 'response.output_item.added', output_index: 2, item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [] } });
+          current.frame({ type: 'response.output_text.done', output_index: 2, content_index: 0, text: 'Finished' });
+          current.frame({ type: 'response.output_item.done', output_index: 2, item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Finished' }] } });
+          current.frame({ type: 'response.completed', response: { id: 'ws-first', output: [], usage: { input_tokens: 3, output_tokens: 7 } } });
+        };
+      } else if (number === 2) {
+        current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [] } });
+        current.frame({ type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'Next turn' });
+        current.frame({ type: 'response.completed', response: { id: 'ws-next', output: [], usage: { input_tokens: 5, output_tokens: 2 } } });
+      } else {
+        current.frame({ type: 'response.output_item.added', output_index: 0,
+          item: { type: 'image_generation_call', id: 'ig_ws_fixture', status: 'in_progress' } });
+        current.frame({ type: 'response.output_item.done', output_index: 0,
+          item: { type: 'image_generation_call', id: 'ig_ws_fixture', status: 'completed', output_format: 'png', result: png.toString('base64') } });
+        current.frame({ type: 'response.completed', response: { id: 'ws-image', output: [], usage: { input_tokens: 7, output_tokens: 5 } } });
+      }
+    });
+    sockets.push(socket);
+    return socket as any;
+  } });
+  const options = {
+    toolDefinitions: [] as any[], registerAbortController: false,
+    appendMessage: async (message: Message) => { session.history.push(message); },
+    onIntermediateAssistantText: (text: string) => { intermediate.push(text); },
+  };
+  try {
+    const first = chat([{ text: 'first turn' }], session, 0, options);
+    for (let tries = 0; tries < 80 && intermediate.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(intermediate, ['Drawing']);
+    assert.ok(finishFirst);
+    finishFirst!();
+    assert.equal((await first).text, 'Finished');
+    assert.equal(session.history.filter(message => message.role === 'model').length, 2);
+    assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
+    assert.equal((await chat([{ text: 'next turn' }], session, 1, options)).text, 'Next turn');
+    assert.equal(sockets.length, 1);
+    assert.equal(sockets[0].sent.length, 2);
+    assert.equal(sockets[0].sent[1].previous_response_id, 'ws-first');
+    assert.equal(sockets[0].sent[1].input.length, 1);
+    assert.equal(sockets[0].sent[1].input[0].content[0].text, 'next turn');
+    const deliveredImages: Message[] = [];
+    await chat([{ text: 'image turn' }], session, 2, {
+      ...options,
+      onCommittedAssistantMessage: message => { if (message.parts.some(part => part.imageMeta?.origin === 'generated')) deliveredImages.push(message); },
+    });
+    assert.equal(deliveredImages.length, 1);
+    assert.equal(sockets[0].sent.length, 3);
+    assert.equal(getOpenAIWsCompletedChainCountForTests(), 0, 'generated images still discard the WebSocket chain');
+    await Promise.all(deliveredImages.flatMap(message => message.parts)
+      .filter(part => part.inlineDataRef?.blobId)
+      .map(part => fs.remove(resolveImageBlobPath(part.inlineDataRef!.blobId!))));
+  } finally {
+    setOpenAIWsTransportTestHooks();
+    clearOpenAIWsCompletedChains();
+  }
+});
+
+test('local commentary append failures do not retry the provider or deliver uncommitted text', async () => {
+  const originalPost = axios.post;
+  let providerCalls = 0;
+  let deliveries = 0;
+  const stream = () => {
+    const output = new PassThrough();
+    process.nextTick(() => {
+      for (const event of [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } },
+        { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'Do not send before save' },
+        { type: 'response.output_item.done', output_index: 0,
+          item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Do not send before save' }] } },
+      ]) output.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+    return output;
+  };
+  (axios as any).post = async () => {
+    providerCalls++;
+    return { status: 200, statusText: 'OK', headers: {}, data: stream() };
+  };
+  try {
+    for (const postCommit of [false, true]) {
+      const session = createOpenAITestSession(makeId('responses_commit_failure'));
+      session.model = 'responses-fixture/model';
+      session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+      const beforeCalls = providerCalls;
+      const postCommitError: any = new Error('synthetic authoritative append failure');
+      if (postCommit) postCommitError.authorityCommitted = true;
+      await assert.rejects(() => chat([{ text: 'work' }], session, 0, {
+        toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+        appendMessage: async message => {
+          if (message.role === 'model' && !postCommit) throw postCommitError;
+          session.history.push(message);
+          if (message.role === 'model' && postCommit) throw postCommitError;
+        },
+        onIntermediateAssistantText: () => { deliveries++; },
+      }), /synthetic authoritative append failure/);
+      assert.equal(providerCalls, beforeCalls + 1);
+      assert.equal(session.history.filter(message => message.role === 'model').length, postCommit ? 1 : 0);
+      assert.equal(deliveries, 0);
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('Responses function calls before and after commentary keep provider order without early tool publication', async () => {
+  const originalPost = axios.post;
+  try {
+    for (const callFirst of [true, false]) {
+      const session = createOpenAITestSession(makeId('responses_tool_boundary'));
+      session.model = 'responses-fixture/model';
+      session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+      const stream = new PassThrough();
+      const delivered: string[] = [];
+      const calls: Array<{ role: string; names: string[] }> = [];
+      (axios as any).post = async () => ({ status: 200, statusText: 'OK', headers: {}, data: stream });
+      const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+      const commentaryAt = callFirst ? 1 : 0;
+      const callAt = callFirst ? 0 : 1;
+      const commentary = () => {
+        frame({ type: 'response.output_item.added', output_index: commentaryAt,
+          item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+        frame({ type: 'response.output_text.done', output_index: commentaryAt, content_index: 0, text: 'Reading' });
+        frame({ type: 'response.output_item.done', output_index: commentaryAt,
+          item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Reading' }] } });
+      };
+      const tool = () => {
+        frame({ type: 'response.output_item.added', output_index: callAt,
+          item: { type: 'function_call', call_id: 'call_fixture', name: 'read', arguments: '' } });
+        frame({ type: 'response.function_call_arguments.done', output_index: callAt, arguments: '{"filePath":"README.md"}' });
+        frame({ type: 'response.output_item.done', output_index: callAt,
+          item: { type: 'function_call', call_id: 'call_fixture', name: 'read', arguments: '{"filePath":"README.md"}' } });
+      };
+      try {
+        const pending = chat([{ text: 'read this' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false,
+          appendMessage: async message => {
+            calls.push({ role: message.role, names: message.parts.filter(part => part.functionCall).map(part => part.functionCall!.name) });
+            session.history.push(message);
+          },
+          onIntermediateAssistantText: text => { delivered.push(text); },
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        if (callFirst) tool();
+        commentary();
+        if (!callFirst) {
+          for (let tries = 0; tries < 60 && delivered.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+          assert.deepEqual(delivered, ['Reading']);
+          assert.deepEqual(calls.filter(call => call.role === 'model').map(call => call.names), [[]]);
+          tool();
+        }
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.equal(calls.filter(call => call.role === 'model').length, callFirst ? 0 : 1);
+        if (callFirst) assert.deepEqual(delivered, []);
+        frame({ type: 'response.completed', response: { output: [], usage: { input_tokens: 3, output_tokens: 5 } } });
+        stream.end();
+        const result = await pending;
+        assert.deepEqual(result.toolCalls?.map(call => call.id), ['call_fixture']);
+        const messages = session.history.filter(message => message.role === 'model');
+        assert.equal(messages.length, callFirst ? 1 : 2);
+        assert.equal(messages.flatMap(message => message.parts).filter(part => part.functionCall).length, 1);
+        assert.equal(messages.flatMap(message => message.parts).filter(part => part.text === 'Reading').length, 1);
+        assert.deepEqual(messages.flatMap(message => message.parts).map(part => part.functionCall ? 'call' : part.text ? 'commentary' : 'other'),
+          callFirst ? ['call', 'commentary'] : ['commentary', 'call']);
+      } finally { stream.destroy(); }
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('Stop after a committed Responses prefix leaves the durable text without manufacturing completion or retry', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_stop_after_prefix'));
+  session.model = 'responses-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+  const stop = new AbortController();
+  const stream = new PassThrough();
+  let calls = 0;
+  let deliveries = 0;
+  (axios as any).post = async () => { calls++; return { status: 200, statusText: 'OK', headers: {}, data: stream }; };
+  const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'start and stop' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, abortSignal: stop.signal,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: () => { deliveries++; },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.added', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+    frame({ type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'Saving progress' });
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Saving progress' }] } });
+    for (let tries = 0; tries < 60 && deliveries === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(deliveries, 1);
+    stop.abort();
+    await assert.rejects(pending, (error: any) => error?.name === 'AbortError');
+    assert.equal(calls, 1);
+    assert.equal(session.history.filter(message => message.role === 'model').length, 1);
+    assert.deepEqual(session.history.at(-1)?.__meta?.llmSegment,
+      { outputStart: 0, outputEndExclusive: 1, complete: false });
+    assert.equal(getModelStreamDraft(session.id), null);
+  } finally { (axios as any).post = originalPost; stream.destroy(); }
 });
 
 test('LocalSessionTurnHost runs detached normal chat through explicit current-session effects', async () => {
