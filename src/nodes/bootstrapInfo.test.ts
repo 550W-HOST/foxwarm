@@ -44,12 +44,34 @@ test('configured path URL is used in all endpoints and host flags, while origin 
   for (const command of [prefixed.examples.bareMetal, prefixed.examples.bareMetalInstall, prefixed.examples.bareMetalBackground, prefixed.examples.docker, prefixed.examples.interactive]) {
     assert.match(command, /--host="\$BASE_URL"/);
   }
-  assert.match(prefixed.examples.windows, /-HostUrl 'https:\/\/example.invalid\/fox''base'/);
+  assert.match(prefixed.examples.windows, /-HostUrl "\$BASE_URL"/);
 
   const origin = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: 'https://example.invalid' });
   assert.equal(origin.endpoints.runShUrl, 'https://example.invalid/node/run.sh');
   assert.doesNotMatch(origin.examples.bareMetal, /--host=/);
   assert.doesNotMatch(origin.examples.windows, /-HostUrl/);
+});
+
+test('PowerShell setup is self-contained for placeholder, configured origin, and quoted deployment path', () => {
+  for (const { publicUrl, expectedBaseUrl, pathPrefix } of [
+    { publicUrl: undefined, expectedBaseUrl: 'http://YOUR_MASTER:3001', pathPrefix: false },
+    { publicUrl: 'https://example.invalid', expectedBaseUrl: 'https://example.invalid', pathPrefix: false },
+    { publicUrl: "https://example.invalid/fox'base", expectedBaseUrl: "https://example.invalid/fox'base", pathPrefix: true },
+  ]) {
+    const { windows } = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl }).examples;
+    const [assignment, fetch, run] = windows.split('\n');
+    assert.equal(windows.split('\n').length, 3);
+    const declared = /^\$BASE_URL = '((?:[^']|'')*)'$/.exec(assignment);
+    assert.ok(declared, 'PowerShell example must assign its own literal BASE_URL');
+    const assignedBaseUrl = declared[1].replace(/''/g, "'");
+    assert.equal(assignedBaseUrl, expectedBaseUrl);
+    const fetchTarget = /^Invoke-WebRequest "([^"]+)" -OutFile \.\\run\.ps1$/.exec(fetch)?.[1];
+    assert.equal(fetchTarget?.replace('$BASE_URL', assignedBaseUrl), `${expectedBaseUrl}/node/run.ps1`);
+    assert.match(run, /^\.\\run\.ps1 /);
+    const hostArg = /-HostUrl "([^"]+)"/.exec(run)?.[1];
+    assert.equal(hostArg?.replace('$BASE_URL', assignedBaseUrl), pathPrefix ? expectedBaseUrl : undefined);
+    assert.match(run, /-Pairing 'TOKEN123' -NodeId my-node$/);
+  }
 });
 
 test('generated manual Compose commands preserve a path with shell/Compose metacharacters', async () => {

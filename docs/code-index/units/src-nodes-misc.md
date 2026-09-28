@@ -70,7 +70,7 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 - Source-distribution regression coverage builds the same allowlisted tar archive with package node_modules excluded and starts the real prebuilt client bundle through `run.sh` in a clean temporary root, preventing externalized bundle modules from accidentally relying on the master checkout's dependencies.
 - Docker node bootstrap uses pinned Node 24 and installs the runtime package strictly. Shell/PowerShell bootstrap installs only that package after extracting the prebuilt JS bundle and continues without PTY capability if npm/native installation is unavailable.
 - `ensureNodePairingToken` lazily generates a 32-byte hex token on first use and persists it to disk.
-- `buildNodeBootstrapInfo` uses configured top-level `url` in endpoint/examples when present and otherwise leaves `$BASE_URL` for the operator. Path-prefixed examples pass `--host`/`-HostUrl`; origin-only downloads use the request-derived script default.
+- `buildNodeBootstrapInfo` uses configured top-level `url` in endpoint/examples when present and otherwise leaves `$BASE_URL` for the operator. Path-prefixed examples pass `--host`/`-HostUrl`; origin-only downloads use the request-derived script default. Its Windows example assigns a PowerShell `$BASE_URL` independently of the Bash example before downloading and running `run.ps1`.
 
 ## Integration
 

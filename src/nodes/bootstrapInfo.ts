@@ -143,9 +143,11 @@ export function buildNodeBootstrapInfo(options: NodeBootstrapInfoOptions): NodeB
   --pairing=${options.pairingToken} \\
   --node-id=my-node`,
       manualCompose: buildNodeManualComposeExample(options.pairingToken),
-      windows: pathPrefix
-        ? `Invoke-WebRequest ${powershellQuote(`${baseUrl}/node/run.ps1`)} -OutFile .\\run.ps1; .\\run.ps1 -HostUrl ${powershellQuote(baseUrl)} -Pairing ${powershellQuote(options.pairingToken)} -NodeId my-node`
-        : `Invoke-WebRequest ${powershellQuote(`${baseUrl}/node/run.ps1`)} -OutFile .\\run.ps1; .\\run.ps1 -Pairing ${powershellQuote(options.pairingToken)} -NodeId my-node`,
+      windows: [
+        `$BASE_URL = ${powershellQuote(configuredUrl || `http://YOUR_MASTER:${HTTP_PORT}`)}`,
+        'Invoke-WebRequest "$BASE_URL/node/run.ps1" -OutFile .\\run.ps1',
+        `.\\run.ps1 ${pathPrefix ? '-HostUrl "$BASE_URL" ' : ''}-Pairing ${powershellQuote(options.pairingToken)} -NodeId my-node`,
+      ].join('\n'),
     },
   };
 }
