@@ -223,6 +223,7 @@ function EffortRangeControl({
 type ModelSelectorScope = 'current' | 'child'
 
 function ModelSelector({
+  experimentalCurrentOnly = false,
   options,
   currentModelKey,
   sessionModel,
@@ -249,6 +250,7 @@ function ModelSelector({
   onRefreshModels,
   onOpenModelSettings,
 }: {
+  experimentalCurrentOnly?: boolean
   options: ModelOption[]
   currentModelKey?: string
   sessionModel?: string | null
@@ -290,7 +292,7 @@ function ModelSelector({
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
-  const childFollows = !childModelDefault
+  const childFollows = experimentalCurrentOnly || !childModelDefault
   const filteredOptions = useMemo(
     () => filterModelOptions(options, filterQuery, defaultModelKey),
     [defaultModelKey, filterQuery, options],
@@ -578,7 +580,7 @@ function ModelSelector({
                   <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-fw-border bg-fw-surface-sunken px-3">
                     <span className="text-xs font-semibold text-fw-text-strong">{isCurrent ? 'Current session' : 'Children'}</span>
                     {isCurrent ? (
-                      childFollows && <button type="button" disabled={busy} data-model-child-mode="specific" onClick={() => {
+                      childFollows && !experimentalCurrentOnly && <button type="button" disabled={busy} data-model-child-mode="specific" onClick={() => {
                         setActiveScope('child')
                         applyChildModel(effectiveChildModelKey || currentModelKey || defaultModelKey || options[0]?.key || null)
                       }} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover disabled:opacity-50">
@@ -636,7 +638,7 @@ function ModelSelector({
             >
               <RefreshCw aria-hidden="true" className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
-            <button
+            {!experimentalCurrentOnly && <button
               type="button"
               onClick={() => {
                 setOpen(false)
@@ -647,7 +649,7 @@ function ModelSelector({
               title="Configure models"
             >
               <Settings aria-hidden="true" className="h-3.5 w-3.5" />
-            </button>
+            </button>}
           </div>
         </div>,
         document.body,
@@ -1465,7 +1467,8 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               )}
             </div>
-            {experimentalTextOnly ? <span className="px-2 text-xs text-fw-text-muted">{sessionModel || currentModelKey || defaultModelKey || 'Configured model'}</span> : <ModelSelector
+            <ModelSelector
+              experimentalCurrentOnly={experimentalTextOnly}
               options={modelOptions}
               currentModelKey={currentModelKey}
               sessionModel={sessionModel}
@@ -1491,7 +1494,7 @@ const ChatComposer = memo(function ChatComposer({
               onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
-            />}
+            />
           </div>
           <button
             type="submit"

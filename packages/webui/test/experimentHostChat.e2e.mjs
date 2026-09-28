@@ -120,7 +120,9 @@ try {
       const chunks = []
       for await (const bytes of req) chunks.push(bytes)
       const body = JSON.parse(Buffer.concat(chunks).toString())
-      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write'])
+      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'recall', 'submit_compact_plan'])
+      assert.equal(body.tools[2].parameters.properties.target.pattern, '^msg#[1-9][0-9]*$')
+      assert.deepEqual(body.tools[3].parameters.required, ['replaceAsBlocks'])
       providerRequests++
       const input = JSON.stringify(body.input)
       const calls = body.input.filter(item => item.type === 'function_call')

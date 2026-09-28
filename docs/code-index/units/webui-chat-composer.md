@@ -11,7 +11,7 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 ## Key Exports
 
 - `ChatComposer` — memoized React component (default export) providing the full chat input experience
-- In the separate experiment-only Chat leaf, `experimentalTextOnly` removes attachment affordances/drop, keeps the original contenteditable text/command entry and displays the configured model as a fixed label rather than opening unsupported model/child/effort settings. Default callers retain the full composer.
+- In the separate experiment-only Chat leaf, `experimentalTextOnly` removes attachment affordances/drop but keeps the original contenteditable text/command entry and existing `ModelSelector` for current concrete model and effort. Its `experimentalCurrentOnly` option hides child-model controls and the unsupported Setup action without changing production callers.
 - `InlineComposerEditor` — imperative contenteditable surface for native text flow plus atomic pasted-text and attachment segments
 - `makeComposerDraft` / `serializeComposerDraft` / `loadComposerDraft` / `persistComposerDraft` — normalized segment model, literal wrapper/reference serialization, and versioned browser persistence with legacy plain-string reads
 - `ModelOption` — type describing a selectable model plus allowed/default effort capability metadata
@@ -30,7 +30,7 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 | `resolveModelTriggerDisplayName(key, options)` | modelFilter.ts | Qualifies a concrete trigger label only when its exact actual model ID exists under another provider |
 | `formatVirtualModelDetail(option)` | modelFilter.ts | Formats ordered alias, session-hash, or failover targets for option-row secondary text |
 | `filterModelOptions(options, query, defaultModelKey?)` | modelFilter.ts | Case-insensitive visible-label/id substring filter that preserves server order |
-| `ModelSelector(props)` | ~85–430 | Popup component for filtering/selecting current and child models, selecting their effort overrides, or opening model settings |
+| `ModelSelector(props)` | ChatComposer.tsx | Popup for current and child model/effort selection; experiment-only current scope hides child and Setup actions |
 | `updatePopupPosition()` | ~97–120 | Calculates fixed positioning for the model selector popup |
 | `applyCurrentModel(model)` | ~140 | Calls onChangeModel unless busy |
 | `applyChildModel(model)` | ~145 | Calls onChangeChildModel unless busy |
