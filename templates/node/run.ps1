@@ -22,6 +22,8 @@ param(
 
     [string]$Pairing = "",
 
+    [string]$AuthToken = "",
+
     [string]$NodeId = "node-$(if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'foxwarm-node' })",
 
     [string]$StateDir = "",
@@ -51,6 +53,7 @@ Usage:
 Parameters:
   -HostUrl        Override Foxwarm master base URL (default: derived from request URL)
   -Pairing        Pairing token for first-time setup
+  -AuthToken      Per-node auth token from /node create (use with -NodeId)
   -NodeId         Node name (default: node-<hostname>)
   -StateDir       Persistent data dir (default: .\data)
   -SourceDir      Source dir for node client (default: .\foxwarm-node)
@@ -99,8 +102,12 @@ foreach ($dir in @(
 }
 
 # ─── Check credentials / pairing ───
-if (-not $Pairing -and -not (Test-Path $CredentialsFile)) {
-    Write-Error "Pairing token is required for first-time setup (no stored credentials at $CredentialsFile). Use -Pairing TOKEN"
+if ($Pairing -and $AuthToken) {
+    Write-Error "Use either -Pairing or -AuthToken, not both."
+    exit 1
+}
+if (-not $Pairing -and -not $AuthToken -and -not (Test-Path $CredentialsFile)) {
+    Write-Error "Pairing or per-node auth token is required for first-time setup (no stored credentials at $CredentialsFile)."
     exit 1
 }
 
@@ -185,6 +192,9 @@ $nodeArgs = @($entryPoint, "--host", $HostUrl, "--id", $NodeId, "--credentials-f
 
 if ($Pairing) {
     $nodeArgs += @("--token", $Pairing)
+}
+if ($AuthToken) {
+    $nodeArgs += @("--auth-token", $AuthToken)
 }
 
 if ($Interactive -and $AutoApprove) {

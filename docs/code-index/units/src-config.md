@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
+Files: src/config.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -15,6 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
+- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional top-level public HTTP(S) URL for Node bootstrap examples; no effect on HTTP bind or internal API origin.
 - `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
 - `MCP_INBOUND_CONFIG`, `normalizeMcpInboundConfig`, and `authenticateMcpInboundBearer` — startup-validated inbound identity settings and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-mcp-inbound-config](./src-mcp-inbound-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
@@ -105,6 +106,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 - App YAML missing at read time yields an empty config.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
+- Runtime startup and Setup validate `url` as an absolute HTTP(S) address without credentials, query, or fragment, trim outer whitespace/trailing slash, and preserve an optional deployment path. Missing `url` retains placeholder-based Node instructions. Shared JSON schema exposes the field to config editors.
 - Setup writes validate by parsing through the same current config readers before replacing files.
 - Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.

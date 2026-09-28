@@ -32,6 +32,7 @@ while [ "$#" -gt 0 ]; do
 done
 mkdir -p "$target/packages/cli-node/dist"
 : > "$target/packages/cli-node/dist/client.bundle.js"
+: > "$target/packages/cli-node/dist/tui.bundle.js"
 `);
   await writeExecutable(path.join(bin, 'node'), '#!/bin/sh\nexec /bin/sleep 30\n');
 
@@ -133,6 +134,81 @@ test('run.sh prepares every local artifact beneath --dir and supports spaces', a
     await execFileAsync('/bin/sh', ['-n', path.join(installDir, 'run-node-client.sh')]);
     const envFile = await fs.readFile(path.join(installDir, '.env'), 'utf8');
     assert.match(envFile, /NODE_INSTALL_DIR='.*install root/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('four launchers accept per-node auth tokens without using a global pairing token', async () => {
+  const fixture = await makeFixture();
+  const installDir = path.join(fixture.root, 'direct-auth');
+  const host = "https://example.invalid/fox'base";
+  try {
+    const prepared = await runScript([
+      `--dir=${installDir}`, `--host=${host}`, '--auth-token=direct-fixture', '--node-id=direct-node', '--prepare-only',
+    ], fixture.env);
+    assert.match(prepared.stdout, /Preparation complete/);
+    const launcher = await fs.readFile(path.join(installDir, 'run-node-client.sh'), 'utf8');
+    assert.match(launcher, /--auth-token 'direct-fixture'/);
+    assert.doesNotMatch(launcher, /--token /);
+    assert.match(launcher, /fox'"'"'base/);
+    assert.equal((await fs.stat(path.join(installDir, '.env'))).mode & 0o077, 0);
+    await execFileAsync('/bin/sh', ['-n', path.join(installDir, 'run-node-client.sh')]);
+
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$MOCK_CALLS/node"\n');
+    const interactive = await execFileAsync('/bin/sh', [path.resolve(__dirname, '../../templates/node/run-interactive.sh'),
+      `--host=${host}`, `--state-dir=${path.join(fixture.root, 'interactive-state')}`,
+      `--source-dir=${path.join(fixture.root, 'interactive-source')}`,
+      '--node-id=direct-node', '--auth-token=direct-fixture',
+    ], { env: fixture.env, timeout: 15_000 });
+    assert.match(interactive.stdout, /Using per-node auth token/);
+    const args = await fs.readFile(path.join(fixture.calls, 'node'), 'utf8');
+    assert.match(args, /--auth-token\ndirect-fixture/);
+    assert.match(args, /fox'base/);
+    assert.doesNotMatch(args, /--token\n/);
+
+    await writeExecutable(path.join(fixture.bin, 'docker'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$MOCK_CALLS/docker"
+exit 0
+`);
+    const dockerDir = path.join(fixture.root, 'docker-run');
+    await fs.ensureDir(dockerDir);
+    const docker = await execFileAsync('/bin/sh', [path.resolve(__dirname, '../../templates/node/run-docker.sh'),
+      `--host=${host}`, '--node-id=direct-node', '--auth-token=direct-fixture', '-d',
+    ], { cwd: dockerDir, env: fixture.env, timeout: 15_000 });
+    assert.match(docker.stdout, /Docker-based node client started/);
+    const dockerEnv = await fs.readFile(path.join(dockerDir, '.env'), 'utf8');
+    assert.match(dockerEnv, /NODE_AUTH_TOKEN='direct-fixture'/);
+    assert.match(dockerEnv, /NODE_PAIRING_TOKEN=''\n/);
+    assert.match(dockerEnv, /NODE_HOST='https:\/\/example.invalid\/fox\\'base'/);
+    assert.equal((await fs.stat(path.join(dockerDir, '.env'))).mode & 0o077, 0);
+
+    const ps = await fs.readFile(path.resolve(__dirname, '../../templates/node/run.ps1'), 'utf8');
+    assert.match(ps, /\[string\]\$AuthToken = ""/);
+    assert.match(ps, /\$nodeArgs \+= @\("--auth-token", \$AuthToken\)/);
+    assert.match(ps, /if \(\$Pairing -and \$AuthToken\)/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('Docker Node startup skips global token-file wait with credentials or direct auth', async () => {
+  const fixture = await makeFixture();
+  const launcher = path.resolve(__dirname, '../../scripts/start-sandbox-node.sh');
+  try {
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$MOCK_CALLS/node"\n');
+    const credentials = path.join(fixture.root, 'node-credentials.json');
+    await fs.writeJson(credentials, { nodeId: 'fixture-node', authToken: 'old' });
+    const env = {
+      ...fixture.env, NODE_URL: 'https://example.invalid/fox', NODE_ID: 'fixture-node',
+      NODE_TOKEN_FILE: path.join(fixture.root, 'no-global-token'), NODE_CREDENTIALS_FILE: credentials,
+      NODE_TOKEN: '', NODE_AUTH_TOKEN: '',
+    };
+    await execFileAsync('/bin/sh', [launcher], { env, timeout: 2000 });
+    assert.doesNotMatch(await fs.readFile(path.join(fixture.calls, 'node'), 'utf8'), /--token\n/);
+    await fs.remove(credentials);
+    await execFileAsync('/bin/sh', [launcher], { env: { ...env, NODE_AUTH_TOKEN: 'new-direct-token' }, timeout: 2000 });
+    assert.match(await fs.readFile(path.join(fixture.calls, 'node'), 'utf8'), /--auth-token\nnew-direct-token/);
   } finally {
     await fs.remove(fixture.root);
   }

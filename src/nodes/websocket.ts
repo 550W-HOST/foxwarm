@@ -100,13 +100,13 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     const approvedMode = !!providedNodeId && !!providedAuthToken;
 
     if (!pairingMode && !approvedMode) {
-      logger.warn({ url: req.url }, 'Node connection rejected: expected pairing token or approved node credentials');
+      logger.warn({ path: url.pathname }, 'Node connection rejected: expected pairing token or approved node credentials');
       ws.close(1008, 'Expected pairing token or approved node credentials');
       return;
     }
 
     if (pairingMode && providedPairToken !== nodeToken) {
-      logger.warn({ url: req.url }, 'Node connection rejected: invalid pairing token');
+      logger.warn({ path: url.pathname }, 'Node connection rejected: invalid pairing token');
       ws.close(1008, 'Invalid pairing token');
       return;
     }
@@ -202,7 +202,6 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
         ws.send(JSON.stringify({
           type: 'pair_pending',
           pendingId: pending.id,
-          pairCode: pending.pairCode,
           requestedName: pending.requestedName,
           nodeType: pending.nodeType,
         }));
@@ -464,7 +463,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
     if (approvedMode) {
       const approved = await authenticateApprovedNode(String(providedNodeId), String(providedAuthToken));
       if (!approved) {
-        logger.warn({ url: req.url, nodeId: providedNodeId }, 'Node connection rejected: invalid node credentials');
+        logger.warn({ path: url.pathname, nodeId: providedNodeId }, 'Node connection rejected: invalid node credentials');
         ws.close(1008, 'Invalid node credentials');
         return;
       }

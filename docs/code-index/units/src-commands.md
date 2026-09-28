@@ -5,7 +5,7 @@ Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
-Defines all slash commands available in the bot (e.g. `/session`, `/fork`, `/agent`, `/timer`, `/channel`, `/model`, `/tools`, `/compact`, `/btw`, `/node`) and provides a `CommandHandler` class that dispatches incoming commands after authorization and session resolution. The `/node` command is the operator-facing surface for node pairing approval, approved-node removal/rename, pairing help, node listing, and session node switching.
+Defines all slash commands available in the bot (e.g. `/session`, `/fork`, `/agent`, `/timer`, `/channel`, `/model`, `/tools`, `/compact`, `/btw`, `/node`) and provides a `CommandHandler` class that dispatches incoming commands after authorization and session resolution. The `/node` command is the operator-facing surface for direct Node credential creation, pairing approval, approved-node removal/rename, pairing help, node listing, and session node switching.
 
 ## Key Exports
 
@@ -40,6 +40,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | `formatChannelRuntimeStatus(channelId, typeFilter)` | Formats runtime status of managed channels |
 | `getManagedPlatformHelp()` | Returns comma-separated managed channel IDs |
 | `buildNodePairHelp(token)` | Builds node pairing/bootstrap help text |
+| `shellQuote(value)` | Quotes configured public URL for generated shell setup instructions |
 | `buildNodeListReply(currentNode, boundNode)` | Builds the operator-facing master/approved-remote Node list, pending approvals, and `/node` command help, including remove/move |
 | `handleCompactCommand(ctx, args, sessionId, session)` | Handles /compact command logic |
 
@@ -86,7 +87,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 - `./skills` / `./tools` — Skill and tool listing/toggling
 - `./timers` — Timer CRUD (create, list, delete)
 - `./tokenCount` — `estimateSessionSummary` (used by `sessionStatus` for status token/image estimates)
-- `./nodes/providerRegistry` / `./nodes/manager` / `./nodes/registry` — generic Node selection plus authenticated remote runtime, pairing approval, and approved-node remove/move operations
+- `./nodes/providerRegistry` / `./nodes/manager` / `./nodes/registry` — generic Node selection plus authenticated remote runtime, direct credential creation, pairing approval, and approved-node remove/move operations
 - `./btw` — Side-question execution
 - `./weixin/api` — WeChat QR login flow
 - `./messageRouter` — `MessageRouter` (used by `CommandHandler` for auth)

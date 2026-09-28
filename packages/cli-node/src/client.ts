@@ -158,6 +158,7 @@ export class NodeClient {
   private requestedName: string;
   private pairingToken?: string;
   private credentialsFile?: string;
+  private initialAuthCredentialsPending = false;
   private connectedNodeId: string | null = null;
   private authToken?: string;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -197,6 +198,7 @@ export class NodeClient {
     this.credentialsFile = options.credentialsFile;
     this.connectedNodeId = options.authToken && options.nodeId ? options.nodeId : null;
     this.authToken = options.authToken;
+    this.initialAuthCredentialsPending = !!(options.authToken && options.nodeId);
     this.localTriggerEnabled = options.localTrigger !== false;
     this.localTriggerPort = typeof options.localTriggerPort === 'number' && Number.isFinite(options.localTriggerPort)
       ? options.localTriggerPort
@@ -236,6 +238,9 @@ export class NodeClient {
   }
 
   private async loadStoredCredentials(): Promise<void> {
+    // An explicitly supplied initial credential must not be silently replaced
+    // by an older credentials file.
+    if (this.initialAuthCredentialsPending) return;
     if (!this.credentialsFile || !await fs.pathExists(this.credentialsFile)) {
       return;
     }
@@ -257,7 +262,8 @@ export class NodeClient {
       nodeId,
       authToken,
       pairedAt: Date.now(),
-    }, { spaces: 2 });
+    }, { spaces: 2, mode: 0o600 });
+    await fs.chmod(this.credentialsFile, 0o600);
   }
 
   private async clearStoredCredentials(): Promise<void> {
@@ -571,6 +577,10 @@ export class NodeClient {
         }
         this.protocolIncompatible = false;
         this.negotiatedNodeProtocol = negotiated;
+        if (this.initialAuthCredentialsPending && this.authToken && this.connectedNodeId === message.nodeId) {
+          await this.saveStoredCredentials(String(message.nodeId), this.authToken);
+          this.initialAuthCredentialsPending = false;
+        }
         logger.info({ nodeId: message.nodeId }, 'Node registered');
         this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
@@ -595,8 +605,8 @@ export class NodeClient {
         this.onStatus?.('protocol_incompatible', message);
         break;
       case 'pair_pending':
-        logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');
-        this.onStatus?.('pair_pending', { pendingId: message.pendingId, pairCode: message.pairCode });
+        logger.info({ pendingId: message.pendingId, requestedName: message.requestedName }, `Node pairing pending approval. Run /node approve ${String(message.pendingId)}`);
+        this.onStatus?.('pair_pending', { pendingId: message.pendingId, approvalCommand: `/node approve ${String(message.pendingId)}` });
         break;
       case 'pair_approved':
         logger.info({ nodeId: message.nodeId }, 'Node pairing approved, storing credentials');

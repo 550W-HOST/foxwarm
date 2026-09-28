@@ -542,6 +542,7 @@ export function normalizeHandoffConfirmationEnabled(value: unknown): boolean {
 }
 
 export type AppConfig = {
+  url?: string;
   mcpInbound?: McpInboundConfig;
   nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
@@ -681,7 +682,28 @@ export function safeAppConfigYamlError(error: yaml.YAMLException): Error {
 }
 
 function loadAppConfig(): AppConfig {
-  return readAppConfigFile();
+  const config = readAppConfigFile();
+  const url = normalizePublicUrl(config.url);
+  return url === undefined ? config : { ...config, url };
+}
+
+/** Public-facing HTTP base URL; it is not the listen address or an internal API origin. */
+export function normalizePublicUrl(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('app config `url` must be an absolute http(s) URL.');
+  }
+  const input = value.trim();
+  if (!/^https?:\/\//i.test(input) || /[\\\x00-\x1f\x7f]/.test(input)) {
+    throw new Error('app config `url` must be an absolute http(s) URL.');
+  }
+  let parsed: URL;
+  try { parsed = new URL(input); }
+  catch { throw new Error('app config `url` must be an absolute http(s) URL.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.host || parsed.username || parsed.password || input.includes('?') || input.includes('#')) {
+    throw new Error('app config `url` must be an absolute http(s) URL without credentials, query, or fragment.');
+  }
+  return parsed.toString().replace(/\/+$/, '');
 }
 
 export function writeAppConfigFile(config: AppConfig): void {
@@ -735,6 +757,7 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 }
 
 export const APP_CONFIG = loadAppConfig();
+export const PUBLIC_BASE_URL = APP_CONFIG.url;
 export function normalizeProviderImageOutputFormat(value: unknown): 'webp' | 'jpeg' {
   if (value === undefined || value === 'webp') return 'webp';
   if (value === 'jpeg') return 'jpeg';

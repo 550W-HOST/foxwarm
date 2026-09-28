@@ -29,6 +29,7 @@ Examples in this area include:
 
 - `/node`
 - `/node approve ...`
+- `/node create <node-id>`
 - `/node reject ...`
 - `/node pair-help`
 - `/agent create ... --isolated ...`
@@ -70,7 +71,7 @@ This skill matches the current bootstrap surfaces exposed by a running master:
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
-It does **not** use the removed old direct-registration flow.
+It does **not** use the removed unauthenticated direct-registration flow. `/node create` is a separate pre-approved, per-node-credential flow.
 
 ## Mental model
 
@@ -125,7 +126,13 @@ So isolated agents are a practical containment tool for higher-risk workflows.
 
 ## Base URL principle
 
-Foxwarm cannot reliably know one globally correct external base URL for every node bootstrap.
+Foxwarm cannot infer one globally correct external base URL for every node bootstrap unless the operator supplies a public URL in top-level config:
+
+```yaml
+url: https://foxwarm.example.invalid/foxwarm
+```
+
+The configured URL supplies `/node pair-help` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, those examples retain `$BASE_URL` placeholders.
 
 Depending on where the node runs, the reachable master URL might be:
 
@@ -139,18 +146,19 @@ What Foxwarm **can** do is:
 
 - when serving `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1`
 - look at the **current HTTP request** (for example `Host` / forwarded proto)
-- fill that request-derived URL into the downloaded script as the **default** host
+- fill that request-derived **origin** into the downloaded script as the **default** host, even when `config.url` is set
 
 Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
-- it returns `$BASE_URL` placeholders in the places where a real reachable master address is needed
-- it also explains that the caller/operator must choose `BASE_URL` from the node's point of view
-- this keeps the tool aligned with reality: Foxwarm does not know one unique globally correct external address
+- it returns configured URLs when available, otherwise `$BASE_URL` placeholders in the places where a real reachable master address is needed
+- it asks the operator to check configured reachability or choose `BASE_URL` from the node's point of view when unset
+- a configured public URL is not a guarantee that every node can reach it
 
 So the rule is:
 
-- if you fetch the bootstrap script from the same URL the node should later use, you usually do **not** need to pass `--host`
+- if you fetch the bootstrap script from the same origin the node should later use, you usually do **not** need to pass `--host`
+- if the public URL has a path prefix, pass `--host="$BASE_URL"` (or Windows `-HostUrl`) to preserve it; request headers cannot recover that path
 - if you fetched the script through a different address, pass `--host=...` explicitly
 
 Example of choosing a reachable URL first:
@@ -161,7 +169,18 @@ BASE_URL=http://YOUR_MASTER:3001
 
 ## Pairing / approval flow
 
+Two supported paths are available. For a Node created before the remote client runs, the master-side user command is:
+
+```text
+/node create my-node
+```
+
+It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host="$BASE_URL"` or `-HostUrl`. `/node remove my-node` revokes the credential. The command is user-facing, not a model tool.
+
+For the existing request/approve path, start the Node with the shared pairing token:
+
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
+The Node startup log includes the exact `/node approve <pending-id>` command; there is no six-digit pairing code to compare.
 
 ### Agent-facing approval
 
@@ -321,13 +340,15 @@ If you want to inspect or customize before starting:
 BASE_URL=http://YOUR_MASTER:3001
 curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml
 
-cat > .env <<'EOF'
-NODE_HOST=$BASE_URL
-NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz
+COMPOSE_BASE_URL=$(printf '%s' "$BASE_URL" | sed "s/'/\\\\'/g")
+cat > .env <<EOF
+NODE_HOST='$COMPOSE_BASE_URL'
+NODE_SOURCE_URL='$COMPOSE_BASE_URL/node/source.tar.gz'
 NODE_PAIRING_TOKEN=YOUR_PAIRING_TOKEN
 NODE_ID=my-node
 NODE_DATA_DIR=./data
 EOF
+chmod 600 .env
 
 docker compose up -d --build
 ```

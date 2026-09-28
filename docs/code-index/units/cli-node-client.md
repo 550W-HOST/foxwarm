@@ -38,6 +38,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 ## Behavior
 
 - Pairing mode sends `pair_request`; approved credentials are saved and the socket reconnects in authenticated mode before `node_register`.
+- `--token` remains the shared pairing token. An explicit `--id` plus `--auth-token` takes priority over any old credentials file and saves the per-node credential with owner-only permissions after successful authenticated registration. Later file-only restarts do not need either token argument. The `pair_pending` status/logger carries the exact `/node approve <pending-id>` command, not a six-digit display code.
 - Both messages advertise the current 1-3 core Node-protocol range. The client validates an explicit Master's selected/range response before starting persistent-exec recovery, treats a missing response as legacy generation 1, and accepts both persistent-exec ID grammars while continuing to generate petnames locally. A malformed/disjoint response emits a clear incompatible status, closes the unusable transport, and suppresses automatic reconnect until update/restart; a future Master quarantine response is retained for operator diagnosis. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Authentication failure clears local credentials and returns to pairing behavior.
 - Client heartbeat sends WebSocket ping frames every 30 seconds, expects pong within 10 seconds, and reconnects after a 5-second delay.

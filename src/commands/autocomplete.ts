@@ -164,6 +164,10 @@ export const SKILL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 
 export const NODE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   literalNode('list', 'List approved nodes, pending approvals, and current node status'),
+  literalNode('create', 'Create a Node credential before starting the Node', {
+    usage: '/node create <node-id>',
+    children: [placeholderNode('<node-id>', 'New Node ID')],
+  }),
   literalNode('approve', 'Approve a pending node pairing request', {
     usage: '/node approve <pending-id> [node-id]',
     children: [

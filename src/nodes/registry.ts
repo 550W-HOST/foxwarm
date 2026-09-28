@@ -43,7 +43,6 @@ export type PendingPairingRecord = {
   nodeType: string
   requestedAt: number
   updatedAt: number
-  pairCode: string
   capabilities: NodeCapabilitiesSnapshot
   nodeProtocol?: NodeProtocolRange
   legacyProtocol?: boolean
@@ -73,7 +72,15 @@ function normalizeRegistryData(raw: any, filePath: string): NodeRegistryData {
 
   return {
     approvedNodes: raw.approvedNodes && typeof raw.approvedNodes === 'object' ? raw.approvedNodes : {},
-    pendingPairings: raw.pendingPairings && typeof raw.pendingPairings === 'object' ? raw.pendingPairings : {},
+    // Older registries included an informational six-digit pairCode. Preserve
+    // every other pending field, including approved-but-unclaimed credentials.
+    pendingPairings: raw.pendingPairings && typeof raw.pendingPairings === 'object'
+      ? Object.fromEntries(Object.entries(raw.pendingPairings).map(([id, value]) => {
+        if (!value || typeof value !== 'object') return [id, value]
+        const { pairCode: _oldPairCode, ...pending } = value as Record<string, unknown>
+        return [id, pending]
+      })) as Record<string, PendingPairingRecord>
+      : {},
   }
 }
 
@@ -158,10 +165,6 @@ function sanitizeNodeId(value: string): string {
   return sanitized || 'node'
 }
 
-function generatePairCode(): string {
-  return String(Math.floor(Math.random() * 900000) + 100000)
-}
-
 function assertNodeIdAllowed(nodeId: string): void {
   if (!nodeId || !/^[a-zA-Z0-9_-]+$/.test(nodeId)) {
     throw new Error('Node id must match [a-zA-Z0-9_-]+')
@@ -233,7 +236,6 @@ export async function createPendingPairing(input: {
     nodeType: input.nodeType,
     requestedAt: now,
     updatedAt: now,
-    pairCode: generatePairCode(),
     capabilities: input.capabilities,
     nodeProtocol: input.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE,
     legacyProtocol: input.legacyProtocol ?? input.nodeProtocol === undefined,
@@ -407,6 +409,32 @@ export async function authenticateApprovedNode(nodeId: string, authToken: string
     return null
   }
   return record
+}
+
+/** Reserve an exact approved ID and return its initial credential only to the caller. */
+export async function createApprovedNode(nodeIdInput: string): Promise<{ nodeId: string; authToken: string }> {
+  const nodeId = normalizeNewNodeId(nodeIdInput)
+  await cleanupExpiredPendingPairings()
+  const data = await loadRegistry()
+  if (data.approvedNodes[nodeId]) {
+    throw new Error(`Node id \`${nodeId}\` already exists`)
+  }
+  const authToken = randomToken(32)
+  const now = Date.now()
+  data.approvedNodes[nodeId] = {
+    nodeId,
+    nodeType: 'cli-node',
+    displayName: nodeId,
+    tokenHash: hashToken(authToken),
+    createdAt: now,
+    updatedAt: now,
+  }
+  try { await saveRegistry() }
+  catch (error) {
+    delete data.approvedNodes[nodeId]
+    throw error
+  }
+  return { nodeId, authToken }
 }
 
 export async function touchApprovedNode(nodeId: string, update: Partial<Pick<ApprovedNodeRecord, 'lastSeenAt' | 'updatedAt' | 'capabilities' | 'nodeType' | 'requestedName' | 'displayName' | 'nodeProtocol' | 'protocolCompatibility'>> = {}): Promise<void> {

@@ -4,9 +4,10 @@ import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { COMPACT_KEEP_PERCENT, HTTP_PORT, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
+import { COMPACT_KEEP_PERCENT, HTTP_PORT, MODEL_EFFORTS, PUBLIC_BASE_URL, resolveModelConfig, type ModelEffort } from '../config';
 import { commandSessionMessageCount, type CommandSession } from './types';
 import { CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE, negotiateNodeProtocol } from '../../packages/shared/dist/nodeProtocol';
+import { buildNodeManualComposeExample } from '../nodes/bootstrapInfo';
 
 export function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
@@ -216,7 +217,17 @@ export function getManagedPlatformHelp(): string {
   return platforms.length > 0 ? platforms.join(', ') : '(none)'
 }
 
-export function buildNodePairHelp(token: string): string {
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`
+}
+
+function shellCommand(lines: string[]): string {
+  return lines.join(' \\\n')
+}
+
+export function buildNodePairHelp(token: string, publicUrl = PUBLIC_BASE_URL): string {
+  const explicitHost = publicUrl && new URL(publicUrl).pathname !== '/'
+  const hostFlag = explicitHost ? ['  --host="$BASE_URL"'] : []
   return [
     '🧩 **Node Pairing / Bootstrap Help**',
     '',
@@ -224,39 +235,30 @@ export function buildNodePairHelp(token: string): string {
     '',
     'Use the pairing token below directly as `--pairing=...` when bootstrapping a node.',
     '',
-    'First choose a **reachable base URL** for this Foxwarm master from the node\'s point of view.',
-    'There is no single globally correct external URL that Foxwarm can always know in advance — it might be localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain depending on where the node runs.',
+    publicUrl ? 'The configured public URL is used below. Check that it is reachable from the new Node.' : 'First choose a **reachable base URL** for this Foxwarm master from the node\'s point of view.',
+    publicUrl ? '' : 'There is no single globally correct external URL that Foxwarm can always know in advance — it might be localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain depending on where the node runs.',
     '',
-    'If you fetch `/node/run.sh`, `/node/run-docker.sh`, or `/node/run.ps1` from that reachable URL, the downloaded script uses that same request URL as its default `--host`/`HostUrl` value.',
-    'Override `--host=...` only when the script was fetched through one address but the node should connect to another reachable address.',
+    'Downloaded scripts infer their default host from the HTTP request origin. They cannot infer a reverse-proxy path prefix.',
+    explicitHost ? 'The configured URL has a path prefix. Pass `--host="$BASE_URL"` so the Node keeps that prefix.' : 'Override `--host=...` only when the script was fetched through one address but the node should connect to another reachable address.',
     '',
     '**Pick a reachable URL first**',
     '```bash',
-    'BASE_URL=http://YOUR_MASTER:3001',
+    publicUrl ? `BASE_URL=${shellQuote(publicUrl)}` : `BASE_URL=http://YOUR_MASTER:${HTTP_PORT}`,
     '```',
     '',
     '**Bare metal (recommended Linux host bootstrap)**',
     '```bash',
-    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
-  --dir=/opt/foxwarm-node \
-  --pairing=${token} \
-  --node-id=my-node`,
+    shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${token}`, '  --node-id=my-node']),
     '```',
     '',
     '**Bare metal with systemd boot startup**',
     '```bash',
-    `curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
-  --dir=/opt/foxwarm-node \
-  --pairing=${token} \
-  --node-id=my-node \
-  --install`,
+    shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${token}`, '  --node-id=my-node', '  --install']),
     '```',
     '',
     '**Docker bootstrap**',
     '```bash',
-    `curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
-  --pairing=${token} \
-  --node-id=my-node`,
+    shellCommand(['curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s --', ...hostFlag, `  --pairing=${token}`, '  --node-id=my-node']),
     '```',
     '',
     '**Explicit host override example**',
@@ -270,16 +272,16 @@ export function buildNodePairHelp(token: string): string {
     '',
     '**Manual docker-compose template**',
     '```bash',
-    'curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml',
-    'cat > .env <<\'EOF\'',
-    'NODE_HOST=$BASE_URL',
-    'NODE_SOURCE_URL=$BASE_URL/node/source.tar.gz',
-    `NODE_PAIRING_TOKEN=${token}`,
-    'NODE_ID=my-node',
-    'NODE_DATA_DIR=./data',
-    'EOF',
+    buildNodeManualComposeExample(token),
+    '```',
     '',
-    'docker compose up -d --build',
+    '**Windows PowerShell (download and run)**',
+    '```powershell',
+    `$BASE_URL = '${(publicUrl || `http://YOUR_MASTER:${HTTP_PORT}`).replace(/'/g, "''")}'`,
+    'Invoke-WebRequest "$BASE_URL/node/run.ps1" -OutFile .\\run.ps1',
+    explicitHost
+      ? `.\\run.ps1 -HostUrl "$BASE_URL" -Pairing '${token}' -NodeId my-node`
+      : `.\\run.ps1 -Pairing '${token}' -NodeId my-node`,
     '```',
     '',
     '**Approve the pending node from Foxwarm**',
@@ -342,13 +344,14 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
           entry.legacyProtocol ?? entry.nodeProtocol === undefined,
         )
       const protocol = compatibility.status === 'compatible' ? ` protocol=v${compatibility.negotiated}` : ' ⚠️ upgrade required'
-      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}${protocol}\n`
+      reply += `- \`${entry.id}\` [${entry.nodeType}]${requestedName}${connected}${approvedMarker}${protocol}\n`
     }
   }
 
   reply += '\nCommands:\n'
   reply += '- `/node` or `/node list` — list nodes and pending approvals\n'
   reply += '- `/node approve <pending-id> [node-id]` — approve a pending node\n'
+  reply += '- `/node create <node-id>` — create a node ID and receive its initial auth token\n'
   reply += '- `/node reject <pending-id>` — reject a pending node\n'
   reply += '- `/node remove <node-id>` — remove an approved node and invalidate its credentials\n'
   reply += '- `/node move <old-id> <new-id>` — rename an approved node id (node-side credentials must be updated)\n'

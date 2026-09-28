@@ -408,6 +408,7 @@ export const APP_CONFIG_SCHEMA = {
   type: 'object',
   additionalProperties: true,
   properties: {
+    url: { type: 'string', pattern: '^https?://', description: 'Public HTTP(S) base URL used in Node setup instructions. May include a deployment path; requires restart.' },
     nodeProviders: {
       type: 'object',
       propertyNames: { pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' },

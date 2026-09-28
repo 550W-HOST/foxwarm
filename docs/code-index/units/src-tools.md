@@ -92,9 +92,9 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_list_nodes` | Lists generic available Nodes, marks the current Node, and shows lifecycle-capable provider IDs/actions |
 | `tool_change_current_node` | Changes the session's current execution node |
 | `tool_copy_between_nodes` | Copies files between nodes |
-| `tool_node_bootstrap_info` | Generates bootstrap info for node pairing |
+| `tool_node_bootstrap_info` | Generates bootstrap info for node pairing using configured public URL or `$BASE_URL` |
 | `tool_node_pair_approve` | Approves a pending node pairing request; an external Main-local caller can provide a final context/policy fence before registry mutation (see [inbound pairing](./src-mcp-inbound-pairing-service.md)) |
-| `tool_node_pair_list` | Lists pending node pairing requests |
+| `tool_node_pair_list` | Lists pending node pairing request IDs and status without the obsolete display code |
 
 ### tools/vectorTools.ts — Vector recall scope utilities
 | Function | Description |
