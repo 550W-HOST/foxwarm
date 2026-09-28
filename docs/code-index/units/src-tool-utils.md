@@ -13,6 +13,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `guardToolOutputForModel` — two-stage guard that truncates oversized tool results and saves full output to disk
 - `TOOL_OUTPUT_GUARD_CHAR_LIMIT` — character limit constant for tool output truncation
 - `normalizeToolResultImages` — extracts current structured inline image fields from tool results
+- `isToolResultImageRefPart` — recognizes a canonical image part that references bytes already stored in the image Blob store
 - `buildToolImageId` — constructs a deterministic image identifier from tool use ID and index
 - `getImageMetaFromPart` — extracts image metadata from a message part
 - `buildImageGuidanceText` / `appendImageGuidanceText` — generates model-facing image usage hints
@@ -44,9 +45,12 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 | `isObject(value)` (toolImages) | ~1 | Type guard for objects in image module |
 | `isImageMimeType(mimeType)` | ~5 | Checks if MIME type is an image type |
 | `normalizeInlineData(item)` | ~20 | Validates one current `{data, mimeType}` inline image item |
+| `normalizeToolResultImageRef(value)` | ~40 | Validates one canonical image part whose `inlineDataRef` names safe raster bytes in the Blob store |
+| `isToolResultImageRefPart(value)` | ~70 | Predicate form of the reference validator |
 | `buildToolImageId(toolUseId, imageIndex)` | ~65 | Creates deterministic image ID string |
 | `probeImageMetadata(inlineData)` | ~70 | Uses sharp to extract width/height/size/hash from image buffer |
 | `buildNormalizedToolResultImage(toolUseId, imageIndex, inlineData)` | ~82 | Combines metadata probe with ID generation |
+| `buildNormalizedRefToolResultImage(toolUseId, imageIndex, ref)` | ~95 | Verifies stored bytes and builds the reference-backed image part |
 | `normalizeToolResultImages(result, toolUseId, fallbackLabel)` | ~88–140 | Main normalizer: collects images from all formats, strips consumed keys |
 | `getImageMetaFromPart(part)` | ~145–170 | Extracts ImageMeta from message part with fallbacks |
 | `formatImageSize(meta)` | ~172 | Formats width×height string |
@@ -83,7 +87,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `parseFunctionCallArgs` canonicalizes an exact empty raw argument string to an empty object, while malformed JSON is preserved with a structured error message to prevent 400 errors on provider APIs.
 - `guardToolOutputForModel` applies a two-stage truncation to the non-image response that remains after image promotion: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures. Canonical ordering is [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 - The guard preserves a curated set of shallow metadata keys (paths, IDs, status, error) in truncated summaries so the model retains actionable context.
-- `normalizeToolResultImages` accepts only current structured `inlineData` / `inlineDataItems` fields with `mimeType` and turns them into consistent `MessagePart[]` values with probed metadata. Source-specific old node shapes are outside this generic unit and are owned by [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
+- `normalizeToolResultImages` accepts current structured `inlineData` / `inlineDataItems` fields with `mimeType` and turns them into consistent `MessagePart[]` values with probed metadata. It also accepts a `imageParts` list of canonical image parts whose `inlineDataRef` names bytes already in the image Blob store, which is how a script hands a model-produced image to the outer tool result without copying bytes: the reference is validated field by field, the stored bytes are read back to confirm their recorded length and digest, and the resulting part keeps the exact reference plus a tool-scoped image id while the consumed field is removed from the model-visible result. A reference that no longer resolves fails the tool result instead of leaving a dangling image part, and JSON that does not match the full reference shape is never treated as an image. Source-specific old node shapes are outside this generic unit and are owned by [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - Passed-Session and ID-based image resolution share inline, canonical blob, and legacy archive-path readers. The passed path walks the exact owner's live history newest-first and then reads that session's canonical archive directly; the ID path loads an existing Session when available and delegates. Cropping shares one sharp validation/extraction implementation. Trusted current-owner `image_crop` and `image_write_to_file` use the passed path; a Worker remote image write validates a nonsymlink handoff root inside the trusted agent tree, atomically creates one operation-private directory plus exclusive mode-0600 file, invokes compound Main-owned master-to-node copy without reverse base64, and removes the whole operation directory before returning. Operation and cleanup failures are preserved together in bounded form. Legacy/no-hook/mismatched calls retain the ID path.
 - The `wait` tool's stop-current-turn behavior is suppressed when any other tool in the batch returns an error.
 
@@ -92,6 +96,10 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 ### D-tool-args-empty-string
 
 [2026-07-31] An exact empty `rawArgsText` string means the model supplied no tool arguments. Parse it as `{ args: {} }` without retaining raw text or an error so later provider serialization emits `{}`. Whitespace-only strings remain invalid JSON and continue through the structured parse-error path.
+
+### D-tool-result-image-reference
+
+[2026-09-19] A tool result may hand back an image either as inline bytes or as a canonical part referencing bytes already stored in the image Blob store. The reference form keeps base64 out of the tool result, session history, and request journal, and it is accepted only when every identity field is present and the Blob id names a safe raster type, so ordinary JSON cannot be mistaken for an image. The referenced bytes are read back before the part becomes session-visible, so a missing or corrupt Blob fails the tool result explicitly rather than producing a dangling image or a silently empty one. The materialized part reuses the tool-result image id convention (`<toolUseId>#<n>`) that the inline form already establishes, keeps the source reference and its byte metadata unchanged, and deliberately does not copy assistant-image provenance or provider metadata into a tool result.
 
 ## Integration
 

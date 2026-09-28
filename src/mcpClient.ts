@@ -655,21 +655,32 @@ export function normalizeMcpToolResult(result: any): any {
   return parsed !== undefined ? parsed : content[0].text;
 }
 
-export async function listTools(serverName?: string) {
+export async function listTools(serverName?: string, signal?: AbortSignal) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
-    return await client.listTools();
+    return signal ? await client.listTools(undefined, { signal }) : await client.listTools();
   });
 }
 
-export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>) {
+export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>, options: { signal?: AbortSignal; rawResult?: boolean } = {}) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
     const params = { name: tool, arguments: args || {} };
-    const result = config.timeoutSeconds === undefined
-      ? await client.callTool(params)
-      : await client.callTool(params, undefined, { timeout: config.timeoutSeconds * 1000 });
-    return normalizeMcpToolResult(result);
+    const requestOptions = {
+      ...(config.timeoutSeconds === undefined ? {} : { timeout: config.timeoutSeconds * 1000 }),
+      ...(options.signal ? { signal: options.signal } : {}),
+    };
+    try {
+      const result = !Object.keys(requestOptions).length
+        ? await client.callTool(params)
+        : await client.callTool(params, undefined, requestOptions);
+      return options.rawResult ? result : normalizeMcpToolResult(result);
+    } catch (error) {
+      // The SDK dispatches cancellation asynchronously. Keep this short-lived HTTP
+      // transport open briefly so its best-effort notification can reach the server.
+      if (options.signal?.aborted) await new Promise(resolve => setTimeout(resolve, 100));
+      throw error;
+    }
   });
 }
 

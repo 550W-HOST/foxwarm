@@ -20,6 +20,7 @@ export type NodeToolDefinition = {
 export type NodeCapabilitiesSnapshot = {
   tools: NodeToolDefinition[]
   services?: Record<string, number>
+  features?: { remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number }
 }
 
 export type ApprovedNodeRecord = {
@@ -422,7 +423,7 @@ export async function touchApprovedNode(nodeId: string, update: Partial<Pick<App
   await saveRegistry()
 }
 
-export async function approvePendingPairing(pendingId: string, requestedNodeId?: string): Promise<{
+export async function approvePendingPairing(pendingId: string, requestedNodeId?: string, assertBeforeApproval?: () => void): Promise<{
   nodeId: string
   authToken: string
   pending: PendingPairingRecord
@@ -446,6 +447,9 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
     nodeId = await allocateUniqueNodeId(pending.requestedName || pending.nodeType || 'node')
   }
 
+  // An external caller can become unavailable while registry reads or ID
+  // allocation are pending. Fence that caller before mutating Node trust.
+  assertBeforeApproval?.()
   const authToken = randomToken(32)
   const now = Date.now()
   data.approvedNodes[nodeId] = {

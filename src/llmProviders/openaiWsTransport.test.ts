@@ -15,6 +15,7 @@ import type { Message } from '../types';
 import {
   DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS,
   SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS,
   setStreamingTimeoutTestHooks,
 } from '../llmStreamingTimeout';
@@ -637,7 +638,7 @@ test('openai-ws first-activity watchdog covers handshake and ignores unrelated r
   }
 });
 
-test('openai-ws meaningful deltas switch to and reset the one-minute inactivity watchdog', async () => {
+test('openai-ws meaningful deltas switch to and reset the three-minute inactivity watchdog', async () => {
   const timers = new FakeIdleTimers();
   setStreamingTimeoutTestHooks(timers.hooks);
   let socket!: FakeSocket;
@@ -805,6 +806,46 @@ test('user abort after safety buffering remains AbortError rather than a metadat
   assert.equal(socket.terminated, 1);
 });
 
+test('a hosted image call keeps the extended inactivity window after its item ends', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } });
+      current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'warming up' });
+      // The image item starts and then ends, but the response never completes.
+      current.frame({ type: 'response.output_item.added', output_index: 1, item: { type: 'image_generation_call', id: 'ig_ws', status: 'in_progress' } });
+      current.frame({ type: 'response.image_generation_call.in_progress', output_index: 1, item_id: 'ig_ws' });
+      current.frame({ type: 'response.image_generation_call.completed', output_index: 1, item_id: 'ig_ws' });
+      current.frame({ type: 'response.output_item.done', output_index: 1, item: { type: 'image_generation_call', id: 'ig_ws', status: 'completed', output_format: 'png', result: 'iVBORw0KGgo=' } });
+    });
+    return socket as any;
+  }});
+  const controller = new AbortController();
+  const pending = requestOpenAIResponsesWs({
+    url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+    placement: 'local', signal: controller.signal,
+  });
+  for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve));
+  const delays = timers.entries.map(entry => entry.delayMs);
+  assert.ok(delays.includes(DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS), 'the configured window applies before the image call');
+  assert.equal(delays.at(-1), IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+
+  // Later hosted image status frames are ongoing progress and restart the
+  // extended window instead of leaving the first report as a fixed deadline.
+  const windowBeforeLateActivity = timers.entries.at(-1)!;
+  socket.emit('message', JSON.stringify({
+    type: 'response.image_generation_call.generating', output_index: 1, item_id: 'ig_ws',
+  }));
+  for (let i = 0; i < 5; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(windowBeforeLateActivity.cleared, true);
+  assert.notEqual(timers.entries.at(-1), windowBeforeLateActivity);
+  assert.equal(timers.entries.at(-1)?.delayMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS);
+  controller.abort();
+  await assert.rejects(pending, (error: any) => error?.name === 'AbortError');
+});
+
 test('completed idle chains actively expire and close after ten minutes without another request', async () => {
   const timers = new FakeIdleTimers();
   const diagnostics = captureDiagnostics();
@@ -918,4 +959,31 @@ test('LRU eviction and pool clear cancel every affected idle timer', async () =>
     .map(entry => entry.fields.closeCause);
   assert.equal(closeCauses.filter(cause => cause === 'lru-eviction').length, 1);
   assert.equal(closeCauses.filter(cause => cause === 'pool-clear').length, 5);
+});
+
+test('openai-ws custom inactivity applies after output and safety buffering never shortens it', async () => {
+  for (const configured of [300_000, 900_000]) {
+    const timers = new FakeIdleTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    let socket!: FakeSocket;
+    setOpenAIWsTransportTestHooks({ socketFactory: () => {
+      socket = new FakeSocket((_request, current) => {
+        current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a' });
+        current.frame({ type: 'response.metadata', metadata: { type: 'safety_buffering' } });
+        current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'b' });
+      });
+      return socket as any;
+    }});
+    const pending = requestOpenAIResponsesWs({
+      url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]),
+      placement: 'local', signal: signal(), streamContentInactivityTimeoutMs: configured,
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const extended = Math.max(configured, 600_000);
+    assert.deepEqual(timers.entries.map(entry => entry.delayMs), [180_000, configured, extended, extended]);
+    timers.entries.at(-1)!.callback();
+    await assert.rejects(pending, new RegExp(`further model output activity after ${extended}ms`));
+    assert.equal(socket.terminated, 1);
+    assert.ok(timers.entries.every(entry => entry.cleared));
+  }
 });

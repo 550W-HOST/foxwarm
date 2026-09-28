@@ -1,6 +1,8 @@
 export const DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS = 60 * 1000;
 export const SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
+/** Local inactivity allowance once an attempt reports hosted image generation activity. */
+export const IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
 export type StreamingTimeoutKind = 'first-content' | 'content-inactivity' | 'hard-deadline';
 
@@ -21,7 +23,14 @@ let timerHooks: TimerHooks = defaultTimerHooks;
 
 export type StreamingAttemptWatchdog = {
   markMeaningfulProgress(): void;
-  enterSafetyBuffering(metadata: Record<string, unknown>): void;
+  enterSafetyBuffering(metadata: Record<string, unknown>): number;
+  /**
+   * Reports hosted image generation activity. The extended allowance is latched
+   * for the rest of the attempt, because the response as a whole can still be
+   * outstanding after the image item itself ends, and every reported activity
+   * restarts it. A later attempt starts from the configured value.
+   */
+  reportImageGenerationActivity(): void;
   finish(): void;
 };
 
@@ -60,14 +69,19 @@ function timeoutError(kind: StreamingTimeoutKind, timeoutMs: number, safetyBuffe
 
 export function createStreamingAttemptWatchdog(options: {
   hardTimeoutMs?: number;
+  streamContentInactivityTimeoutMs?: number;
   onTimeout(error: Error, kind: StreamingTimeoutKind): void;
 }): StreamingAttemptWatchdog {
   let finished = false;
   let phaseTimer: TimerHandle | undefined;
   let hardTimer: TimerHandle | undefined;
   let phaseGeneration = 0;
-  let inactivityTimeoutMs = DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
+  let inactivityTimeoutMs = options.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS;
   let safetyBufferingMetadata: Record<string, unknown> | undefined;
+  let imageGenerationStarted = false;
+
+  const effectiveInactivityTimeoutMs = () =>
+    imageGenerationStarted ? Math.max(inactivityTimeoutMs, IMAGE_GENERATION_CONTENT_INACTIVITY_TIMEOUT_MS) : inactivityTimeoutMs;
 
   const clearPhase = () => {
     if (!phaseTimer) return;
@@ -105,13 +119,19 @@ export function createStreamingAttemptWatchdog(options: {
   return {
     markMeaningfulProgress() {
       if (finished) return;
-      schedulePhase('content-inactivity', inactivityTimeoutMs);
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
     },
     enterSafetyBuffering(metadata) {
-      if (finished) return;
+      if (finished) return inactivityTimeoutMs;
       safetyBufferingMetadata = boundSafetyBufferingMetadata(metadata);
-      inactivityTimeoutMs = SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS;
-      schedulePhase('content-inactivity', inactivityTimeoutMs);
+      inactivityTimeoutMs = Math.max(inactivityTimeoutMs, SAFETY_BUFFERING_CONTENT_INACTIVITY_TIMEOUT_MS);
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
+      return effectiveInactivityTimeoutMs();
+    },
+    reportImageGenerationActivity() {
+      if (finished) return;
+      imageGenerationStarted = true;
+      schedulePhase('content-inactivity', effectiveInactivityTimeoutMs());
     },
     finish() {
       if (finished) return;

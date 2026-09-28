@@ -14,6 +14,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `readFileToolPath`, `writeFileToolPath`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write core used by both master-side and node-side wrappers
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
+- `NodeToolContext.externalOwner` / `externalExecManager` — disjoint authenticated CLI execution context, never an Agent fallback or fabricated Session. Its pre-reserved real ID, completion capability, cwd and foreground/background callbacks keep output in the external Node namespace.
 - `browse_open`, `browse_list`, `browse_get`, `browse_close`, `browse_interact` — browser automation tools
 - `buildBrowserScreenshotResult` — builds the current structured `inlineData` screenshot result without source-specific base64 fields
 - `CLI_NODE_CAPABILITIES` — tool schema definitions for all node tools (used for LLM tool registration)

@@ -93,7 +93,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_change_current_node` | Changes the session's current execution node |
 | `tool_copy_between_nodes` | Copies files between nodes |
 | `tool_node_bootstrap_info` | Generates bootstrap info for node pairing |
-| `tool_node_pair_approve` | Approves a pending node pairing request |
+| `tool_node_pair_approve` | Approves a pending node pairing request; an external Main-local caller can provide a final context/policy fence before registry mutation (see [inbound pairing](./src-mcp-inbound-pairing-service.md)) |
 | `tool_node_pair_list` | Lists pending node pairing requests |
 
 ### tools/vectorTools.ts — Vector recall scope utilities
@@ -106,6 +106,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 |----------|-------------|
 | `tool_search_tools` | Unified search across builtin, MCP, and node tool sources |
 | `formatSearchToolsOutput` | Renders bounded copyable TypeScript-like declarations, selected/total counts, schema omission markers, and discovery warnings |
+| `scoreUnifiedToolQuery`, `compareUnifiedSearchResults` | Shared pure ranking and deterministic tie-break for internal search and inbound MCP discovery |
 | `tool_call_tool` | Parses the unified call surface and delegates to the canonical resolved-tool executor |
 
 ### tools/resolvedTools.ts — Canonical invocation resolution
@@ -115,6 +116,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `resolveUnifiedTool` | Resolves `call_tool` IDs/descriptors; omitted Node IDs use the current target and builtin aliases for Node capabilities are rejected |
 | `executeResolvedTool` | Authorizes the resolved concrete target and dispatches through local, Node, or MCP owners; `call_tool` itself is permission-neutral |
 | `buildUnifiedToolId` | Constructs the source-qualified identifier used by discovery |
+| `parseUnifiedToolId` | Canonical source-qualified ID parser reused by internal and inbound MCP invocation |
 
 ### tools/definitions.ts — Tool definition array
 | Export | Description |
@@ -179,7 +181,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - **Model-facing schema validity**: Default-injected tool definitions are the single schema source passed to providers. Every top-level property in a model-facing tool must have a concrete schema shape (`type`, `enum`, or composition keywords), because OpenAI Responses rejects description-only properties.
 - **Channel delivery guidance**: `send_to_channel` directs callers to reply normally for attached normal-mode channels, where assistant text is delivered automatically. Explicit tool delivery is for send-only channels or tasks requiring a different destination; this guidance does not change routing or authorization.
 - **First-party schema copy**: Builtin definitions and generated cancellation/handoff fields use concise caller-oriented descriptions that explain purpose, supported inputs, defaults, path placement, and observable results without changing tool identity or schema constraints. Editorial wording is not unit-locked; tests retain schema shape, bounds, ordering, protocol constants, search behavior through synthetic fixtures, and runtime effects instead of snapshotting first-party prose. Third-party MCP and custom Node descriptions remain provider-owned.
-- **Intentional creation overrides**: `create_child_session` and `create_session` expose only optional strict `forceModel: { modelId?, effort? }`; removed top-level `model`/`effort` keys fail across direct, unified, ToolScript, and Worker/Main-management dispatch. Omission or an empty object keeps inheritance/default behavior. The existing `set_session_child_model` schema continues to own future-child model/effort inspection and mutation. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
+- **Intentional creation overrides**: `create_child_session` and `create_session` expose only optional strict `forceModel: { modelId?, effort? }`; removed top-level `model`/`effort` keys fail across direct, unified, ToolScript, and Worker/Main-management dispatch. Omission or an empty object keeps inheritance/default behavior. The parameter description reserves overrides for an explicit user request for the current task or Session; this is caller guidance, not an additional runtime validation or permission gate. The existing `set_session_child_model` schema continues to own future-child model/effort inspection and mutation. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - **Memory operations**: Read/write/edit/delete/patch operations target per-agent memory directories. These file CRUD operations do not automatically update the session-archive vector index.
 - **Patch result summaries**: Master file and memory patch wrappers use the shared per-operation formatter for per-file add/update counts, including operations listed after a partial failure; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
 

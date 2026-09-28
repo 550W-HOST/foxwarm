@@ -173,7 +173,10 @@ test('raw archive max-latency scheduling is fixed, serialized, retryable, and sh
       const suffixDeadline = runtime.getArchiveIndexStatus(sessionId).maxLatencyDeadline;
       assert.equal(suffixDeadline, now + 300_000);
       releaseHeldEmbedding?.();
-      for (let attempt = 0; attempt < 50 && runtime.getArchiveIndexStatus(sessionId).lastIndexedSeq < 1; attempt += 1) {
+      // The released flush performs real store I/O after the embedding resolves, so
+      // wait on a wall-clock deadline rather than a fixed number of event-loop turns.
+      const flushDeadline = Date.now() + 10_000;
+      while (runtime.getArchiveIndexStatus(sessionId).lastIndexedSeq < 1 && Date.now() < flushDeadline) {
         await flushAsyncWork();
       }
       const afterFirst = runtime.getArchiveIndexStatus(sessionId);

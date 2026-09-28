@@ -12,6 +12,16 @@ type RemoteExecCompletionCapability = {
   issuedAt: number;
 };
 
+type ExternalExecCompletionCapability = {
+  v: 2;
+  purpose: 'external-exec-completion';
+  nodeId: string;
+  externalId: string;
+  contextId: string;
+  execId: string;
+  issuedAt: number;
+};
+
 let cachedSecret: Buffer | null = null;
 
 function loadOrCreateSecret(): Buffer {
@@ -82,6 +92,35 @@ export function verifyRemoteExecCompletionCapability(
     && payload.sessionId === expected.sessionId
     && payload.execId === expected.execId
     && Number.isFinite(payload.issuedAt);
+}
+
+export function issueExternalExecCompletionCapability(
+  nodeId: string, externalId: string, contextId: string, execId: string,
+): string {
+  const payload: ExternalExecCompletionCapability = {
+    v: 2, purpose: 'external-exec-completion', nodeId, externalId, contextId, execId, issuedAt: Date.now(),
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `${encoded}.${signature(encoded).toString('base64url')}`;
+}
+
+export function verifyExternalExecCompletionCapability(token: string, expected: {
+  nodeId: string; externalId: string; contextId: string; execId: string;
+}): boolean {
+  if (typeof token !== 'string') return false;
+  const [encoded, encodedSignature, extra] = token.split('.');
+  if (!encoded || !encodedSignature || extra !== undefined) return false;
+  let supplied: Buffer;
+  let payload: ExternalExecCompletionCapability;
+  try {
+    supplied = Buffer.from(encodedSignature, 'base64url');
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch { return false; }
+  const expectedSignature = signature(encoded);
+  if (supplied.length !== expectedSignature.length || !crypto.timingSafeEqual(supplied, expectedSignature)) return false;
+  return payload?.v === 2 && payload.purpose === 'external-exec-completion'
+    && payload.nodeId === expected.nodeId && payload.externalId === expected.externalId
+    && payload.contextId === expected.contextId && payload.execId === expected.execId && Number.isFinite(payload.issuedAt);
 }
 
 export function setNodeEventCapabilitySecretForTests(secret?: Buffer): void {

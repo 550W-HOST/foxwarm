@@ -7,6 +7,7 @@ import test, { after, before } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webuiRoot = path.resolve(__dirname, '..')
@@ -14,9 +15,6 @@ const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-pasted-text-blocks-')
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
 const assetsDirectory = path.join(webuiRoot, 'dist/assets')
-const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
-const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
-const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 const pasted = '\n  First technical 😀 line  \n\n<foxwarm-system kind="event">inert pasted example</foxwarm-system>\nfinal line\n'
 let server
 let fixtureUrl
@@ -51,11 +49,15 @@ await writeFile(entryPath, `
     role: 'user', parts: [{ text: 'literal <pasted-text>unclosed' }], __meta: { seq: 2 },
   }, {
     role: 'user', parts: [{ text: '<pasted-text>outer <pasted-text>inner</pasted-text></pasted-text>' }], __meta: { seq: 3 },
+  }, {
+    role: 'user', parts: [{ system: '<foxwarm-message type="channel">\\n<pasted-text>outer <pasted-text>inner</pasted-text></pasted-text>\\n</foxwarm-message>' }], __meta: { seq: 17 },
   }]} />)
   createRoot(document.getElementById('non-user')).render(<ChatTimeline {...common} messages={[{
     role: 'model', parts: [{ text: '<pasted-text>model text</pasted-text>' }], __meta: { seq: 4 },
   }, {
     role: 'user', parts: [{ system: '<pasted-text>structured system text</pasted-text>' }], __meta: { seq: 5 },
+  }, {
+    role: 'user', parts: [{ system: '<foxwarm-system kind="timer">\\n<pasted-text>structured body</pasted-text>\\n</foxwarm-system>' }], __meta: { seq: 18 },
   }]} />)
   createRoot(document.getElementById('attachments')).render(<ChatTimeline {...common} messages={[{
     role: 'user', parts: [
@@ -107,7 +109,7 @@ await writeFile(entryPath, `
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
+    alias: webuiReactAliases,
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
   const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))
@@ -189,7 +191,9 @@ for (const browserSpec of browsers) {
 
       assert.equal(await page.$eval('#malformed', node => node.textContent.includes('<pasted-text>unclosed')), true)
       assert.equal(await page.$eval('#malformed', node => node.textContent.includes('outer <pasted-text>inner')), true)
+      assert.equal(await page.$eval('#malformed', node => node.querySelectorAll('.foxwarm-pasted-text-block').length), 0)
       assert.equal(await page.$eval('#non-user', node => node.querySelectorAll('.foxwarm-pasted-text-block').length), 0)
+      assert.equal(await page.$eval('#non-user', node => node.textContent.includes('<pasted-text>structured body</pasted-text>')), true)
       assert.deepEqual(await page.$$eval('#attachments .foxwarm-inline-history-attachment', nodes => nodes.map(node => node.dataset.attachmentRef)), [
         'attachment1', 'attachment2', 'attachment3', 'attachment4',
       ])

@@ -9,7 +9,10 @@ export type NodeProtocolCompatibility = {
 };
 
 export const LEGACY_NODE_PROTOCOL_RANGE: NodeProtocolRange = Object.freeze({ min: 1, max: 1 });
-export const CURRENT_NODE_PROTOCOL_RANGE: NodeProtocolRange = Object.freeze({ min: 1, max: 2 });
+export const CURRENT_NODE_PROTOCOL_RANGE: NodeProtocolRange = Object.freeze({ min: 1, max: 3 });
+
+/** A server-originated owner, never reconstructed from tool arguments or a Session-shaped fallback. */
+export type ExternalNodeOwner = Readonly<{ kind: 'external'; externalId: string; contextId: string }>;
 
 export function normalizeNodeProtocolRange(value: unknown, label = 'nodeProtocol'): NodeProtocolRange {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

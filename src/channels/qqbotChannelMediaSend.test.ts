@@ -344,38 +344,31 @@ test('send_file channel-target integration invokes QQ Bot sendFile', async () =>
   });
 });
 
-test('tool_send_file carries only matching current-turn QQ metadata for restart fallback', async () => {
+test('tool_send_file explicit targets do not inherit Session-turn reply metadata', async () => {
   await withTempFiles(async paths => {
     const transport = createFetchTransport();
     const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-tool-context', { fetch: transport.fetch });
     activate(channel);
     registerChannel('qq-send-tool-context', channel);
     try {
-      const currentTurnMetadata = {
-        channelReplyMetadata: {
-          qqbotChannelId: 'qq-send-tool-context',
-          qqbotConversationId: 'c2c:openid-restart',
-          qqbotMessageId: 'persisted-tool-message',
-        },
-      };
       await tool_send_file({
         channelTargetId: 'qq-send-tool-context:c2c:openid-restart',
         filePath: paths.generic,
-        caption: 'restart fallback',
-      }, currentTurnMetadata);
+        caption: 'explicit target',
+      }, {});
       await tool_send_file({
         channelTargetId: 'qq-send-tool-context:group:other-group',
         filePath: paths.generic,
         caption: 'mismatched target',
-      }, currentTurnMetadata);
+      }, {});
     } finally {
       unregisterChannel('qq-send-tool-context');
     }
     const messages = apiCalls(transport, '/messages').map(body);
     assert.equal(messages.length, 2);
-    assert.equal(messages[0].msg_id, 'persisted-tool-message');
+    assert.equal(messages[0].msg_id, undefined);
     assertOutboundSequence(messages[0].msg_seq);
-    assert.equal(messages[0].content, 'restart fallback');
+    assert.equal(messages[0].content, 'explicit target');
     assert.equal(messages[1].msg_id, undefined);
     assertOutboundSequence(messages[1].msg_seq);
     assert.notEqual(messages[0].msg_seq, messages[1].msg_seq);

@@ -1,0 +1,9 @@
+{
+  "name": "foxwarm-preview",
+  "compatibility_date": "2026-09-20",
+  "preview_urls": true,
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  }
+}

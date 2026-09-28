@@ -1,11 +1,18 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import 'katex/dist/katex.min.css'
 import './index.css'
-import App from './App'
-import { EmbeddedAgentsApp, EmbeddedChatApp, EmbeddedSetupApp, EmbeddedSidebarApp } from './EmbeddedWebUiApp'
 import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
+import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
+
+const App = lazy(() => import('./App'))
+const ExperimentChatApp = lazy(() => import('./ExperimentChatApp'))
+const PopupWebUiApp = lazy(() => import('./PopupWebUiApp'))
+const EmbeddedSidebarApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSidebarApp })))
+const EmbeddedChatApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedChatApp })))
+const EmbeddedAgentsApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedAgentsApp })))
+const EmbeddedSetupApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSetupApp })))
 
 function syncViewportHeight() {
   const vv = window.visualViewport
@@ -26,7 +33,12 @@ window.addEventListener('orientationchange', syncViewportHeight)
 window.addEventListener('pageshow', syncViewportHeight)
 
 const embeddedTarget = parseFoxwarmEmbeddedTarget(window.location.search)
-const content = embeddedTarget?.kind === 'sidebar'
+const popupTarget = parseFoxwarmPopupTarget(window.location.search)
+const content = import.meta.env.VITE_FOXWARM_EXPERIMENT_CHAT === '1'
+  ? <ExperimentChatApp />
+  : popupTarget
+  ? <PopupWebUiApp target={popupTarget} />
+  : embeddedTarget?.kind === 'sidebar'
   ? <EmbeddedSidebarApp target={embeddedTarget} />
   : embeddedTarget?.kind === 'chat'
     ? <EmbeddedChatApp target={embeddedTarget} />
@@ -38,7 +50,9 @@ const content = embeddedTarget?.kind === 'sidebar'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {content}
+    <Suspense fallback={<div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />}>
+      {content}
+    </Suspense>
   </StrictMode>,
 )
 

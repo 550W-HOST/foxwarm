@@ -38,7 +38,6 @@ function makeCtx(channelId: string, conversationId: string, senderId: string, re
     conversationId,
     senderId,
     username: senderId,
-    preferDirectReply: true,
     reply: async (text: string) => {
       replies.push(text);
     },

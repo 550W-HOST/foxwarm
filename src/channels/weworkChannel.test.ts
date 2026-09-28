@@ -71,6 +71,143 @@ test('WeWork channel only enables passive stream aggregation when configured', a
   });
 });
 
+test('WeWork non-stream terminal delivery consumes the latest response_url inside the adapter', async () => {
+  const channel = new WeWorkWebhookChannel({ name: 'wework-response-context', webhookUrl: 'https://example.test/proactive' });
+  let observedContext: any;
+  channel.onMessage(async ctx => { observedContext = ctx; });
+  const responses: Array<{ url: string; text: string }> = [];
+  (channel as any).sendAIBotResponse = async (url: string, text: string) => { responses.push({ url, text }); };
+
+  await (channel as any).processInboundBody({ ...cloneBody('response-context-1'), response_url: 'https://example.test/response-1' }, {
+    mode: 'webhook', responseUrl: 'https://example.test/response-1',
+  }, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(observedContext, 'preferDirectReply'), false);
+
+  await channel.sendMessage('chat-1', 'terminal answer', { turnFinal: true });
+  assert.deepEqual(responses, [{ url: 'https://example.test/response-1', text: 'terminal answer' }]);
+  assert.equal((channel as any).latestResponseUrls.has('chat-1'), false);
+});
+
+test('WeWork response_url take-before-await preserves a newer inbound context and explicit webhook override wins', async () => {
+  const channel = new WeWorkWebhookChannel({ name: 'wework-response-race', webhookUrl: 'https://example.test/proactive' });
+  channel.onMessage(async () => {});
+  let releaseFirst!: () => void;
+  const firstPending = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const responses: Array<{ url: string; text: string }> = [];
+  (channel as any).sendAIBotResponse = async (url: string, text: string) => {
+    responses.push({ url, text });
+    if (url.endsWith('/response-1')) await firstPending;
+  };
+  const webhookSends: any[] = [];
+  (channel as any).postWebhookPayload = async (url: string, payload: any) => { webhookSends.push({ url, payload }); };
+
+  await (channel as any).processInboundBody({ ...cloneBody('response-race-1'), response_url: 'https://example.test/response-1' }, {
+    mode: 'webhook', responseUrl: 'https://example.test/response-1',
+  }, true);
+  const firstFinal = channel.sendMessage('chat-1', 'first terminal', { turnFinal: true });
+  await waitFor(() => responses.length === 1);
+  await (channel as any).processInboundBody({ ...cloneBody('response-race-2'), response_url: 'https://example.test/response-2' }, {
+    mode: 'webhook', responseUrl: 'https://example.test/response-2',
+  }, true);
+  releaseFirst();
+  await firstFinal;
+
+  await channel.sendMessage('chat-1', 'explicit terminal', {
+    turnFinal: true, webhookUrl: 'https://example.test/explicit',
+  });
+  assert.equal(webhookSends.length, 1);
+  assert.equal(webhookSends[0].url, 'https://example.test/explicit');
+  assert.equal((channel as any).latestResponseUrls.get('chat-1'), 'https://example.test/response-2');
+
+  await channel.sendMessage('chat-1', 'second terminal', { turnFinal: true });
+  assert.deepEqual(responses.map(item => item.url), [
+    'https://example.test/response-1',
+    'https://example.test/response-2',
+  ]);
+});
+
+test('WeWork explicit webhook override bypasses an active latest card while automatic delivery still uses it', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-explicit-over-active-card',
+    webhookUrl: 'https://example.test/proactive',
+    aibot: { stream: true },
+  });
+  channel.onMessage(async () => {});
+  const webhookSends: Array<{ url: string; payload: any }> = [];
+  (channel as any).postWebhookPayload = async (url: string, payload: any) => { webhookSends.push({ url, payload }); };
+
+  const inbound = await (channel as any).processInboundBody(cloneBody('active-card-explicit-override'), {
+    mode: 'webhook', responseUrl: aibotTextBody.response_url,
+  }, true);
+  const streamId = inbound.passiveResponse.stream.id;
+
+  await channel.sendMessage('chat-1', 'explicit webhook message', { webhookUrl: 'https://example.test/explicit-active-card' });
+  assert.equal(webhookSends.length, 1);
+  assert.equal(webhookSends[0].url, 'https://example.test/explicit-active-card');
+  const afterExplicit = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(afterExplicit.passiveResponse.stream.finish, false);
+  assert.equal(afterExplicit.passiveResponse.stream.content, '> 🤔 thinking');
+
+  await channel.sendMessage('chat-1', '🗜️ Background compaction finished');
+  const afterNotice = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(afterNotice.passiveResponse.stream.finish, false);
+  assert.equal(afterNotice.passiveResponse.stream.content, '🗜️ Background compaction finished');
+  assert.equal(webhookSends.length, 1, 'ordinary text stays in the active card instead of sending proactively');
+
+  await channel.sendMessage('chat-1', 'automatic card terminal', { turnFinal: true });
+  const afterAutomatic = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(afterAutomatic.passiveResponse.stream.finish, true);
+  assert.equal(afterAutomatic.passiveResponse.stream.content, '🗜️ Background compaction finished\n\nautomatic card terminal');
+  assert.equal(webhookSends.length, 1);
+
+  await channel.sendMessage('chat-1', 'after finished card');
+  assert.equal(webhookSends.length, 2);
+  assert.equal(webhookSends[1].url, 'https://example.test/proactive');
+  const afterProactive = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(afterProactive.passiveResponse.stream.content, '🗜️ Background compaction finished\n\nautomatic card terminal');
+  assert.equal(afterProactive.passiveResponse.stream.finish, true);
+});
+
+test('WeWork automatic latest-card routing stays scoped to one conversation', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-conversation-card-scope',
+    webhookUrl: 'https://example.test/proactive',
+    aibot: { stream: true },
+  });
+  channel.onMessage(async () => {});
+  const webhookSends: Array<{ url: string; payload: any }> = [];
+  (channel as any).postWebhookPayload = async (url: string, payload: any) => { webhookSends.push({ url, payload }); };
+
+  const inbound = await (channel as any).processInboundBody(cloneBody('conversation-card-scope'), {
+    mode: 'webhook', responseUrl: aibotTextBody.response_url,
+  }, true);
+  const streamId = inbound.passiveResponse.stream.id;
+
+  await channel.sendMessage('chat-2', 'other conversation text');
+  assert.equal(webhookSends.length, 1);
+  assert.equal(webhookSends[0].url, 'https://example.test/proactive');
+  const refresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: streamId } }, { mode: 'webhook' }, true);
+  assert.equal(refresh.passiveResponse.stream.content, '> 🤔 thinking');
+  assert.equal(refresh.passiveResponse.stream.finish, false);
+});
+
+test('WeWork failed terminal response_url delivery does not fall back or reuse the callback', async () => {
+  const channel = new WeWorkWebhookChannel({ name: 'wework-response-failure', webhookUrl: 'https://example.test/proactive' });
+  channel.onMessage(async () => {});
+  let responseAttempts = 0;
+  let proactiveAttempts = 0;
+  (channel as any).sendAIBotResponse = async () => { responseAttempts += 1; throw new Error('ambiguous response failure'); };
+  (channel as any).postWebhookPayload = async () => { proactiveAttempts += 1; };
+
+  await (channel as any).processInboundBody(cloneBody('response-failure-1'), {
+    mode: 'webhook', responseUrl: aibotTextBody.response_url,
+  }, true);
+  await assert.rejects(() => channel.sendMessage('chat-1', 'terminal answer', { turnFinal: true }), /ambiguous response failure/);
+  assert.equal(responseAttempts, 1);
+  assert.equal(proactiveAttempts, 0);
+  assert.equal((channel as any).latestResponseUrls.has('chat-1'), false);
+});
+
 test('WeWork channel config readiness supports pure callback and websocket modes', () => {
   assert.equal(isWeWorkChannelConfigReady({ webhookUrl: 'https://example.test/webhook' }), true);
   assert.equal(isWeWorkChannelConfigReady({
@@ -407,7 +544,7 @@ test('busy queued WeWork stream card is updated when its queued turn runs', asyn
     });
 
     const busyQueuedSession = await sessionManager.getSession(sessionId);
-    assert.equal(busyQueuedSession.queue[0]?.source?.weworkStreamId, streamId);
+    assert.equal(Object.prototype.hasOwnProperty.call(busyQueuedSession.queue[0]?.source || {}, 'weworkStreamId'), false);
     busyQueuedSession.busy = false;
     busyQueuedSession.busyStartedAt = undefined;
     await sessionManager.saveSession(sessionId);
@@ -516,7 +653,7 @@ test('busy WeWork follow-up joins the active tool loop and moves delivery to the
 
     const queuedSession = await sessionManager.getSession(sessionId);
     assert.equal(queuedSession.queue.length, 1);
-    assert.equal(queuedSession.queue[0]?.source?.weworkStreamId, secondStreamId);
+    assert.equal(Object.prototype.hasOwnProperty.call(queuedSession.queue[0]?.source || {}, 'weworkStreamId'), false);
 
     releaseTool();
     await handlerRuns[0];
@@ -619,15 +756,14 @@ test('WeWork follow-up arriving during the final provider request is absorbed be
       secondRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: secondStreamId } }, { mode: 'webhook' }, true);
       return firstRefresh.passiveResponse.stream.finish === true
         && secondRefresh.passiveResponse.stream.finish === true
-        && secondRefresh.passiveResponse.stream.content === 'answer to late card steering';
+        && secondRefresh.passiveResponse.stream.content.endsWith('answer to late card steering');
     });
 
     assert.equal(chatCalls, 2);
     assert.equal(session.history.filter(message => message.role === 'user').length, 2);
     assert.equal(firstRefresh.passiveResponse.stream.content, '处理完成。');
     assert.equal(firstRefresh.passiveResponse.stream.finish, true);
-    assert.equal(secondRefresh.passiveResponse.stream.content, 'answer to late card steering');
-    assert.equal(secondRefresh.passiveResponse.stream.content.includes('intermediate answer'), false);
+    assert.equal(secondRefresh.passiveResponse.stream.content, 'intermediate answer\n\nanswer to late card steering');
   } finally {
     releaseFirstRequest?.();
     (llm as any).chat = originalChat;

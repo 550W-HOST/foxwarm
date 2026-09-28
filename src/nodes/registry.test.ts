@@ -53,6 +53,24 @@ test('node registry writes through DiskJsonData-backed persistence', async () =>
   });
 });
 
+test('a revoked external pairing context cannot approve after asynchronous registry work', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    resetNodeRegistryForTests();
+    const pending = await createPendingPairing({ requestedName: 'external node', nodeType: 'cli-node', capabilities: capabilities('external') });
+    let checked = false;
+    await assert.rejects(() => approvePendingPairing(pending.id, 'blocked-node', () => {
+      checked = true;
+      throw new Error('external context disposed');
+    }), /external context disposed/);
+    assert.equal(checked, true);
+    assert.equal((await listPendingPairings()).some(entry => entry.id === pending.id), true);
+    assert.equal((await listApprovedNodes()).length, 0);
+    assert.equal(Object.keys((await fs.readJson(filePath)).approvedNodes).length, 0);
+  });
+});
+
 test('node registry falls back to backup candidate after primary corruption', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'nodes.json');

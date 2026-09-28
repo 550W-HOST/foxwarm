@@ -17,7 +17,7 @@ Provides session archiving (persisting messages with canonical image references)
 - `ManagedSessionState`, `getManagedSessionState`, `setManagedSessionState`, `isManagedSessionActive`, `isManagedSessionLeaseExpired`, `shouldRouteQueueItemToManagedInbox` — managed session lease/state
 - `isModelVisibleMessage`, `createDisplayOnlyModelMessage`, `redactDisplayOnlyMessageForModel`, `formatModelVisibilitySuffix` — message visibility helpers
 - `maybeRefreshStaleSessionSnapshot`, `shouldAutoRefreshSessionSnapshot`, `getSessionIdleMs`, `AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS` — snapshot refresh logic
-- `isNoActionSignalText`, `isModelNoActionSignal`, `buildChildCompletionInstruction`, `buildChildReminder`, `NO_ACTION_MARKER` — child session reminder/completion signaling
+- `isNoActionSignalText`, `buildChildCompletionInstruction`, `buildChildReminder`, `NO_ACTION_MARKER` — child session reminder/completion signaling
 - `getChildHandoffBoundaryForQueueItem`, `applyChildHandoffQueueItem`, `resolveChildHandoffBoundary`, `shouldQueueChildHandoffReminder` — pure persisted child-handoff boundary transitions and reminder decision
 
 ## Function Index
@@ -67,7 +67,6 @@ Parent-cycle traversal canonicalizes every ancestor alias before seen/self check
 | `maybeRefreshStaleSessionSnapshot(session, refresh, now)` | ~20 | Conditionally triggers snapshot refresh with error handling |
 | `isNoActionSignalText(text)` | ~7 | Detects no-action marker in text |
 | `partsContainNoActionSignal(parts)` | ~13 | Checks if any message part contains no-action signal |
-| `isModelNoActionSignal(message)` | ~17 | Checks if a model message is a no-action signal |
 | `buildChildCompletionInstruction(parentSessionId)` | ~21 | Builds instruction text for child session completion |
 | `buildChildReminder(parentSessionId)` | ~25 | Builds reminder text when child didn't hand off |
 
@@ -90,7 +89,7 @@ Parent-cycle traversal canonicalizes every ancestor alias before seen/self check
 - **Message visibility**: Supports display-only messages that are hidden from the model (replaced with placeholder text during inference).
 - **Snapshot refresh**: Auto-refreshes session prompt snapshots after 1 hour of inactivity, with graceful error handling that doesn't block processing.
 - **Child reminder**: Detects `[NO_ACTION]` signals from child sessions to suppress completion reminders and instructs completed children to report once with `send_to_session(..., afterSend:"finish")`, which ends idle without a dependency. It includes the structured confirmation shape only when startup `handoffConfirmation:true` is active. It reserves `afterSend:"wait"` for a genuine later reply and forbids a separate explicit wait. Reminder system events use one `<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="...">reminder</foxwarm-system>` part instead of a generic `hint` wrapper or split `systemPayload`.
-- **Persisted handoff boundary**: Current Sessions use an optional semantic `childHandoffState`. Direct-user input establishes a resolved direct-user boundary; parent/other inter-session input establishes an unresolved report-required boundary; direct-child and maintenance input are transparent. Resolution is explicit and idempotent. Absence remains the legacy-scanner compatibility signal and is never seeded from a scan.
+- **Persisted handoff boundary**: Current Sessions use an optional semantic `childHandoffState`. Direct-user input establishes a resolved direct-user boundary; parent/other inter-session input establishes an unresolved report-required boundary; direct-child and maintenance input are transparent. Resolution is explicit and idempotent. Absence means no reminder decision: history is not scanned and state is not reconstructed or migrated from earlier rows.
 
 ## Integration
 

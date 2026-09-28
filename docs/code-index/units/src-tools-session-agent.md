@@ -47,7 +47,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/interSession.ts — Inter-session communication
 | Function | Description |
 |----------|-------------|
-| `tool_create_child_session` | Creates a child session (fork or new) |
+| `tool_create_child_session` | Creates a child session (fork or new), optionally assigning its display name before initial delivery |
 | `tool_send_to_session` | Sends a message to another session's queue; self-sends are rejected |
 | `tool_wait` | Ends the agent's current turn with __toolLoopControl |
 | `tool_submit_compact_plan` | Submits a compaction plan |
@@ -170,6 +170,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_send_to_session` delegates to session relations, accepts `<main>` / `<parent>` special target ids, and cannot target the current/source session itself; self-send errors include current/requested/resolved IDs and remind agents that messages to the current session's direct user should be ordinary assistant text instead.
 - `send_to_session` and `create_child_session` expose `afterSend:"continue" | "finish" | "wait"`. `finish` is the completed-child report path and stops idle without wait state, including when a sibling tool fails; both terminal child-creation modes await any initial delivery, while `wait` additionally requires a non-empty message and records resolved targets. Hidden legacy stop/wait booleans remain runtime-readable but are absent from the model schema. Canonical orchestration: [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
 - `tool_skill({ action: "load" })` is progressive-disclosure oriented: it returns `SKILL.md` plus skill directory/resource-path guidance, not full companion resources. The list/load actions share the same resolution, and isolated sessions may use them for their own agent only.
+- `create_child_session.displayName` optionally sets the new child's display name in the initial fork/non-fork Session and Main-owned catalog persistence, before any initial message delivery. It does not change the allocated session ID or inherit the parent's name when omitted. Like `create_session` creation, string values are stored as supplied (including `""` or surrounding spaces); non-string values are rejected before ID allocation. The existing display-name update action separately trims/clears names.
 - Path resolution expands `~` and resolves relative paths against the agent directory or session CWD.
 - All mutating tools check isolation status via `requireNotIsolated` before proceeding.
 - `delete_session` defaults to one target and shares the Main-owned lifecycle orchestrator with WebUI and `/session delete`. It detaches surviving direct children, preserves channel/busy/claim revalidation, and may tear down another exact Worker target through the fixed reverse operation. The canonical current source or any alias resolving to it is rejected before target preparation; there is no self-destruct protocol. Canonical semantics: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).

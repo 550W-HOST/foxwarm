@@ -3,8 +3,8 @@ import crypto from 'crypto';
 import sharp from 'sharp';
 import * as sessionManager from './sessionManager';
 import { readArchiveMessages } from './session/archive';
-import { ImageMeta, InlineData, Message, MessagePart, Session } from './types';
-import { readImageRef } from './imageBlobs';
+import { ImageMeta, InlineData, InlineDataRef, Message, MessagePart, Session } from './types';
+import { getSafeRasterMimeType, readImageRef } from './imageBlobs';
 
 export interface NormalizedToolResultImage {
   inlineData: InlineData;
@@ -37,6 +37,44 @@ function normalizeInlineData(item: any): InlineData | null {
   return null;
 }
 
+/**
+ * Accepts a canonical image part reference only when every identity field is
+ * present and the Blob id names a safe raster type, so arbitrary JSON cannot be
+ * mistaken for an image.
+ */
+function normalizeToolResultImageRef(value: any): InlineDataRef | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const ref = value.inlineDataRef;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
+  // Only references to the content-addressed image Blob store are accepted, so a
+  // hand-written tool result cannot point the materializer at an arbitrary file.
+  if (typeof ref.blobId !== 'string' || !getSafeRasterMimeType(ref.blobId)) return null;
+  if (!isImageMimeType(ref.mimeType)) return null;
+  if (typeof ref.byteLength !== 'number' || !Number.isInteger(ref.byteLength) || ref.byteLength < 0) return null;
+  if (typeof ref.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(ref.sha256)) return null;
+
+  const normalized: InlineDataRef = {
+    imageId: typeof ref.imageId === 'string' && ref.imageId.trim() ? ref.imageId : ref.blobId,
+    blobId: ref.blobId,
+    mimeType: ref.mimeType,
+    byteLength: ref.byteLength,
+    sha256: ref.sha256,
+  };
+  if (typeof ref.format === 'string' && ref.format) normalized.format = ref.format;
+  if (typeof ref.width === 'number' && Number.isInteger(ref.width) && ref.width > 0) normalized.width = ref.width;
+  if (typeof ref.height === 'number' && Number.isInteger(ref.height) && ref.height > 0) normalized.height = ref.height;
+  return normalized;
+}
+
+/**
+ * Whether a tool result entry is a canonical image part whose bytes already live
+ * in the image Blob store instead of travelling inline. Scripts hand these back
+ * after a low-level model request.
+ */
+export function isToolResultImageRefPart(value: unknown): boolean {
+  return normalizeToolResultImageRef(value) !== null;
+}
+
 export function buildToolImageId(toolUseId: string, imageIndex: number): string {
   const safeToolUseId = String(toolUseId || 'tool').trim() || 'tool';
   return `${safeToolUseId}#${imageIndex + 1}`;
@@ -66,6 +104,24 @@ async function buildNormalizedToolResultImage(toolUseId: string, imageIndex: num
   };
 }
 
+async function buildNormalizedRefToolResultImage(toolUseId: string, imageIndex: number, ref: InlineDataRef): Promise<MessagePart> {
+  // Verify that the referenced bytes exist and still match their recorded length
+  // and digest before the reference becomes a session-visible image.
+  const buffer = await readImageRef(ref);
+  return {
+    toolUseId,
+    inlineDataRef: ref,
+    imageMeta: {
+      imageId: buildToolImageId(toolUseId, imageIndex),
+      mimeType: ref.mimeType,
+      width: ref.width,
+      height: ref.height,
+      sizeBytes: buffer.length,
+      sha256: ref.sha256,
+    },
+  };
+}
+
 export async function normalizeToolResultImages(result: any, toolUseId: string, fallbackLabel: string): Promise<NormalizedToolResultImages> {
   if (!isObject(result)) {
     return { result, imageParts: [] };
@@ -86,7 +142,17 @@ export async function normalizeToolResultImages(result: any, toolUseId: string, 
     }
   }
 
-  if (normalizedInlineItems.length === 0) {
+  const normalizedRefItems: InlineDataRef[] = [];
+  if (Array.isArray(result.imageParts)) {
+    for (const item of result.imageParts) {
+      const ref = normalizeToolResultImageRef(item);
+      if (ref) {
+        normalizedRefItems.push(ref);
+      }
+    }
+  }
+
+  if (normalizedInlineItems.length === 0 && normalizedRefItems.length === 0) {
     return { result, imageParts: [] };
   }
 
@@ -99,10 +165,18 @@ export async function normalizeToolResultImages(result: any, toolUseId: string, 
       imageMeta: normalized.imageMeta,
     });
   }
+  for (let index = 0; index < normalizedRefItems.length; index += 1) {
+    imageParts.push(await buildNormalizedRefToolResultImage(
+      toolUseId,
+      normalizedInlineItems.length + index,
+      normalizedRefItems[index],
+    ));
+  }
 
   const {
     inlineData,
     inlineDataItems,
+    imageParts: _promotedImageParts,
     ...rest
   } = result;
 

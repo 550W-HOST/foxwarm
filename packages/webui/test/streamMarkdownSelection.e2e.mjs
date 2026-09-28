@@ -8,15 +8,13 @@ import { fileURLToPath } from 'node:url'
 
 import * as esbuild from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webuiRoot = path.resolve(__dirname, '..')
 const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-stream-markdown-selection-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
-const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
-const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
-const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 
 let server
 let fixtureUrl
@@ -73,12 +71,7 @@ before(async () => {
     platform: 'browser',
     target: 'es2020',
     jsx: 'automatic',
-    alias: {
-      react: preactCompatPath,
-      'react-dom': preactCompatPath,
-      'react-dom/client': preactCompatClientPath,
-      'react/jsx-runtime': preactJsxRuntimePath,
-    },
+    alias: webuiReactAliases,
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' },
     logLevel: 'silent',
   })

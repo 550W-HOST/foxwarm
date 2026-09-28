@@ -7,6 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import '../llm';
+import { createWorktreeFileOperations } from '../../packages/sandbox-node-runtime/dist/worktreeFileOperations';
+import { normalizeMcpInboundConfig, authenticateMcpInboundBearer } from '../mcpInboundConfig';
+import { McpInboundMcpCatalog } from '../mcpInboundCatalog';
+import type { ExternalExecutionContext } from '../mcpInboundHttp';
+import { callExternalNodeTool, externalExecResult, externalNodeAction, listExternalNodeTools, releaseExternalNodeContext } from '../mcpInboundNodeService';
+import { nodeProviderRegistry } from './providers';
+import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { DockerCommandError, DockerWorktreeNodeProvider, NativeDockerCommandRunner, type DockerCommandRunner } from './dockerWorktreeProvider';
 import { NodeProviderRegistry } from './providerRegistry';
 
@@ -39,6 +46,8 @@ class FakeDocker implements DockerCommandRunner {
   failTopCount = 0;
   immediateExitOnRun = false;
   closedAfterAbort = false;
+  realFilesystem = false;
+  onInspect?: () => Promise<void>;
   get container(): any { return [...this.containers.values()][0]; }
   async run(args: string[], options: { input?: string; signal?: AbortSignal } = {}) {
     this.calls.push({ args: [...args], input: options.input });
@@ -58,12 +67,33 @@ class FakeDocker implements DockerCommandRunner {
       return { stdout: `${container.Id}\n`, stderr: '' };
     }
     if (args[0] === 'inspect') {
+      await this.onInspect?.();
       const container = this.containers.get(args[1]); if (!container) throw new Error('missing');
       return { stdout: JSON.stringify([container]), stderr: '' };
     }
     if (args[0] === 'exec') {
       if (this.pauseExecUntilAbort) await new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => { this.closedAfterAbort = true; reject(new DockerCommandError('cancelled')); }, { once: true }));
       const request = JSON.parse(options.input || '{}');
+      if (this.realFilesystem) {
+        const container = this.containers.get(args[args.indexOf('-i') + 3]);
+        const root: string = container.Config.Labels['foxwarm.worktree'];
+        const filePath = path.isAbsolute(request.path) ? request.path : path.resolve(request.cwd || root, request.path);
+        const operations = createWorktreeFileOperations(root);
+        try {
+          let result: unknown;
+          if (request.operation === 'parent') result = { path: path.dirname(filePath) };
+          else if (request.operation === 'stat') result = await operations.stat(filePath);
+          else if (request.operation === 'read') result = { dataBase64: (await operations.read(filePath, request.offset, request.count)).toString('base64') };
+          else if (request.operation === 'readdir') result = await operations.readdir(filePath);
+          else if (request.operation === 'write') { await operations.write(filePath, Buffer.from(request.contentBase64, 'base64'), request.flag); result = null; }
+          else if (request.operation === 'mkdir') { await operations.mkdir(filePath); result = null; }
+          else if (request.operation === 'remove') { await operations.remove(filePath); result = null; }
+          else throw new Error('Unexpected Docker filesystem primitive.');
+          return { stdout: JSON.stringify({ ok: true, result }), stderr: '' };
+        } catch (error: any) {
+          return { stdout: JSON.stringify({ ok: false, error: { code: error?.code || 'SANDBOX_FILESYSTEM_ERROR', message: error?.message || 'Invalid path' } }), stderr: '' };
+        }
+      }
       const result: any = request.operation === 'parent' ? { path: path.dirname(request.path) }
         : request.operation === 'stat' ? { kind: 'file', size: 15, modifiedAtMs: 1 }
         : request.operation === 'read' ? { dataBase64: Buffer.from('fixture-content').toString('base64') }
@@ -427,6 +457,158 @@ test('resident Docker exec reuses canonical foreground, cwd, failure, artifact-r
     const operations = (provider as any).createDockerProcessOperations((await (provider as any).readState()).nodes[0]);
     await assert.rejects(() => operations.launch({ command: '/bin/bash', args: ['/tmp/not-managed.sh'], cwd: repo, env: {}, detached: true, windowsHide: true }), /script escaped/);
   } finally { await provider.destroyNode({ sourceSessionId: 'session-exec', nodeId: 'n', parameters: {}, context: { agent: 'main' } }).catch(() => {}); await fs.remove(dir); }
+});
+
+test('external owner uses an already-ready Docker worktree for canonical files and per-context resident exec results', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-docker-external-'));
+  const repo = await makeRepo(dir); const docker = new FakeDocker(); docker.realFilesystem = true;
+  const launches: string[][] = [];
+  const launcher: typeof spawn = ((command: any, args: any, options: any) => {
+    launches.push([...args]); return localDockerExecLauncher(command, args, options);
+  }) as typeof spawn;
+  const provider = new DockerWorktreeNodeProvider({ id: 'docker-external', type: 'docker-worktree', command: 'docker-launcher', args: [], image: 'fixture',
+    allowedWorktreeRoots: [dir], networkModes: ['none'], stateDir: path.join(dir, 'state'), memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' },
+  docker, undefined, launcher, async () => { throw new Error('External exec must not deliver a Session event.'); });
+  const registry = new NodeProviderRegistry([provider]);
+  const original = { listNodes: nodeProviderRegistry.listNodes, resolveNode: nodeProviderRegistry.resolveNode, invokeTool: nodeProviderRegistry.invokeTool };
+  (nodeProviderRegistry as any).listNodes = registry.listNodes.bind(registry);
+  (nodeProviderRegistry as any).resolveNode = registry.resolveNode.bind(registry);
+  (nodeProviderRegistry as any).invokeTool = registry.invokeTool.bind(registry);
+  const config = normalizeMcpInboundConfig({ enabled: true, identities: { alpha: { token: 'synthetic-docker-alpha' }, beta: { token: 'synthetic-docker-beta' } } });
+  const alpha = authenticateMcpInboundBearer(config, 'Bearer synthetic-docker-alpha')!;
+  const beta = authenticateMcpInboundBearer(config, 'Bearer synthetic-docker-beta')!;
+  const context = (externalId: string, id: string): ExternalExecutionContext =>
+    ({ id, externalId, currentNode: 'master', cwd: null, selectionGeneration: 0 });
+  const first = context('alpha', '44444444-4444-4444-8444-555555555555');
+  const second = context('alpha', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  const other = context('beta', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1
+defaultAction: deny
+rules:
+  - id: docker-select
+    match: { externalId: alpha, tool: { source: builtin, name: node } }
+    action: allow
+  - id: docker-files
+    match: { externalId: alpha, tool: { source: node, name: [read, write, edit, apply_patch, exec] }, targetNode: docker-ready }
+    action: allow
+`));
+  try {
+    const created = await provider.createNode({ sourceSessionId: 'admin-session', nodeId: 'docker-ready', parameters: { worktreePath: repo }, context: { agent: 'admin' } });
+    const artifactDir = String((created.details as any).artifactDir);
+    await fs.ensureDir(path.join(repo, 'sub'));
+    assert.deepEqual((await listExternalNodeTools(alpha, first)).map(item => item.name).sort(), ['apply_patch', 'edit', 'exec', 'read', 'write']);
+    assert.deepEqual(await listExternalNodeTools(beta, other), []);
+    assert.equal((await externalNodeAction(alpha, first, 'select', 'docker-ready')).cwd, repo);
+    await callExternalNodeTool(alpha, first, 'docker-ready', 'write', { filePath: 'sub/external.txt', content: 'initial' });
+    await callExternalNodeTool(alpha, first, 'docker-ready', 'edit', { filePath: 'sub/external.txt', oldText: 'initial', newText: 'edited' });
+    await callExternalNodeTool(alpha, first, 'docker-ready', 'apply_patch', { input: '*** Begin Patch\n*** Update File: sub/external.txt\n@@\n-edited\n+patched\n*** End Patch' });
+    assert.equal(await fs.readFile(path.join(repo, 'sub', 'external.txt'), 'utf8'), 'patched');
+    assert.match(String(await callExternalNodeTool(alpha, first, 'docker-ready', 'read', { filePath: 'sub/external.txt' })), /patched/);
+    const partial = await new McpInboundMcpCatalog().callTool(first, 'foxwarm_call', {
+      toolId: 'node:docker-ready/apply_patch', args: { input: '*** Begin Patch\n*** Update File: sub/external.txt\n@@\n-patched\n+partial\n*** Update File: sub/missing.txt\n@@\n-old\n+new\n*** End Patch' },
+    }, new AbortController().signal, alpha);
+    assert.equal(partial.isError, true);
+    assert.match(String((partial.content[0] as any).text), /unknown outcome/);
+    assert.doesNotMatch(String((partial.content[0] as any).text), /before effect/);
+    assert.equal(await fs.readFile(path.join(repo, 'sub', 'external.txt'), 'utf8'), 'partial');
+    await assert.rejects(() => callExternalNodeTool(beta, other, 'docker-ready', 'write', { filePath: 'beta.txt', content: 'never' }), /not permitted/);
+    assert.equal(await fs.pathExists(path.join(repo, 'beta.txt')), false);
+    await assert.rejects(() => callExternalNodeTool(alpha, first, 'docker-ready', 'read', { filePath: artifactDir }), /execution artifacts/);
+    await fs.symlink(artifactDir, path.join(repo, 'escape'));
+    await assert.rejects(() => callExternalNodeTool(alpha, first, 'docker-ready', 'read', { filePath: path.join(repo, 'escape') }), /execution artifacts/);
+    const foreground = await callExternalNodeTool(alpha, first, 'docker-ready', 'exec', { command: 'cd sub; printf foreground', timeout: 5 }) as any;
+    assert.equal(foreground.background, false); assert.match(foreground.output, /foreground/); assert.equal(foreground.cwd, path.join(repo, 'sub'));
+    assert.equal(first.cwd, path.join(repo, 'sub'));
+    assert.match((await externalExecResult(alpha, first, foreground.execId) as any).output, /foreground/);
+    await assert.rejects(() => externalExecResult(alpha, second, foreground.execId), /unavailable/);
+    const background = await callExternalNodeTool(alpha, first, 'docker-ready', 'exec', { command: 'sleep 1.4; printf background-done', timeout: 1 }) as any;
+    assert.equal(background.background, true); assert.equal(typeof background.execId, 'string');
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes('version: 1\ndefaultAction: deny\nrules: []\n'));
+    await assert.rejects(() => externalExecResult(alpha, first, background.execId), /not permitted/);
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1
+defaultAction: deny
+rules:
+  - id: docker-select
+    match: { externalId: alpha, tool: { source: builtin, name: node } }
+    action: allow
+  - id: docker-files
+    match: { externalId: alpha, tool: { source: node, name: [read, write, edit, apply_patch, exec] }, targetNode: docker-ready }
+    action: allow
+`));
+    let finished: any;
+    for (let i = 0; i < 20; i++) {
+      finished = await externalExecResult(alpha, first, background.execId);
+      if (finished.state === 'completed') break;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    assert.equal(finished.state, 'completed'); assert.match(finished.output, /background-done/);
+    await assert.rejects(() => externalExecResult(alpha, second, background.execId), /unavailable/);
+    await assert.rejects(() => externalExecResult(beta, other, background.execId), /unavailable/);
+    const dropped = context('alpha', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+    const afterDelete = await callExternalNodeTool(alpha, dropped, 'docker-ready', 'exec', {
+      command: `sleep 1.4; printf survived > ${JSON.stringify(path.join(repo, 'survived'))}`, timeout: 1,
+    }) as any;
+    assert.equal(afterDelete.background, true);
+    releaseExternalNodeContext(alpha, dropped);
+    await assert.rejects(() => externalExecResult(alpha, dropped, afterDelete.execId), /unavailable/);
+    for (let i = 0; i < 20 && !await fs.pathExists(path.join(repo, 'survived')); i++) await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(await fs.readFile(path.join(repo, 'survived'), 'utf8'), 'survived');
+    const late = context('alpha', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+    let inspectCount = 0; let resume!: () => void;
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { entered = resolve; });
+    docker.onInspect = async () => { if (++inspectCount === 3) { entered(); await gate; } };
+    const pendingWrite = callExternalNodeTool(alpha, late, 'docker-ready', 'write', { filePath: 'sub/late.txt', content: 'never' });
+    try {
+      await Promise.race([held, new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Docker readiness gate was not reached')), 5_000))]);
+      releaseExternalNodeContext(alpha, late);
+      resume();
+      await assert.rejects(pendingWrite, /context is unavailable/);
+      assert.equal(await fs.pathExists(path.join(repo, 'sub', 'late.txt')), false);
+    } finally { docker.onInspect = undefined; resume(); await pendingWrite.catch(() => {}); }
+    const lateExec = context('alpha', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+    const originalGetRuntime = (provider as any).getExecRuntime;
+    let resumeExec!: () => void; const execGate = new Promise<void>(resolve => { resumeExec = resolve; });
+    let enteredExec!: () => void; const execHeld = new Promise<void>(resolve => { enteredExec = resolve; });
+    (provider as any).getExecRuntime = async function (node: unknown) {
+      const runtime = await originalGetRuntime.call(provider, node);
+      return { ...runtime, startPersistentExec: async (options: unknown) => {
+        enteredExec(); await execGate; return runtime.startPersistentExec(options);
+      } };
+    };
+    const beforeExec = launches.length;
+    const pendingExec = callExternalNodeTool(alpha, lateExec, 'docker-ready', 'exec', { command: 'printf never', timeout: 1 });
+    try {
+      await Promise.race([execHeld, new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Docker exec launch gate was not reached')), 5_000))]);
+      releaseExternalNodeContext(alpha, lateExec);
+      resumeExec();
+      await assert.rejects(pendingExec, /before process launch/);
+      assert.equal(launches.length, beforeExec);
+    } finally { (provider as any).getExecRuntime = originalGetRuntime; resumeExec(); await pendingExec.catch(() => {}); }
+    const oldGeneration = await callExternalNodeTool(alpha, first, 'docker-ready', 'exec', {
+      command: 'sleep 3; printf old-generation', timeout: 1,
+    }) as any;
+    assert.equal(oldGeneration.background, true);
+    await provider.destroyNode({ sourceSessionId: 'admin-session', nodeId: 'docker-ready', parameters: {}, context: { agent: 'admin' } });
+    const replacement = await provider.createNode({ sourceSessionId: 'admin-session', nodeId: 'docker-ready', parameters: { worktreePath: repo }, context: { agent: 'admin' } });
+    assert.notEqual((replacement.details as any).artifactDir, artifactDir);
+    const obsolete = await externalExecResult(alpha, first, oldGeneration.execId) as any;
+    assert.equal(obsolete.state, 'unavailable', 'running result cannot switch to a newly created Docker generation');
+    for (let i = 0; i < 20; i++) {
+      const record = await externalExecResult(alpha, first, oldGeneration.execId) as any;
+      if (record.state === 'completed') { assert.match(record.output, /old-generation/); break; }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  } finally {
+    releaseExternalNodeContext(alpha, first); releaseExternalNodeContext(alpha, second); releaseExternalNodeContext(beta, other);
+    (nodeProviderRegistry as any).listNodes = original.listNodes;
+    (nodeProviderRegistry as any).resolveNode = original.resolveNode;
+    (nodeProviderRegistry as any).invokeTool = original.invokeTool;
+    setToolAuthorizationPolicyForTests(undefined);
+    await provider.destroyNode({ sourceSessionId: 'admin-session', nodeId: 'docker-ready', parameters: {}, context: { agent: 'admin' } }).catch(() => {});
+    await fs.remove(dir);
+  }
 });
 
 test('resident Docker exec times out to background, delivers exact event, survives destroy truthfully, and recreates a new generation', async () => {

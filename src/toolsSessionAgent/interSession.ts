@@ -28,7 +28,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   await requireNotIsolated(ctx, 'create_child_session');
   validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
-  const { agentName, suffix, fork = false, message, node } = normalizedArgs;
+  const { agentName, suffix, displayName, fork = false, message, node } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
   const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
@@ -41,7 +41,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 
   const currentSessionId = ctx.sessionId;
   const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { agentName, node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
+    { agentName, displayName, node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
     if (afterSend === 'wait' || afterSend === 'finish') {
@@ -235,34 +235,14 @@ export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
   }
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
-  const turnReplyMetadata = ctx?.channelReplyMetadata;
-  const sendOptions = {
-    caption,
-    ...(turnReplyMetadata?.qqbotMessageId && turnReplyMetadata.qqbotChannelId && turnReplyMetadata.qqbotConversationId
-      ? {
-        qqbotMessageId: turnReplyMetadata.qqbotMessageId,
-        qqbotChannelId: turnReplyMetadata.qqbotChannelId,
-        qqbotConversationId: turnReplyMetadata.qqbotConversationId,
-      }
-      : {}),
-  };
+  const sendOptions = { caption };
 
   if (normalizedChannelTargetId) {
     if (normalizedChannelTargetId.startsWith('webui:')) {
       return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
     }
 
-    const matchesTurnSource = Boolean(
-      turnReplyMetadata?.qqbotMessageId
-      && turnReplyMetadata.qqbotChannelId
-      && turnReplyMetadata.qqbotConversationId
-      && normalizedChannelTargetId === `${turnReplyMetadata.qqbotChannelId}:${turnReplyMetadata.qqbotConversationId}`,
-    );
-    await sessionManager.sendFileToChannelTargetId(
-      normalizedChannelTargetId,
-      file,
-      matchesTurnSource ? sendOptions : { caption },
-    );
+    await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, sendOptions);
     return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 

@@ -15,12 +15,13 @@ import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
-import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
+import { findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import { useChatPreferences } from './chatPreferences'
+import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 
 type AppView = 'session' | 'agents' | 'setup'
 
@@ -65,7 +66,6 @@ const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
-const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
 type OriginalFaviconLink = {
@@ -354,13 +354,9 @@ function setTabHash(tabId?: string | null) {
   window.location.hash = `${TAB_HASH_PREFIX}${encodeURIComponent(tabId)}`
 }
 
-function makePreviewChatTabId() {
-  return createWorkbenchId('chatpreview')
-}
-
 function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean }): WorkbenchTab {
   return {
-    id: options?.preview ? makePreviewChatTabId() : getPersistentChatTabId(sessionId),
+    id: getPersistentChatTabId(sessionId),
     type: 'chat',
     sessionId,
     title,
@@ -475,6 +471,7 @@ function App() {
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const currentRouteTabIdRef = useRef<string | null>(route.tabId)
   const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
+  const movedOutTerminalIdsRef = useRef<Set<string>>(new Set())
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -685,19 +682,6 @@ function App() {
   }, [allTabs, sessions])
 
   useEffect(() => {
-    const legacyPreview = allTabs.find((tab) => isPreviewChatTab(tab) && tab.id === LEGACY_PREVIEW_CHAT_TAB_ID)
-    if (!legacyPreview) return
-
-    const nextId = makePreviewChatTabId()
-    replaceTabId(legacyPreview.id, { ...legacyPreview, id: nextId })
-
-    if (route.tabId === legacyPreview.id) {
-      setRoute({ view: 'tab', tabId: nextId })
-      setTabHash(nextId)
-    }
-  }, [allTabs, route, replaceTabId])
-
-  useEffect(() => {
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
     const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
     const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
@@ -729,6 +713,9 @@ function App() {
     })
 
     activeTerminals.forEach((terminal) => {
+      if (movedOutTerminalIdsRef.current.has(terminal.id)) {
+        return
+      }
       const existing = terminalTabs.find((tab) => tab.terminalId === terminal.id)
       if (existing) {
         return
@@ -946,10 +933,12 @@ function App() {
 
     const previewTab = allTabs.find(isPreviewChatTab)
     if (previewTab) {
-      updateTab(previewTab.id, (current) => isPreviewChatTab(current)
-        ? { ...current, sessionId, title, preview: true }
-        : current)
-      navigateToTab(previewTab.id, origin)
+      const nextTab = makeChatTab(sessionId, title, { preview: true })
+      if (currentRouteTabIdRef.current === previewTab.id) {
+        closingRouteTabIdsRef.current.add(previewTab.id)
+      }
+      replaceTabId(previewTab.id, nextTab)
+      navigateToTab(nextTab.id, origin)
       return
     }
 
@@ -958,31 +947,6 @@ function App() {
     navigateToTab(tab.id, origin)
   }
   notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
-
-  const openKeptChatTab = (sessionId: string) => {
-    const title = sessionTitle(sessionId)
-    const existingTab = findPreferredChatTab(sessionId)
-
-    if (existingTab) {
-      if (existingTab.title !== title) {
-        updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
-      }
-      navigateToTab(existingTab.id)
-      return
-    }
-
-    const previewTab = allTabs.find((tab) => isPreviewChatTab(tab) && tab.sessionId === sessionId)
-    if (previewTab) {
-      const persistentTab = makeChatTab(sessionId, title)
-      replaceTabId(previewTab.id, persistentTab)
-      navigateToTab(persistentTab.id)
-      return
-    }
-
-    const tab = makeChatTab(sessionId, title)
-    upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
-  }
 
   const getPaneHeight = (paneId: string): number => {
     const paneElement = document.querySelector<HTMLElement>(`[data-pane-id="${paneId}"]`)
@@ -1116,44 +1080,84 @@ function App() {
     }
   }
 
-  const keepWorkbenchTab = (tabId: string) => {
+  const moveWorkbenchTabToNewWindow = (tabId: string) => {
     const targetTab = tabsById[tabId]
-    if (!targetTab || !isPreviewChatTab(targetTab)) {
-      return
+    if (!targetTab) return
+    if (targetTab.type === 'terminal' && !targetTab.terminalId) return
+
+    if (targetTab.type === 'setup' && !window.confirm('Unsaved changes will be lost. Open Setup in a new window?')) return
+    if (targetTab.type === 'agents' && !window.confirm('Unsaved changes will be lost. Open Agents in a new window?')) return
+
+    let url: URL
+    if (targetTab.type === 'vscode') {
+      url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: codeNodeId, path: codePath })
+    } else {
+      const popupTarget: FoxwarmPopupTarget = targetTab.type === 'chat'
+        ? { kind: 'chat', sessionId: targetTab.sessionId, title: targetTab.title }
+        : targetTab.type === 'terminal'
+          ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
+          : targetTab.type === 'agents'
+            ? { kind: 'agents' }
+            : { kind: 'setup' }
+      url = makeFoxwarmPopupUrl(window.location.href, popupTarget)
     }
 
-    const persistentId = getPersistentChatTabId(targetTab.sessionId)
-    const existingTab = tabsById[persistentId]
-
-    if (existingTab) {
-      removeTab(tabId)
-      navigateToTab(existingTab.id)
+    const popup = window.open(url.toString(), '_blank', 'popup')
+    if (!popup) {
+      window.alert('The browser blocked the new window. Allow pop-ups and try again.')
       return
     }
+    try { popup.opener = null } catch {}
 
-    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
-    replaceTabId(tabId, persistentTab)
-    navigateToTab(persistentTab.id)
+    const stateBeforeMove = useWorkbenchStore.getState()
+    const paneBeforeMove = findPaneContainingTab(stateBeforeMove.root, tabId)
+    const wasFocusedActiveTab = paneBeforeMove?.activeTabId === tabId
+      && stateBeforeMove.focusedPaneId === paneBeforeMove.id
+
+    if (targetTab.type === 'vscode') {
+      setVscodeFrameStarted(false)
+    }
+    if (targetTab.type === 'terminal' && targetTab.terminalId) {
+      movedOutTerminalIdsRef.current.add(targetTab.terminalId)
+    }
+    if (currentRouteTabIdRef.current === tabId) {
+      closingRouteTabIdsRef.current.add(tabId)
+    }
+    removeTab(tabId)
+
+    if (route.tabId === tabId || wasFocusedActiveTab) {
+      const stateAfterMove = useWorkbenchStore.getState()
+      const focusedPaneAfterMove = stateAfterMove.focusedPaneId
+        ? findPaneNode(stateAfterMove.root, stateAfterMove.focusedPaneId)
+        : null
+      const nextTabId = focusedPaneAfterMove?.activeTabId
+        || getPaneNodes(stateAfterMove.root)[0]?.activeTabId
+        || null
+      if (nextTabId) {
+        navigateToTab(nextTabId)
+      } else {
+        pendingRouteTabIdRef.current = null
+        currentRouteTabIdRef.current = null
+        localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
+        setRoute({ view: 'tab', tabId: null })
+        setTabHash(null)
+      }
+    }
+  }
+
+  const keepWorkbenchTab = (tabId: string) => {
+    if (tabsById[tabId] && isPreviewChatTab(tabsById[tabId])) {
+      promotePreviewTab(tabId)
+    }
   }
 
   const promotePreviewTab = (tabId: string): string | null => {
     const targetTab = tabsById[tabId]
     if (!targetTab) return null
-
-    if (!isPreviewChatTab(targetTab)) {
-      return tabId
+    if (isPreviewChatTab(targetTab)) {
+      updateTab(tabId, (current) => isPreviewChatTab(current) ? { ...current, preview: false } : current)
     }
-
-    const persistentId = getPersistentChatTabId(targetTab.sessionId)
-    const existingTab = tabsById[persistentId]
-    if (existingTab) {
-      removeTab(tabId)
-      return existingTab.id
-    }
-
-    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
-    replaceTabId(tabId, persistentTab)
-    return persistentTab.id
+    return tabId
   }
 
   const closePaneTabsByPredicate = async (paneId: string, predicate: (tab: WorkbenchTab) => boolean) => {
@@ -1193,13 +1197,6 @@ function App() {
       } else {
         navigateToTab(nextTabId)
       }
-    }
-  }
-
-  const handleChatDraftEdited = (tabId: string) => {
-    const targetTab = tabsById[tabId]
-    if (targetTab && isPreviewChatTab(targetTab)) {
-      keepWorkbenchTab(tabId)
     }
   }
 
@@ -1384,7 +1381,7 @@ function App() {
       return
     }
 
-    openPersistentChatTab(sessionId)
+    openChatTab(sessionId)
   }, [route, tabsById, allTabs, sessions])
 
   useEffect(() => {
@@ -1441,7 +1438,6 @@ function App() {
           onGroupToolsChange={setGroupTools}
           onShowUsageBadgeChange={setShowUsageBadge}
           onShowUserMessageMetadataChange={setShowUserMessageMetadata}
-          onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
     }
@@ -1565,12 +1561,18 @@ function App() {
         emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
         showPaneControls={!isMobile}
+        hideTabStrip={paneIds.length === 1 && paneTabs.length === 1}
         canClosePane={paneIds.length > 1}
         content={content}
         onFocusPane={handleFocus}
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
+        onMoveTabToNewWindow={moveWorkbenchTabToNewWindow}
+        canMoveTabToNewWindow={(tabId) => {
+          const tab = tabsById[tabId]
+          return !!tab && (tab.type !== 'terminal' || !!tab.terminalId)
+        }}
         onCloseOtherTabs={(tabId) => { void closePaneTabsByPredicate(paneId, (tab) => tab.id !== tabId) }}
         onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
         onSplitRight={() => handleSplit('right')}
@@ -1611,12 +1613,6 @@ function App() {
 
     if (!overId || !activeData) {
       return
-    }
-
-    const applyTabDrop = (targetPaneId: string, options?: { beforeTabId?: string | null }) => {
-      moveTabToPane(activeId, targetPaneId, { beforeTabId: options?.beforeTabId || null, activate: true })
-      navigateToTab(activeId)
-      return activeId
     }
 
     if (activeData.type === 'session') {
@@ -1686,40 +1682,51 @@ function App() {
       return
     }
 
+    const state = useWorkbenchStore.getState()
+    const sourcePane = findPaneContainingTab(state.root, activeId)
+    if (!sourcePane || !state.tabsById[activeId]) return
+
+    const applyTabDrop = (targetPaneId: string, beforeTabId?: string) => {
+      const tabId = promotePreviewTab(activeId)
+      if (!tabId) return
+      moveTabToPane(tabId, targetPaneId, { beforeTabId, activate: true })
+      navigateToTab(tabId)
+    }
+
     if (overData?.type === 'tab' && overData.paneId) {
-      if (activeData.paneId === overData.paneId) {
-        if (activeId !== overId) {
-          reorderTabs(overData.paneId, activeId, overId)
+      const targetPane = findPaneNode(state.root, overData.paneId)
+      if (!targetPane || !targetPane.tabIds.includes(overId)) return
+      if (sourcePane.id === targetPane.id) {
+        const from = targetPane.tabIds.indexOf(activeId)
+        const to = targetPane.tabIds.indexOf(overId)
+        if (from < 0 || from === to) return
+        const tabId = promotePreviewTab(activeId)
+        if (tabId) {
+          reorderTabs(targetPane.id, tabId, overId)
         }
         return
       }
 
-      applyTabDrop(overData.paneId, { beforeTabId: overId })
+      applyTabDrop(targetPane.id, overId)
       return
     }
 
     if (overData?.type === 'pane-center' && overData.paneId) {
-      if (activeData.paneId !== overData.paneId) {
-        moveTabToPane(activeId, overData.paneId, { activate: true })
-        navigateToTab(activeId)
-      }
+      if (sourcePane.id !== overData.paneId && findPaneNode(state.root, overData.paneId)) applyTabDrop(overData.paneId)
       return
     }
 
     if (overData?.type === 'tab-row' && overData.paneId) {
-      if (activeData.paneId === overData.paneId) {
-        return
-      }
-      applyTabDrop(overData.paneId)
+      if (sourcePane.id !== overData.paneId && findPaneNode(state.root, overData.paneId)) applyTabDrop(overData.paneId)
       return
     }
 
     if (overData?.type === 'pane-edge' && overData.paneId && overData.edge) {
-      if (overData.edge === 'top') {
-        return
-      }
-      dockTabToPaneEdge(activeId, overData.paneId, overData.edge)
-      navigateToTab(activeId)
+      if (overData.edge === 'top' || !findPaneNode(state.root, overData.paneId)) return
+      const tabId = promotePreviewTab(activeId)
+      if (!tabId) return
+      dockTabToPaneEdge(tabId, overData.paneId, overData.edge)
+      navigateToTab(tabId)
     }
   }
 
@@ -1791,7 +1798,7 @@ function App() {
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
           onSelectSession={openChatTab}
-          onKeepSession={openKeptChatTab}
+          onKeepSession={openPersistentChatTab}
           onSelectArchitecture={openAgentsView}
           onSelectSetup={openSetupView}
           codePath={codePath}
@@ -1838,7 +1845,7 @@ function App() {
             currentView={currentView}
             currentSessionRecord={currentContextSessionRecord}
             onSelectSession={openChatTab}
-            onKeepSession={openKeptChatTab}
+            onKeepSession={openPersistentChatTab}
             onSelectArchitecture={openAgentsView}
             onSelectSetup={openSetupView}
             codePath={codePath}

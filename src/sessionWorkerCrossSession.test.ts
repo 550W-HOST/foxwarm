@@ -8,7 +8,6 @@ import { createMainManagementToolServiceHandler, mainManagementToolServiceDescri
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -44,13 +43,11 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
   const childId = `${parentId}_mp-child`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-cross-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_CROSS_SESSION: 'create-child,reply,query' },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   const parentStatePath = path.join(root, 'state', 'sessions', `${parentId}.json`);
   await fs.outputJson(parentStatePath, serializeSessionHistoryPayload(baseSession(parentId)));
   // Production Main and Worker share this authority path; mirror the split test
@@ -193,6 +190,11 @@ test('main-management facade forks read-only, rejects stale generations, and val
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /unknown key/.test(error.message),
     );
     await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'bad-name', displayName: null } }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /displayName must be a string/.test(error.message),
+    );
+    assert.equal(sessionManager.getAllSessions().has(`${parentId}_bad-name`), false);
+    await assert.rejects(
       () => client.call('execute', { sourceSessionId: parentId, operation: 'create_session', args: { agentName: 'main', sessionName: 'old-effort', effort: 'high' } }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /forceModel/.test(error.message),
     );
@@ -216,10 +218,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const inheritedResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { suffix: 'mp-new', fork: false, confirmation: TEST_CONFIRMATION },
+      args: { suffix: 'mp-new', displayName: 'Worker child', fork: false, confirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(inheritedResult?.result).includes(inheritedChildId));
     const inheritedChild = await sessionManager.getSession(inheritedChildId);
+    assert.equal(inheritedChild.displayName, 'Worker child');
+    assert.equal(sessionCatalogStore.get(inheritedChildId)?.displayName, 'Worker child');
     assert.equal(inheritedChild.model, undefined);
     assert.equal(inheritedChild.effort, undefined);
     assert.equal(inheritedChild.childModelDefault, undefined);
@@ -242,10 +246,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
     const crossAgentResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { agentName: targetAgent, suffix: 'worker-child', fork: false, confirmation: TEST_CONFIRMATION },
+      args: { agentName: targetAgent, suffix: 'worker-child', displayName: 'Across agents', fork: false, confirmation: TEST_CONFIRMATION },
     });
     assert.ok(String(crossAgentResult?.result).includes(targetChildId));
     const targetChild = await sessionManager.getSession(targetChildId);
+    assert.equal(targetChild.displayName, 'Across agents');
+    assert.equal(sessionCatalogStore.get(targetChildId)?.displayName, 'Across agents');
     assert.equal(targetChild.agent, targetAgent);
     assert.equal(targetChild.parentSessionId, parentId);
     assert.match(targetChild.persistentMemorySnapshot, /WORKER_TARGET_MEMORY/);
@@ -266,10 +272,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
 
     // fork=true derives from the authority through a strictly read-only detached read.
     const forkResult: any = await client.call('execute',
-      { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-fork', fork: true, confirmation: TEST_CONFIRMATION } });
+      { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-fork', displayName: 'Worker fork', fork: true, confirmation: TEST_CONFIRMATION } });
     assert.ok(String(forkResult?.result).includes(forkChildId));
     const parentHistoryLength = (await sessionManager.getSessionMessages(parentId, 0, 1000)).length;
     const forked = await sessionManager.getSession(forkChildId);
+    assert.equal(forked.displayName, 'Worker fork');
+    assert.equal(sessionCatalogStore.get(forkChildId)?.displayName, 'Worker fork');
     assert.ok(forked.history.length >= parentHistoryLength, 'the fork inherits the authority history');
     assert.ok(JSON.stringify(forked.history.slice(0, parentHistoryLength)).includes('fork parent message one')
       && JSON.stringify(forked.history.slice(0, parentHistoryLength)).includes('fork parent message two'),
@@ -305,7 +313,6 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   const approvedNodeId = `mc-node-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-main-tools-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(root, 'nodes.json')));
   const pending = await createPendingPairing({ requestedName: 'worker-fixture', nodeType: 'cli', capabilities: { tools: [] } });
   const calls = [
@@ -321,9 +328,8 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_MAIN_TOOLS: JSON.stringify(calls) },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => sessionManager.getAllSessions().has(id));
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, id => sessionManager.getAllSessions().has(id));
   const sourcePath = path.join(root, 'state', 'sessions', `${sourceId}.json`);
   const originalBootstrap = (nodeTools as any).tool_node_bootstrap_info;
   (nodeTools as any).tool_node_bootstrap_info = async () => ({ kind: 'disposable-bootstrap-fixture' });

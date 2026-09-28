@@ -1,6 +1,6 @@
 # Unit: webui-workbench
 
-Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs
+Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs
 
 ## Purpose
 
@@ -75,10 +75,13 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - `normalizeLayoutNode` collapses single-child splits and deduplicates tab IDs on every tree mutation.
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
+- A pane with exactly one tab hides its split and close-pane toolbar buttons. When it is also the only pane, the entire tab strip is omitted without leaving header space; content and pane drop zones remain mounted. Other panes retain their tab strips, and empty panes retain their existing controls.
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.
+- Context menus also expose `Move to new window` for every tab type. A terminal draft keeps the item disabled until it has a backend terminal ID. App owns popup/confirmation/route behavior and removes the tab through the ordinary layout-only store action without invoking its separate resource-close lifecycle.
 - Bulk close operations still run each tab's ordinary resource and component close lifecycle. `Close others` preserves its target tab, while `Close all` may leave the pane empty and a forced Setup tab remains protected. Route fencing and final publication are canonical in [D-webui-app-route-close](./webui-app.md#d-webui-app-route-close).
 - Tab-level pinning has been removed. Persisted v4 and migrated v3 records may still contain a legacy `pinned` key; normalization accepts the record, strips that key, and future writes preserve the existing tab order in one row.
 - Persisted state normalization intentionally drops old `workspace` and `file` tab records; preserves current `vscode`, `agents`, and `setup` tabs (normalizing the Code title); and prunes panes that only referenced removed tab types.
+- Chat previews use the same `chat:<sessionId>` ID as kept tabs; `preview` is a presentation/reuse flag, not a separate tab identity. Persisted old previews whose ID does not name their Session (including legacy random IDs) are discarded along with their layout references. Current canonical previews and kept tabs survive reload; unrelated tabs remain intact.
 
 ## Integration
 

@@ -69,6 +69,30 @@ const openaiWebSearchConfig = {
   description: 'Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers.',
 }
 
+const openaiImageGenerationOptions = {
+  type: 'object',
+  additionalProperties: true,
+  description: 'Opt-in OpenAI Responses hosted image generation settings. Ignored by non-Responses providers.',
+  properties: {
+    enabled: { type: 'boolean', description: 'Enable the hosted image_generation tool for eligible Responses requests.' },
+    model: { type: 'string', minLength: 1, description: 'Optional hosted image model override. Omitted uses the provider default.' },
+    action: { enum: ['auto', 'generate', 'edit'], description: 'Hosted image action. Defaults to auto.' },
+    size: { type: 'string', minLength: 1, description: 'Requested output size for the hosted image model.' },
+    quality: { enum: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Requested output quality.' },
+    background: { enum: ['auto', 'opaque', 'transparent'], description: 'Requested output background.' },
+    outputFormat: { enum: ['png', 'jpeg', 'webp'], description: 'Requested output image format.' },
+    outputCompression: { type: 'integer', minimum: 0, maximum: 100, description: 'Output compression percentage where the provider supports it.' },
+  },
+}
+
+const openaiImageGenerationConfig = {
+  oneOf: [
+    { type: 'boolean' },
+    openaiImageGenerationOptions,
+  ],
+  description: 'Opt-in OpenAI Responses hosted image generation settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers.',
+}
+
 const modelEffortConfig = {
   type: 'object',
   additionalProperties: true,
@@ -89,6 +113,7 @@ const modelEffortConfig = {
 }
 
 const modelOverrideProperties = {
+  streamContentInactivityTimeoutMs: { type: 'integer', minimum: 1, maximum: 2147483647, default: 60000, description: 'Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000.' },
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   effort: modelEffortConfig,
   historyReasoningField: {
@@ -98,6 +123,7 @@ const modelOverrideProperties = {
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
   webSearch: openaiWebSearchConfig,
+  imageGeneration: openaiImageGenerationConfig,
 }
 
 const modelItem = {
@@ -141,6 +167,7 @@ const providerObjectEntry = {
       ],
     },
     contextLimit: modelOverrideProperties.contextLimit,
+    streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
@@ -149,6 +176,7 @@ const providerObjectEntry = {
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
     webSearch: modelOverrideProperties.webSearch,
+    imageGeneration: modelOverrideProperties.imageGeneration,
     targets: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true, description: 'Concrete model keys used by a virtual provider.' },
     failureThreshold: { ...positiveInteger, description: 'Consecutive failures before a non-final failover target cools down.' },
     cooldownMs: { ...positiveInteger, description: 'Failover cooldown duration in milliseconds.' },
@@ -159,7 +187,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -167,7 +195,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -239,71 +267,50 @@ const guestAgent = {
   },
 }
 
-const channelEntry = {
-  type: 'object',
-  additionalProperties: true,
-  properties: {
-    type: {
-      anyOf: [
-        { enum: ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'] },
-        { type: 'string' },
-      ],
-      description: 'Known managed channel type or a custom channel type.',
-    },
-    enabled: { type: 'boolean' },
-    channelProgress: {
-      oneOf: [
-        { const: false },
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['intervalMs'],
-          properties: {
-            intervalMs: { type: 'integer', minimum: 30000, maximum: 1800000 },
-          },
+const channelCommonProperties = {
+  type: {
+    anyOf: [
+      { enum: ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'] },
+      { type: 'string' },
+    ],
+    description: 'Known managed channel type or a custom channel type.',
+  },
+  enabled: { type: 'boolean' },
+  channelProgress: {
+    oneOf: [
+      { const: false },
+      {
+        type: 'object',
+        additionalProperties: false,
+        required: ['intervalMs'],
+        properties: {
+          intervalMs: { type: 'integer', minimum: 30000, maximum: 1800000 },
         },
-      ],
-      description: 'Best-effort ordinary-text tool progress. Omission or false disables it.',
-    },
-    appId: { type: 'string' },
-    clientSecret: { type: 'string' },
-    requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
-    groupContextLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Prior QQ group messages retained as untrusted context; defaults to 10.' },
-    groupBatchWindowMs: {
-      anyOf: [
-        { const: 0 },
-        { type: 'integer', minimum: 250, maximum: 30000 },
-      ],
-      description: 'Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching.',
-    },
-    media: {
-      type: 'object',
-      additionalProperties: true,
-      properties: {
-        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 20971520, description: 'Safe inline-image threshold; larger images fall back to generic files.' },
-        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200, description: 'Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB.' },
-        maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
-        maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
       },
-    },
-    allowedUsers: { type: 'array', items: { type: 'string' } },
-    guestAgent,
+    ],
+    description: 'Best-effort ordinary-text tool progress. Omission or false disables it.',
+  },
+  allowedUsers: { type: 'array', items: { type: 'string' } },
+  guestAgent,
+}
+
+const channelPropertiesByType = {
+  telegram: {
     botToken: { type: 'string' },
     mainAttachUser: { type: 'string' },
+  },
+  matrix: {
     homeserver: { type: 'string' },
     accessToken: { type: 'string' },
     botUserId: { type: 'string' },
+  },
+  wework: {
     webhookUrl: { type: 'string' },
     token: { type: 'string' },
     encodingAESKey: { type: 'string' },
     listenPort: { type: 'integer', minimum: 1, maximum: 65535 },
     listenPath: { type: 'string' },
     selfName: { type: 'string' },
-    baseUrl: { type: 'string' },
-    routeTag: { type: 'string' },
-    allowAllUsers: { type: 'boolean' },
-    longPollTimeoutMs: { type: 'integer', minimum: 1 },
-    loginBotType: { type: 'string' },
     aibot: {
       type: 'object',
       additionalProperties: true,
@@ -325,7 +332,74 @@ const channelEntry = {
       },
     },
   },
+  weixin: {
+    baseUrl: { type: 'string' },
+    token: { type: 'string' },
+    routeTag: { type: 'string' },
+    allowAllUsers: { type: 'boolean' },
+    longPollTimeoutMs: { type: 'integer', minimum: 1 },
+    loginBotType: { type: 'string' },
+  },
+  qqbot: {
+    appId: { type: 'string' },
+    clientSecret: { type: 'string' },
+    requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
+    groupContextLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Prior QQ group messages retained as untrusted context; defaults to 10.' },
+    groupBatchWindowMs: {
+      anyOf: [
+        { const: 0 },
+        { type: 'integer', minimum: 250, maximum: 30000 },
+      ],
+      description: 'Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching.',
+    },
+    allowAllUsers: { type: 'boolean' },
+    media: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 20971520, description: 'Safe inline-image threshold; larger images fall back to generic files.' },
+        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200, description: 'Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB.' },
+        maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
+      },
+    },
+  },
+} as const
+
+type KnownChannelType = keyof typeof channelPropertiesByType
+
+const channelTypeCondition = (channelType: KnownChannelType) => ({
+  required: ['type'],
+  properties: {
+    type: { type: 'string', pattern: `^\\s*${channelType}\\s*$` },
+  },
+})
+
+const channelEntry = {
+  type: 'object',
+  additionalProperties: true,
+  properties: channelCommonProperties,
+  allOf: (Object.keys(channelPropertiesByType) as KnownChannelType[]).map((channelType) => ({
+    if: channelTypeCondition(channelType),
+    then: { properties: channelPropertiesByType[channelType] },
+  })),
 }
+
+const channelEntryWithKeyFallback = (channelType: KnownChannelType) => ({
+  ...channelEntry,
+  allOf: [
+    ...channelEntry.allOf,
+    {
+      if: {
+        anyOf: [
+          { not: { required: ['type'] } },
+          { required: ['type'], properties: { type: { type: 'string', pattern: '^\\s*$' } } },
+        ],
+      },
+      then: { properties: channelPropertiesByType[channelType] },
+    },
+  ],
+})
 
 export const APP_CONFIG_SCHEMA = {
   $id: 'https://foxwarm.dev/schemas/app-config.json',
@@ -447,6 +521,7 @@ export const APP_CONFIG_SCHEMA = {
         compactBlockForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         maxOutput: { type: 'integer', minimum: 1, default: 32768, description: 'Maximum provider output tokens. Defaults to 32768.' },
+        providerImageOutputFormat: { enum: ['webp', 'jpeg'], default: 'webp', description: 'Format for optimized provider-bound images. Transparent pixels use PNG when JPEG is selected.' },
         openaiBaseUrl: { type: 'string' },
         openaiApiKey: { type: 'string' },
         anthropicBaseUrl: { type: 'string' },
@@ -464,6 +539,12 @@ export const APP_CONFIG_SCHEMA = {
     },
     channels: {
       type: 'object',
+      patternProperties: Object.fromEntries(
+        (Object.keys(channelPropertiesByType) as KnownChannelType[]).map((channelType) => [
+          `^${channelType}$`,
+          channelEntryWithKeyFallback(channelType),
+        ]),
+      ),
       additionalProperties: channelEntry,
     },
     asrService: {

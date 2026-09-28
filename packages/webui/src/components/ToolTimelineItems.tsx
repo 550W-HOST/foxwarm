@@ -1,6 +1,6 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Code2, Eye, FileJson, Download } from 'lucide-react'
+import { Code2, Eye, FileJson, Download, Timer } from 'lucide-react'
 import {
   IconToggleButton,
   MiniToggleButton,
@@ -15,6 +15,7 @@ import {
   getToolResponseStatus,
   formatCompactObjectPreview,
   renderSystemTextWithSessionLinks,
+  summarizeToolTagCounts,
   parseApplyPatchPreview,
   type FunctionCall,
   type FunctionResponse,
@@ -32,10 +33,20 @@ import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
+import { formatCompactDuration } from '../usageTiming'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
+import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
+
+const getToolInvocationDuration = (timing: FunctionResponse['executionTiming']): number | null => {
+  if (!timing || typeof timing !== 'object'
+    || typeof timing.startedAt !== 'number' || !Number.isFinite(timing.startedAt) || timing.startedAt < 0
+    || typeof timing.completedAt !== 'number' || !Number.isFinite(timing.completedAt) || timing.completedAt < timing.startedAt
+    || typeof timing.durationMs !== 'number' || !Number.isFinite(timing.durationMs) || timing.durationMs < 0) return null
+  return timing.durationMs
+}
 
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
   if (resp.name !== 'send_file') {
@@ -99,29 +110,39 @@ const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
   error: '-ml-2 bg-fw-danger-surface/85 pl-2 pr-0 py-1 dark:bg-fw-danger-surface-strong/20',
 }
 
-export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand }: { items: ToolTagItem[]; onExpand: () => void }) {
+export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand, expanded = false, children }: {
+  items: ToolTagItem[]
+  onExpand: () => void
+  expanded?: boolean
+  children?: ReactNode
+}) {
+  const countedItems = useMemo(() => summarizeToolTagCounts(items), [items])
   return (
     <div
-      className={`foxwarm-tool-card foxwarm-tool-tone-neutral group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
-      onClick={onExpand}
+      data-tool-group-card
+      data-group-expanded={expanded}
+      className={`foxwarm-tool-card foxwarm-tool-group-card foxwarm-tool-tone-neutral group relative min-w-0 max-w-full pl-2 pr-2 text-xs text-fw-text-muted ${expanded ? 'pb-1' : 'cursor-pointer hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer'} ${toolSurfaceToneClasses.neutral}`}
+      onClick={!expanded ? onExpand : undefined}
     >
       <ThreadLineButton
-        expanded={false}
+        expanded={expanded}
         onToggle={onExpand}
-        label="Expand tool group"
+        label={expanded ? 'Collapse tool group' : 'Expand tool group'}
         className={toolThreadLineToneClasses.neutral}
       />
-      <div className={`foxwarm-tool-header flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
-        <ToolTagList items={items} />
+      <div
+        data-tool-header-tone="neutral"
+        className={`foxwarm-tool-header foxwarm-tool-group-header -ml-2 -mr-2 flex min-w-0 items-start gap-2 pr-2 ${toolHeaderToneClasses.neutral} ${expanded ? 'cursor-pointer' : ''}`}
+        onClick={expanded ? (event) => { event.stopPropagation(); onExpand() } : undefined}
+      >
+        <ToolTagList items={countedItems} />
       </div>
+      {expanded && <div className="foxwarm-tool-group-body mt-1 min-w-0 max-w-full pl-2">{children}</div>}
     </div>
   )
 })
 
-
 const getToolDisplayLabel = (call: FunctionCall): string => formatToolLabel(call.name, call.args)
-
-export { getToolResponseStatus }
 
 const getToolPairStatus = (responses: FunctionResponse[], imageParts: MessagePart[] = []): 'success' | 'error' | 'neutral' => {
   if (responses.some((resp) => getToolResponseStatus(resp) === 'error')) {
@@ -139,6 +160,10 @@ const truncateToolResultPreview = (text: string): string => {
   if (text.length <= COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS) return text
   return `${text.slice(0, COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS)}...`
 }
+
+const renderTextResult = (text: string, expanded: boolean): ReactNode => (
+  <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? text : truncateToolResultPreview(text)}</div>
+)
 
 export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
 
@@ -188,6 +213,10 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
 )
 
 const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
+  if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
+    const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
+    return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
+  }
   if (options.partial) {
     const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
@@ -290,6 +319,9 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 }
 
 const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
+  if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
+    return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
+  }
   if (options.partial) {
     return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : JSON.stringify(call.args, null, 2)}</pre>
   }
@@ -433,9 +465,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
       const displayStr = expanded ? output : preview
       return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
     }
-    const raw = formatToolResponseText(resp)
-    const preview = truncateToolResultPreview(raw)
-    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? raw : preview}</div>
+    return renderTextResult(formatToolResponseText(resp), expanded)
   }
 
   const download = getSendFileDownload(call, resp)
@@ -446,44 +476,46 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   }
 
   if (download) {
-    const preview = truncateToolResultPreview(primaryText)
     return (
       <div className="space-y-2">
         <ToolDownloadButton url={download.url} fileName={download.fileName} />
-        {primaryText ? <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div> : null}
+        {primaryText ? renderTextResult(primaryText, expanded) : null}
       </div>
     )
   }
 
   if (primaryText) {
-    const preview = truncateToolResultPreview(primaryText)
-    return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
+    return renderTextResult(primaryText, expanded)
   }
 
   if (getToolResponseStatus(resp) === 'success') {
     return expanded ? <div className="text-fw-text-muted">Completed</div> : <div>Completed</div>
   }
 
-  const respFormatted = formatToolResponseText(resp)
-  const preview = truncateToolResultPreview(respFormatted)
-  return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
+  return renderTextResult(formatToolResponseText(resp), expanded)
 }
 
 const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
+
+const ToolScriptSubCallTag = ({ subCall }: { subCall: ToolScriptSubCall }) => (
+  <>
+    {subCall.status === 'running' && (
+      <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
+    )}
+    <ToolTag
+      name={subCall.name}
+      label={subCall.name}
+      tone={subCall.status === 'failed' ? 'error' : subCall.status === 'completed' ? 'success' : 'neutral'}
+    />
+  </>
+)
 
 const ToolScriptSubCallsTags = memo(function ToolScriptSubCallsTags({ subCalls }: { subCalls: ToolScriptSubCall[] }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1 py-0.5">
       {subCalls.map((sc) => (
         <span key={sc.id} className="inline-flex items-center gap-0.5">
-          {sc.status === 'running' && (
-            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
-          )}
-          <ToolTag
-            name={sc.name}
-            label={sc.name}
-            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
-          />
+          <ToolScriptSubCallTag subCall={sc} />
         </span>
       ))}
     </div>
@@ -495,14 +527,7 @@ const ToolScriptSubCallsList = memo(function ToolScriptSubCallsList({ subCalls }
     <div className="ml-3 border-l-2 border-fw-accent-border dark:border-fw-accent-border pl-2 space-y-0.5 py-1">
       {subCalls.map((sc) => (
         <div key={sc.id} className="flex items-center gap-2 text-xs">
-          {sc.status === 'running' && (
-            <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-fw-accent shrink-0" />
-          )}
-          <ToolTag
-            name={sc.name}
-            label={sc.name}
-            tone={sc.status === 'failed' ? 'error' : sc.status === 'completed' ? 'success' : 'neutral'}
-          />
+          <ToolScriptSubCallTag subCall={sc} />
           {sc.argsSummary && (
             <span className="text-fw-text-muted truncate max-w-[200px]">{sc.argsSummary}</span>
           )}
@@ -555,6 +580,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onOpenCodeFile?: OpenCodeFileHandler
 }) {
   const [expanded, setExpanded] = useState(false)
+  const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
+  const toggle = () => { prepare(); setExpanded(current => !current) }
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && viewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
   const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && viewMode === 'default')
@@ -565,10 +592,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const setToolViewMode = useCallback((mode: ToolViewMode) => {
     if (mode === 'json') {
-      setExpanded(true)
+      if (!expanded) { prepare(); setExpanded(true) }
     }
     setViewMode(mode)
-  }, [])
+  }, [expanded, prepare])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -588,7 +615,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   const pairStatus = getToolPairStatus(responses, imageParts)
   const isError = pairStatus === 'error'
-  const tagTone = pairStatus === 'error' ? 'error' : pairStatus === 'success' ? 'success' : 'neutral'
+  const tagTone = pairStatus
   const partialToolCall = shouldUseStreamingToolPlaceholder({
     modelMessageMeta: modelMessage?.__meta,
     hasCall: !!call,
@@ -596,6 +623,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     imagePartCount: imageParts.length,
   })
   const primaryResponse = responses[0]
+  const invocationDurationMs = getToolInvocationDuration(primaryResponse?.executionTiming)
   const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
   const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
@@ -626,6 +654,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const hasBody = expanded || !!responsePreview || hasToolScriptProgress
 
   const actionButtonsToneClass = `foxwarm-tool-action-buttons-${tagTone}`
+  const resultSeparatorClass = `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}`
 
   const expandedCallContent = call ? (
     <div className={`text-fw-text ${showDiffToggles ? 'relative' : ''}`}>
@@ -640,15 +669,16 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   ) : null
 
   const header = (includeCallPreview = false, includeExpandedCall = false) => (
-    <div className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
+    <div data-tool-header-tone={tagTone} className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
       <div
         className={`foxwarm-tool-header-toggle cursor-pointer ${THREAD_CARD_HEADER_ROW_CLASS}`}
         onClick={(e) => {
           e.stopPropagation()
-          setExpanded(current => !current)
+          toggle()
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
+        {invocationDurationMs !== null && <span data-tool-execution-time className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
         {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
       </div>
       {includeExpandedCall && expandedCallContent && (
@@ -661,15 +691,16 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 
   return (
     <div
+      ref={heightRef}
       className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''}`}
     >
       <ThreadLineButton
         expanded={expanded}
-        onToggle={() => setExpanded(current => !current)}
+        onToggle={toggle}
         label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
-      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100`}>
+      <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity`}>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
         <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
@@ -696,13 +727,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               {hasResponseContent && !hasToolScriptProgress && (
                 <div className="text-fw-text">
                   {responses.length > 0 && responses.map((resp, idx) => (
-                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
+                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? resultSeparatorClass : ''}>
                       {renderToolResponseContent(resp, true, call)}
                     </div>
                   ))}
 
                   {imageParts.length > 0 && (
-                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
+                    <div className={responses.length > 0 ? resultSeparatorClass : ''}>
                       <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call?.id || primaryName}`} />
                     </div>
                   )}
@@ -716,7 +747,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                   {responses.length > 0 && responses.map((resp, idx) => {
                     const content = renderToolScriptResultContent(resp, true)
                     return content ? (
-                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
+                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? resultSeparatorClass : ''}>
                         {content}
                       </div>
                     ) : null

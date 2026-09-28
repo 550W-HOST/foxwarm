@@ -9,7 +9,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Key Exports
 
 - `createExecRuntime(options)` — constructs one isolated application exec runtime around exactly one `PersistentExecManager`
-- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, including process operations, entry-aware liveness/cwd, one-shot reconcile, and shutdown
+- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, including disjoint external-owner default-cwd/artifact callbacks for resident Docker, process operations, entry-aware liveness/cwd, one-shot reconcile, and shutdown
 - `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution

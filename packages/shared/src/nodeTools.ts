@@ -12,11 +12,17 @@ import {
   type FileOperations,
 } from './fileOperations';
 import { PersistentExecManager, resolveExecTimeoutSeconds, type ExecStatus, type RunningExecEntry } from './persistentExec';
+import type { ExternalNodeOwner } from './nodeProtocol';
 import { nativeProcessOperations } from './processOperations';
 
 export interface NodeToolContext {
   sessionId?: string;
   session?: { agent?: string; cwd?: string; currentNode?: string };
+  externalOwner?: ExternalNodeOwner;
+  externalExecManager?: PersistentExecManager;
+  externalCwd?: string;
+  onExecBackground?: (execId: string) => void;
+  onExecForeground?: (execId: string, output: string, cwd: string) => void;
   runtimeNodeId?: string;
   backgroundExecId?: string;
   completionCapability?: string;
@@ -231,25 +237,29 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   if (!command.trim()) throw new Error('exec requires command');
   const resolvedTimeout = resolveExecTimeoutSeconds(args.timeout);
   const timeoutSeconds = resolvedTimeout.effectiveSeconds;
-  const agentName = ctx.session?.agent || 'main';
+  if (ctx.externalOwner && (ctx.sessionId || ctx.session?.agent || !ctx.externalExecManager)) {
+    throw new Error('External exec requires a real external owner and namespace.');
+  }
+  const agentName = ctx.externalOwner ? undefined : (ctx.session?.agent || 'main');
   if (ctx.sessionId && ctx.queueSystemEvent) sessionEventDispatchers.set(ctx.sessionId, ctx.queueSystemEvent);
-  const manager = getExecManager(agentName);
+  const manager = ctx.externalOwner ? ctx.externalExecManager! : getExecManager(agentName!);
   await manager.initialize();
   const entry = await manager.startPersistentExec({
     execId: ctx.backgroundExecId,
     command,
-    sessionId: ctx.sessionId,
-    agentName,
+    ...(ctx.externalOwner ? { externalOwner: ctx.externalOwner } : { sessionId: ctx.sessionId, agentName }),
     nodeId: ctx.runtimeNodeId || ctx.session?.currentNode || process.env.FOXWARM_NODE_ID || 'remote-node',
     cwd: args.cwd,
-    sessionCwd: ctx.session?.cwd,
+    sessionCwd: ctx.externalOwner ? ctx.externalCwd : ctx.session?.cwd,
     completionCapability: ctx.completionCapability,
     onProcessStarted: ctx.onExecStarted,
   });
   const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000);
   if (status) {
     try {
-      return await manager.buildForegroundExecResult(entry, status, resolvedTimeout.warning);
+      const output = await manager.buildForegroundExecResult(entry, status, resolvedTimeout.warning);
+      if (ctx.onExecForeground) ctx.onExecForeground(entry.id, output, await manager.getResolvedExecCwd(entry));
+      return output;
     } finally {
       await manager.finalizeForegroundExec(entry.id);
     }
@@ -257,6 +267,7 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   if (ctx.registerBackgroundExec && entry.completionCapability) {
     await ctx.registerBackgroundExec({ execId: entry.id, completionCapability: entry.completionCapability });
   }
+  ctx.onExecBackground?.(entry.id);
   await manager.markExecForBackgroundNotification(entry.id);
   return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
 }

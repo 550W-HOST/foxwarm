@@ -18,7 +18,7 @@ Defines the pure cross-package core Node-protocol compatibility contract used by
 
 ## Behavior
 
-Malformed ranges reject; omitted ranges become legacy generation 1; disjoint ranges never silently select a fallback. The current range is 1-2: current peers negotiate 2, while either current/legacy direction negotiates 1. Negotiation returns data rather than performing transport effects so registration, persistence, provider routing, CLI validation, WebUI status, and tests consume one implementation.
+Malformed ranges reject; omitted ranges become legacy generation 1; disjoint ranges never silently select a fallback. The current range is 1-3: current peers negotiate 3, a previous-generation 1-2 Node negotiates 2, and either current/legacy direction negotiates 1. Generation 3 permits an explicit authenticated external execution owner only when the connected Node also advertises `externalToolOwner:1`; internal v1/v2 request shapes remain unchanged. Negotiation returns data rather than performing transport effects so registration, persistence, provider routing, CLI validation, WebUI status, and tests consume one implementation.
 
 The protocol covers the coupled WebSocket execution contract, including request/result envelopes, execution IDs, session events, file transfer, and backend-service framing. It is separate from per-tool schemas and individual backend-service version numbers.
 

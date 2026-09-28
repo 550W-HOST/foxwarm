@@ -373,7 +373,7 @@ test('unset effort remains unset for local new/fork children and a virtual route
   }
 });
 
-test('child current settings use distinct parent child defaults while the child future defaults follow its current pair', async () => {
+test('child current settings consume distinct parent child defaults without copying the policy pair', async () => {
   await sessionManager.loadSessions();
   const { primary, secondary } = getTestModels();
   const parentSessionId = makeId('child_distinct_defaults_parent');
@@ -396,6 +396,7 @@ test('child current settings use distinct parent child defaults while the child 
       assert.equal(child.childEffortDefault, undefined);
       const presentation = buildSessionModelEffortPresentation(child);
       assert.equal(presentation.effectiveChildModelKey, secondary);
+      assert.equal(presentation.childModelPolicySource, 'follow-parent');
       const childAllowed = presentation.childEffort.allowed;
       assert.equal(
         presentation.childEffort.effective,
@@ -432,7 +433,7 @@ test('create_child_session replaces main leaf for agent-qualified parents', asyn
   }
 });
 
-test('cross-agent fresh children use target identity and memory while preserving caller defaults and parent relation', async () => {
+test('cross-agent fresh children use target identity and memory while consuming caller child settings once', async () => {
   await sessionManager.loadSessions();
   const { primary } = getTestModels();
   const parentSessionId = makeId('cross_agent_parent');
@@ -502,6 +503,120 @@ test('cross-agent fresh children use target identity and memory while preserving
     }
     await sessionManager.setAgentIsolation(targetAgent, undefined).catch(() => {});
     await fs.remove(getAgentDir(targetAgent)).catch(() => {});
+  }
+});
+
+test('new and forked descendants follow the current pair unless their direct parent sets a child policy', async () => {
+  await sessionManager.loadSessions();
+  const { primary, secondary } = getTestModels();
+  assert.notEqual(primary, secondary);
+  const rootId = makeId('policy_subtree_root');
+  const childId = `${rootId}_child`;
+  const newGrandId = `${childId}_newgrand`;
+  const forkGrandId = `${childId}_forkgrand`;
+  const pinnedGrandId = `${childId}_pinned`;
+  const pinnedForkGrandId = `${childId}_pinnedfork`;
+  const overrideId = `${rootId}_override`;
+  const overrideGrandId = `${overrideId}_grand`;
+  const forkOverrideId = `${rootId}_forkoverride`;
+  const forkOverrideGrandId = `${forkOverrideId}_grand`;
+  const unsetId = `${rootId}_unset`;
+  try {
+    const root = await ensureSession(rootId, primary);
+    root.childModelDefault = secondary;
+    root.childEffortDefault = 'max';
+    await sessionManager.saveSession(root.id);
+
+    await sessionManager.createChildSession(rootId, 'child', false, { sourceOverride: root });
+    const child = await sessionManager.getSession(childId);
+    assert.equal(child.model, secondary);
+    assert.equal(child.effort, 'max');
+    assert.equal(child.childModelDefault, undefined);
+    assert.equal(child.childEffortDefault, undefined);
+
+    child.model = primary;
+    child.effort = 'low';
+    await sessionManager.saveSession(childId);
+
+    // Both creation paths consume the direct parent's changed current pair.
+    await sessionManager.createChildSession(childId, 'newgrand', false, { sourceOverride: child });
+    await sessionManager.createChildSession(childId, 'forkgrand', true, { sourceOverride: child });
+    for (const id of [newGrandId, forkGrandId]) {
+      const grand = await sessionManager.getSession(id);
+      assert.equal(grand.model, primary);
+      assert.equal(grand.effort, 'low');
+      assert.equal(grand.childModelDefault, undefined);
+      assert.equal(grand.childEffortDefault, undefined);
+    }
+
+    const grandPresentation = buildSessionModelEffortPresentation(
+      await sessionManager.getSession(newGrandId),
+      undefined,
+      sessionId => sessionManager.getSessionCatalog(sessionId),
+    );
+    assert.deepEqual(
+      grandPresentation.childPolicyChain.map(entry => ({ level: entry.level, supplies: entry.supplies })),
+      [
+        { level: 'session', supplies: true },
+        { level: 'inherited', supplies: false },
+        { level: 'inherited', supplies: false },
+      ],
+    );
+
+    // An explicitly set future policy stays independent even if it initially
+    // equals the current pair; changing the current pair must not erase it.
+    await tool_set_session_child_model({ model: primary, effort: 'low' }, {
+      sessionId: childId,
+      session: child,
+      persistCurrentSession: () => sessionManager.saveSession(childId),
+    });
+    assert.equal(child.childModelDefault, primary);
+    assert.equal(child.childEffortDefault, 'low');
+    child.model = secondary;
+    child.effort = 'max';
+    await sessionManager.saveSession(childId);
+    await sessionManager.createChildSession(childId, 'pinned', false, { sourceOverride: child });
+    await sessionManager.createChildSession(childId, 'pinnedfork', true, { sourceOverride: child });
+    for (const id of [pinnedGrandId, pinnedForkGrandId]) {
+      const pinned = await sessionManager.getSession(id);
+      assert.equal(pinned.model, primary);
+      assert.equal(pinned.effort, 'low');
+      assert.equal(pinned.childModelDefault, undefined);
+      assert.equal(pinned.childEffortDefault, undefined);
+    }
+
+    // A one-time forceModel override changes this child's current pair, not
+    // future descendants back to the root's distinct child policy.
+    for (const [suffix, fork, grandId] of [
+      ['override', false, overrideGrandId],
+      ['forkoverride', true, forkOverrideGrandId],
+    ] as const) {
+      await tool_create_child_session({ suffix, fork, forceModel: { modelId: primary, effort: 'low' } }, { sessionId: rootId, session: root });
+      const overrideIdForPath = `${rootId}_${suffix}`;
+      const overridden = await sessionManager.getSession(overrideIdForPath);
+      assert.equal(overridden.model, primary);
+      assert.equal(overridden.effort, 'low');
+      assert.equal(overridden.childModelDefault, undefined);
+      assert.equal(overridden.childEffortDefault, undefined);
+      await sessionManager.createChildSession(overrideIdForPath, 'grand', false, { sourceOverride: overridden });
+      const grandchild = await sessionManager.getSession(grandId);
+      assert.equal(grandchild.model, primary);
+      assert.equal(grandchild.effort, 'low');
+    }
+
+    // An unset policy keeps following the parent's model and stays unset for the child.
+    delete root.childModelDefault;
+    delete root.childEffortDefault;
+    await sessionManager.saveSession(root.id);
+    await sessionManager.createChildSession(rootId, 'unset', false, { sourceOverride: root });
+    const unsetChild = await sessionManager.getSession(unsetId);
+    assert.equal(unsetChild.model, primary);
+    assert.equal(unsetChild.childModelDefault, undefined);
+    assert.equal(unsetChild.childEffortDefault, undefined);
+  } finally {
+    for (const id of [rootId, childId, newGrandId, forkGrandId, pinnedGrandId, pinnedForkGrandId, overrideId, overrideGrandId, forkOverrideId, forkOverrideGrandId, unsetId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
   }
 });
 

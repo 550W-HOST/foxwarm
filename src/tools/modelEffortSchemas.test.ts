@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { definitions } from './definitions';
 import { normalizeCreateChildSessionArgs, normalizeCreateSessionArgs, normalizeForceModel } from '../toolsSessionAgent/helpers';
 import { resolveModelConfig } from '../config';
+import { addHandoffConfirmationSchema } from '../toolCallControls';
 
 const efforts = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -22,6 +23,9 @@ test('model-facing creation schemas require intentional nested forceModel overri
     assert.deepEqual(properties.forceModel.required, undefined);
   }
   assert.equal((child.parameters.properties as any).agentName.type, 'string');
+  assert.equal((child.parameters.properties as any).displayName.type, 'string');
+  assert.equal((create.parameters.properties as any).displayName.type, 'string');
+  assert.equal(Object.keys(addHandoffConfirmationSchema(child, true).parameters.properties!).at(-1), 'confirmation');
   assert.equal((child.parameters.properties as any).node.type, 'string');
   assert.equal((create.parameters.properties as any).node.type, 'string');
   assert.equal((create.parameters.properties as any).fork, undefined);
@@ -55,6 +59,9 @@ test('forceModel parser is strict, non-mutating, and accepts all supported overr
   const childArgs = { agentName: 'main', suffix: 'child', node: 'child-node', forceModel: { effort: 'low' } };
   const sessionArgs = { agentName: 'main', sessionName: 'session', node: 'session-node', forceModel: {} };
   assert.deepEqual(normalizeCreateChildSessionArgs(childArgs), childArgs);
+  assert.deepEqual(normalizeCreateChildSessionArgs({ suffix: 'child', displayName: '  Kept  ' }), { suffix: 'child', displayName: '  Kept  ' });
+  assert.deepEqual(normalizeCreateChildSessionArgs({ suffix: 'child', displayName: '' }), { suffix: 'child', displayName: '' });
+  assert.throws(() => normalizeCreateChildSessionArgs({ suffix: 'child', displayName: null }), /displayName must be a string/);
   assert.deepEqual(normalizeCreateSessionArgs(sessionArgs), sessionArgs);
   assert.notEqual(normalizeCreateChildSessionArgs(childArgs), childArgs);
   assert.notEqual(normalizeCreateChildSessionArgs(childArgs).forceModel, childArgs.forceModel);

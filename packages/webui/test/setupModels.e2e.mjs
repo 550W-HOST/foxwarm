@@ -164,6 +164,23 @@ async function attachRequestMocks(targetPage, options = {}) {
     }
   }
   await targetPage.setRequestInterception(true)
+  if (targetPage.browser() === browser) {
+    // Chromium's default '*' interception can pause worker startup requests that
+    // never reach this page's request handler. Intercept only the mocked API, plus
+    // editor assets in the two scenarios that intentionally test the fallback.
+    await targetPage._client().send('Fetch.enable', {
+      handleAuthRequests: true,
+      patterns: [
+        { urlPattern: '*://*/api/*' },
+        ...(options.blockEditorChunks ? [
+          { urlPattern: '*monaco-editor*' },
+          { urlPattern: '*monaco-yaml*' },
+          { urlPattern: '*yaml.worker*' },
+          { urlPattern: '*editor.worker*' },
+        ] : []),
+      ],
+    })
+  }
   targetPage.on('request', (request) => {
     const url = new URL(request.url())
     requestPaths.push(url.pathname)
@@ -186,7 +203,7 @@ async function attachRequestMocks(targetPage, options = {}) {
       return
     }
     if (url.pathname.endsWith('/api/models')) {
-      void respondJson(request, {
+      const respondModels = () => respondJson(request, {
         defaultKey: 'route',
         currentKey: 'route',
         models: [
@@ -196,11 +213,28 @@ async function attachRequestMocks(targetPage, options = {}) {
           { key: 'route', label: 'route', isVirtual: true, allowedEfforts: ['none', 'low', 'medium', 'high'], defaultEffort: null },
         ],
       })
+      if (options.heldModelOptionsResponses && request.frame()?.url().includes('foxwarmEmbed=chat')) options.heldModelOptionsResponses.push(respondModels)
+      else void respondModels()
+      return
+    }
+    if (url.pathname.endsWith('/api/setup/models/list') && request.method() === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      options.providerModelListRequests?.push(body)
+      if (options.heldProviderModelLists) {
+        options.heldProviderModelLists.push({ request, body })
+        return
+      }
+      if (options.providerModelListError) {
+        void respondJson(request, { error: options.providerModelListError }, 502)
+      } else {
+        void respondJson(request, { models: options.providerModelListResponse || ['gpt-5.6/x', 'ft:gpt-5.6:project'] })
+      }
       return
     }
     if (url.pathname.endsWith('/api/setup/models') && request.method() === 'POST') {
       savedRequestPath = url.pathname
       savedRequest = JSON.parse(request.postData() || '{}')
+      options.modelsSaveRequests?.push(savedRequest)
       if (options.heldModelsSaves) {
         options.heldModelsSaves.push({ request, body: savedRequest })
         return
@@ -216,6 +250,11 @@ async function attachRequestMocks(targetPage, options = {}) {
     }
     if (url.pathname.endsWith('/api/setup/config') && request.method() === 'POST') {
       savedConfigRequest = JSON.parse(request.postData() || '{}')
+      options.configSaveRequests?.push(savedConfigRequest)
+      if (options.heldConfigSaves) {
+        options.heldConfigSaves.push({ request, body: savedConfigRequest })
+        return
+      }
       if (configSaveError) {
         void respondJson(request, { error: configSaveError }, 400)
       } else {
@@ -245,6 +284,14 @@ async function attachRequestMocks(targetPage, options = {}) {
           mockChildEffort = 'max'
         }
       }
+      if (Object.prototype.hasOwnProperty.call(body, 'effort') && options.heldEffortRequests) {
+        options.heldEffortRequests.push(async (fail = false) => {
+          if (fail) return respondJson(request, { error: 'Effort save rejected' }, 500)
+          mockSessionEffort = body.effort || null
+          return respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
+        })
+        return
+      }
       if (Object.prototype.hasOwnProperty.call(body, 'effort')) mockSessionEffort = body.effort || null
       void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
       return
@@ -252,6 +299,8 @@ async function attachRequestMocks(targetPage, options = {}) {
     if (/\/api\/sessions\/[^/]+\/child-model$/.test(url.pathname) && request.method() === 'POST') {
       const body = JSON.parse(request.postData() || '{}')
       modelUpdateRequests.push({ path: url.pathname, body })
+      if (Object.prototype.hasOwnProperty.call(body, 'model')) mockChildModel = body.model || null
+      if (body.clear) mockChildModel = null
       if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) mockChildModel = body.childModelDefault || null
       if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) mockChildEffort = body.childEffortDefault || null
       void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
@@ -295,7 +344,33 @@ async function attachRequestMocks(targetPage, options = {}) {
   })
 }
 
+// The only transient observed in CI is CDP "Promise was collected", which drops an
+// evaluate's response after its side effect already applied: the editor kept the value
+// written by the failing call, and a page reload restores the pristine mock YAML, so
+// this is a lost-response race, not a reload. Only that exact error is retried, so a
+// genuine crash (target/context closed) still fails loudly. Every action here is
+// idempotent (setValue with a fixed payload, setSelection/position/focus,
+// trigger-suggest, read-only snapshots), so a bounded re-issue cannot double-apply.
+const TRANSIENT_CDP_ERROR = /Promise was collected/i
+
 async function runMonacoEditorAction(targetPage, modelUri, action, payload = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await evaluateMonacoEditorAction(targetPage, modelUri, action, payload)
+    } catch (error) {
+      if (attempt >= 2 || !TRANSIENT_CDP_ERROR.test(String(error?.message || error))) throw error
+      try {
+        // Best-effort readiness gate: a no-op when the editor is already mounted.
+        await targetPage.waitForFunction((uri) => {
+          const editor = document.querySelector(`[data-monaco-model-uri="${uri}"]`)
+          return editor?.getAttribute('data-editor-ready') === 'true'
+        }, { timeout: 20_000 }, modelUri)
+      } catch {}
+    }
+  }
+}
+
+async function evaluateMonacoEditorAction(targetPage, modelUri, action, payload = {}) {
   return targetPage.evaluate(async ({ targetModelUri, editorAction, actionPayload }) => {
     const monacoUrl = performance.getEntriesByType('resource')
       .map((entry) => entry.name)
@@ -359,6 +434,10 @@ async function triggerAndAcceptVisibleSuggestion(targetPage, label) {
   await targetPage.keyboard.up('Control')
   await targetPage.waitForFunction((expectedLabel) => [...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')]
     .some((row) => row.textContent?.includes(expectedLabel)), { timeout: 15_000 }, label)
+  await acceptVisibleSuggestion(targetPage, label)
+}
+
+async function acceptVisibleSuggestion(targetPage, label) {
   const rows = await targetPage.$$('.suggest-widget.visible .monaco-list-row')
   for (const row of rows) {
     const text = await row.evaluate((element) => element.textContent || '')
@@ -370,6 +449,15 @@ async function triggerAndAcceptVisibleSuggestion(targetPage, label) {
   throw new Error(`Completion suggestion was not visible: ${label}`)
 }
 
+async function readVisibleSuggestions(targetPage, modelUri, position) {
+  await runMonacoEditorAction(targetPage, modelUri, 'position', position)
+  await runMonacoEditorAction(targetPage, modelUri, 'trigger-suggest')
+  await targetPage.waitForSelector('.suggest-widget.visible .monaco-list-row', { timeout: 15_000 })
+  const suggestions = await targetPage.$$eval('.suggest-widget.visible .monaco-list-row', (rows) => rows.map((row) => row.textContent || ''))
+  await targetPage.keyboard.press('Escape')
+  return suggestions
+}
+
 async function waitForMonacoValue(targetPage, modelUri, expectedValue) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
@@ -379,6 +467,20 @@ async function waitForMonacoValue(targetPage, modelUri, expectedValue) {
   }
   const state = await runMonacoEditorAction(targetPage, modelUri, 'snapshot')
   assert.equal(state.value, expectedValue)
+}
+
+async function pressSaveShortcut(targetPage, modifier) {
+  await targetPage.keyboard.down(modifier)
+  await targetPage.keyboard.press('s')
+  await targetPage.keyboard.up(modifier)
+}
+
+async function waitForItems(items, expectedLength) {
+  const deadline = Date.now() + 10_000
+  while (items.length < expectedLength && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.equal(items.length, expectedLength)
 }
 
 async function dragMonacoSelection(targetPage, modelUri, start, end) {
@@ -654,29 +756,52 @@ test('Config tab status reflects enabled channel health and ignores disabled cha
   }
 })
 
-test('each Setup tab editor uses the responsive 600px/80vh height without mobile overflow', async () => {
+test('Setup editors fill available desktop space and remain scroll-reachable on mobile', async () => {
   const measureEditor = (targetPage, tab) => targetPage.$eval(`[data-setup-section="${tab}"] [data-monaco-model-uri]`, (editor) => {
     const rect = editor.getBoundingClientRect()
+    const panel = editor.closest('[role="tabpanel"]')
+    const saveButton = panel?.querySelector('button')
     return {
       authoredHeight: editor.style.height,
-      computedHeight: Number.parseFloat(getComputedStyle(editor).height),
       width: rect.width,
+      height: rect.height,
       viewportWidth: window.innerWidth,
-      expectedHeight: Math.min(600, window.innerHeight * 0.8),
       documentWidth: document.documentElement.scrollWidth,
+      panelClientHeight: panel?.clientHeight || 0,
+      panelScrollHeight: panel?.scrollHeight || 0,
+      saveTop: saveButton?.getBoundingClientRect().top || 0,
+      saveBottom: saveButton?.getBoundingClientRect().bottom || 0,
     }
   })
 
-  for (const tab of ['models', 'config']) {
-    await page.click(`[data-setup-tab="${tab}"]`)
-    await page.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
-    const editor = await measureEditor(page, tab)
-    assert.ok(['calc(min(600px, 80vh))', 'min(600px, 80vh)'].includes(editor.authoredHeight))
-    assert.ok(Math.abs(editor.computedHeight - editor.expectedHeight) < 1)
-    assert.ok(editor.width <= editor.viewportWidth)
+  const largePage = await browser.newPage()
+  await largePage.setViewport({ width: 2560, height: 1440 })
+  await attachRequestMocks(largePage)
+  try {
+    await largePage.goto(`${productionBaseUrl}/?case=large#setup`, { waitUntil: 'networkidle2' })
+    for (const tab of ['models', 'config']) {
+      await largePage.click(`[data-setup-tab="${tab}"]`)
+      await largePage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
+      const editor = await measureEditor(largePage, tab)
+      assert.equal(editor.authoredHeight, '100%')
+      assert.ok(editor.width > 1600, `${tab} editor should use the wide desktop pane`)
+      assert.ok(editor.height > 600, `${tab} editor should grow beyond the removed 600px cap`)
+      assert.ok(editor.width <= editor.viewportWidth)
+      assert.ok(editor.documentWidth <= editor.viewportWidth)
+    }
+    await largePage.setViewport({ width: 1280, height: 800 })
+    await largePage.click('[data-setup-tab="models"]')
+    await largePage.waitForFunction(() => {
+      const editor = document.querySelector('[data-setup-section="models"] [data-monaco-model-uri]')
+      return !!editor && editor.getBoundingClientRect().width < 1200
+    })
+    const regularEditor = await measureEditor(largePage, 'models')
+    assert.ok(regularEditor.width > 700)
+    assert.ok(regularEditor.height >= 288)
+    assert.ok(regularEditor.documentWidth <= regularEditor.viewportWidth)
+  } finally {
+    await largePage.close()
   }
-  await page.click('[data-setup-tab="models"]')
-  await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
 
   const mobilePage = await browser.newPage()
   await mobilePage.setViewport({ width: 390, height: 700 })
@@ -687,9 +812,17 @@ test('each Setup tab editor uses the responsive 600px/80vh height without mobile
       await mobilePage.click(`[data-setup-tab="${tab}"]`)
       await mobilePage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
       const editor = await measureEditor(mobilePage, tab)
-      assert.ok(Math.abs(editor.computedHeight - 560) < 1)
+      assert.equal(editor.authoredHeight, '100%')
+      assert.ok(editor.height >= 288)
       assert.ok(editor.width <= editor.viewportWidth)
       assert.ok(editor.documentWidth <= editor.viewportWidth)
+      await mobilePage.$eval(`[data-setup-section="${tab}"] button`, (button) => button.scrollIntoView({ block: 'nearest' }))
+      const saveVisible = await mobilePage.$eval(`[data-setup-section="${tab}"] button`, (button) => {
+        const rect = button.getBoundingClientRect()
+        return rect.top >= 0 && rect.bottom <= innerHeight
+      })
+      assert.equal(saveVisible, true)
+      assert.ok(editor.panelScrollHeight >= editor.panelClientHeight)
     }
   } finally {
     await mobilePage.close()
@@ -699,6 +832,8 @@ test('each Setup tab editor uses the responsive 600px/80vh height without mobile
 test('both Setup Monaco editors preserve controlled selection replacement', async () => {
   const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
   const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  await page.click('[data-setup-tab="models"]')
+  await page.$eval(`[data-monaco-model-uri="${modelsUri}"]`, (editor) => editor.scrollIntoView({ block: 'nearest' }))
   const originalModels = (await runMonacoEditorAction(page, modelsUri, 'snapshot')).value
 
   let state = await dragMonacoSelection(page, modelsUri, { line: 1, column: 12 }, { line: 1, column: 10 })
@@ -725,6 +860,7 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
 
   await page.click('[data-setup-tab="config"]')
   await page.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+  await page.$eval(`[data-monaco-model-uri="${configUri}"]`, (editor) => editor.scrollIntoView({ block: 'nearest' }))
   const originalConfig = (await runMonacoEditorAction(page, configUri, 'snapshot')).value
   await runMonacoEditorAction(page, configUri, 'replace-value', { value: 'alpha beta\nsecond line\nthird line\n' })
   state = await dragMonacoSelection(page, configUri, { line: 3, column: 6 }, { line: 2, column: 1 })
@@ -749,6 +885,133 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
 
   await page.click('[data-setup-tab="models"]')
   await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+})
+
+test('Setup editor Ctrl/Cmd+S shortcuts save once, prevent browser Save, and stay editor-scoped', async () => {
+  const shortcutPage = await browser.newPage()
+  const heldModelsSaves = []
+  const heldConfigSaves = []
+  const modelsSaveRequests = []
+  const configSaveRequests = []
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  await attachRequestMocks(shortcutPage, { heldModelsSaves, heldConfigSaves, modelsSaveRequests, configSaveRequests })
+
+  const recordEditorShortcuts = async (modelUri) => {
+    await shortcutPage.$eval(`[data-monaco-model-uri="${modelUri}"]`, (editor) => {
+      window.__setupSaveShortcutEvents = []
+      editor.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey)) {
+          window.__setupSaveShortcutEvents.push({
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            altKey: event.altKey,
+            shiftKey: event.shiftKey,
+            repeat: event.repeat,
+            defaultPrevented: event.defaultPrevented,
+          })
+        }
+      }, { capture: true })
+    })
+  }
+  const readEditorShortcuts = () => shortcutPage.evaluate(() => window.__setupSaveShortcutEvents || [])
+
+  try {
+    await shortcutPage.goto(`${baseUrl}/setup-save-shortcuts/#setup`, { waitUntil: 'networkidle2' })
+    await shortcutPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm Setup'), { timeout: 15_000 })
+    await shortcutPage.waitForSelector('[data-setup-tab="models"]', { timeout: 15_000 })
+    await shortcutPage.click('[data-setup-tab="models"]')
+    await shortcutPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+    const modelsYaml = 'default: local/model-a\nproviders:\n  local:\n    models: [model-a]\n'
+    await runMonacoEditorAction(shortcutPage, modelsUri, 'replace-value', { value: modelsYaml })
+    await runMonacoEditorAction(shortcutPage, modelsUri, 'focus')
+    await recordEditorShortcuts(modelsUri)
+
+    await shortcutPage.keyboard.down('Control')
+    await shortcutPage.keyboard.down('s')
+    await shortcutPage.keyboard.down('s')
+    await shortcutPage.keyboard.up('s')
+    await shortcutPage.keyboard.up('Control')
+    await waitForItems(heldModelsSaves, 1)
+    assert.deepEqual(modelsSaveRequests, [{ yaml: modelsYaml }])
+    assert.deepEqual((await readEditorShortcuts()).slice(0, 2).map(event => ({ repeat: event.repeat, defaultPrevented: event.defaultPrevented })), [
+      { repeat: false, defaultPrevented: true },
+      { repeat: true, defaultPrevented: true },
+    ])
+
+    await pressSaveShortcut(shortcutPage, 'Control')
+    await shortcutPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(heldModelsSaves.length, 1)
+    assert.equal(modelsSaveRequests.length, 1)
+    assert.equal((await readEditorShortcuts()).at(-1)?.defaultPrevented, true)
+
+    await respondJson(heldModelsSaves[0].request, {
+      success: true,
+      models: { ...statusPayload.models, rawYaml: heldModelsSaves[0].body.yaml },
+    })
+    await shortcutPage.waitForFunction(() => {
+      const button = [...document.querySelectorAll('button')].find(candidate => candidate.textContent?.includes('Save models'))
+      return button instanceof HTMLButtonElement && !button.disabled
+    })
+
+    for (const modifiers of [['Control', 'Shift'], ['Control', 'Alt']]) {
+      for (const modifier of modifiers) await shortcutPage.keyboard.down(modifier)
+      await shortcutPage.keyboard.press('s')
+      for (const modifier of [...modifiers].reverse()) await shortcutPage.keyboard.up(modifier)
+    }
+    await shortcutPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(modelsSaveRequests.length, 1)
+    const composingPrevented = await shortcutPage.$eval(`[data-monaco-model-uri="${modelsUri}"]`, (editor) => {
+      const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, isComposing: true, bubbles: true, cancelable: true })
+      editor.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    assert.equal(composingPrevented, true)
+    assert.equal(modelsSaveRequests.length, 1)
+
+    await shortcutPage.click('[data-setup-tab="config"]')
+    await shortcutPage.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+    const configYaml = 'channels:\n  telegram:\n    enabled: true\n'
+    await runMonacoEditorAction(shortcutPage, configUri, 'replace-value', { value: configYaml })
+    await runMonacoEditorAction(shortcutPage, configUri, 'focus')
+    await recordEditorShortcuts(configUri)
+    await pressSaveShortcut(shortcutPage, 'Meta')
+    await waitForItems(heldConfigSaves, 1)
+    assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    assert.deepEqual((await readEditorShortcuts()).map(event => ({ metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })), [
+      { metaKey: true, defaultPrevented: true },
+    ])
+
+    await pressSaveShortcut(shortcutPage, 'Meta')
+    await shortcutPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(heldConfigSaves.length, 1)
+    assert.equal(configSaveRequests.length, 1)
+    assert.equal((await readEditorShortcuts()).at(-1)?.defaultPrevented, true)
+    await respondJson(heldConfigSaves[0].request, { success: true, rawYaml: heldConfigSaves[0].body.yaml, reload: { started: ['telegram'] } })
+    await shortcutPage.waitForFunction(() => {
+      const button = [...document.querySelectorAll('button')].find(candidate => candidate.textContent?.includes('Save config'))
+      return button instanceof HTMLButtonElement && !button.disabled
+    })
+
+    await shortcutPage.click('[data-setup-tab="appearance"]')
+    await shortcutPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    const outsidePrevented = await shortcutPage.$eval('[data-setup-tab="appearance"]', (tab) => {
+      const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+      tab.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    const hiddenEditorPrevented = await shortcutPage.$eval(`[data-monaco-model-uri="${modelsUri}"]`, (editor) => {
+      const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+      editor.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    assert.equal(outsidePrevented, false)
+    assert.equal(hiddenEditorPrevented, false)
+    assert.equal(modelsSaveRequests.length, 1)
+    assert.equal(configSaveRequests.length, 1)
+  } finally {
+    await shortcutPage.close()
+  }
 })
 
 if (selectedBrowser === 'firefox' || selectedBrowser === 'all') test('Firefox replaces real reverse mouse selections on the first physical key', {
@@ -903,9 +1166,167 @@ test('local and schema completions replace the current punctuated YAML scalar', 
   }
 })
 
+test('provider model completions request only at the active model-id list and preserve unsaved connection context', async () => {
+  const completionPage = await browser.newPage()
+  const providerModelListRequests = []
+  await attachRequestMocks(completionPage, { providerModelListRequests })
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const firstYaml = `providers:
+  open:
+    providerType: openai-completions
+    baseUrl: https://provider.test/v1
+    apiKey: first-secret
+    models:
+      - 'gpt-5.'
+`
+  try {
+    await completionPage.goto(`${baseUrl}/provider-model-completions/#setup`, { waitUntil: 'networkidle2' })
+    await completionPage.click('[data-setup-tab="models"]')
+    await completionPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
+    assert.equal(providerModelListRequests.length, 0)
+
+    await runMonacoEditorAction(completionPage, modelsUri, 'replace-value', { value: firstYaml })
+    await new Promise(resolve => setTimeout(resolve, 300))
+    assert.equal(providerModelListRequests.length, 0)
+    await runMonacoEditorAction(completionPage, modelsUri, 'position', { line: 7, column: 16 })
+    await runMonacoEditorAction(completionPage, modelsUri, 'trigger-suggest')
+    let requestDeadline = Date.now() + 5_000
+    while (providerModelListRequests.length < 1 && Date.now() < requestDeadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(providerModelListRequests.length, 1)
+    await completionPage.waitForFunction((expectedLabel) => [...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')]
+      .some((row) => row.textContent?.includes(expectedLabel)), { timeout: 15_000 }, 'gpt-5.6/x')
+    await acceptVisibleSuggestion(completionPage, 'gpt-5.6/x')
+    assert.deepEqual(providerModelListRequests, [{
+      providerType: 'openai-completions',
+      baseUrl: 'https://provider.test/v1',
+      apiKey: 'first-secret',
+    }])
+    assert.equal((await runMonacoEditorAction(completionPage, modelsUri, 'snapshot')).value,
+      firstYaml.replace("'gpt-5.'", "'gpt-5.6/x'"))
+
+    await runMonacoEditorAction(completionPage, modelsUri, 'position', { line: 7, column: 18 })
+    await runMonacoEditorAction(completionPage, modelsUri, 'trigger-suggest')
+    await completionPage.waitForSelector('.suggest-widget.visible .monaco-list-row', { timeout: 15_000 })
+    await completionPage.keyboard.press('Escape')
+    assert.equal(providerModelListRequests.length, 1)
+
+    const changedYaml = firstYaml.replace('first-secret', 'second-secret').replace("'gpt-5.'", "'ft:'")
+    await runMonacoEditorAction(completionPage, modelsUri, 'replace-value', { value: changedYaml })
+    await runMonacoEditorAction(completionPage, modelsUri, 'position', { line: 7, column: 12 })
+    await runMonacoEditorAction(completionPage, modelsUri, 'trigger-suggest')
+    requestDeadline = Date.now() + 5_000
+    while (providerModelListRequests.length < 2 && Date.now() < requestDeadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(providerModelListRequests.length, 2)
+    await completionPage.waitForFunction((expectedLabel) => [...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')]
+      .some((row) => row.textContent?.includes(expectedLabel)), { timeout: 15_000 }, 'ft:gpt-5.6:project')
+    await acceptVisibleSuggestion(completionPage, 'ft:gpt-5.6:project')
+    assert.equal(providerModelListRequests.length, 2)
+    assert.equal(providerModelListRequests[1].apiKey, 'second-secret')
+    assert.equal((await runMonacoEditorAction(completionPage, modelsUri, 'snapshot')).value,
+      changedYaml.replace("'ft:'", "'ft:gpt-5.6:project'"))
+
+    const requestsBeforeVirtual = providerModelListRequests.length
+    const virtualYaml = 'providers:\n  route:\n    providerType: failover\n    targets: [open]\n    models:\n      - should-not-request\n'
+    await runMonacoEditorAction(completionPage, modelsUri, 'replace-value', { value: virtualYaml })
+    await runMonacoEditorAction(completionPage, modelsUri, 'position', { line: 6, column: 15 })
+    await runMonacoEditorAction(completionPage, modelsUri, 'trigger-suggest')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    assert.equal(providerModelListRequests.length, requestsBeforeVirtual)
+  } finally {
+    await completionPage.close()
+  }
+})
+
+test('provider model list failure leaves the editor and Save usable', async () => {
+  const failurePage = await browser.newPage()
+  const providerModelListRequests = []
+  await attachRequestMocks(failurePage, { providerModelListRequests, providerModelListError: 'provider unavailable' })
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const yaml = 'providers:\n  open:\n    providerType: openai\n    apiKey: transient-secret\n    models:\n      - gpt\n'
+  try {
+    await failurePage.goto(`${baseUrl}/provider-model-failure/#setup`, { waitUntil: 'networkidle2' })
+    await failurePage.click('[data-setup-tab="models"]')
+    await failurePage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
+    await runMonacoEditorAction(failurePage, modelsUri, 'replace-value', { value: yaml })
+    await runMonacoEditorAction(failurePage, modelsUri, 'position', { line: 6, column: 12 })
+    await runMonacoEditorAction(failurePage, modelsUri, 'trigger-suggest')
+    const deadline = Date.now() + 5_000
+    while (providerModelListRequests.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(providerModelListRequests.length, 1)
+    await failurePage.keyboard.type('-manual')
+    assert.ok((await runMonacoEditorAction(failurePage, modelsUri, 'snapshot')).value.includes('gpt-manual'))
+    await failurePage.click('button::-p-text(Save models)')
+    await failurePage.waitForSelector('[data-save-feedback="models"][role="status"]')
+  } finally {
+    await failurePage.close()
+  }
+})
+
+test('provider model completion aborts changed connections and canceled lists do not reappear', async () => {
+  const cancellationPage = await browser.newPage()
+  const heldProviderModelLists = []
+  const failedProviderModelLists = []
+  cancellationPage.on('requestfailed', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/api/setup/models/list')) failedProviderModelLists.push(request)
+  })
+  await attachRequestMocks(cancellationPage, { heldProviderModelLists })
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const yamlFor = (apiKey, model = 'draft') => `providers:
+  open:
+    providerType: openai
+    apiKey: ${apiKey}
+    models:
+      - ${model}
+`
+  const waitForHeld = async (count) => {
+    const deadline = Date.now() + 5_000
+    while (heldProviderModelLists.length < count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(heldProviderModelLists.length, count)
+  }
+  try {
+    await cancellationPage.goto(`${baseUrl}/provider-model-cancellation/#setup`, { waitUntil: 'networkidle2' })
+    await cancellationPage.click('[data-setup-tab="models"]')
+    await cancellationPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
+
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'replace-value', { value: yamlFor('first-secret') })
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'position', { line: 6, column: 14 })
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'trigger-suggest')
+    await waitForHeld(1)
+
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'replace-value', { value: yamlFor('second-secret') })
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'position', { line: 6, column: 14 })
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'trigger-suggest')
+    await waitForHeld(2)
+    const abortDeadline = Date.now() + 5_000
+    while (failedProviderModelLists.length === 0 && Date.now() < abortDeadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(failedProviderModelLists.length, 1)
+    assert.equal(heldProviderModelLists[1].body.apiKey, 'second-secret')
+    await respondJson(heldProviderModelLists[1].request, { models: ['second-model'] })
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'replace-value', { value: yamlFor('third-secret') })
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'position', { line: 6, column: 14 })
+    await runMonacoEditorAction(cancellationPage, modelsUri, 'trigger-suggest')
+    await waitForHeld(3)
+    await cancellationPage.keyboard.press('Escape')
+    await respondJson(heldProviderModelLists[2].request, { models: ['must-not-reappear'] })
+    await new Promise(resolve => setTimeout(resolve, 500))
+    assert.equal(await cancellationPage.$$eval('.suggest-widget.visible .monaco-list-row', (rows) => rows
+      .some((row) => row.textContent?.includes('must-not-reappear'))), false)
+  } finally {
+    await cancellationPage.close()
+  }
+})
+
 test('raw model save remains enabled and preserves editor text', async () => {
+  // Establish the pristine precondition explicitly so an earlier Monaco failure cannot
+  // leak a dirty editor into this save assertion.
+  await page.click('[data-setup-tab="models"]')
+  await page.click('button::-p-text(Refresh)')
+  await waitForMonacoValue(page, 'inmemory://foxwarm/setup/foxwarm-models.yaml', statusPayload.models.rawYaml)
   const saveButton = await page.waitForSelector('button::-p-text(Save models)')
   assert.equal(await saveButton.evaluate((button) => button.disabled), false)
+  await saveButton.evaluate((button) => button.scrollIntoView({ block: 'nearest' }))
   await saveButton.click()
   const feedback = await page.waitForSelector('[data-save-feedback="models"][role="status"]')
   assert.equal((await feedback.evaluate((element) => element.textContent || '')).trim(), 'Models saved.')
@@ -954,18 +1375,62 @@ test('production worker provides real schema markers and current-document comple
   }
 })
 
+test('channel property completions follow each instance type and canonical-key fallback', async () => {
+  const completionPage = await browser.newPage()
+  await completionPage.setBypassServiceWorker(true)
+  await attachRequestMocks(completionPage)
+  const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  const assertSuggestions = async (yaml, line, expected, excluded) => {
+    await runMonacoEditorAction(completionPage, configUri, 'replace-value', { value: yaml })
+    const suggestions = await readVisibleSuggestions(completionPage, configUri, { line, column: 5 })
+    for (const name of expected) assert.ok(suggestions.some((text) => text.includes(name)), `${name} missing from ${suggestions.join(' | ')}`)
+    for (const name of excluded) assert.equal(suggestions.some((text) => text.includes(name)), false, `${name} leaked into ${suggestions.join(' | ')}`)
+  }
+  try {
+    await completionPage.goto(`${baseUrl}/channel-completions/#setup`, { waitUntil: 'networkidle2' })
+    await completionPage.click('[data-setup-tab="config"]')
+    await completionPage.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
+
+    await assertSuggestions('channels:\n  primary:\n    type: telegram\n    \n  secondary:\n    type: matrix\n    \n', 4,
+      ['botToken', 'enabled'], ['homeserver', 'appId', 'webhookUrl'])
+    await assertSuggestions('channels:\n  primary:\n    type: telegram\n    \n  secondary:\n    type: matrix\n    \n', 7,
+      ['homeserver', 'enabled'], ['botToken', 'appId', 'webhookUrl'])
+    await assertSuggestions('channels:\n  primary:\n    type: qqbot\n    \n', 4,
+      ['appId', 'media'], ['botToken', 'homeserver', 'webhookUrl'])
+    await assertSuggestions('channels:\n  custom:\n    type: company-platform\n    \n', 4,
+      ['enabled', 'channelProgress'], ['botToken', 'homeserver', 'appId', 'webhookUrl'])
+    await assertSuggestions('channels:\n  qqbot:\n    type: ""\n    \n', 4,
+      ['appId', 'enabled'], ['botToken', 'homeserver'])
+    await assertSuggestions('channels:\n  telegram:\n    \n', 3,
+      ['botToken', 'enabled'], ['homeserver', 'appId'])
+    await assertSuggestions('channels:\n  telegram:\n    type: matrix\n    \n', 4,
+      ['homeserver', 'enabled'], ['botToken', 'appId'])
+  } finally {
+    await completionPage.close()
+  }
+})
+
 test('backend validation error remains final authority and is shown after Monaco diagnostics', async () => {
+  // Restore the pristine precondition and always clear the injected mock error, so a
+  // failed assertion cannot leak either the dirty editor or `saveError` into later tests.
+  await page.click('[data-setup-tab="models"]')
+  await page.click('button::-p-text(Refresh)')
+  await waitForMonacoValue(page, 'inmemory://foxwarm/setup/foxwarm-models.yaml', statusPayload.models.rawYaml)
   saveError = 'canonical backend rejected the models config'
-  const saveButton = await page.waitForSelector('button::-p-text(Save models)')
-  await saveButton.click()
-  const feedback = await page.waitForSelector('[data-save-feedback="models"][role="alert"]')
-  assert.ok((await feedback.evaluate((element) => element.textContent || '')).includes('canonical backend rejected the models config'))
-  assert.equal(await feedback.evaluate((element) => element.closest('[data-setup-section]')?.getAttribute('data-setup-section')), 'models')
-  assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
-  await runMonacoEditorAction(page, 'inmemory://foxwarm/setup/foxwarm-models.yaml', 'position', { line: 1, column: statusPayload.models.rawYaml.split('\n')[0].length + 1 })
-  await page.keyboard.type('#')
-  await page.waitForFunction(() => !document.querySelector('[data-save-feedback="models"]'))
-  saveError = null
+  try {
+    const saveButton = await page.waitForSelector('button::-p-text(Save models)')
+    await saveButton.evaluate((button) => button.scrollIntoView({ block: 'nearest' }))
+    await saveButton.click()
+    const feedback = await page.waitForSelector('[data-save-feedback="models"][role="alert"]')
+    assert.ok((await feedback.evaluate((element) => element.textContent || '')).includes('canonical backend rejected the models config'))
+    assert.equal(await feedback.evaluate((element) => element.closest('[data-setup-section]')?.getAttribute('data-setup-section')), 'models')
+    assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
+    await runMonacoEditorAction(page, 'inmemory://foxwarm/setup/foxwarm-models.yaml', 'position', { line: 1, column: statusPayload.models.rawYaml.split('\n')[0].length + 1 })
+    await page.keyboard.type('#')
+    await page.waitForFunction(() => !document.querySelector('[data-save-feedback="models"]'))
+  } finally {
+    saveError = null
+  }
   await page.click('button::-p-text(Refresh)')
   await waitForMonacoValue(page, 'inmemory://foxwarm/setup/foxwarm-models.yaml', statusPayload.models.rawYaml)
 })
@@ -1047,8 +1512,10 @@ test('editing while a models save is held preserves the newer document and suppr
 
 test('OOBE remains editable and savable when lazy Monaco/YAML support import rejects', async () => {
   const degradedPage = await browser.newPage()
+  const modelsSaveRequests = []
+  const configSaveRequests = []
   await degradedPage.setCacheEnabled(false)
-  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true })
+  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true, modelsSaveRequests, configSaveRequests })
   try {
     await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
@@ -1062,9 +1529,10 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
     const fallbackHeight = await degradedPage.$eval('[data-editor-fallback="true"]', (editor) => ({
       height: Number.parseFloat(getComputedStyle(editor).height),
-      expected: Math.min(600, window.innerHeight * 0.8),
+      authoredHeight: editor.style.height,
     }))
-    assert.ok(Math.abs(fallbackHeight.height - fallbackHeight.expected) < 1)
+    assert.equal(fallbackHeight.authoredHeight, '100%')
+    assert.ok(fallbackHeight.height >= 288)
 
     const initialYaml = 'default: local\nproviders:\n  local:\n    providerType: openai-completions\n    models: [model-a]\n'
     await fallback.evaluate((textarea, value) => {
@@ -1079,32 +1547,70 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     })
     await degradedPage.keyboard.press('x')
     const yaml = initialYaml.replace('local', 'x')
-    await degradedPage.click('button::-p-text(Save models)')
+    await fallback.evaluate((textarea) => {
+      window.__fallbackSaveShortcutEvents = []
+      textarea.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey)) {
+          window.__fallbackSaveShortcutEvents.push({ ctrlKey: event.ctrlKey, metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })
+        }
+      }, { capture: true })
+      textarea.focus()
+    })
+    await pressSaveShortcut(degradedPage, 'Control')
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved.'))
     assert.deepEqual(savedRequest, { yaml })
+    assert.deepEqual(modelsSaveRequests, [{ yaml }])
+    assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
+      { ctrlKey: true, metaKey: false, defaultPrevented: true },
+    ])
 
     await degradedPage.click('[data-setup-tab="config"]')
     const configFallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-fallback="true"]', { timeout: 15_000 })
     const configFallbackHeight = await configFallback.evaluate((editor) => ({
       height: Number.parseFloat(getComputedStyle(editor).height),
-      expected: Math.min(600, window.innerHeight * 0.8),
+      authoredHeight: editor.style.height,
     }))
-    assert.ok(Math.abs(configFallbackHeight.height - configFallbackHeight.expected) < 1)
+    assert.equal(configFallbackHeight.authoredHeight, '100%')
+    assert.ok(configFallbackHeight.height >= 288)
+    await degradedPage.$eval('button::-p-text(Save config)', (button) => button.scrollIntoView({ block: 'nearest' }))
+    assert.equal(await degradedPage.$eval('button::-p-text(Save config)', (button) => {
+      const rect = button.getBoundingClientRect()
+      return rect.top >= 0 && rect.bottom <= innerHeight
+    }), true)
+    const configYaml = 'channels:\n  telegram:\n    enabled: true\n'
+    const configTextarea = await configFallback.$('textarea')
+    await configTextarea.evaluate((textarea, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(textarea, value)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      window.__fallbackSaveShortcutEvents = []
+      textarea.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey)) {
+          window.__fallbackSaveShortcutEvents.push({ ctrlKey: event.ctrlKey, metaKey: event.metaKey, defaultPrevented: event.defaultPrevented })
+        }
+      }, { capture: true })
+      textarea.focus()
+    }, configYaml)
+    await pressSaveShortcut(degradedPage, 'Meta')
+    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Config saved. Active channels refreshed: telegram.'))
+    assert.deepEqual(configSaveRequests, [{ yaml: configYaml }])
+    assert.deepEqual(await degradedPage.evaluate(() => window.__fallbackSaveShortcutEvents), [
+      { ctrlKey: false, metaKey: true, defaultPrevented: true },
+    ])
   } finally {
     await degradedPage.close()
   }
 })
 
 test('embedded model filter selects one result and keeps the accessible Setup bridge', async () => {
-  const embeddedBrowser = await puppeteer.launch({
-    executablePath: chromiumPath,
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  })
-  const hostPage = await embeddedBrowser.newPage()
+  const hostPage = await browser.newPage()
   await hostPage.setBypassServiceWorker(true)
   await hostPage.setViewport({ width: 390, height: 700 })
-  await attachRequestMocks(hostPage, { staleEffort: true })
+  const heldModelOptionsResponses = []
+  await attachRequestMocks(hostPage, { staleEffort: true, heldModelOptionsResponses })
+  const modelOptionsRequested = hostPage.waitForRequest(request => (
+    new URL(request.url()).pathname.endsWith('/api/models') && request.frame()?.url().includes('foxwarmEmbed=chat')
+  ))
   const nonce = '0123456789abcdef0123456789abcdef'
   try {
     await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
@@ -1127,92 +1633,37 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     const filter = await chatFrame.waitForSelector('input[aria-label="Filter models"]', { timeout: 15_000 })
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await filter.evaluate((input) => input.value), '')
+    // Opening the popup/focusing search does not imply the async model catalog is ready.
+    await modelOptionsRequested
+    assert.equal(heldModelOptionsResponses.length, 1)
+    assert.equal(await chatFrame.$$eval('[data-model-option-row="true"]', rows => rows.length), 1)
+    await heldModelOptionsResponses[0]()
+    await chatFrame.waitForFunction(() => (
+      ['leaf/model-a', 'leaf/model-b', 'sticky', 'route'].every(key => (
+        [...document.querySelectorAll('[data-model-column="current"] [data-model-option-key]')]
+          .some(row => row.getAttribute('data-model-option-key') === key)
+      ))
+    ))
 
     const configure = await chatFrame.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     assert.equal(await configure.evaluate((button) => button.title), 'Configure models')
-    const popupLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const popupRect = popup.getBoundingClientRect()
-      const settingsRect = popup.querySelector('button[aria-label="Configure models"]')?.getBoundingClientRect()
-      const filterRect = popup.querySelector('input[aria-label="Filter models"]')?.getBoundingClientRect()
+    const popupState = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const rect = popup.getBoundingClientRect()
+      const columns = popup.querySelectorAll('[data-model-column]')
       return {
-        left: popupRect.left,
-        right: popupRect.right,
-        viewportWidth: window.innerWidth,
-        settingsRight: settingsRect?.right || 0,
-        filterLeft: filterRect?.left || 0,
-        filterRight: filterRect?.right || 0,
+        withinViewport: rect.left >= 0 && rect.right <= window.innerWidth,
+        columnCount: columns.length,
+        optionCount: popup.querySelectorAll('[data-model-option-row="true"]').length,
+        currentEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Current effort"]').length,
+        childEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Child effort"]').length,
       }
     })
-    assert.ok(popupLayout.left >= 0)
-    assert.ok(popupLayout.right <= popupLayout.viewportWidth)
-    assert.ok(popupLayout.settingsRight <= popupLayout.filterLeft)
-    assert.ok(popupLayout.filterRight <= popupLayout.right)
-    const alignedEffortLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
-      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
-      const columnRects = (element) => Array.from(element.children).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right, width: rect.width }
-      })
-      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
-        const rect = select.getBoundingClientRect()
-        const style = getComputedStyle(select)
-        const canvas = document.createElement('canvas')
-        const context = canvas.getContext('2d')
-        if (context) context.font = style.font
-        const selectedLabel = select.selectedOptions[0]?.label || ''
-        const textWidth = context?.measureText(selectedLabel).width || 0
-        const description = select.getAttribute('aria-describedby')
-        return {
-          width: rect.width,
-          left: rect.left,
-          right: rect.right,
-          fontSize: Number.parseFloat(style.fontSize),
-          selectedLabel,
-          readable: textWidth + 28 <= rect.width,
-          description: description ? document.getElementById(description)?.textContent : '',
-        }
-      })
-      return {
-        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
-        headerSelectCount: header.querySelectorAll('select').length,
-        footerLabel: footer.firstElementChild?.textContent?.trim(),
-        footerImmediatelyAboveSearch: !!footer.nextElementSibling?.querySelector('input[aria-label="Filter models"]'),
-        headerColumns: columnRects(header),
-        footerColumns: columnRects(footer),
-        rowColumns: Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-          const rect = child.getBoundingClientRect()
-          return { left: rect.left, right: rect.right, width: rect.width }
-        }),
-        footerHeight: footer.getBoundingClientRect().height,
-        selects,
-      }
-    })
-    assert.deepEqual(alignedEffortLayout.headerLabels, ['Model id', 'Current', 'Child'])
-    assert.equal(alignedEffortLayout.headerSelectCount, 0)
-    assert.equal(alignedEffortLayout.footerLabel, 'Effort')
-    assert.equal(alignedEffortLayout.footerImmediatelyAboveSearch, true)
-    assert.ok(alignedEffortLayout.footerHeight <= 36)
-    assert.equal(alignedEffortLayout.selects.length, 2)
-    for (let index = 0; index < 3; index += 1) {
-      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
-      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
-      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
-      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
-    }
-    assert.ok(Math.abs(alignedEffortLayout.headerColumns[1].width - 100) <= 1)
-    assert.ok(Math.abs(alignedEffortLayout.headerColumns[2].width - 100) <= 1)
-    assert.ok(alignedEffortLayout.selects.every(({ left, right, width }, index) => left >= alignedEffortLayout.footerColumns[index + 1].left && right <= alignedEffortLayout.footerColumns[index + 1].right && width >= 76))
-    assert.ok(alignedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
-    assert.deepEqual(alignedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
-    assert.ok(alignedEffortLayout.selects.every(({ readable }) => readable))
-    assert.deepEqual(alignedEffortLayout.selects.map(({ description }) => description), [
-      'Current effort: default (per leaf)',
-      'Child effort: follow/default (per leaf)',
-    ])
+    assert.equal(popupState.withinViewport, true)
+    assert.equal(popupState.columnCount, 1)
+    assert.ok(popupState.optionCount >= 5)
+    assert.equal(popupState.currentEffortCount, 1)
+    assert.equal(popupState.childEffortCount, 0)
 
     const updatesBefore = modelUpdateRequests.length
     await filter.type('LEAF')
@@ -1258,42 +1709,46 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
     assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
-    const currentEffort = await chatFrame.waitForSelector('select[aria-label="Current effort"]')
-    assert.equal(await currentEffort.evaluate(select => select.value), 'max')
-    assert.equal(await currentEffort.$eval('option[value=""]', option => option.textContent), 'default (per leaf)')
-    assert.equal(await currentEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
-    assert.deepEqual(await currentEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
-      text: 'max (unavailable; using per-leaf default)', disabled: true,
-    })
-    assert.equal(await currentEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
-    assert.equal(await currentEffort.evaluate(select => select.title), 'Current effort: max (unavailable; using per-leaf default)')
-    const childEffort = await chatFrame.waitForSelector('select[aria-label="Child effort"]')
-    assert.equal(await childEffort.evaluate(select => select.value), 'max')
-    assert.equal(await childEffort.$eval('option[value=""]', option => option.textContent), 'follow/default (per leaf)')
-    assert.equal(await childEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
-    assert.deepEqual(await childEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
-      text: 'max (unavailable; using per-leaf default)', disabled: true,
-    })
-    assert.equal(await childEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
-    assert.equal(await childEffort.evaluate(select => select.title), 'Child effort: max (unavailable; using per-leaf default)')
+    const currentEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Current effort"]')
+    assert.equal(await currentEffort.evaluate(input => input.value), '0')
+    assert.match(await currentEffort.evaluate(input => input.getAttribute('aria-valuetext') || ''), /unavailable/)
 
     const effortUpdatesBefore = modelUpdateRequests.length
-    await currentEffort.select('low')
+    await currentEffort.evaluate((input) => { input.value = '1'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })) })
     const effortDeadline = Date.now() + 5_000
     while (modelUpdateRequests.length === effortUpdatesBefore && Date.now() < effortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
     assert.deepEqual(modelUpdateRequests.at(-1), {
       path: '/preview/api/sessions/embedded%2Fchat/model',
       body: { effort: 'low' },
     })
-    await childEffort.select('none')
+
+    await chatFrame.click('[data-model-child-mode="specific"]')
+    await chatFrame.waitForSelector('[data-model-child-mode="follow"]')
+    assert.ok(await chatFrame.$('input[aria-label="Filter models"]'))
+    assert.ok(await chatFrame.$('input[aria-label="Filter child models"]'))
+    const childFilter = await chatFrame.$('input[aria-label="Filter child models"]')
+    await childFilter.type('model-b')
+    await chatFrame.waitForFunction(() => document.querySelectorAll('[data-model-column="child"] [data-model-option-row]').length === 1)
+    assert.equal(await chatFrame.$eval('input[aria-label="Filter models"]', input => input.value), '')
+    assert.equal(await chatFrame.$$eval('[data-model-column="current"] [data-model-option-row]', nodes => nodes.length), 5)
+    assert.ok(await chatFrame.$eval('[data-model-selector-popup="true"]', popup => {
+      const rect = popup.getBoundingClientRect()
+      return rect.left >= 0 && rect.right <= innerWidth && popup.scrollWidth <= popup.clientWidth
+    }))
+
+    const childEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Child effort"]')
+    assert.equal(await childEffort.evaluate(input => input.value), '0')
+    assert.match(await childEffort.evaluate(input => input.getAttribute('aria-valuetext') || ''), /unavailable/)
+    await childEffort.evaluate((input) => { input.value = '0'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })) })
     const childEffortDeadline = Date.now() + 5_000
     while (modelUpdateRequests.at(-1)?.body?.childEffortDefault !== 'none' && Date.now() < childEffortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
     assert.deepEqual(modelUpdateRequests.at(-1), {
       path: '/preview/api/sessions/embedded%2Fchat/child-model',
       body: { childEffortDefault: 'none' },
     })
-    await chatFrame.waitForFunction(() => document.querySelector('button[aria-haspopup="dialog"]')?.textContent?.includes('low'))
-    assert.ok((await modelButton.evaluate(button => button.textContent || '')).includes('child follow · none'))
+    await chatFrame.waitForFunction(() => document.querySelector('button[aria-haspopup="dialog"]')?.textContent?.includes('Low'))
+    assert.ok(await chatFrame.$('[data-model-trigger-child="true"]'))
+
     const reopenedConfigure = await chatFrame.waitForSelector('button[aria-label="Configure models"]')
     await reopenedConfigure.click()
     await hostPage.waitForFunction(() => window.embedMessages.some((message) => message?.type === 'open-setup'))
@@ -1320,18 +1775,14 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     await setupFrame.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
   } finally {
-    await embeddedBrowser.close()
+    await hostPage.close()
   }
 })
 
 test('embedded Setup defaults to Appearance and explicit host focus activates Models', async () => {
-  const embeddedBrowser = await puppeteer.launch({
-    executablePath: chromiumPath,
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  })
-  const hostPage = await embeddedBrowser.newPage()
+  const hostPage = await browser.newPage()
   await hostPage.setBypassServiceWorker(true)
+  await hostPage.setViewport({ width: 2560, height: 1440 })
   await attachRequestMocks(hostPage)
   const nonce = 'abcdef0123456789abcdef0123456789'
   try {
@@ -1352,142 +1803,94 @@ test('embedded Setup defaults to Appearance and explicit host focus activates Mo
     }, { bridgeNonce: nonce })
     await setupFrame.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
+    const editorSize = await setupFrame.$eval('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]', (editor) => {
+      const rect = editor.getBoundingClientRect()
+      return { width: rect.width, height: rect.height, documentWidth: document.documentElement.scrollWidth }
+    })
+    assert.ok(editorSize.width > 2000)
+    assert.ok(editorSize.height > 600)
+    assert.ok(editorSize.documentWidth <= 2560)
   } finally {
-    await embeddedBrowser.close()
+    await hostPage.close()
   }
 })
 
-test('default desktop model effort footer stays compact and table-aligned', async () => {
+test('model columns preserve child policy and commit effort only after dragging ends', async () => {
   const desktopPage = await browser.newPage()
   await desktopPage.setViewport({ width: 900, height: 700 })
   await attachRequestMocks(desktopPage)
   try {
     await desktopPage.goto(`${baseUrl}/normal/#session/model-effort-default-desktop`, { waitUntil: 'networkidle2' })
-    const modelButton = await desktopPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const modelButton = await desktopPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await modelButton.click()
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     await desktopPage.click('button[title="leaf/model-a"]')
-    await desktopPage.waitForFunction(() => document.querySelector('select[aria-label="Current effort"]')?.title === 'Current effort: default (high)')
-    const layout = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
-      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
-      const columns = (element) => Array.from(element.children).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      })
-      const headerColumns = columns(header)
-      const footerColumns = columns(footer)
-      const rowColumns = Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      })
-      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
-        const rect = select.getBoundingClientRect()
-        const style = getComputedStyle(select)
-        const canvas = document.createElement('canvas')
-        const context = canvas.getContext('2d')
-        if (context) context.font = style.font
-        const selectedLabel = select.selectedOptions[0]?.label || ''
-        const description = select.getAttribute('aria-describedby')
-        return {
-          width: rect.width,
-          fontSize: Number.parseFloat(style.fontSize),
-          selectedLabel,
-          readable: (context?.measureText(selectedLabel).width || 0) + 28 <= rect.width,
-          title: select.title,
-          description: description ? document.getElementById(description)?.textContent : '',
-        }
-      })
-      return {
-        selects,
-        aligned: footerColumns.every((column, index) => (
-          Math.abs(column.left - headerColumns[index].left) <= 1
-          && Math.abs(column.right - headerColumns[index].right) <= 1
-          && Math.abs(column.left - rowColumns[index].left) <= 1
-          && Math.abs(column.right - rowColumns[index].right) <= 1
-        )),
-        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
-        footerLabel: footer.firstElementChild?.textContent?.trim(),
-      }
-    })
-    assert.equal(layout.aligned, true)
-    assert.deepEqual(layout.headerLabels, ['Model id', 'Current', 'Child'])
-    assert.equal(layout.footerLabel, 'Effort')
-    assert.deepEqual(layout.selects.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
-    assert.ok(layout.selects.every(({ fontSize }) => fontSize === 11))
-    assert.ok(layout.selects.every(({ width }) => width >= 80))
-    assert.ok(layout.selects.every(({ readable }) => readable))
-    assert.deepEqual(layout.selects.map(({ title }) => title), [
-      'Current effort: default (high)',
-      'Child effort: follow/default (high)',
-    ])
-    assert.deepEqual(layout.selects.map(({ description }) => description), [
-      'Current effort: default (high)',
-      'Child effort: follow/default (high)',
-    ])
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-option-key="leaf/model-a"]')?.getAttribute('data-model-option-selected') === 'true')
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Current effort"]', nodes => nodes.length), 1)
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Child effort"]', nodes => nodes.length), 0)
+
+    const popupHeight = await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height)
+    await desktopPage.click('[data-model-child-mode="specific"]')
+    await desktopPage.waitForSelector('[data-model-column="child"]')
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Current effort"]', nodes => nodes.length), 1)
+    assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Child effort"]', nodes => nodes.length), 1)
+    assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
+    await desktopPage.keyboard.press('Escape')
+    await desktopPage.click('[data-model-trigger-child="true"]')
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await desktopPage.click('input[aria-label="Filter child models"]')
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter child models"]'))
+    assert.ok(await desktopPage.$('[data-model-column="child"]'))
+    const slider = await desktopPage.$('input[type="range"][aria-label="Child effort"]')
+    const rect = await slider.boundingBox()
+    const beforeDrag = modelUpdateRequests.length
+    await desktopPage.mouse.move(rect.x + 11, rect.y + rect.height / 2)
+    await desktopPage.mouse.down()
+    await desktopPage.mouse.move(rect.x + rect.width * 0.5, rect.y + rect.height / 2, { steps: 4 })
+    assert.equal(modelUpdateRequests.length, beforeDrag)
+    assert.equal(await slider.evaluate(input => input.disabled), false)
+    const midDragRect = await slider.boundingBox()
+    assert.ok(Math.abs(midDragRect.x - rect.x) < 1 && Math.abs(midDragRect.width - rect.width) < 1,
+      'changing effort labels must not move or resize the slider during dragging')
+    await desktopPage.mouse.move(rect.x + rect.width - 11, rect.y + rect.height / 2, { steps: 4 })
+    assert.equal(modelUpdateRequests.length, beforeDrag)
+    await desktopPage.mouse.up()
+    await desktopPage.waitForFunction(() => document.querySelector('input[type="range"][aria-label="Child effort"]')?.getAttribute('aria-valuetext')?.toLowerCase().includes('high'))
+    assert.equal(modelUpdateRequests.length, beforeDrag + 1)
+    await desktopPage.waitForSelector('[data-model-child-mode="follow"]:not(:disabled)')
+    await desktopPage.click('[data-model-child-mode="follow"]')
+    await desktopPage.waitForSelector('[data-model-column="child"]', { hidden: true })
+    assert.equal(await desktopPage.$('[data-model-trigger-child="true"]'), null)
+    assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
+
+
   } finally {
     await desktopPage.close()
   }
 })
 
-test('desktop model popup keeps stable 600/100/100 geometry across scroll and current selection', async () => {
+test('desktop model popup remains bounded and supports single-selection rows', async () => {
   const desktopPage = await browser.newPage()
   await desktopPage.setViewport({ width: 1000, height: 700 })
   await attachRequestMocks(desktopPage)
   try {
     await desktopPage.goto(`${baseUrl}/normal/#session/model-popup-geometry`, { waitUntil: 'networkidle2' })
-    await desktopPage.click('button[aria-haspopup="dialog"]')
+    await desktopPage.click('.foxwarm-model-selector-trigger')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
-
-    const readGeometry = () => desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
+    const bounded = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const rect = popup.getBoundingClientRect()
       const scroll = popup.querySelector('[data-model-selector-scroll="true"]')
-      if (!header || !footer || !row || !scroll) throw new Error('model selector geometry missing')
-      scroll.scrollTop = scroll.scrollHeight
-      const columns = (element) => Array.from(element.children).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right, width: rect.width }
-      })
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
       return {
-        popup: popup.getBoundingClientRect().width,
-        header: columns(header),
-        footer: columns(footer),
-        row: Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-          const rect = child.getBoundingClientRect()
-          return { left: rect.left, right: rect.right, width: rect.width }
-        }),
-        scrollGutter: scroll.getBoundingClientRect().width - scroll.clientWidth,
+        inViewport: rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight,
+        footerOutsideScroll: !!scroll && !!footer && !scroll.contains(footer),
       }
     })
-
-    const before = await readGeometry()
-    assert.ok(Math.abs(before.popup - 600) <= 1)
-    assert.ok(Math.abs(before.header[1].width - 100) <= 1)
-    assert.ok(Math.abs(before.header[2].width - 100) <= 1)
-    const hoverRegions = await desktopPage.$eval('[data-model-selector-row="true"]', (row) => {
-      const current = row.querySelector('[data-model-current-region="true"]')
-      const child = row.querySelector('[data-model-selector-column="child"]')
-      return {
-        currentClasses: current?.className || '',
-        currentColumns: current ? Array.from(current.children).map(cell => cell.getAttribute('data-model-selector-column')) : [],
-        childClasses: child?.className || '',
-        currentTag: current?.tagName,
-        childTag: child?.tagName,
-      }
-    })
-    assert.equal(hoverRegions.currentTag, 'BUTTON')
-    assert.deepEqual(hoverRegions.currentColumns, ['model', 'current'])
-    assert.match(hoverRegions.currentClasses, /hover:bg-fw-accent-surface/)
-    assert.equal(hoverRegions.childTag, 'BUTTON')
-    assert.match(hoverRegions.childClasses, /hover:bg-fw-special-surface/)
+    assert.equal(bounded.inViewport, true)
+    assert.equal(bounded.footerOutsideScroll, true)
     await desktopPage.click('button[title="leaf/model-a"]')
-    await desktopPage.waitForFunction(() => document.querySelector('button[title="leaf/model-a"]')?.className.includes('text-fw-accent'))
-    const after = await readGeometry()
-    assert.deepEqual(after, before)
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-option-key="leaf/model-a"]')?.getAttribute('data-model-option-selected') === 'true')
+    assert.equal(await desktopPage.$$eval('[data-model-option-selected="true"]', nodes => nodes.length), 1)
   } finally {
     await desktopPage.close()
   }
@@ -1497,68 +1900,42 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
   const normalPage = await browser.newPage()
   await attachRequestMocks(normalPage)
   try {
+    const assertConfigureModelsHitTarget = async () => {
+      const state = await normalPage.$eval('button[aria-label="Configure models"]', (button) => {
+        const rect = button.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return {
+          visible: button.checkVisibility(),
+          hit: hit === button || button.contains(hit),
+        }
+      })
+      assert.deepEqual(state, { visible: true, hit: true })
+    }
+
     await normalPage.evaluateOnNewDocument(() => {
       try {
         localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
-    const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const modelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
-    const themeLayout = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => {
-      const current = popup.querySelector('select[aria-label="Current effort"]')
-      const child = popup.querySelector('select[aria-label="Child effort"]')
-      const header = popup.querySelector('[data-model-selector-header="true"]')
-      const footer = popup.querySelector('[data-model-effort-footer="true"]')
-      const row = popup.querySelector('[data-model-selector-row="true"]')
-      const columns = (element) => element ? Array.from(element.children).map((cell) => {
-        const rect = cell.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      }) : []
-      const headerColumns = columns(header)
-      const footerColumns = columns(footer)
-      const rowColumns = Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
-        const rect = child.getBoundingClientRect()
-        return { left: rect.left, right: rect.right }
-      })
-      return {
-        treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
-        popupWidth: popup.getBoundingClientRect().width,
-        headerContainsCurrent: !!header?.contains(current),
-        headerContainsChild: !!header?.contains(child),
-        footerContainsCurrent: !!footer?.contains(current),
-        footerContainsChild: !!footer?.contains(child),
-        currentWidth: current?.getBoundingClientRect().width || 0,
-        childWidth: child?.getBoundingClientRect().width || 0,
-        currentFontSize: current ? Number.parseFloat(getComputedStyle(current).fontSize) : 0,
-        currentLabel: current?.selectedOptions[0]?.label || '',
-        childLabel: child?.selectedOptions[0]?.label || '',
-        filterBorderColor: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).borderColor,
-        filterBoxShadow: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).boxShadow,
-        themeAccentDim: getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-console-accent-dim').trim(),
-        aligned: footerColumns.length === 3 && footerColumns.every((column, index) => (
-          Math.abs(column.left - headerColumns[index].left) <= 1
-          && Math.abs(column.right - headerColumns[index].right) <= 1
-          && Math.abs(column.left - rowColumns[index].left) <= 1
-          && Math.abs(column.right - rowColumns[index].right) <= 1
-        )),
-      }
-    })
-    assert.equal(themeLayout.treatment, 'console')
-    assert.ok(Math.abs(themeLayout.popupWidth - 600) <= 1)
-    assert.equal(themeLayout.headerContainsCurrent, false)
-    assert.equal(themeLayout.headerContainsChild, false)
-    assert.equal(themeLayout.footerContainsCurrent, true)
-    assert.equal(themeLayout.footerContainsChild, true)
-    assert.ok(themeLayout.currentWidth >= 80)
-    assert.ok(themeLayout.childWidth >= 80)
-    assert.ok(themeLayout.currentFontSize <= 11)
-    assert.equal(themeLayout.currentLabel, 'Per leaf')
-    assert.equal(themeLayout.childLabel, 'Per leaf')
-    assert.equal(themeLayout.filterBorderColor, `rgb(${Number.parseInt(themeLayout.themeAccentDim.slice(1, 3), 16)}, ${Number.parseInt(themeLayout.themeAccentDim.slice(3, 5), 16)}, ${Number.parseInt(themeLayout.themeAccentDim.slice(5, 7), 16)})`)
-    assert.doesNotMatch(themeLayout.filterBoxShadow, /59, 130, 246|96, 165, 250/)
-    assert.equal(themeLayout.aligned, true)
+    await assertConfigureModelsHitTarget()
+    const pickerState = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => ({
+      treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
+      columnCount: popup.querySelectorAll('[data-model-column]').length,
+      currentEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Current effort"]').length,
+      childEffortCount: popup.querySelectorAll('input[type="range"][aria-label="Child effort"]').length,
+      configureCount: popup.querySelectorAll('button[aria-label="Configure models"]').length,
+      refreshCount: popup.querySelectorAll('button[aria-label="Refresh models"]').length,
+    }))
+    assert.equal(pickerState.treatment, 'console')
+    assert.equal(pickerState.columnCount, 1)
+    assert.equal(pickerState.currentEffortCount, 1)
+    assert.equal(pickerState.childEffortCount, 0)
+    assert.equal(pickerState.configureCount, 1)
+    assert.equal(pickerState.refreshCount, 1)
     const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     await configure.click()
@@ -1571,9 +1948,10 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     await normalPage.click('[data-setup-tab="config"]')
     await normalPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
     await normalPage.click('[data-tab-id="chat:model-filter-normal"]')
-    const reopenedModelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const reopenedModelButton = await normalPage.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
     await reopenedModelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await assertConfigureModelsHitTarget()
     await normalPage.click('button[aria-label="Configure models"]')
     await normalPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await normalPage.waitForFunction(() => (
@@ -1582,5 +1960,63 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     assert.equal(await normalPage.$$eval('[data-tab-id="system:setup"]', (tabs) => tabs.length), 1)
   } finally {
     await normalPage.close()
+  }
+})
+
+test('effort dragging saves concrete levels without flashing, and automatic mode is independent', async () => {
+  const p = await browser.newPage()
+  const held = []
+  await p.setViewport({ width: 1000, height: 700 })
+  await attachRequestMocks(p, { heldEffortRequests: held })
+  try {
+    await p.goto(`${baseUrl}/normal/#session/effort-interaction`, { waitUntil: 'networkidle2' })
+    await p.click('.foxwarm-model-selector-trigger')
+    await p.waitForSelector('button[title="leaf/model-a"]')
+    await p.click('button[title="leaf/model-a"]')
+    const sliderSelector = 'input[aria-label="Current effort"]'
+    await p.waitForFunction(sel => document.querySelector(sel)?.value === '2' && !document.querySelector(sel)?.disabled, {}, sliderSelector)
+    const slider = await p.$(sliderSelector)
+    const originalBox = await slider.boundingBox()
+    const before = modelUpdateRequests.length
+    await p.mouse.move(originalBox.x + originalBox.width - 11, originalBox.y + originalBox.height / 2)
+    await p.mouse.down()
+    await p.mouse.move(originalBox.x + originalBox.width / 2, originalBox.y + originalBox.height / 2, { steps: 5 })
+    assert.equal(modelUpdateRequests.length, before)
+    assert.match(await slider.evaluate(el => el.getAttribute('aria-valuetext')), /low/)
+    await p.mouse.up()
+    await p.waitForFunction(sel => document.querySelector(sel)?.disabled, {}, sliderSelector)
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { effort: 'low' })
+    assert.match(await slider.evaluate(el => el.getAttribute('aria-valuetext')), /low/)
+    assert.equal(await slider.evaluate(el => getComputedStyle(el).opacity), '1')
+    assert.equal(await p.$eval('[data-model-option-row]', el => getComputedStyle(el).opacity), '1')
+    const savingBox = await slider.boundingBox()
+    assert.equal(savingBox.x, originalBox.x)
+    assert.equal(savingBox.width, originalBox.width)
+    assert.ok(held.length)
+    await held.shift()()
+    await p.waitForFunction(sel => !document.querySelector(sel)?.disabled, {}, sliderSelector)
+    assert.equal(await slider.evaluate(el => el.value), '1')
+    assert.match(await slider.evaluate(el => el.getAttribute('aria-valuetext')), /low/)
+
+    // Auto is an explicit action, and previews the configured High, not old Low.
+    await p.click('button[aria-label="Current: Use model default"]')
+    await p.waitForFunction(sel => document.querySelector(sel)?.disabled, {}, sliderSelector)
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { effort: null })
+    assert.match(await slider.evaluate(el => el.getAttribute('aria-valuetext')), /high/)
+    await held.shift()()
+    await p.waitForFunction(sel => !document.querySelector(sel)?.disabled, {}, sliderSelector)
+    assert.equal(await slider.evaluate(el => el.value), '2')
+
+    // Lowest concrete level (Off in this model) never submits a default clear.
+    const box = await slider.boundingBox()
+    await p.mouse.click(box.x + 2, box.y + box.height / 2)
+    await p.waitForFunction(sel => document.querySelector(sel)?.disabled, {}, sliderSelector)
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { effort: 'none' })
+    await held.shift()(true)
+    await p.waitForFunction(sel => !document.querySelector(sel)?.disabled, {}, sliderSelector)
+    assert.equal(await slider.evaluate(el => el.value), '2')
+    assert.match(await p.$eval('[data-model-selector-popup]', el => el.textContent), /Effort save rejected/)
+  } finally {
+    await p.close()
   }
 })

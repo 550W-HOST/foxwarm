@@ -3,7 +3,6 @@
  */
 
 import express from 'express';
-import crypto from 'crypto';
 import http from 'http';
 import path from 'path';
 import fs from 'fs-extra';
@@ -20,7 +19,7 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -33,8 +32,7 @@ import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { getSessionListSequenceMessageCounts } from '../session/archiveStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
-import type { Message, MessagePart, QueueItem, Session } from '../types';
-import { formatFoxwarmMessage } from '../utils/promptWrappers';
+import type { Message, QueueHistoryAppendPresentation, QueueItem, Session } from '../types';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
@@ -55,10 +53,10 @@ import {
 } from '../webuiSessionListQueries';
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
+import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
+import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
-const MAX_QUEUED_PREVIEW_ITEMS = 20;
-const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
 const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
 const TERMINAL_WEBSOCKET_KEEPALIVE_MS = 30_000;
 
@@ -212,39 +210,6 @@ function parseOptionalPositiveNumberQuery(value: unknown, label: string): number
   return Math.floor(parsed);
 }
 
-function truncateQueuedPreviewText(value: string): string {
-  if (value.length <= MAX_QUEUED_PREVIEW_TEXT_CHARS) {
-    return value;
-  }
-  return `${value.slice(0, MAX_QUEUED_PREVIEW_TEXT_CHARS)}\n… [preview truncated]`;
-}
-
-function sanitizeQueuedPreviewPart(part: MessagePart): MessagePart | null {
-  const sanitized: MessagePart = { ...part };
-
-  if (typeof sanitized.text === 'string') {
-    sanitized.text = truncateQueuedPreviewText(sanitized.text);
-  }
-  if (typeof sanitized.system === 'string') {
-    sanitized.system = truncateQueuedPreviewText(sanitized.system);
-  }
-  if (typeof sanitized.thinking === 'string') {
-    sanitized.thinking = truncateQueuedPreviewText(sanitized.thinking);
-  }
-
-  if (sanitized.inlineData || sanitized.inlineDataRef) {
-    const mimeType = sanitized.inlineData?.mimeType
-      || sanitized.inlineData?.mime_type
-      || sanitized.inlineDataRef?.mimeType
-      || 'attachment';
-    delete sanitized.inlineData;
-    delete (sanitized as any).inlineDataRef;
-    return { text: `[${mimeType} attachment preview omitted]` };
-  }
-
-  return sanitized;
-}
-
 function sanitizeWebUiTransportValue(value: any): any {
   if (Array.isArray(value)) return value.map(sanitizeWebUiTransportValue);
   if (!value || typeof value !== 'object') return value;
@@ -287,7 +252,13 @@ function sanitizeWebUiTransportValue(value: any): any {
 }
 
 function buildWebUiMessage(message: Message): Message {
-  return sanitizeWebUiTransportValue(message) as Message;
+  const projected = sanitizeWebUiTransportValue(message) as Message;
+  projected.parts = projected.parts.map(part => {
+    if (!part.functionCall || part.functionCall.argsParseError !== undefined) return part;
+    const { rawArgsText: _rawArgsText, ...functionCall } = part.functionCall;
+    return { ...part, functionCall };
+  });
+  return projected;
 }
 
 async function materializeWebUiMessages(messages: Message[]): Promise<{ messages: Message[]; canonicalMessages: Message[]; changed: boolean }> {
@@ -332,112 +303,6 @@ async function sanitizeWebUiDebugPayload(payload: any): Promise<any> {
   return sanitizeWebUiTransportValue(result);
 }
 
-function sanitizeQueuedPreviewParts(parts: MessagePart[] | undefined): MessagePart[] {
-  if (!Array.isArray(parts)) {
-    return [];
-  }
-  return parts
-    .map(sanitizeQueuedPreviewPart)
-    .filter((part): part is MessagePart => !!part);
-}
-
-function hashQueuedPreviewItem(index: number, item: QueueItem): string {
-  const hash = crypto.createHash('sha1');
-  hash.update(String(index));
-  hash.update('\0');
-  hash.update(item.type || 'unknown');
-  hash.update('\0');
-  hash.update(JSON.stringify({
-    source: item.source,
-    sourceSessionId: item.sourceSessionId,
-    parts: item.parts,
-    message: item.message,
-  }, (_key, value) => (
-    typeof value === 'string' && value.length > 1000 ? `${value.slice(0, 1000)}…` : value
-  )).slice(0, 20_000));
-  return hash.digest('hex').slice(0, 12);
-}
-
-function hasSystemPart(parts: MessagePart[]): boolean {
-  return parts.some(part => typeof part.system === 'string' && part.system.trim().length > 0);
-}
-
-function buildNonUserQueuedPreviewParts(item: QueueItem, parts: MessagePart[]): MessagePart[] {
-  if (hasSystemPart(parts)) {
-    return parts;
-  }
-
-  const text = parts
-    .map(part => part.text || part.thinking || '')
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-  if (!text) {
-    return [];
-  }
-
-  return [{
-    system: formatFoxwarmMessage({
-      type: item.type || 'background',
-      ...(item.sourceSessionId ? { sourceSessionId: item.sourceSessionId } : {}),
-      hint: 'queued session event preview',
-    }, truncateQueuedPreviewText(text)),
-  }];
-}
-
-function buildQueuedPreviewMessage(item: QueueItem, index: number): Message | null {
-  if (item.type === 'compact-commit') {
-    return null;
-  }
-
-  const synthetic = `queued-${index}-${item.type}-${hashQueuedPreviewItem(index, item)}`;
-  const queuedMeta = {
-    ...(item.message?.__meta || {}),
-    synthetic,
-    temporary: true,
-    queuedPreview: true,
-    queueIndex: index,
-    queueType: item.type,
-  };
-
-  if (item.message) {
-    return {
-      ...item.message,
-      parts: sanitizeQueuedPreviewParts(item.message.parts),
-      __meta: queuedMeta,
-    };
-  }
-
-  const sanitizedParts = sanitizeQueuedPreviewParts(item.parts);
-  const parts = item.type === 'user'
-    ? sanitizedParts
-    : buildNonUserQueuedPreviewParts(item, sanitizedParts);
-
-  if (parts.length === 0) {
-    return null;
-  }
-
-  return {
-    role: 'user',
-    parts,
-    __meta: queuedMeta,
-  };
-}
-
-function buildQueuedPreviewMessages(queue: QueueItem[] | undefined): Message[] {
-  if (!Array.isArray(queue) || queue.length === 0) {
-    return [];
-  }
-
-  const messages: Message[] = [];
-  for (let index = 0; index < queue.length && messages.length < MAX_QUEUED_PREVIEW_ITEMS; index++) {
-    const message = buildQueuedPreviewMessage(queue[index], index);
-    if (message) {
-      messages.push(message);
-    }
-  }
-  return messages;
-}
 
 
 export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsConfigPath()) {
@@ -559,8 +424,21 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>) {
-  const presentation = buildSessionModelEffortPresentation(session);
+function resolveWebUiAncestrySession(sessionId: string) {
+  const candidate = sessionManager.getSessionCatalog(sessionId);
+  if (!candidate) return undefined;
+  return {
+    id: candidate.id,
+    model: candidate.model,
+    effort: candidate.effort,
+    childModelDefault: candidate.childModelDefault,
+    childEffortDefault: candidate.childEffortDefault,
+    parentSessionId: candidate.parentSessionId,
+  };
+}
+
+function buildWebUiModelStatus(session: any, resolveAncestry = resolveWebUiAncestrySession) {
+  const presentation = buildSessionModelEffortPresentation(session, undefined, resolveAncestry);
   return {
     model: presentation.model,
     modelKey: presentation.modelKey,
@@ -570,6 +448,8 @@ function buildWebUiModelStatus(session: Pick<Session, 'model' | 'effort' | 'chil
     effortAllowed: presentation.effort.allowed,
     effortDefault: presentation.effort.defaultEffort,
     childModelDefault: presentation.childModelDefault,
+    childModelPolicySource: presentation.childModelPolicySource,
+    childPolicyChain: presentation.childPolicyChain,
     effectiveChildModelKey: presentation.effectiveChildModelKey,
     childEffortDefault: presentation.childEffort.raw,
     effectiveChildEffort: presentation.childEffort.effective,
@@ -661,8 +541,8 @@ function sendSessionListQueryError(res: express.Response, error: any, logMessage
   res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
-export function buildWebUiModelsPayload(currentModel?: string) {
-  const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
+export function buildWebUiModelsPayloadFromConfig(modelsConfig: ModelsConfig, currentKey: string = modelsConfig.default) {
+  const defaultKey = modelsConfig.default;
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
   return {
     defaultKey,
@@ -674,6 +554,8 @@ export function buildWebUiModelsPayload(currentModel?: string) {
         label: key,
         isDefault: key === defaultKey,
         contextLimit: entry?.contextLimit || null,
+        providerKey: entry?.providerKey || null,
+        modelId: entry?.model || null,
         providerType: entry?.providerType || null,
         isVirtual: !!entry?.virtualRouting,
         targets: entry?.virtualRouting?.targets || [],
@@ -682,6 +564,11 @@ export function buildWebUiModelsPayload(currentModel?: string) {
       };
     }),
   };
+}
+
+export function buildWebUiModelsPayload(currentModel?: string) {
+  const { modelsConfig, currentKey } = resolveModelConfig(currentModel);
+  return buildWebUiModelsPayloadFromConfig(modelsConfig, currentKey);
 }
 
 function normalizeWebUiEffortSelection(value: unknown): ModelEffort | undefined {
@@ -1219,6 +1106,35 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addRoute({
+        path: '/api/setup/models/list',
+        method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          let providerType = '';
+          try {
+            const request = parseProviderModelListRequest(req.body);
+            providerType = request.providerType;
+            const models = await listProviderModels(request);
+            res.json({ models });
+          } catch (error) {
+            if (error instanceof ProviderModelListError) {
+              logger.warn({
+                providerType,
+                code: error.code,
+                upstreamStatus: error.upstreamStatus,
+              }, 'Failed to list provider models');
+              res.status(error.statusCode).json({ error: error.message });
+              return;
+            }
+            logger.error({
+              providerType,
+              errorName: error instanceof Error ? error.name : typeof error,
+            }, 'Unexpected provider model list failure');
+            res.status(500).json({ error: 'Failed to list provider models.' });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
         path: '/api/setup/models/test',
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
@@ -1570,7 +1486,8 @@ export class WebUIChannel implements Channel {
             for (let index = 0; index < pathContextIds.length; index += 100) {
               pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
             }
-            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
+            const sidebarChildren = children.children.map(({ nextCursor: _nextCursor, ...preview }) => preview);
+            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: sidebarChildren, focus: focus.results,
               presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list sidebar query');
@@ -3335,6 +3252,24 @@ export class WebUIChannel implements Channel {
       });
     }
     this.realtimeHub?.broadcastSession(sessionId, payload);
+  }
+
+  broadcastQueueHistoryAppend(sessionId: string, append: QueueHistoryAppendPresentation) {
+    const clients = this.sseClients.get(sessionId);
+    for (const message of append.messages) {
+      const payload = { type: 'message', message: buildWebUiMessage(message) };
+      const data = JSON.stringify(payload);
+      (clients || []).forEach(client => {
+        try { client.write(`data: ${data}\n\n`); }
+        catch (e) { logger.error({ err: e }, 'Failed to send SSE queue history message'); }
+      });
+    }
+    this.realtimeHub?.broadcastSession(sessionId, {
+      type: 'history-append',
+      ...append,
+      messages: append.messages.map(buildWebUiMessage),
+      queuedMessages: append.queuedMessages.map(buildWebUiMessage),
+    });
   }
 
   broadcastSessionEvent(sessionId: string, event: any) {

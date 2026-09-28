@@ -44,7 +44,7 @@ Nodes, providers, and authenticated CLI Node runtime
 - Runtime: Node.js and TypeScript
 - LLM providers: OpenAI-compatible APIs and Anthropic
 - HTTP/WebSocket: Express and `ws`
-- Frontend: React-compatible Preact build, Monaco, and xterm.js
+- Frontend: React 18 and ReactDOM, Monaco, and xterm.js
 - Storage: JSON/JSONL, SQLite, and LanceDB
 - Automation: Puppeteer, MCP, ToolScript, and optional `node-pty`
 - Configuration: YAML with targeted legacy-data readers

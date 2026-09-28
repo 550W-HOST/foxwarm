@@ -18,7 +18,7 @@ const model = (timing) => ({
 
 const timing = (startedAt, completedAt, durationMs = completedAt - startedAt) => ({ startedAt, completedAt, durationMs })
 
-test('request timing derives API latency and the gap around intervening tool work', () => {
+test('request timing derives each model API latency without attributing tool/user work to a badge', () => {
   const derived = deriveRequestTimings([
     model(timing(1000, 2000)),
     { role: 'tool' },
@@ -27,14 +27,14 @@ test('request timing derives API latency and the gap around intervening tool wor
   ])
 
   assert.deepEqual(derived, [
-    { apiDurationMs: 1000, betweenRequestsMs: null },
-    { apiDurationMs: null, betweenRequestsMs: null },
-    { apiDurationMs: null, betweenRequestsMs: null },
-    { apiDurationMs: 1500, betweenRequestsMs: 3000 },
+    { apiDurationMs: 1000 },
+    { apiDurationMs: null },
+    { apiDurationMs: null },
+    { apiDurationMs: 1500 },
   ])
 })
 
-test('missing or invalid model timing breaks the request chain instead of spanning unknown history', () => {
+test('missing or invalid model timing is unavailable rather than a fabricated API duration', () => {
   const derived = deriveRequestTimings([
     model(timing(1000, 2000)),
     model(),
@@ -44,21 +44,21 @@ test('missing or invalid model timing breaks the request chain instead of spanni
   ])
 
   assert.deepEqual(derived, [
-    { apiDurationMs: 1000, betweenRequestsMs: null },
-    { apiDurationMs: null, betweenRequestsMs: null },
-    { apiDurationMs: 1000, betweenRequestsMs: null },
-    { apiDurationMs: 'invalid', betweenRequestsMs: 'invalid' },
-    { apiDurationMs: 1000, betweenRequestsMs: null },
+    { apiDurationMs: 1000 },
+    { apiDurationMs: null },
+    { apiDurationMs: 1000 },
+    { apiDurationMs: 'invalid' },
+    { apiDurationMs: 1000 },
   ])
 })
 
-test('overlapping request boundaries are marked invalid without corrupting later API timing', () => {
+test('overlapping request boundaries leave each valid request’s own API duration intact', () => {
   assert.deepEqual(deriveRequestTimings([
     model(timing(1000, 3000)),
     model(timing(2500, 4000)),
   ]), [
-    { apiDurationMs: 2000, betweenRequestsMs: null },
-    { apiDurationMs: 1500, betweenRequestsMs: 'invalid' },
+    { apiDurationMs: 2000 },
+    { apiDurationMs: 1500 },
   ])
 })
 

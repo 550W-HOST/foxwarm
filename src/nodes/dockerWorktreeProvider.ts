@@ -7,13 +7,16 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { STATE_DIR, type NormalizedDockerWorktreeNodeProviderConfig } from '../config';
 import { createNativeFileOperations } from '../../packages/shared/dist/fileOperations';
+import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
+import type { ExternalNodeOwner } from '../../packages/shared/dist/nodeProtocol';
 import type { ProcessOperations, ProcessLaunchRequest } from '../../packages/shared/dist/processOperations';
 import { createExecRuntime, type ExecRuntime } from '../execManager';
 import { tool_exec } from '../tools/execTools';
 import * as sessionManager from '../sessionManager';
 import { logger } from '../common';
+import { completeExternalExec, getExternalExec } from './externalExecOwnership';
 import {
-  NodeProviderError, type NodeDefaultCwdRequest, type NodeDescriptor, type NodeProviderDescriptor, type NodeLifecycleNodeRequest, type NodeLifecycleProviderRequest,
+  FIRST_PARTY_DOCKER_EXTERNAL_OWNER, NodeProviderError, type NodeDefaultCwdRequest, type NodeDescriptor, type NodeProviderDescriptor, type NodeLifecycleNodeRequest, type NodeLifecycleProviderRequest,
   type NodeLifecycleResult, type NodeProvider, type NodeProviderCallOptions, type NodeFilesystemRequest, type NodeExecRequest,
 } from './providerRegistry';
 
@@ -84,6 +87,7 @@ function assertDockerMountPath(value: string): void {
 
 export class DockerWorktreeNodeProvider implements NodeProvider {
   readonly id: string;
+  readonly [FIRST_PARTY_DOCKER_EXTERNAL_OWNER] = true;
   private readonly stateDir: string;
   private readonly statePath: string;
   private readonly configHash: string;
@@ -199,9 +203,13 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     const initializing = (async () => {
       const artifactStat = await fs.lstat(node.artifactDir); const artifactReal = await fs.realpath(node.artifactDir);
       if (!artifactStat.isDirectory() || artifactStat.isSymbolicLink() || artifactReal !== node.artifactDir) throw new NodeProviderError('DOCKER_WORKTREE_ARTIFACT_IDENTITY_INVALID', `Docker Node \`${node.nodeId}\` execution artifact directory is not its exact retained generation directory.`);
-      const runtime = createExecRuntime({
+      let runtime!: ExecRuntime;
+      runtime = createExecRuntime({
         getDefaultCwd: () => node.worktreePath,
         getExecTempDir: () => node.artifactDir,
+        getExternalDefaultCwd: () => node.worktreePath,
+        getExternalExecTempDir: owner => path.join(node.artifactDir, 'external',
+          crypto.createHash('sha256').update(`${owner.externalId}\0${owner.contextId}`).digest('hex')),
         registryPath: path.join(node.artifactDir, 'running-exec.json'),
         nodeId: node.nodeId,
         processOperations: this.createDockerProcessOperations(node),
@@ -210,6 +218,15 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
         onRegistryIdle: () => this.scheduleRetiredCleanup(node),
         processTreeFormatter: (_entries, rootPid) => `Process tree (best-effort Docker boundary; launcher PID ${rootPid}):\n(Container process tree is not represented as host descendants.)`,
         completionDispatcher: async (entry, _status, message) => {
+          if (entry.externalOwner) {
+            const record = getExternalExec(entry.externalOwner, entry.id);
+            if (!record || record.nodeId !== node.nodeId || record.dockerGeneration !== node.generation) return;
+            const output = await runtime.buildForegroundExecResult(entry, _status);
+            const cwd = await runtime.readFinishedExecWorkingDirectory(entry);
+            if (!completeExternalExec(node.nodeId, entry.externalOwner, entry.id, record.capability,
+              output, cwd || undefined)) throw new Error('External Docker execution completion could not be retained.');
+            return;
+          }
           if (entry.sessionId) await this.queueSystemEvent(entry.sessionId, message);
         },
       });
@@ -665,6 +682,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     if (state.destroys.some(intent => intent.node.nodeId === node.nodeId)) throw new NodeProviderError('DOCKER_WORKTREE_DESTROY_PENDING', `Docker Node \`${node.nodeId}\` has a committed destroy pending.`);
     this.assertCurrentConfig(node);
     const { readiness } = await this.inspectReadiness(node, options); this.assertExecutionReady(node, readiness);
+    if (request.owner) return this.invokeExternalExec(request as Extract<NodeExecRequest, { owner: ExternalNodeOwner }>, node, options);
     const runtime = await this.getExecRuntime(node);
     return tool_exec(request.args as any, {
       sessionId: request.sourceSessionId,
@@ -678,12 +696,77 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     });
   }
 
+  private async invokeExternalExec(request: Extract<NodeExecRequest, { owner: ExternalNodeOwner }>,
+    node: ProviderNodeState, options?: NodeProviderCallOptions): Promise<unknown> {
+    let launchAttempted = false;
+    try {
+      options?.assertExternalOwnerActive?.();
+      const id = request.context.externalExec?.execId;
+      if (!id || !request.context.externalExec?.completionCapability) {
+        throw new NodeProviderError('NODE_EXTERNAL_EXEC_ID_MISSING', 'External Docker execution requires a Main-owned reservation.');
+      }
+      const command = request.args.command;
+      if (typeof command !== 'string' || !command.trim()) throw new Error('exec requires command');
+      const timeout = resolveExecTimeoutSeconds(request.args.timeout);
+      const runtime = await this.getExecRuntime(node);
+      options?.assertExternalOwnerActive?.();
+      options?.bindExternalGeneration?.(node.generation);
+      const entry = await runtime.startPersistentExec({
+        execId: id, command, externalOwner: request.owner, nodeId: node.nodeId,
+        cwd: request.args.cwd, sessionCwd: request.context.cwd,
+        onBeforeProcessLaunch: () => { options?.assertExternalOwnerActive?.(); launchAttempted = true; },
+      });
+      const status = await runtime.waitForExecCompletion(entry.id, timeout.effectiveSeconds * 1000);
+      if (status) {
+        try {
+          const cwd = await runtime.readFinishedExecWorkingDirectory(entry);
+          return { execId: entry.id, background: false,
+            output: await runtime.buildForegroundExecResult(entry, status, timeout.warning),
+            ...(cwd ? { cwd } : {}),
+          };
+        } finally { await runtime.finalizeForegroundExec(entry.id); }
+      }
+      const cwd = await runtime.readLiveExecWorkingDirectory(entry);
+      await runtime.markExecForBackgroundNotification(entry.id);
+      return { execId: entry.id, background: true,
+        output: await runtime.buildBackgroundTimeoutResult(entry, timeout.effectiveSeconds, timeout.warning),
+        ...(cwd ? { cwd } : {}),
+      };
+    } catch (error) {
+      if (launchAttempted) throw error;
+      const beforeEffect = new NodeProviderError('NODE_EXTERNAL_EXEC_BEFORE_EFFECT', 'External Docker exec was unavailable before process launch.');
+      (beforeEffect as NodeProviderError & { execStarted: false }).execStarted = false;
+      throw beforeEffect;
+    }
+  }
+
+  /** Same-Main only; the original external record and exact generation are checked by the caller. */
+  async queryExternalExec(owner: ExternalNodeOwner, execId: string, generation: string): Promise<unknown> {
+    const state = await this.readState();
+    const node = state.nodes.find(item => item.nodeId === getExternalExec(owner, execId)?.nodeId);
+    if (!node || node.generation !== generation || state.destroys.some(intent => intent.node.nodeId === node.nodeId)) {
+      throw new NodeProviderError('NODE_EXTERNAL_EXEC_GENERATION_UNAVAILABLE', 'External Docker execution generation is unavailable.');
+    }
+    const runtime = await this.getExecRuntime(node);
+    const entry = runtime.listRunningExecs().find(item => item.id === execId
+      && item.externalOwner?.externalId === owner.externalId && item.externalOwner.contextId === owner.contextId);
+    if (!entry) throw new NodeProviderError('NODE_EXTERNAL_EXEC_UNAVAILABLE', 'External Docker execution is unavailable.');
+    const status = await runtime.waitForExecCompletion(execId, 20);
+    const cwd = status ? await runtime.readFinishedExecWorkingDirectory(entry) : await runtime.readLiveExecWorkingDirectory(entry);
+    return { state: status ? 'completed' : 'running',
+      output: status ? await runtime.buildForegroundExecResult(entry, status) : await runtime.buildBackgroundTimeoutResult(entry, 0),
+      ...(cwd ? { cwd } : {}),
+    };
+  }
+
   async invokeFilesystem(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown> {
     if (options?.signal?.aborted) throw new NodeProviderError('DOCKER_WORKTREE_CANCELLED', 'Docker worktree filesystem operation was cancelled before provider effect.', true);
+    if (request.owner) options?.assertExternalOwnerActive?.();
     const state = await this.readState(); const node = state.nodes.find(item => item.nodeId === request.nodeId); if (!node) throw new NodeProviderError('DOCKER_WORKTREE_NODE_NOT_FOUND', `Docker Node \`${request.nodeId}\` was not found.`);
     if (state.destroys.some(intent => intent.node.nodeId === node.nodeId)) throw new NodeProviderError('DOCKER_WORKTREE_DESTROY_PENDING', `Docker Node \`${node.nodeId}\` has a committed destroy pending.`);
     this.assertCurrentConfig(node);
     const { readiness } = await this.inspectReadiness(node, options); this.assertExecutionReady(node, readiness);
+    if (request.owner) options?.assertExternalOwnerActive?.();
     if (['write', 'mkdir', 'remove'].includes(request.operation) && path.isAbsolute(request.path)
       && !inside(node.worktreePath, path.resolve(request.path))) {
       throw new NodeProviderError('DOCKER_WORKTREE_PATH_DENIED', 'Docker worktree mutation path is outside the exact worktree.');
@@ -692,6 +775,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       let resolved: string | undefined;
       try { resolved = await fs.realpath(request.path); } catch {}
       if (resolved && inside(node.artifactDir, resolved)) {
+        if (request.owner) throw new NodeProviderError('NODE_EXTERNAL_ARTIFACT_DENIED', 'External Node calls cannot read execution artifacts.');
         const native = createNativeFileOperations();
         if (request.operation === 'stat') return native.stat(resolved);
         if (request.operation === 'readdir') return native.readdir(resolved);
@@ -705,6 +789,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       ...(request.context.cwd ? { cwd: request.context.cwd } : {}) });
     if (Buffer.byteLength(input, 'utf8') > MAX_OUTPUT) throw new NodeProviderError('DOCKER_WORKTREE_HELPER_INPUT_TOO_LARGE', 'Docker worktree filesystem input exceeds the fixed 8 MiB provider limit.');
     let output: DockerResult;
+    if (request.owner) options?.assertExternalOwnerActive?.();
     try { output = await this.docker.run(['exec', '-i', '-e', `FOXWARM_WORKTREE_ROOT=${node.worktreePath}`, node.containerId, 'node', HELPER_PATH], { input, timeoutMs: 90_000, maxOutputBytes: MAX_OUTPUT, signal: options?.signal }); }
     catch { throw new NodeProviderError(options?.signal?.aborted ? 'DOCKER_WORKTREE_CANCELLED' : 'DOCKER_WORKTREE_HELPER_FAILED', options?.signal?.aborted ? `Docker worktree filesystem operation \`${request.operation}\` was cancelled.` : `Docker worktree filesystem operation \`${request.operation}\` failed.`, true); }
     let parsed: any; try { parsed = JSON.parse(output.stdout); } catch { throw new NodeProviderError('DOCKER_WORKTREE_HELPER_INVALID', 'Docker worktree helper returned an invalid response.'); }

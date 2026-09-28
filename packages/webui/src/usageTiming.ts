@@ -2,7 +2,6 @@ export type DurationSample = number | null | 'invalid'
 
 export type DerivedRequestTiming = {
   apiDurationMs: DurationSample
-  betweenRequestsMs: DurationSample
 }
 
 type TimingMessage = {
@@ -38,36 +37,22 @@ const readPersistedRequestTiming = (value: unknown): PersistedRequestTiming | nu
   }
 }
 
-/**
- * Derive per-request API and inter-request durations without crossing a model
- * message whose historical timing is unavailable. Tool/user rows do not break
- * the chain because they are precisely the work performed between requests.
- */
+/** Read each model's own persisted request duration without inferring absent history. */
 export const deriveRequestTimings = (messages: readonly TimingMessage[]): DerivedRequestTiming[] => {
-  let previousCompletedAt: number | null = null
-
   return messages.map((message) => {
     if (message.role !== 'model') {
-      return { apiDurationMs: null, betweenRequestsMs: null }
+      return { apiDurationMs: null }
     }
 
     const timing = readPersistedRequestTiming(message.__meta?.llmRequestTiming)
     if (timing === null) {
-      previousCompletedAt = null
-      return { apiDurationMs: null, betweenRequestsMs: null }
+      return { apiDurationMs: null }
     }
     if (timing === 'invalid') {
-      previousCompletedAt = null
-      return { apiDurationMs: 'invalid', betweenRequestsMs: 'invalid' }
+      return { apiDurationMs: 'invalid' }
     }
 
-    const betweenRequestsMs: DurationSample = previousCompletedAt === null
-      ? null
-      : timing.startedAt >= previousCompletedAt
-        ? timing.startedAt - previousCompletedAt
-        : 'invalid'
-    previousCompletedAt = timing.completedAt
-    return { apiDurationMs: timing.durationMs, betweenRequestsMs }
+    return { apiDurationMs: timing.durationMs }
   })
 }
 

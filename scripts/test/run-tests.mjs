@@ -113,6 +113,9 @@ function unitGroups() {
   return [
     {
       name: 'backend',
+      // Backend test files are short-lived; keep their logger worker out of teardown.
+      // The dedicated async logger test removes this setting in its child process.
+      env: { FOXWARM_SYNC_FILE_LOG: process.env.FOXWARM_SYNC_FILE_LOG ?? '1' },
       steps: [
         ...backendShards.map((files, index) => nodeTestStep(`backend-${String(index + 1).padStart(2, '0')}`, files, { concurrency: 8, timeoutMs: 600_000 })),
         ...(vectorFailure ? [nodeTestStep('vector.indexFailure', [vectorFailure], { timeoutMs: 120_000 })] : []),

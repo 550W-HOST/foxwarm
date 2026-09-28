@@ -136,7 +136,7 @@ Common shapes:
 | `write` / `edit` | success string; failure raises an exception |
 | `apply_patch` | string summarizing changed files |
 | `search_tools` | dictionary containing one `output` string with bounded declarations, counts, and warnings |
-| `request_model_without_context` | dictionary containing `text` |
+| `request_model_without_context` | dictionary containing `text` and `parts` (text and stored-image references) |
 
 Use `search_tools` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
 
@@ -195,6 +195,16 @@ def main(args):
 ```
 
 Pass `model="provider/model"` to select a model. If omitted, the owner session's selected model is used.
+
+The result contains `text` and `parts`. Image parts reference stored bytes rather than containing base64. Reasoning, tool calls, and provider metadata are not included. To return images to the calling session, return the result object, or an object containing its `parts`:
+
+```python
+def main(args):
+    result = request_model_without_context(args["prompt"])
+    return result
+```
+
+Returned images become tool-result images that the session can display and access with the image tools. Reading only `result["text"]` does not return the images.
 
 ## Run lifecycle
 

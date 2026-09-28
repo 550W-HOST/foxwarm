@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { webuiReactAliases } from './reactRendererAliases.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webuiRoot = path.resolve(__dirname, '..')
@@ -14,9 +15,6 @@ const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-composer-paste-'))
 const entryPath = path.join(tempDir, 'fixture.tsx')
 const outputDirectory = path.join(tempDir, 'dist')
 const assetsDirectory = path.join(webuiRoot, 'dist/assets')
-const preactCompatPath = fileURLToPath(import.meta.resolve('preact/compat'))
-const preactCompatClientPath = fileURLToPath(import.meta.resolve('preact/compat/client'))
-const preactJsxRuntimePath = fileURLToPath(import.meta.resolve('preact/jsx-runtime'))
 let server
 let fixtureUrl
 
@@ -25,8 +23,27 @@ await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
   import InlineComposerEditor from ${JSON.stringify(path.join(webuiRoot, 'src/components/InlineComposerEditor.tsx'))}
-  import { makePlainComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
+  import { loadComposerDraft, makePlainComposerDraft, serializeComposerDraft } from ${JSON.stringify(path.join(webuiRoot, 'src/composerDraft.ts'))}
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [{ name: '/help', description: 'Help' }] }) })
+  window.fixtureMicMode = 'ok'
+  window.fixtureStreamMode = 'ok'
+  window.fixtureStoppedTracks = 0
+  window.fixtureStreamSessions = []
+  window.fixtureGetUserMedia = async () => {
+    if (window.fixtureMicMode === 'reject') throw new Error('Microphone access denied')
+    if (window.fixtureMicMode === 'hold') await new Promise(resolve => { window.fixtureReleaseMicrophone = resolve })
+    return { getTracks: () => [{ stop() { window.fixtureStoppedTracks += 1 } }] }
+  }
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: (...args) => window.fixtureGetUserMedia(...args) } })
+  window.AudioContext = class {
+    sampleRate = 16000
+    destination = {}
+    createMediaStreamSource() { return { connect() {}, disconnect() {} } }
+    createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null } }
+    createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} } }
+    resume() { return Promise.resolve() }
+    close() { return Promise.resolve() }
+  }
   const noop = async () => {}
   const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window)
   const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window)
@@ -69,21 +86,26 @@ await writeFile(entryPath, `
     window.fixtureSetSendKeyMode = setSendKeyMode
     window.fixtureRedraw = () => redraw(value => value + 1)
     const props = {
-      sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: false,
+      sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: true,
       modelOptions: [], currentModelKey: 'model/current', sessionModel: 'model/current', defaultModelKey: 'model/current',
       childModelDefault: 'model/current', effectiveChildModelKey: 'model/current', effectiveEffort: 'medium', effectiveChildEffort: 'medium',
       onChangeModel: noop, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
       onRefreshModels: noop, onOpenModelSettings: () => {},
       onSend: async value => { window.fixtureSends.push(value); return window.fixtureAccept },
-      onTranscribeAudio: async () => {
-        if (window.fixtureHoldTranscription) await new Promise(resolve => { window.fixtureReleaseTranscription = resolve })
-        return { text: 'transcript', status: 200, rawLength: 0, textLength: 10, responsePreview: '' }
+      onCreateStreamingTranscriber: async callbacks => {
+        if (window.fixtureStreamMode === 'reject') throw new Error('Streaming setup unavailable')
+        const session = { callbacks, sent: [], stopped: false, cancelled: false,
+          sendAudioChunk(chunk) { this.sent.push(chunk) }, stop() { this.stopped = true }, cancel() { this.cancelled = true } }
+        window.fixtureStreamSessions.push(session)
+        return session
       },
-      onCreateStreamingTranscriber: async () => ({ sendAudioChunk() {}, stop() {}, cancel() {} }),
-      onDraftEdited: text => { window.fixtureDraft = text },
     }
     return <div id="host"><ChatComposer {...props} /></div>
   }
+  // Observe the canonical persisted draft rather than a production edit callback.
+  Object.defineProperty(window, 'fixtureDraft', {
+    get: () => serializeComposerDraft(loadComposerDraft(window.fixtureCurrentSession || 'fixture/main')),
+  })
   function StaleSameSessionPropFixture() {
     const editorRef = useRef(null)
     const [disabled, setDisabled] = useState(false)
@@ -108,7 +130,6 @@ await writeFile(entryPath, `
   }
   window.fixtureSends = []
   window.fixtureAccept = false
-  window.fixtureHoldTranscription = false
   const fixtureRoot = createRoot(document.getElementById('root'))
   window.fixtureRenderStaleSameSessionProp = () => fixtureRoot.render(<StaleSameSessionPropFixture />)
   fixtureRoot.render(<Fixture />)
@@ -147,7 +168,7 @@ await writeFile(entryPath, `
 before(async () => {
   await esbuild.build({
     entryPoints: [entryPath], outdir: outputDirectory, bundle: true, format: 'esm', platform: 'browser', target: 'es2020', jsx: 'automatic',
-    alias: { react: preactCompatPath, 'react-dom': preactCompatPath, 'react-dom/client': preactCompatClientPath, 'react/jsx-runtime': preactJsxRuntimePath },
+    alias: webuiReactAliases,
     loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, logLevel: 'silent',
   })
   const cssAsset = (await readdir(assetsDirectory)).find(name => /^index-.*\.css$/.test(name))
@@ -180,6 +201,17 @@ async function withBrowser(spec, run) {
   } finally {
     await browser.close()
   }
+}
+
+async function setModalText(page, value) {
+  await page.$eval('textarea[aria-label="Full pasted text"]', (node, nextValue) => {
+    // The native setter mirrors browser input; assigning node.value directly
+    // updates React's value tracker before the input event reaches onChange.
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    if (!setValue) throw new Error('Native textarea value setter is unavailable')
+    setValue.call(node, nextValue)
+    node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
+  }, value)
 }
 
 const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
@@ -219,11 +251,11 @@ for (const spec of browsers) {
     assert.equal(modalGeometry.width >= modalGeometry.viewportWidth * 0.75 && modalGeometry.width <= modalGeometry.viewportWidth * 0.81, true)
     assert.equal(modalGeometry.height >= modalGeometry.viewportHeight * 0.75 && modalGeometry.height <= modalGeometry.viewportHeight * 0.81, true)
     assert.equal(modalGeometry.textareaHeight > modalGeometry.height * 0.5, true)
-    await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'edited\n\n  block'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+    await setModalText(page, 'edited\n\n  block')
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Cancel').click())
     assert.equal(await page.evaluate(text => window.fixtureDraft.includes(`${text}</pasted-text>`), pasted), true)
     await page.click('.foxwarm-composer-pasted-text-chip')
-    await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'edited\n\n  block'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+    await setModalText(page, 'edited\n\n  block')
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save').click())
     assert.equal(await page.evaluate(() => window.fixtureDraft), 'before<pasted-text>edited\n\n  block</pasted-text>X\nYafter')
     await page.waitForFunction(() => document.activeElement?.closest('.foxwarm-composer-pasted-text-chip'))
@@ -252,7 +284,7 @@ for (const spec of browsers) {
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
     await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste('b'.repeat(2000)) })
     await page.click('.foxwarm-composer-pasted-text-chip')
-    await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'ordinary </pasted-text> text'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+    await setModalText(page, 'ordinary </pasted-text> text')
     assert.equal(await page.$eval('button', () => !![...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save')?.disabled), true)
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Restore to text').click())
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
@@ -312,6 +344,7 @@ for (const spec of browsers) {
       document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
       document.documentElement.classList.remove('dark')
     })
+    await page.waitForFunction(() => window.fixtureReady && window.fixtureEditor()?.dataset.empty === 'true' && window.fixtureEditor()?.childNodes.length === 0)
     assert.deepEqual(await page.$eval(editor, node => ({ empty: node.dataset.empty, children: node.childNodes.length })), { empty: 'true', children: 0 })
 
     await page.click(editor)
@@ -471,6 +504,7 @@ for (const spec of browsers) {
     await page.reload({ waitUntil: 'load' })
     await page.waitForSelector(editor)
     await page.evaluate(() => document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console'))
+    await page.waitForFunction(() => window.fixtureEditor()?.querySelectorAll('[data-composer-trailing-newline]').length === 1)
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-trailing-newline]').length), 1)
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     const restoredEnd = await page.evaluate(() => {
@@ -1334,6 +1368,183 @@ test(`${spec.name} restores caret and selected ranges through custom undo and re
 }))
 }
 
+for (const spec of browsers) {
+test(`${spec.name} inserts live transcription at the retained caret and keeps one undo step`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  const record = 'button[aria-label="Start recording"]'
+  await page.type(editor, 'before after')
+  await page.evaluate(() => window.fixtureSelectText(7, 7))
+  await page.click(record)
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 1 && window.fixtureEditor()?.contentEditable === 'false')
+  assert.equal(await page.$(record), null)
+  assert.equal(await page.$('#audio-upload'), null)
+  assert.equal(await page.$('button[aria-label="Send message"]:disabled') !== null, true)
+  assert.equal(await page.$('[aria-label="Attach files"]') !== null, true)
+  assert.equal(await page.evaluate(() => document.body.textContent.includes('Live ASR preview') || document.body.textContent.includes('Rec')), false)
+  await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onPartial('今'))
+  await page.waitForFunction(() => window.fixtureDraft === 'before 今after')
+  await page.evaluate(() => {
+    const session = window.fixtureStreamSessions[0]
+    session.callbacks.onPartial('今天')
+    session.callbacks.onPartial('今天')
+    session.callbacks.onPartial('今天天')
+    session.callbacks.onPartial('今天')
+  })
+  await page.waitForFunction(() => window.fixtureDraft === 'before 今天after')
+  await page.keyboard.type('blocked')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'before 今天after')
+  await page.click('button[aria-label="Stop recording and transcribe"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions[0].stopped && !!document.querySelector('button[aria-label="Finalizing transcription"]'))
+  await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onFinal('今天天气'))
+  await page.waitForFunction(() => window.fixtureDraft === 'before 今天天气after' && window.fixtureEditor()?.contentEditable === 'true')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'before after')
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), '')
+}))
+
+test(`${spec.name} inserts next to atomic blocks and appends when this Session has no caret`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'left right')
+  await page.evaluate(() => { window.fixtureSelectText(5, 5); window.fixturePaste('p'.repeat(2000)) })
+  await page.waitForSelector('.foxwarm-composer-pasted-text-chip')
+  const before = await page.evaluate(() => window.fixtureDraft)
+  await page.evaluate(() => {
+    const root = window.fixtureEditor()
+    const chip = root.querySelector('[data-composer-pasted-text-id]')
+    window.fixtureCaretAtRootOffset([...root.childNodes].indexOf(chip))
+  })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 1)
+  await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onPartial('语音'))
+  await page.waitForFunction(() => window.fixtureDraft.includes('语音<pasted-text>'))
+  await page.$eval('[data-composer-block-remove]', node => node.click())
+  await page.evaluate(() => {
+    window.fixturePaste('blocked')
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['one'], 'during.txt', { type: 'text/plain' }))
+    const input = document.querySelector('#file-upload')
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    const drop = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(drop, 'dataTransfer', { value: transfer })
+    window.fixtureEditor().dispatchEvent(drop)
+  })
+  assert.equal(await page.evaluate(() => window.fixtureDraft), before.replace('<pasted-text>', '语音<pasted-text>'))
+  await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onFinal('语音稿'))
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), before.replace('<pasted-text>', '语音稿<pasted-text>'))
+
+  await page.evaluate(() => {
+    localStorage.setItem('composer_draft_v1_fixture/no-caret', JSON.stringify({ version: 1, segments: [{ type: 'text', text: 'tail' }] }))
+    getSelection()?.removeAllRanges()
+    window.fixtureSetSession('fixture/no-caret')
+  })
+  await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'tail')
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 2)
+  await page.evaluate(() => window.fixtureStreamSessions[1].callbacks.onFinal('after'))
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true')
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'tailafter')
+}))
+
+test(`${spec.name} keeps partial text on error and ignores late callbacks across Sessions`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'old')
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 1)
+  await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onPartial(' partial'))
+  await page.waitForFunction(() => window.fixtureDraft === 'old partial')
+  await page.evaluate(() => window.fixtureSetSession('fixture/new'))
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/new' && window.fixtureEditor()?.contentEditable === 'true')
+  assert.equal(await page.evaluate(() => window.fixtureStreamSessions[0].cancelled), true)
+  await page.evaluate(() => {
+    const old = window.fixtureStreamSessions[0]
+    old.callbacks.onPartial('late')
+    old.callbacks.onFinal('late final')
+  })
+  assert.equal(await page.evaluate(() => window.fixtureDraft), '', 'late callbacks must not change the new Session draft')
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments[0].text), 'old partial')
+  await page.type(editor, 'new')
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 2)
+  await page.evaluate(() => {
+    const current = window.fixtureStreamSessions[1]
+    current.callbacks.onPartial(' live')
+    current.callbacks.onError('ASR unavailable')
+    current.callbacks.onFinal('should be ignored')
+  })
+  await page.waitForFunction(() => window.fixtureDraft === 'new live' && window.fixtureEditor()?.contentEditable === 'true')
+  assert.equal(await page.$eval('[role="alert"]', node => node.textContent.includes('ASR unavailable')), true)
+  await page.evaluate(() => window.fixtureStreamSessions[1].callbacks.onPartial('ignored'))
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'new live')
+}))
+
+test(`${spec.name} preserves selected text, committed composition, and partial text on empty final`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'ab')
+  await page.evaluate(() => window.fixtureSelectText(0, 1))
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 1)
+  await page.evaluate(() => {
+    const session = window.fixtureStreamSessions[0]
+    session.callbacks.onPartial('X')
+    session.callbacks.onFinal('')
+  })
+  await page.waitForFunction(() => window.fixtureDraft === 'aXb' && window.fixtureEditor()?.contentEditable === 'true')
+  await page.evaluate(() => {
+    window.fixtureSelectText(3, 3)
+    const node = window.fixtureEditor()
+    node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const selection = getSelection()
+    const range = selection.getRangeAt(0)
+    const inserted = document.createTextNode('中')
+    range.insertNode(inserted)
+    range.setStart(inserted, 1)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    node.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中' }))
+  })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 2)
+  await page.evaluate(() => window.fixtureStreamSessions[1].callbacks.onFinal('文'))
+  await page.waitForFunction(() => window.fixtureDraft === 'aXb中文' && window.fixtureEditor()?.contentEditable === 'true')
+}))
+
+test(`${spec.name} unlocks the draft on microphone rejection and retries`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.evaluate(() => { window.fixtureMicMode = 'reject' })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true' && document.querySelector('[role="alert"]')?.textContent.includes('Microphone access denied'))
+  assert.equal(await page.evaluate(() => window.fixtureStreamSessions.length), 0)
+  await page.type(editor, 'still editable')
+  await page.evaluate(() => { window.fixtureMicMode = 'ok' })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureStreamSessions.length === 1)
+  await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onFinal(''))
+  await page.waitForFunction(() => window.fixtureDraft === 'still editable' && window.fixtureEditor()?.contentEditable === 'true')
+}))
+
+test(`${spec.name} discards pending microphone startup after a Session change or stream setup failure`, async () => withBrowser(spec, async page => {
+  const editor = '[role="textbox"][aria-label="Message"]'
+  await page.type(editor, 'old')
+  await page.evaluate(() => { window.fixtureMicMode = 'hold' })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'false' && !!window.fixtureReleaseMicrophone)
+  await page.evaluate(() => window.fixtureSetSession('fixture/fresh'))
+  await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/fresh' && window.fixtureEditor()?.contentEditable === 'true')
+  await page.evaluate(() => window.fixtureReleaseMicrophone())
+  await page.waitForFunction(() => window.fixtureStoppedTracks > 0)
+  assert.equal(await page.evaluate(() => window.fixtureStreamSessions.length), 0)
+  await page.type(editor, 'fresh')
+  await page.evaluate(() => { window.fixtureMicMode = 'ok'; window.fixtureStreamMode = 'reject' })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true' && document.querySelector('[role="alert"]')?.textContent.includes('Streaming setup unavailable'))
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'fresh')
+}))
+}
+
 test('Chromium blocks custom and native draft mutations throughout disabled transitions', async () => withBrowser(browsers[0], async page => {
   const editor = '[role="textbox"][aria-label="Message"]'
   await page.evaluate(() => window.fixtureSetSession('fixture/disabled'))
@@ -1344,7 +1555,7 @@ test('Chromium blocks custom and native draft mutations throughout disabled tran
   await page.evaluate(() => { window.fixtureSelectText(5, 6); window.fixturePaste('d'.repeat(2000)) })
   const expected = await page.evaluate(() => window.fixtureDraft)
   await page.click('.foxwarm-composer-pasted-text-chip')
-  await page.$eval('textarea[aria-label="Full pasted text"]', node => { node.value = 'stale modal edit'; node.dispatchEvent(new InputEvent('input', { bubbles: true })) })
+  await setModalText(page, 'stale modal edit')
   await page.evaluate(() => {
     window.fixtureStaleSave = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Save')
     window.fixtureStaleRestore = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Restore to text')
@@ -1372,14 +1583,6 @@ test('Chromium blocks custom and native draft mutations throughout disabled tran
   await page.click('.foxwarm-composer-pasted-text-chip')
   assert.equal(await page.$('textarea[aria-label="Full pasted text"]'), null)
 
-  await page.evaluate(() => {
-    const transfer = new DataTransfer()
-    transfer.items.add(new File(['audio'], 'busy.wav', { type: 'audio/wav' }))
-    const input = document.querySelector('#audio-upload')
-    input.files = transfer.files
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-  })
-  await page.waitForFunction(previous => window.fixtureDraft === `${previous}\n\ntranscript`, {}, expected)
   await page.evaluate(() => window.fixtureSetLoading(false))
   await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true'
     && document.querySelector('.foxwarm-composer-pasted-text-chip')?.getAttribute('aria-disabled') === 'false')
@@ -1397,23 +1600,12 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.type(editor, 'session B')
   await page.evaluate(() => window.fixtureSetSession('fixture/main'))
   await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'session A')
-  await page.evaluate(() => {
-    window.fixtureHoldTranscription = true
-    const transfer = new DataTransfer()
-    transfer.items.add(new File(['audio'], 'sample.wav', { type: 'audio/wav' }))
-    const input = document.querySelector('#audio-upload')
-    input.files = transfer.files
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-  })
   await page.evaluate(() => window.fixtureSetSession('fixture/other'))
   await page.waitForFunction(() => window.fixtureCurrentSession === 'fixture/other')
   await new Promise(resolve => setTimeout(resolve, 100))
   assert.equal(await page.$eval(editor, node => node.textContent), 'session B')
-  await page.evaluate(() => window.fixtureReleaseTranscription())
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem('composer_draft_v1_fixture/main')).segments.some(segment => segment.type === 'text' && segment.text.includes('transcript')))
-  assert.equal(await page.$eval(editor, node => node.textContent), 'session B')
   await page.evaluate(() => { window.fixtureHoldDraftRestoreFrame = true; window.fixtureSetSession('fixture/main') })
-  await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'session A\n\ntranscript')
+  await page.waitForFunction(() => window.fixtureEditor()?.textContent === 'session A')
   await page.waitForFunction(() => window.fixtureHasHeldDraftRestoreFrame())
 
   await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste(Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n')) })
@@ -1440,7 +1632,7 @@ test('Chromium preserves storage, send, copy, selection, composition, slash, and
   await page.evaluate(() => window.fixtureSelectAll())
   await page.keyboard.down('Control'); await page.keyboard.press('x'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), '')
-  await page.evaluate(() => window.fixtureEditor().dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'historyUndo' })))
+  await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
   assert.equal(await page.evaluate(() => window.fixtureDraft), exact)
 
   await page.evaluate(() => { window.fixtureAccept = false })

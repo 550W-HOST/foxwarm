@@ -91,31 +91,26 @@ Session broadcast has no aggregate failure promise. It dispatches to eligible ch
 
 [2026-09-01, updated 2026-09-06] Ordinary-text tool progress is a generic per-channel-instance presentation option, configured as `channelProgress: { intervalMs }` with a 30,000–1,800,000 ms bound; omission or `false` disables it. Main owns one transient in-memory coordinator keyed by turn, channel instance, and conversation. It consumes only provider-neutral top-level tool start/finish facts, stores bounded sanitized names/counts/running call IDs, uses fixed non-sliding per-target timers, and never writes Session history, archives, catalog state, or recovery data. Sanitization preserves underscores so canonical tool names remain readable and distinct while retaining the existing control-character and channel-markup removal.
 
-Each target has an independent interval and report baseline. A due timer sends a best-effort standalone summary when starts are new or tools remain running. Before ordinary intermediate/final/stop/error text is delivered, that target's unreported summary is prepended and only its baseline is consumed; a terminal turn with pending activity and no ordinary text gets one final standalone flush. Delivery failure cannot poison the semantic turn, and reload/terminal cleanup plus a TTL fence remove stale timers. Explicit tool-owned channel sends, file delivery, typing, WebUI realtime/history, and canonical model content bypass decoration. Active WeWork stream-card delivery remains native and receives no duplicate text fallback; non-stream WeWork and other configured ordinary-text targets use the common path. Source-bound QQ delivery metadata remains attached to progress and decorated turn text.
+Each target has an independent interval and report baseline. A due timer sends a best-effort standalone summary when starts are new or tools remain running. Before ordinary intermediate/final/stop/error text is delivered, that target's unreported summary is prepended and only its baseline is consumed; a terminal turn with pending activity and no ordinary text gets one final standalone flush. Delivery failure cannot poison the semantic turn, and reload/terminal cleanup plus a TTL fence remove stale timers. Explicit tool-owned channel sends, file delivery, typing, WebUI realtime/history, and canonical model content bypass decoration. Active WeWork stream-card delivery remains native and receives no duplicate text fallback; non-stream WeWork and other configured ordinary-text targets use the common path. QQ and WeWork resolve passive context inside their adapters; progress and decorated turn text carry only generic turn metadata.
 
 The exact builtin tool name `wait` is presentation-silent for this fallback: its start/result is excluded from counts, running state, timers, heartbeats, prepends, and terminal flushes. This does not match aliases or suffixes and does not change the tool's Session wait semantics.
 
 ### D-channel-conversation-latest-passive-context
 
-QQ Bot message IDs and WeWork stream-card IDs are adapter-local passive-delivery
-context, not Router turn boundaries. Within one configured channel instance and
-scoped conversation, the latest inbound context owns subsequent typing,
-progress, and final delivery. QQ Bot keeps a bounded in-memory latest-message
-map and uses the serialized source ID only when that live context is missing.
-WeWork supersedes the previous active card, preserves its substantive model
-text while removing transient thinking/tool status, and finishes it before
-routing ongoing updates to the latest card. Different instances or
-conversations never share passive context. This policy adds no delivery ledger,
-outbox, or persisted adapter state.
+[2026-09-21] QQ Bot message IDs, WeWork stream-card IDs, and WeWork non-stream `response_url` callbacks are bounded adapter-local passive-delivery context, not Router state, queue boundaries, Worker RPC fields, or tool context. Within one configured Channel instance and scoped conversation, the latest valid inbound context owns subsequent automatic typing, progress, intermediate, final, lifecycle, and ordinary text delivery. Automatic Session output is broadcast to every eligible attachment; each adapter independently selects its passive context or proactive route.
+
+QQ Bot keeps a bounded in-memory latest-message map and does not persist or receive serialized message IDs from the Session turn. WeWork supersedes the previous active card, preserves substantive model text while removing transient thinking/tool status, and finishes it before routing ongoing updates to the latest card. Any ordinary text uses that latest unfinished card without requiring turn metadata; `turnFinal` controls only completion and structured progress controls only progress content. After the card finishes or expires, the existing proactive route applies. Without a stream card, WeWork keeps a bounded in-memory latest `response_url` per conversation; one terminal attachment delivery takes and removes that callback before awaiting the send, so a newer inbound callback cannot be deleted by the older attempt. Explicit webhook overrides and ordinary proactive sends bypass that terminal context. Different instances or conversations never share passive context. This policy adds no delivery ledger, outbox, persisted adapter state, receipt layer, or strategy registry.
 
 ### D-channel-wework-aibot-proactive-delivery
 
-[2026-09-08] When WeWork AIBot WebSocket mode is enabled, ordinary proactive
+[2026-09-08, updated 2026-09-21] When WeWork AIBot WebSocket mode is enabled, ordinary proactive
 `sendMessage` and `sendFile` delivery use the existing long connection even if
 the same channel also has a legacy group webhook URL. An explicit per-call
 `webhookUrl` remains on the legacy text/image/file path, including inbound
 replies already bound to a native webhook URL; legacy-only configuration is
-unchanged. Source-bound stream-card replies and HTTP `response_url` replies
+unchanged. Without an explicit stream ID, that webhook override also bypasses
+automatic latest-card selection; a request-level reply carrying both an explicit
+stream ID and webhook URL retains its explicit stream binding. Adapter-local latest stream-card replies and terminal HTTP `response_url` replies
 retain their dedicated routes before this proactive selection. A selected
 WebSocket route never falls back to the webhook after an error, because timeout
 and disconnect outcomes can be ambiguous. Proactive WebSocket text uses the

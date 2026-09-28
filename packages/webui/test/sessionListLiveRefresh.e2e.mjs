@@ -190,12 +190,19 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
   const rowExists = sessionId => page.evaluate(id => (
     !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
   ), sessionId)
-  const clickDisclosure = sessionId => page.evaluate(id => {
-    const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
-    const button = row?.querySelector('button[aria-label="Expand child sessions"],button[aria-label="Collapse child sessions"]')
-    if (!(button instanceof HTMLElement)) throw new Error(`Missing disclosure for ${id}`)
-    button.click()
-  }, sessionId)
+  const clickDisclosure = async sessionId => {
+    // Creation/move HTTP responses can precede the bounded sidebar's new child counts.
+    await page.waitForFunction(id => {
+      const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+      return !!row?.querySelector('button[aria-label="Expand child sessions"],button[aria-label="Collapse child sessions"]')
+    }, { timeout: 10_000 }, sessionId)
+    await page.evaluate(id => {
+      const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+      const button = row?.querySelector('button[aria-label="Expand child sessions"],button[aria-label="Collapse child sessions"]')
+      if (!(button instanceof HTMLElement)) throw new Error(`Missing disclosure for ${id}`)
+      button.click()
+    }, sessionId)
+  }
   const disclosureExpanded = sessionId => page.evaluate(id => {
     const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
     return row?.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded') || null
@@ -204,14 +211,19 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
     return row?.querySelector('button[aria-expanded]')?.textContent?.trim() || null
   }, sessionId)
-  const waitForBranchReplay = (includedIds, excludedIds = []) => page.waitForResponse(response => {
-    const request = response.request()
-    if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/api/session-list/children')) return false
-    try {
-      const ids = JSON.parse(request.postData() || '{}').parents?.map(parent => parent.parentSessionId) || []
-      return includedIds.every(id => ids.includes(id)) && excludedIds.every(id => !ids.includes(id))
-    } catch { return false }
-  }, { timeout: 10_000 })
+  const waitForBranchReplay = (includedIds, excludedIds = []) => {
+    const replay = page.waitForResponse(response => {
+      const request = response.request()
+      if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/api/session-list/children')) return false
+      try {
+        const ids = JSON.parse(request.postData() || '{}').parents?.map(parent => parent.parentSessionId) || []
+        return includedIds.every(id => ids.includes(id)) && excludedIds.every(id => !ids.includes(id))
+      } catch { return false }
+    }, { timeout: 10_000 })
+    // Observe rejection immediately if the triggering interaction fails before awaiting replay.
+    void replay.catch(() => {})
+    return replay
+  }
 
   try {
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })

@@ -66,7 +66,7 @@ test('authenticated unversioned legacy client registers ready and can dispatch a
     }));
     const registered = await nextMessage();
     assert.equal(registered.type, 'registered');
-    assert.deepEqual(registered.nodeProtocol, { negotiated: 1, master: { min: 1, max: 2 } });
+    assert.deepEqual(registered.nodeProtocol, { negotiated: 1, master: { min: 1, max: 3 } });
     assert.equal(ws.readyState, WebSocket.OPEN);
     assert.equal(nodesManager.getNode('legacy-wire-node')?.protocolCompatibility.status, 'compatible');
 

@@ -129,7 +129,6 @@ test('message router refreshes stale session prompt snapshot before processing a
       conversationId,
       senderId: 'webui',
       username: 'webui',
-      preferDirectReply: true,
       reply: async (text: string) => { replies.push(text); },
       sendTyping: async () => {},
     }, {

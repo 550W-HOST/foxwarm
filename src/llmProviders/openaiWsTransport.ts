@@ -52,8 +52,10 @@ type OpenAIWsRequestOptions = {
     placement: 'local' | 'session-worker';
     signal: AbortSignal;
     hardTimeoutMs?: number;
+    streamContentInactivityTimeoutMs?: number;
     diagnostics?: OpenAIWsAttemptDiagnostics;
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    onImageGenerationActivity?: () => void;
     onRawFrame?: (frame: string) => void;
 };
 
@@ -371,6 +373,7 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     let streamingTimeoutError: Error | undefined;
     const watchdog = createStreamingAttemptWatchdog({
         hardTimeoutMs: options.hardTimeoutMs,
+        streamContentInactivityTimeoutMs: options.streamContentInactivityTimeoutMs,
         onTimeout: error => {
             streamingTimeoutError = error;
             attemptAbortController.abort();
@@ -378,12 +381,12 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     });
     const handleSafetyBuffering = (metadata: Record<string, unknown>) => {
         const boundedMetadata = boundSafetyBufferingMetadata(metadata);
-        watchdog.enterSafetyBuffering(boundedMetadata);
+        const inactivityTimeoutMs = watchdog.enterSafetyBuffering(boundedMetadata);
         emitDiagnostic('warn', {
             providerType: 'openai-ws',
             ...options.diagnostics,
             metadata: boundedMetadata,
-        }, 'OpenAI response entered safety buffering; extending the output inactivity timeout to 600000ms.');
+        }, `OpenAI response entered safety buffering; extending the output inactivity timeout to ${inactivityTimeoutMs}ms.`);
     };
     const attemptSignal = attemptAbortController.signal;
     matched?.chain.resource.removeIdleListeners?.();
@@ -602,6 +605,10 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
             onSafetyBuffering: handleSafetyBuffering,
+            onImageGenerationActivity: () => {
+                watchdog.reportImageGenerationActivity();
+                options.onImageGenerationActivity?.();
+            },
             onMeaningfulProgress: () => {
                 if (firstContentAt === undefined) firstContentAt = now();
                 watchdog.markMeaningfulProgress();

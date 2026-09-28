@@ -471,26 +471,29 @@ test('persistent exec expires background tracking records strictly after 24 hour
     await fs.writeJson(registryPath, { execs: [entry] });
     let dispatches = 0;
     let livenessChecks = 0;
+    const trackingExpired: string[] = [];
     const manager = new PersistentExecManager({
       registryPath,
       nodeId: 'master',
       getDefaultCwd: () => root,
       getExecTempDir: () => root,
       completionDispatcher: async () => { dispatches += 1; },
+      onTrackingExpired: entry => { trackingExpired.push(entry.id); },
       processOperations: { ...nativeProcessOperations, isRunning: () => { livenessChecks += 1; return !options.finished; } },
       now: () => fixedNow,
     });
-    return { root, registryPath, manager, counts: () => ({ dispatches, livenessChecks }) };
+    return { root, registryPath, manager, counts: () => ({ dispatches, livenessChecks }), trackingExpired };
   }
 
   await t.test('removes an alive background entry older than 24 hours without a liveness check', async () => {
-    const { root, registryPath, manager, counts } = await createRecoveredManager({
+    const { root, registryPath, manager, counts, trackingExpired } = await createRecoveredManager({
       id: 'exec_expiry_alive', ageMs: BACKGROUND_COMPLETION_EVENT_RETENTION_MS + 1, notifyOnCompletion: true,
     });
     try {
       await manager.initialize();
       assert.deepEqual(manager.listRunningExecs(), []);
       assert.deepEqual(counts(), { dispatches: 0, livenessChecks: 0 });
+      assert.deepEqual(trackingExpired, ['exec_expiry_alive']);
       assert.deepEqual((await fs.readJson(registryPath)).execs, []);
     } finally { await manager.shutdown(); await fs.remove(root); }
   });

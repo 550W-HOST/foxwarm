@@ -2,7 +2,7 @@ import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../chan
 import { channelProgressCoordinator, type ChannelProgressTarget } from '../channelProgress';
 import { logger } from '../common';
 import { CHANNELS_FILE, getChannelConfigById, normalizeChannelProgressInterval, readAppConfigFile } from '../config';
-import { ChannelTurnProgress, QueueSource, Session, SessionBroadcast } from '../types';
+import { ChannelTurnProgress, Session, SessionBroadcast } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 
@@ -234,44 +234,33 @@ function getProgressIntervalMs(channelInstanceId: string): number | undefined {
   }
 }
 
-function sourceDeliveryOptions(source: QueueSource | undefined, target: { channelId: string; conversationId: string }): any {
-  if (!source || (source.channelId || source.platform) !== target.channelId
-    || (source.conversationId || source.channelUserId) !== target.conversationId) return undefined;
-  return source.qqbotMessageId ? {
-    qqbotMessageId: source.qqbotMessageId,
-    qqbotChannelId: target.channelId,
-    qqbotConversationId: target.conversationId,
-  } : undefined;
-}
-
-function getChannelProgressTargets(sessionId: string, source?: QueueSource): ChannelProgressTarget[] {
+function getChannelProgressTargets(sessionId: string, turnId: string): ChannelProgressTarget[] {
   const attached = getChannelsBySession(sessionId);
-  const sourceTarget = source ? {
-    channelId: source.channelId || source.platform,
-    conversationId: source.conversationId || source.channelUserId,
-  } : undefined;
-  if (sourceTarget && !attached.some(target => target.channelId === sourceTarget.channelId && target.conversationId === sourceTarget.conversationId)) {
-    attached.push(sourceTarget);
-  }
   return attached.flatMap(target => {
     const intervalMs = getProgressIntervalMs(target.channelId);
     const channel = getChannelInstance(target.channelId);
     if (!intervalMs || !channel || channel.platform === 'webui') return [];
-    if (source?.weworkStreamId && target.channelId === (source.channelId || source.platform)
-      && target.conversationId === (source.conversationId || source.channelUserId)) return [];
     if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') return [];
-    const deliveryOptions = sourceDeliveryOptions(source, target);
+    if (channel.isTurnLifecycleActive?.(target.conversationId)) return [];
     return [{
       channelInstanceId: target.channelId,
       conversationId: target.conversationId,
       intervalMs,
-      send: (text: string) => channel.sendMessage(target.conversationId, text, deliveryOptions),
+      send: (text: string) => channel.sendMessage(target.conversationId, text, { channelProgressTurnId: turnId }),
     }];
   });
 }
 
-export function reportChannelTurnProgress(sessionId: string, turnId: string, source: QueueSource | undefined, progress: ChannelTurnProgress): void {
-  channelProgressCoordinator.report(turnId, getChannelProgressTargets(sessionId, source), progress);
+export function reportChannelTurnProgress(sessionId: string, turnId: string, progress: ChannelTurnProgress): void {
+  for (const target of getChannelsBySession(sessionId)) {
+    if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') continue;
+    const channel = getChannelInstance(target.channelId);
+    void channel?.handleTurnLifecycle?.(target.conversationId, {
+      channelProgressTurnId: turnId,
+      channelTurnProgress: progress,
+    }).catch(error => logger.error({ err: error, channelId: target.channelId, conversationId: target.conversationId }, 'Channel turn progress delivery failed'));
+  }
+  channelProgressCoordinator.report(turnId, getChannelProgressTargets(sessionId, turnId), progress);
 }
 
 export async function finishChannelTurnProgress(turnId: string): Promise<void> {
@@ -464,15 +453,10 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
   return (text: string, options?: any) => {
     const channels = getChannelsBySession(sessionId);
     const excludePlatforms = options?.excludePlatforms || [];
-    const targetChannel = options?.targetChannel;
     const isEmptyBroadcast = typeof text !== 'string' || text.trim().length === 0;
     logger.debug({ sessionId, channelCount: channels.length, excludePlatforms, textPreview: text.substring(0, 50) }, 'Broadcasting message');
 
     for (const channelInfo of channels) {
-      if (targetChannel && (targetChannel.channelId !== channelInfo.channelId || targetChannel.conversationId !== channelInfo.conversationId)) {
-        continue;
-      }
-
       if (isEmptyBroadcast && !options?.allowEmptyBroadcast) {
         continue;
       }
@@ -490,6 +474,12 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
 
       const channel = getChannelInstance(channelInfo.channelId);
       if (channel) {
+        if (isEmptyBroadcast) {
+          channel.handleTurnLifecycle?.(channelInfo.conversationId, options)?.catch((e: any) => {
+            logger.error({ err: e, channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Failed to finish channel turn');
+          });
+          continue;
+        }
         logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Calling channel.sendMessage');
         const deliveredText = decorateChannelProgressText(channelInfo, text, options);
         channel.sendMessage(channelInfo.conversationId, deliveredText, options)?.catch((e: any) => {
@@ -509,14 +499,19 @@ export async function deliverCommittedFinalToAttachments(
 ): Promise<{ attempted: number; delivered: number; failures: string[] }> {
   const result = { attempted: 0, delivered: 0, failures: [] as string[] };
   const excludePlatforms = options?.excludePlatforms || [];
-  const targetChannel = options?.targetChannel;
   const isEmpty = !text.trim();
   for (const target of getChannelsBySession(sessionId)) {
-    if (targetChannel && (targetChannel.channelId !== target.channelId || targetChannel.conversationId !== target.conversationId)) continue;
     if ((isEmpty && !options?.allowEmptyBroadcast) || excludePlatforms.includes(target.channelId)) continue;
     if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') continue;
     const channel = getChannelInstance(target.channelId);
     if (!channel) continue;
+    if (isEmpty) {
+      if (!channel.handleTurnLifecycle) continue;
+      result.attempted += 1;
+      try { await channel.handleTurnLifecycle(target.conversationId, options); result.delivered += 1; }
+      catch (error: any) { result.failures.push(`${target.channelId}:${target.conversationId}: ${error?.message || error}`); }
+      continue;
+    }
     result.attempted += 1;
     try {
       const deliveredText = decorateChannelProgressText(target, text, options);

@@ -17,6 +17,14 @@ export const standaloneSelftests = [
   'lib/selftest/toolLoopStallSelfTest.js',
 ]
 
+// Driven by test/app-e2e/run-app-e2e.mjs with a live application and a scripted
+// provider, so they are never run standalone by the routine unit groups.
+export const appHarnessE2e = [
+  'test/app-e2e/core.e2e.mjs',
+  'test/app-e2e/imageGeneration.e2e.mjs',
+  'test/app-e2e/imageGenerationRestart.e2e.mjs',
+]
+
 const testLike = /(?:\.test\.(?:ts|js|mjs|cjs)|\.e2e\.mjs|\/test_[^/]+\.py)$/
 
 const manualGroups = new Map([
@@ -55,7 +63,7 @@ function classify(file) {
   if (/^packages\/webui\/test\/.*\.e2e\.mjs$/.test(file)) {
     return appRuntimeE2e.includes(file) ? 'app-browser' : 'webui-browser'
   }
-  if (file === 'test/app-e2e/core.e2e.mjs') return 'app-browser'
+  if (appHarnessE2e.includes(file)) return 'app-browser'
   if (/^website\/tests\//.test(file)) return 'website-owned'
   return 'unclassified'
 }

@@ -2,9 +2,8 @@ import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from '.
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
 import type { SessionWorkerHost } from './sessionWorkerHost';
-import type { CompactionRequest, QueueSource } from './types';
+import type { CompactionRequest } from './types';
 import type { CompactCancellationResult, ToolNoiseCompactionResult } from './session/history';
-import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import { MODEL_EFFORTS, type ModelEffort } from './config';
 import type { ModelStreamDraftSnapshot } from './modelStreamDraft';
 
@@ -65,7 +64,7 @@ export type SessionWorkerBtwResult = {
 export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 14, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
-  retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
+  retry: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   dequeue: rpcMethod<Record<string, never>, SessionWorkerDequeueResult>(),
   runBtw: rpcMethod<{ message: string }, SessionWorkerBtwResult>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
@@ -251,14 +250,11 @@ export function createSessionWorkerRuntimeServiceHandler(
     async retry(input) {
       gate.assertActive();
       if (!input || typeof input !== 'object' || Array.isArray(input)
-        || Object.keys(input).some(key => key !== 'source')) {
-        throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'retry takes an optional serialized source only.');
+        || Object.keys(input).length !== 0) {
+        throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'retry takes no fields.');
       }
-      const source = Object.prototype.hasOwnProperty.call(input, 'source')
-        ? normalizeSessionTurnDeliverySource(input.source)
-        : undefined;
       await options.beforeRetry?.();
-      const projection = await host.retry(source);
+      const projection = await host.retry();
       await options.afterRetryBeforeResponse?.();
       return projection;
     },

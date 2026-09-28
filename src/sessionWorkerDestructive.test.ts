@@ -11,7 +11,6 @@ import { createSessionRuntimeServiceHandler, sessionRuntimeServiceDescriptor } f
 import { teardownSessionWorkerForDelete } from './sessionWorkerDelete';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -44,7 +43,6 @@ function makeFixture(
   readProcessIdentity?: (pid: number) => string | null,
 ) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv }, stopCompletionTimeoutMs, readProcessIdentity,
@@ -52,16 +50,15 @@ function makeFixture(
       const session = sessionManager.getAllSessions().get(sessionId);
       return session ? { agent: session.agent, aliases: session.aliases, parentSessionId: session.parentSessionId, displayName: session.displayName } : undefined;
     },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   const registry = new RpcServiceRegistry();
   registry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({
     worker: { store, registry: supervisor.projectionRegistry, ingress, supervisor },
   }));
   const transport = new LocalRpcTransport(registry, { maxPendingRequests: 32 });
   const runtime = new RpcClient(sessionRuntimeServiceDescriptor, transport);
-  return { store, sourceContexts, supervisor, ingress, registry, transport, runtime };
+  return { store, supervisor, ingress, registry, transport, runtime };
 }
 
 test('Worker crash before Stop acknowledgement returns outcome-unknown instead of false success', async () => {
@@ -529,7 +526,10 @@ test('dequeue aborts a busy provider and the same worker action loop consumes qu
   const fixture = makeFixture(root, { FOXWARM_TEST_SLOW_PROVIDER: '1', FOXWARM_TEST_SLOW_SESSION: sessionId });
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   const idle = baseSession(idleSessionId);
-  idle.queue.push({ type: 'user', parts: [{ text: 'idle queued input' }] });
+  idle.queue.push(
+    { type: 'user', source: { platform: 'wework', channelId: 'wework-a', channelUserId: 'chat-a', conversationId: 'chat-a' }, parts: [{ text: 'idle queued input A' }] },
+    { type: 'user', source: { platform: 'qqbot', channelId: 'qq-a', channelUserId: 'c2c:user-a', conversationId: 'c2c:user-a' }, parts: [{ text: 'idle queued input B' }] },
+  );
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   await fs.outputJson(path.join(root, 'state', 'sessions', `${idleSessionId}.json`), serializeSessionHistoryPayload(idle));
   await fs.outputJson(path.join(root, 'state', 'sessions', `${emptySessionId}.json`), serializeSessionHistoryPayload(baseSession(emptySessionId)));
@@ -543,12 +543,17 @@ test('dequeue aborts a busy provider and the same worker action loop consumes qu
     });
     await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${sessionId}`)));
     await fixture.ingress.enqueueEnsuringWorker(sessionId, {
-      type: 'user', parts: [{ text: 'queued dequeue follow-up' }],
+      type: 'user', source: { platform: 'wework', channelId: 'wework-a', channelUserId: 'chat-a', conversationId: 'chat-a' },
+      parts: [{ text: 'queued dequeue follow-up A' }],
+    });
+    await fixture.ingress.enqueueEnsuringWorker(sessionId, {
+      type: 'user', source: { platform: 'qqbot', channelId: 'qq-a', channelUserId: 'c2c:user-a', conversationId: 'c2c:user-a' },
+      parts: [{ text: 'queued dequeue follow-up B' }],
     });
 
     const started = Date.now();
     assert.deepEqual(await fixture.runtime.call('control', { sessionId, action: 'dequeue' }), {
-      action: 'dequeue', queuedItems: 1, stoppedCurrent: true, abortedInFlight: true,
+      action: 'dequeue', queuedItems: 2, stoppedCurrent: true, abortedInFlight: true,
     });
     assert.ok(Date.now() - started < 2_000, 'busy dequeue signals immediately instead of waiting behind the turn');
     await turn;
@@ -561,18 +566,20 @@ test('dequeue aborts a busy provider and the same worker action loop consumes qu
     const authority = await fs.readJson(statePath);
     const text = JSON.stringify(authority.history);
     assert.equal(text.split('slow dequeue question').length - 1, 1);
-    assert.equal(text.split('queued dequeue follow-up').length - 1, 1);
+    assert.equal(text.split('queued dequeue follow-up A').length - 1, 1);
+    assert.equal(text.split('queued dequeue follow-up B').length - 1, 1);
     assert.equal(text.split('deterministic child answer').length - 1, 1, 'queued work produces one final answer');
     assert.equal(authority.stopping, false);
     assert.equal(authority.meta.runQueuedAfterStop, undefined);
-    assert.equal(authority.history.length, 3, 'the aborted provider contributes no duplicate model/final row');
+    assert.equal(authority.history.length, 4, 'the aborted provider contributes no duplicate model/final row');
 
     assert.deepEqual(await fixture.runtime.call('control', { sessionId: idleSessionId, action: 'dequeue' }), {
-      action: 'dequeue', queuedItems: 1, stoppedCurrent: false, abortedInFlight: false,
+      action: 'dequeue', queuedItems: 2, stoppedCurrent: false, abortedInFlight: false,
     });
     const idleAuthority = await fs.readJson(path.join(root, 'state', 'sessions', `${idleSessionId}.json`));
     assert.equal(idleAuthority.queue.length, 0);
-    assert.equal(JSON.stringify(idleAuthority.history).split('idle queued input').length - 1, 1);
+    assert.equal(JSON.stringify(idleAuthority.history).split('idle queued input A').length - 1, 1);
+    assert.equal(JSON.stringify(idleAuthority.history).split('idle queued input B').length - 1, 1);
     assert.equal(JSON.stringify(idleAuthority.history).split('deterministic child answer').length - 1, 1);
 
     assert.deepEqual(await fixture.runtime.call('control', { sessionId: emptySessionId, action: 'dequeue' }), {
@@ -753,9 +760,11 @@ test('worker BTW snapshots a busy owner concurrently and serializes display-only
     assert.equal(authority.busy, false);
     assert.equal(authority.queue.length, 0);
     assert.equal(stub.history.length, 0, 'Main catalog stub never hydrates Worker authority');
-    assert.equal(sent.length, 4, 'each committed display row receives one attachment broadcast');
+    assert.equal(sent.length, 5, 'the turn final plus each committed display row receive one attachment broadcast');
+    assert.equal(sent.filter(item => item.options.turnFinal === true).length, 1);
+    assert.equal(sent.filter(item => item.options.turnFinal === undefined).length, 4);
     assert.ok(sent.every(item => item.conversationId === 'btw-room'
-      && item.options.excludePlatforms.includes('webui') && item.options.turnFinal === undefined));
+      && item.options.excludePlatforms.includes('webui')));
     const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
     assert.equal(projection?.messageCount, authority.history.length);
     assert.equal(projection?.busy, false);
@@ -872,7 +881,6 @@ test('reciprocal Worker delete_session calls admit one pair and let its survivin
       [sourceB]: [{ id: 'delete-a', name: 'delete_session', args: { sessionId: sourceA } }],
     }),
   });
-  const replies: Array<{ sessionId: string; text: string }> = [];
   const drainedAuthorities = new Map<string, any>();
   let releaseAdmissionBarrier!: () => void;
   const admissionBarrier = new Promise<void>(resolve => { releaseAdmissionBarrier = resolve; });
@@ -885,9 +893,7 @@ test('reciprocal Worker delete_session calls admit one pair and let its survivin
   const queueSource = (sessionId: string): QueueSource => ({
     platform: 'test', channelId: 'reciprocal-delete', channelType: 'test',
     channelUserId: sessionId, conversationId: sessionId, senderId: sessionId,
-    preferDirectReply: true,
   });
-  const registrations: Array<() => void> = [];
   try {
     await sessionManager.loadSessions();
     for (const id of [sourceA, sourceB]) {
@@ -910,15 +916,6 @@ test('reciprocal Worker delete_session calls admit one pair and let its survivin
     await fixture.ingress.ensureWorkerOwner(sourceA);
     await fixture.ingress.ensureWorkerOwner(sourceB);
 
-    for (const id of [sourceA, sourceB]) {
-      const source = queueSource(id);
-      registrations.push(fixture.sourceContexts.register(id, source, {
-        ...source,
-        reply: async text => { replies.push({ sessionId: id, text }); },
-        sendTyping: async () => {},
-      }));
-    }
-
     const [turnA, turnB] = await Promise.allSettled([
       fixture.ingress.submitEnsuringWorker(sourceA, {
         type: 'user', source: queueSource(sourceA), clientMessageId: `reciprocal-a-${nonce}`,
@@ -936,8 +933,8 @@ test('reciprocal Worker delete_session calls admit one pair and let its survivin
         assert.fail(`reciprocal turn failed outside the tool result: ${result.reason?.code || result.reason?.message || result.reason}`);
       }
     }
-    assert.equal(JSON.stringify([turnA, turnB, replies]).includes('RPC_DRAIN_TIMEOUT'), false);
-    assert.equal(JSON.stringify([turnA, turnB, replies]).includes('RPC_CLOSED'), false);
+    assert.equal(JSON.stringify([turnA, turnB]).includes('RPC_DRAIN_TIMEOUT'), false);
+    assert.equal(JSON.stringify([turnA, turnB]).includes('RPC_CLOSED'), false);
 
     const survivingIds = [sourceA, sourceB].filter(id => sessionManager.getSessionCatalog(id));
     assert.equal(survivingIds.length, 1, 'exactly one reciprocal delete commits');
@@ -947,9 +944,6 @@ test('reciprocal Worker delete_session calls admit one pair and let its survivin
     assert.ok(deletedAuthority, 'target teardown observes the drained source authority before deletion');
     assert.match(JSON.stringify(deletedAuthority.history), /SESSION_DELETE_CONFLICT/);
     assert.match(JSON.stringify(deletedAuthority.history), /"retryable":true/);
-    assert.ok(replies.some(reply => reply.sessionId === deletedId && reply.text === '_[Execution stopped by user]_'),
-      'the conflicting target commits a terminal turn response before deletion');
-    assert.ok(replies.some(reply => reply.sessionId === survivorId && reply.text === 'deterministic child answer'));
 
     const survivorAuthority = await fs.readJson(getSessionHistoryFilePath(survivorId));
     assert.match(JSON.stringify(survivorAuthority.history), /deleted successfully/);
@@ -964,7 +958,6 @@ test('reciprocal Worker delete_session calls admit one pair and let its survivin
   } finally {
     releaseAdmissionBarrier();
     setBeforeCrossSessionDeletionAdmissionForTests(undefined);
-    for (const unregister of registrations) unregister();
     sessionManager.setSessionWorkerDeleteHandler(undefined);
     await sessionRuntime.shutdownSessionRuntime().catch(() => {});
     fixture.transport.close();

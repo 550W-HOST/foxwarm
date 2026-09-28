@@ -53,18 +53,6 @@ export function getPlainComposerDraftText(draft: ComposerDraft): string | null {
     : null
 }
 
-export function appendTextToComposerDraft(draft: ComposerDraft, text: string): ComposerDraft {
-  const trimmed = text.trim()
-  if (!trimmed) return draft
-  const segments = draft.segments.map(segment => ({ ...segment }))
-  const previousText = serializeComposerDraft(draft).trim().length > 0
-  const suffix = previousText ? `\n\n${trimmed}` : trimmed
-  const last = segments[segments.length - 1]
-  if (last?.type === 'text') last.text = `${last.text.replace(/\s+$/u, '')}${suffix}`
-  else segments.push({ type: 'text', text: suffix })
-  return makeComposerDraft(segments)
-}
-
 export function canConvertPasteToBlock(text: string): boolean {
   if (text.includes(PASTED_TEXT_CLOSE)) return false
   const characterCount = Array.from(text).length

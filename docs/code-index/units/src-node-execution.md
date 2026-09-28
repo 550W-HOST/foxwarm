@@ -9,6 +9,8 @@ Provides the versioned RPC boundary for canonical Node tool execution over provi
 
 ## Key exports
 
+- `plainJsonWithin(value, maxBytes)` — shared bounded plain-JSON copy for Node capability/schema disclosure; no Session authority is implied.
+
 - `nodeExecutionServiceDescriptor` — version 4 descriptor with fixed complete-capability execute, topology/provider list, selection validation, provider lifecycle, and compound copy methods; version 4 adds structured Node unavailability and core protocol compatibility to topology.
 - `createNodeExecutionServiceHandler()` — validates source identity, optional exact worker-source fence, non-master target, isolation binding, args, and optional routing snapshot before authoritative provider resolution.
 - `executeNodeTool()` / `listNodeTopology()` / `validateNodeSelection()` / `listNodeLifecycleProviders()` / `executeNodeLifecycle()` / `copyBetweenNodes()` — placement-neutral callers for Node execution and operation-specific topology/lifecycle/copy behavior.

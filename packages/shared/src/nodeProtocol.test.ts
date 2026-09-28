@@ -18,11 +18,13 @@ test('Node protocol ranges are strict bounded plain data', () => {
 
 test('missing protocol is explicit legacy generation one', () => {
   assert.deepEqual(resolveAdvertisedNodeProtocol(undefined), { range: LEGACY_NODE_PROTOCOL_RANGE, legacy: true });
-  assert.deepEqual(resolveAdvertisedNodeProtocol({ min: 1, max: 2 }), { range: CURRENT_NODE_PROTOCOL_RANGE, legacy: false });
+  assert.deepEqual(resolveAdvertisedNodeProtocol({ min: 1, max: 2 }), { range: { min: 1, max: 2 }, legacy: false });
+  assert.deepEqual(resolveAdvertisedNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE), { range: CURRENT_NODE_PROTOCOL_RANGE, legacy: false });
 });
 
 test('protocol negotiation covers rolling current and legacy combinations while rejecting disjoint ranges', () => {
-  assert.equal(negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE).negotiated, 2);
+  assert.equal(negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE).negotiated, 3);
+  assert.equal(negotiateNodeProtocol({ min: 1, max: 2 }, CURRENT_NODE_PROTOCOL_RANGE).negotiated, 2);
   assert.deepEqual(negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE), {
     status: 'compatible', client: CURRENT_NODE_PROTOCOL_RANGE, master: LEGACY_NODE_PROTOCOL_RANGE, legacyClient: false, negotiated: 1,
   });
@@ -32,7 +34,7 @@ test('protocol negotiation covers rolling current and legacy combinations while 
   assert.deepEqual(negotiateNodeProtocol({ min: 2, max: 4 }, { min: 3, max: 5 }), {
     status: 'compatible', client: { min: 2, max: 4 }, master: { min: 3, max: 5 }, legacyClient: false, negotiated: 4,
   });
-  const incompatible = negotiateNodeProtocol({ min: 3, max: 3 }, CURRENT_NODE_PROTOCOL_RANGE);
+  const incompatible = negotiateNodeProtocol({ min: 4, max: 4 }, CURRENT_NODE_PROTOCOL_RANGE);
   assert.equal(incompatible.status, 'upgrade-required');
-  assert.match(describeNodeProtocolCompatibility(incompatible), /client 3-3.*Master requires 1-2.*Update and restart/i);
+  assert.match(describeNodeProtocolCompatibility(incompatible), /client 4-4.*Master requires 1-3.*Update and restart/i);
 });

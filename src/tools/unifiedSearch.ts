@@ -331,7 +331,7 @@ function normalizeUnifiedToolQueryTerms(query: string): string[] {
     return normalizedQuery ? Array.from(new Set(normalizedQuery.split(/\s+/).filter(Boolean))) : [];
 }
 
-function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>): number {
+export function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>): number {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
         return 0;
@@ -382,6 +382,18 @@ function scoreUnifiedToolQuery(query: string, fields: Array<string | undefined>)
 
     score += matchedTerms * 12;
     return score;
+}
+
+export function compareUnifiedSearchResults(a: Record<string, any>, b: Record<string, any>): number {
+    const scoreCompare = Number(b._score || 0) - Number(a._score || 0);
+    if (scoreCompare !== 0) return scoreCompare;
+    const sourceCompare = String(a.source).localeCompare(String(b.source));
+    if (sourceCompare !== 0) return sourceCompare;
+    const scopeA = String(a.server || a.nodeId || '');
+    const scopeB = String(b.server || b.nodeId || '');
+    const scopeCompare = scopeA.localeCompare(scopeB);
+    if (scopeCompare !== 0) return scopeCompare;
+    return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
 async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string> {
@@ -545,17 +557,7 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
         }
     }
 
-    collected.sort((a, b) => {
-        const scoreCompare = Number(b._score || 0) - Number(a._score || 0);
-        if (scoreCompare !== 0) return scoreCompare;
-        const sourceCompare = String(a.source).localeCompare(String(b.source));
-        if (sourceCompare !== 0) return sourceCompare;
-        const scopeA = String(a.server || a.nodeId || '');
-        const scopeB = String(b.server || b.nodeId || '');
-        const scopeCompare = scopeA.localeCompare(scopeB);
-        if (scopeCompare !== 0) return scopeCompare;
-        return String(a.name || '').localeCompare(String(b.name || ''));
-    });
+    collected.sort(compareUnifiedSearchResults);
 
     const tools = collected.slice(0, limit).map(({ _score, ...tool }, index) => {
         if (!includeSchema || index < SEARCH_TOOLS_SCHEMA_DETAIL_LIMIT) {

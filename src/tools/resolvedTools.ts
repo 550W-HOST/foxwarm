@@ -43,7 +43,7 @@ export function buildUnifiedToolId(source: UnifiedToolSource, name: string, opti
   return `node:${options.nodeId}/${name}`;
 }
 
-function parseUnifiedToolId(toolId: string): { source: UnifiedToolSource; name: string; server?: string; nodeId?: string } {
+export function parseUnifiedToolId(toolId: string): { source: UnifiedToolSource; name: string; server?: string; nodeId?: string } {
   if (typeof toolId !== 'string' || !toolId.trim()) throw new Error('toolId is required');
   if (toolId.startsWith('builtin:')) {
     const name = toolId.slice(8).trim();

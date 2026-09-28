@@ -1,6 +1,6 @@
 # Unit: WebUI app
 
-Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/nodeTargets.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
+Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/ExperimentChatApp.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/package.json, packages/webui/package-lock.json, packages/webui/pnpm-lock.yaml, packages/webui/test/reactRendererAliases.mjs, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/popupWebUi.test.mjs, packages/webui/test/popupMove.e2e.mjs, packages/webui/test/nodeTargets.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs, packages/webui/test/experimentHostChat.e2e.mjs, packages/webui/test/experimentHostModelCompact.e2e.mjs, packages/webui/test/experimentHostModelCompact.provider.mjs
 Secondary files: packages/webui/src/realtime.ts, packages/webui/src/boundedSessionList.ts, packages/webui/src/components/CollapsedSidebarContainer.tsx, packages/webui/test/boundedSessionList.test.mjs, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
@@ -25,8 +25,12 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 
 ## App behavior
 
+- `main.tsx` lazily mounts the normal app, a strict Code-embedded leaf, or a top-level popup leaf with ReactDOM 18 `createRoot` and `StrictMode`. A popup therefore does not initialize the normal workbench store. Vite resolves WebUI imports against one React 18 runtime rather than an aliased renderer; browser JSX fixtures use that same package-local runtime. The module-level contract is [D-webui-react18-runtime](../modules/webui.md#d-webui-react18-runtime).
+- The separate experimental build flag `VITE_FOXWARM_EXPERIMENT_CHAT=1` selects `ExperimentChatApp` before ordinary App/Popup/Embedded routing. This thin leaf uses the existing Chat component and realtime client plus an owned Session create/select control and one-time local cookie-token login. It never fabricates normal App/Setup/Agent/Code/Terminal endpoints; production builds without the flag retain their existing entry path. `packages/webui/test/experimentHostChat.e2e.mjs` keeps the original Chat/queue/Stop browser regression, and `experimentHostModelCompact.e2e.mjs` with its local provider module checks current model/effort selection, full layered CTX expansion after clean restart, exact archived-message recall, and compact Stop against the separately built localhost-only .NET host.
 - Hash routing restores normal tabs plus current singleton Agents/Setup tabs; old agents/architecture/setup/oobe hash aliases remain inbound readers.
+- A tab context-menu popout opens synchronously, removes the source tab only after `window.open` returns a handle, and uses the ordinary route-fencing/fallback publication without invoking resource close. Setup and Agents require a synchronous warning confirmation. A terminal without a resolved backend ID cannot move. Code opens its current launcher node/path through the existing standalone URL helper and destroys the embedded frame only after the standalone window opens.
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
+- A Chat preview and kept tab share the Session-derived `chat:<sessionId>` ID. Opening another Session replaces the one preview tab in its existing pane, changing both its content and hash; editing or sending a draft does not keep it. Double-click, the tab Keep menu, Sidebar double-click/drag into the workbench, and a successful tab reorder/move/dock keep explicitly by clearing the preview flag. A no-op or canceled drag leaves the preview unchanged. Navigating to `#tab/chat:<sessionId>` or an inbound `#session/<sessionId>` selects an existing tab without changing its keep status, or opens a preview if absent.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
 - App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
 - `useBoundedSessionList` bootstraps Sidebar through fixed `/session-list/sidebar`, `/children`, `/by-id`, and `/search` calls. It keeps normalized rows plus root/child cursors, focus paths, open tabs, and browser-local idle watches; normal App never GETs the legacy global Session list. Independent request generations reject stale root, child, exact, and search responses.
@@ -51,6 +55,10 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 Embedded Chat sends `open-setup` with an allowlisted optional Models-focus field. The Code host activates the stable Setup custom editor and sends a separate nonce-bound one-shot `focus-models` message after the Setup leaf reports ready; Embedded Setup converts it to the same transient `SetupView` focus request used by normal App.
 
 These are independent roots, not CSS-hidden full App instances. Active-target messages update sidebar selection; a null target clears it. The same nonce-bound payload may include all active Code Chat editor session IDs so the embedded sidebar can apply the canonical unread visibility contract.
+
+## Top-level popup leaf roots
+
+`foxwarmPopupVersion=1` plus `foxwarmPopup=chat|terminal|agents|setup` selects a real top-level leaf at the current deployment pathname. Chat and terminal require a bounded session/terminal ID; optional titles are presentation only. The popup imports no workbench shell, tabs, panes, sidebar, or persisted workbench store. Chat session links and Configure Models navigate to another popup leaf URL rather than hydrating the normal App. Setup uses its ordinary APIs and browser settings, Agents refetches its server state, and terminal reattaches by exact terminal ID. There is no opener bridge, state transfer, close restoration, or cross-window synchronization.
 
 ## Code and commit behavior
 
@@ -84,6 +92,10 @@ Workbench store/layout, Sidebar, Chat, Architecture, Setup, terminal view, WebUI
 ### D-webui-app-leaf-embeds
 
 Code-embedded sidebar/chat/Agents/Setup are strict leaf roots with allowlisted messages, not nested copies of the workbench shell.
+
+### D-webui-app-popup-leaves
+
+[2026-09-21] Top-level popup leaves are real same-origin pages selected by a separate versioned URL parser. They are not Code embeds and do not send or accept the nonce-bound embed-host protocol. Dynamic root imports keep the normal App/workbench store out of popup startup. Popout is intentionally reopen-and-remove rather than live DOM/React/iframe transfer: no state handoff, opener lifecycle manager, or automatic return is provided.
 
 ### D-webui-app-persistent-code-frame
 

@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
+import type { ChildPolicyChainEntry } from './childModelState'
 import ChatTimeline from './ChatTimeline'
 import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
@@ -12,6 +13,7 @@ import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from
 import { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
@@ -50,14 +52,6 @@ function getAsrStreamUrl() {
   return base.replace(/^http/i, 'ws')
 }
 
-type AsrTranscribeResult = {
-  text: string
-  status: number
-  rawLength: number
-  textLength: number
-  responsePreview: string
-}
-
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
@@ -77,6 +71,19 @@ type HistoryResponse = {
 }
 
 type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
+type PendingQueueAppend = { historyVersion: number; startSeq: number; endSeq: number }
+
+type TimelineState = { messages: Message[]; queuedMessages: Message[] }
+type TimelineAction =
+  | { type: 'messages'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'queue'; update: Message[] | ((messages: Message[]) => Message[]) }
+  | { type: 'atomic'; messages: Message[] | ((messages: Message[]) => Message[]); queuedMessages: Message[] }
+
+function timelineReducer(state: TimelineState, action: TimelineAction): TimelineState {
+  if (action.type === 'atomic') return { messages: typeof action.messages === 'function' ? action.messages(state.messages) : action.messages, queuedMessages: action.queuedMessages }
+  if (action.type === 'messages') return { ...state, messages: typeof action.update === 'function' ? action.update(state.messages) : action.update }
+  return { ...state, queuedMessages: typeof action.update === 'function' ? action.update(state.queuedMessages) : action.update }
+}
 
 type PendingViewportRestore =
   | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
@@ -131,6 +138,7 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 
 interface ChatProps {
   sessionId: string
+  experimentalTextOnly?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
   onBack?: () => void
@@ -148,7 +156,6 @@ interface ChatProps {
   onGroupToolsChange?: (enabled: boolean) => void
   onShowUsageBadgeChange?: (enabled: boolean) => void
   onShowUserMessageMetadataChange?: (enabled: boolean) => void
-  onDraftEdited?: (draftText: string) => void
 }
 
 type StreamingAsrSession = {
@@ -178,6 +185,8 @@ type SessionListRecord = {
   modelKey?: string
   defaultModelKey?: string
   childModelDefault?: string | null
+  childModelPolicySource?: 'explicit' | 'follow-parent'
+  childPolicyChain?: ChildPolicyChainEntry[]
   effectiveChildModelKey?: string
   effort?: string | null
   effectiveEffort?: string
@@ -190,13 +199,16 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {}, onDraftEdited }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([])
+const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+  const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
+  const messages = timelineState.messages
+  const queuedMessages = timelineState.queuedMessages
+  const setMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'messages', update }), [])
+  const setQueuedMessages = useCallback((update: Message[] | ((messages: Message[]) => Message[])) => dispatchTimeline({ type: 'queue', update }), [])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
-  const [queuedMessages, setQueuedMessages] = useState<Message[]>([])
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
@@ -248,6 +260,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const reconnectAwaitingStateRef = useRef(false)
   const queueRefreshNeededRef = useRef(false)
   const historyGapDetectedRef = useRef(false)
+  const pendingQueueAppendRef = useRef<PendingQueueAppend | null>(null)
+  const atomicRecoveryScheduledRef = useRef(false)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
@@ -262,6 +276,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const heightFollowHoldsRef = useRef(new Set<object>())
+  const heightFollowAnimatingRef = useRef(new Set<object>())
+  const heightFollowPendingContentRef = useRef(false)
+  const heightFollowPreparesRef = useRef(new Set<object>())
+  const heightFollowReleaseTimersRef = useRef(new Set<number>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
   const modelRequestGateRef = useRef(createLatestRequestGate())
@@ -299,6 +318,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     reconnectAwaitingStateRef.current = false
     queueRefreshNeededRef.current = false
     historyGapDetectedRef.current = false
+    pendingQueueAppendRef.current = null
+    atomicRecoveryScheduledRef.current = false
     queuedMessagesRef.current = []
     pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
@@ -395,6 +416,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
     if (container) {
+      // Explicit bottom navigation and independent new content win over a card-only hold.
+      heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+      heightFollowReleaseTimersRef.current.clear()
+      heightFollowHoldsRef.current.clear()
+      heightFollowAnimatingRef.current.clear()
+      heightFollowPendingContentRef.current = false
+      if (!heightFollowPreparesRef.current.size) container.style.removeProperty('overflow-anchor')
       container.scrollTop = container.scrollHeight
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
@@ -404,6 +432,77 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       storeChatViewportState(viewportSessionId, state)
     }
   }, [viewportSessionId])
+
+  const prepareCardHeight = useCallback(() => {
+    const token = {}
+    heightFollowPreparesRef.current.add(token)
+    const container = messagesContainerRef.current
+    if (container) container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowPreparesRef.current.delete(token)
+      if (!heightFollowHoldsRef.current.size && !heightFollowPreparesRef.current.size) {
+        container?.style.removeProperty('overflow-anchor')
+      }
+    }
+  }, [])
+
+  const holdTallCardFollow = useCallback((card: HTMLElement, startHeight: number, targetHeight: number) => {
+    const container = messagesContainerRef.current
+    // Clicking a disclosure is viewport interaction, not a request to detach. Re-arm
+    // the existing ResizeObserver generation after its pointerdown invalidation.
+    capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    if (!container || !shouldAutoScrollRef.current || pendingUserLeaveBottomRef.current || targetHeight <= startHeight) return () => {}
+    const viewport = container.getBoundingClientRect()
+    // Predict the card's top after bottom alignment, including the unscrolled distance
+    // below the current viewport. No fixed card-height cutoff or scrollTop snapshot.
+    const bottomAlignmentDelta = Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop)
+    if (card.getBoundingClientRect().top - bottomAlignmentDelta >= viewport.top) return () => {}
+    const hold = {}
+    heightFollowHoldsRef.current.add(hold)
+    heightFollowAnimatingRef.current.add(hold)
+    // An initial bottom restoration still pending when the user opens a card must
+    // not reassert bottom after the temporary hold expires.
+    if (pendingViewportRestoreRef.current?.kind === 'state' && pendingViewportRestoreRef.current.state.kind === 'bottom') {
+      pendingViewportRestoreRef.current = null
+    }
+    container.style.overflowAnchor = 'none'
+    return () => {
+      heightFollowAnimatingRef.current.delete(hold)
+      // A stream/history update while a tall card is still moving is distinct
+      // from the card's own resize. Follow once after the last active transition,
+      // without letting an earlier reversal release another card's hold.
+      if (heightFollowPendingContentRef.current) queueMicrotask(() => {
+        if (!heightFollowPendingContentRef.current || heightFollowAnimatingRef.current.size) return
+        heightFollowPendingContentRef.current = false
+        if (shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current && !pendingViewportRestoreRef.current) {
+          scrollToBottom()
+        }
+      })
+      // The final auto-height cleanup can deliver a ResizeObserver notification
+      // after transitionend. Drain that notification before normal follow resumes;
+      // a later token/layout update can use the unchanged follow latch as usual.
+      const timer = window.setTimeout(() => {
+        heightFollowReleaseTimersRef.current.delete(timer)
+        heightFollowHoldsRef.current.delete(hold)
+        if (heightFollowHoldsRef.current.size === 0 && heightFollowPreparesRef.current.size === 0 && messagesContainerRef.current === container) {
+          container.style.removeProperty('overflow-anchor')
+        }
+      }, 200)
+      heightFollowReleaseTimersRef.current.add(timer)
+    }
+  }, [scrollToBottom])
+
+  const cardHeightContext = useMemo(() => ({ before: prepareCardHeight, begin: holdTallCardFollow }), [prepareCardHeight, holdTallCardFollow])
+
+  useEffect(() => () => {
+    heightFollowReleaseTimersRef.current.forEach(timer => window.clearTimeout(timer))
+    heightFollowReleaseTimersRef.current.clear()
+    heightFollowHoldsRef.current.clear()
+    heightFollowAnimatingRef.current.clear()
+    heightFollowPendingContentRef.current = false
+    heightFollowPreparesRef.current.clear()
+    messagesContainerRef.current?.style.removeProperty('overflow-anchor')
+  }, [sessionId])
 
   const handleComposerHeightChange = useCallback((height: number) => {
     const nextHeight = Math.max(0, Math.round(height))
@@ -457,6 +556,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    if (heightFollowHoldsRef.current.size && shouldAutoScrollRef.current && !pendingUserLeaveBottomRef.current) return currentViewportStateRef.current
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
@@ -478,6 +578,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (!container) return false
 
     if (state.kind === 'bottom') {
+      if (heightFollowHoldsRef.current.size) return false
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
       currentViewportGeometryRef.current = null
@@ -764,6 +865,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         representedMessageCountRef.current = 0
         latestCommittedSeqRef.current = 0
         hasTrustedHistoryFrontierRef.current = false
+        pendingQueueAppendRef.current = null
+        atomicRecoveryScheduledRef.current = false
         fullHistoryLoadedRef.current = true
         setIsFullHistoryLoaded(true)
         setHistoryLoaded(true)
@@ -778,15 +881,27 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
         representedHistoryVersionRef.current = version
         const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
-        latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
-        hasTrustedHistoryFrontierRef.current = typeof data.latestSeq === 'number'
+        const hasAuthoritativeFrontier = typeof data.latestSeq === 'number'
+        if (hasAuthoritativeFrontier) {
+          let contiguousLatestSeq = responseLatestSeq
+          const concurrentSeqs = concurrentMessages()
+            .map(message => message.__meta?.seq)
+            .filter((seq): seq is number => Number.isSafeInteger(seq))
+          for (const seq of [...new Set(concurrentSeqs)].sort((left, right) => left - right)) {
+            contiguousLatestSeq = advanceHistorySeqFrontier(contiguousLatestSeq, seq).latestSeq
+          }
+          latestCommittedSeqRef.current = contiguousLatestSeq
+        } else {
+          latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
+        }
+        hasTrustedHistoryFrontierRef.current = hasAuthoritativeFrontier
         if (complete) {
           fullHistoryLoadedRef.current = true
           setIsFullHistoryLoaded(true)
           setEarlierHistoryError(false)
         }
       }
-      const applyMetadata = (data: HistoryResponse) => {
+      const applyMetadata = (data: HistoryResponse, deferTimeline = false): boolean => {
         const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
         const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
         const hasNewerMismatchedQueue = hasNewerStreamState
@@ -799,12 +914,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (hasNewerMismatchedQueue) {
           queueRefreshNeededRef.current = true
           historyTrailingRefreshRef.current = true
-        } else {
+        } else if (!deferTimeline) {
           setQueuedMessages(Array.isArray(data.queuedMessages) ? data.queuedMessages : [])
           queueRefreshNeededRef.current = false
         }
         setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
         if (!hasNewerStreamState && typeof data.queueLength === 'number') setSessionQueueLength(data.queueLength)
+        return hasNewerMismatchedQueue
       }
       const maybeClearDraft = (snapshotMessages: Message[]) => {
         if (shouldClearDraftAfterHistory({
@@ -820,13 +936,47 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
       const applyFullSnapshot = (data: HistoryResponse, snapshotMessages: Message[]) => {
         const concurrent = concurrentMessages()
+        const pending = pendingQueueAppendRef.current
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
+        const pendingCovered = !pending || responseVersion !== pending.historyVersion || responseLatestSeq >= pending.endSeq
+        const queueMismatch = applyMetadata(data, true)
+        if (!pendingCovered || queueMismatch) {
+          historyTrailingRefreshRef.current = true
+          return false
+        }
+        dispatchTimeline({
+          type: 'atomic',
+          messages: currentMessages => {
+            const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
+            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+            return merged
+          },
+          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+        })
+        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        if (pending) {
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+        }
+        queueRefreshNeededRef.current = false
+        for (const message of snapshotMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, snapshotMessages, true)
+        updateLastTimestamp(snapshotMessages)
+        return true
+      }
+      const applySnapshotBeforePendingQueueAppend = (data: HistoryResponse, snapshotMessages: Message[]) => {
+        const pending = pendingQueueAppendRef.current
+        if (!pending) return false
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : 0
+        if (responseVersion !== pending.historyVersion || responseLatestSeq >= pending.startSeq) return false
+        const concurrent = concurrentMessages()
         setMessages(currentMessages => {
-          const merged = mergeHistorySnapshot({
-            snapshot: snapshotMessages,
-            concurrentMessages: concurrent,
-            currentMessages,
-            pendingClientMessageIds: pendingSentMessageIdsRef.current,
-          })
+          const merged = mergeHistorySnapshot({ snapshot: snapshotMessages, concurrentMessages: concurrent, currentMessages, pendingClientMessageIds: pendingSentMessageIdsRef.current })
           representedMessageCountRef.current = countCommittedHistoryMessages(merged)
           return merged
         })
@@ -836,6 +986,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         }
         updateFrontier(data, snapshotMessages, true)
         updateLastTimestamp(snapshotMessages)
+        historyGapDetectedRef.current = true
+        queueRefreshNeededRef.current = true
+        historyTrailingRefreshRef.current = true
+        return true
       }
       const fetchAndApplyFull = async (): Promise<boolean> => {
         const { response, data } = await requestJson()
@@ -844,8 +998,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (missing !== null) return missing
         if (!response.ok) throw new Error(data.error || `Failed to fetch history (${response.status})`)
         const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
-        applyMetadata(data)
-        applyFullSnapshot(data, snapshotMessages)
+        if (!applyFullSnapshot(data, snapshotMessages)) return true
         maybeClearDraft(snapshotMessages)
         historyGapDetectedRef.current = false
         reconnectAwaitingStateRef.current = false
@@ -890,7 +1043,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               return true
             }
             const prefixMessages = Array.isArray(prefixResult.data.messages) ? prefixResult.data.messages : []
-            applyFullSnapshot(data, [...prefixMessages, ...tailMessages])
+            const assembledSnapshot = [...prefixMessages, ...tailMessages]
+            if (!applyFullSnapshot(data, assembledSnapshot)
+              && !applySnapshotBeforePendingQueueAppend(data, assembledSnapshot)) return true
           } else {
             setMessages(currentMessages => {
               representedMessageCountRef.current = countCommittedHistoryMessages(currentMessages)
@@ -915,12 +1070,29 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (response.status === 409 && data.code === 'SESSION_HISTORY_BOUNDARY_STALE') return fetchAndApplyFull()
         if (!response.ok) throw new Error(data.error || `Failed to reconcile history (${response.status})`)
         const appendedMessages = Array.isArray(data.messages) ? data.messages : []
-        applyMetadata(data)
-        setMessages(currentMessages => {
-          const merged = mergeHistoryMessages(currentMessages, appendedMessages)
-          representedMessageCountRef.current = countCommittedHistoryMessages(merged)
-          return merged
+        const pending = pendingQueueAppendRef.current
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(appendedMessages)
+        const responseVersion = typeof data.historyVersion === 'number' ? data.historyVersion : historyVersion
+        const queueMismatch = applyMetadata(data, true)
+        if (queueMismatch || pending && responseVersion === pending.historyVersion && responseLatestSeq < pending.endSeq) {
+          historyTrailingRefreshRef.current = true
+          return true
+        }
+        dispatchTimeline({
+          type: 'atomic',
+          messages: currentMessages => {
+            const merged = mergeHistoryMessages(currentMessages, appendedMessages)
+            representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+            return merged
+          },
+          queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
         })
+        queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+        if (pending) {
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
+        }
+        queueRefreshNeededRef.current = false
         for (const message of appendedMessages) {
           const clientMessageId = getClientMessageId(message)
           if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
@@ -936,6 +1108,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         return true
       } catch (error) {
         if (controller.signal.aborted) return true
+        if (pendingQueueAppendRef.current) atomicRecoveryScheduledRef.current = false
         console.error('Failed to fetch history:', error)
         if (mode === 'bootstrap') {
           setEarlierHistoryError(true)
@@ -961,13 +1134,27 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return requestPromise
   }, [applySessionState, clearStreamingAssistantDraft, sessionId])
 
+  const scheduleAtomicRecovery = useCallback(() => {
+    if (atomicRecoveryScheduledRef.current) return
+    atomicRecoveryScheduledRef.current = true
+    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
+    historyRefreshTimeoutRef.current = window.setTimeout(() => {
+      historyRefreshTimeoutRef.current = null
+      void fetchHistory('reconcile')
+    }, 0)
+  }, [fetchHistory])
+
   const scheduleHistoryRefresh = useCallback((delay = 100) => {
+    if (pendingQueueAppendRef.current) {
+      scheduleAtomicRecovery()
+      return
+    }
     if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
     historyRefreshTimeoutRef.current = window.setTimeout(() => {
       historyRefreshTimeoutRef.current = null
       void fetchHistory('reconcile')
     }, delay)
-  }, [fetchHistory])
+  }, [fetchHistory, scheduleAtomicRecovery])
 
   const subscribeRealtime = useCallback(() => {
     let unsubscribe = () => {}
@@ -1016,7 +1203,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             || nextMessageCount !== previousMessageCount
             || nextHistoryVersion !== previousHistoryVersion
             || queueRefreshNeededRef.current) {
-            scheduleHistoryRefresh()
+            if (pendingQueueAppendRef.current) scheduleAtomicRecovery()
+            else scheduleHistoryRefresh()
           }
           return
         }
@@ -1052,6 +1240,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           fullHistoryLoadedRef.current = true
           setIsFullHistoryLoaded(true)
           queuedMessagesRef.current = []
+          pendingQueueAppendRef.current = null
+          atomicRecoveryScheduledRef.current = false
           unsubscribe()
           setConnectionState('disconnected')
           return
@@ -1086,7 +1276,66 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           return
         }
 
+        if (data.type === 'history-append') {
+          const incomingMessages = Array.isArray(data.messages) ? data.messages as Message[] : []
+          const seqs = incomingMessages.map(message => message.__meta?.seq).filter((seq): seq is number => Number.isSafeInteger(seq))
+          const startSeq = seqs.length ? Math.min(...seqs) : 0
+          const endSeq = seqs.length ? Math.max(...seqs) : 0
+          const historyVersion = Number.isSafeInteger(data.historyVersion) ? data.historyVersion : 0
+          if (historyVersion === representedHistoryVersionRef.current && hasTrustedHistoryFrontierRef.current && endSeq > 0 && endSeq <= latestCommittedSeqRef.current) return
+          let batchFrontier = latestCommittedSeqRef.current
+          let batchHasGap = false
+          if (hasTrustedHistoryFrontierRef.current) {
+            for (const seq of [...new Set(seqs)].sort((left, right) => left - right)) {
+              const next = advanceHistorySeqFrontier(batchFrontier, seq)
+              batchFrontier = next.latestSeq
+              batchHasGap ||= next.gapDetected
+            }
+          }
+          const stateMatches = historyVersion === sessionHistoryVersionRef.current
+            && data.messageCount === sessionMessageCountRef.current
+            && data.queueLength === sessionQueueLengthRef.current
+          if (!stateMatches || batchHasGap || pendingQueueAppendRef.current || historyInFlightRef.current?.sessionId === sessionId) {
+            const existing = pendingQueueAppendRef.current
+            pendingQueueAppendRef.current = existing && existing.historyVersion === historyVersion
+              ? { historyVersion, startSeq: Math.min(existing.startSeq, startSeq), endSeq: Math.max(existing.endSeq, endSeq) }
+              : { historyVersion, startSeq, endSeq }
+            historyGapDetectedRef.current = true
+            queueRefreshNeededRef.current = true
+            scheduleAtomicRecovery()
+            return
+          }
+          dispatchTimeline({
+            type: 'atomic',
+            messages: currentMessages => {
+              const merged = mergeHistoryMessages(currentMessages, incomingMessages)
+              representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+              return merged
+            },
+            queuedMessages: Array.isArray(data.queuedMessages) ? data.queuedMessages : [],
+          })
+          queuedMessagesRef.current = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
+          for (const message of incomingMessages) {
+            const clientMessageId = getClientMessageId(message)
+            if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+          }
+          representedHistoryVersionRef.current = historyVersion
+          latestCommittedSeqRef.current = hasTrustedHistoryFrontierRef.current ? batchFrontier : Math.max(latestCommittedSeqRef.current, endSeq)
+          hasTrustedHistoryFrontierRef.current = endSeq > 0 || hasTrustedHistoryFrontierRef.current
+          queueRefreshNeededRef.current = false
+          historyGapDetectedRef.current = false
+          return
+        }
+
         if (data.type === 'message') {
+          const incomingMessage = data.message as Message
+          const pendingQueueAppend = pendingQueueAppendRef.current
+          if (pendingQueueAppend && Number.isSafeInteger(incomingMessage.__meta?.seq)
+            && (incomingMessage.__meta?.seq as number) >= pendingQueueAppend.startSeq) {
+            historyGapDetectedRef.current = true
+            scheduleAtomicRecovery()
+            return
+          }
           const msgTimestamp = data.message.__meta?.timestamp
           const isCommandResponse = data.message.__meta?.isCommandResponse
           const isUpdateExisting = data.message.__meta?.updateExisting
@@ -1102,7 +1351,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             scheduleHistoryRefresh()
           }
 
-          const incomingMessage = data.message as Message
           const hasStableIdentity = hasStableHistoryIdentity(incomingMessage)
           if (!isCommandResponse && !isUpdateExisting && !hasStableIdentity
             && msgTimestamp && msgTimestamp <= lastKnownTimestampRef.current) {
@@ -1163,7 +1411,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       },
     })
     return unsubscribe
-  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleHistoryRefresh, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -1251,9 +1499,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [subscribeRealtime])
 
   useEffect(() => {
-    if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current) {
-      scrollToBottom()
+    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
+    if (heightFollowAnimatingRef.current.size) {
+      heightFollowPendingContentRef.current = true
+      return
     }
+    // A fresh message/draft during only the final observer-settling grace is
+    // independent content: resume the existing follow immediately.
+    scrollToBottom()
   }, [messages, scrollToBottom, streamingAssistantDraft])
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
@@ -1391,6 +1644,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         if (capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
 
         const pending = pendingViewportRestoreRef.current
+        if (heightFollowHoldsRef.current.size && !pending) {
+          setShowScrollButton(container.scrollHeight - container.scrollTop - container.clientHeight > 200)
+          return
+        }
         if (pending) {
           if (pending.interactionVersion === userInteractionVersionRef.current) {
             if (pending.kind === 'state') {
@@ -1560,41 +1817,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     void sendSessionCommand('/continue')
   }, [sendSessionCommand])
 
-  const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
-    const formData = new FormData()
-    formData.append('audio', file)
-    const context = buildAsrContext(messages, draftText)
-    if (context.trim()) {
-      formData.append('context', context.trim())
-    }
-
-    const response = await fetch(`${API_BASE_PATH}/asr/transcribe`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    const responseText = await response.text()
-    let data: any = {}
-    try {
-      data = responseText ? JSON.parse(responseText) : {}
-    } catch {
-      data = { error: responseText || 'ASR request failed' }
-    }
-
-    if (!response.ok) {
-      throw new Error(data?.error || `ASR request failed (${response.status})`)
-    }
-
-    const text = typeof data?.text === 'string' ? data.text : ''
-    return {
-      text,
-      status: response.status,
-      rawLength: responseText.length,
-      textLength: text.length,
-      responsePreview: responseText.slice(0, 200),
-    }
-  }, [messages])
-
   const handleCreateStreamingTranscriber = useCallback(async ({
     draftText,
     onPartial,
@@ -1614,8 +1836,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       const socket = new WebSocket(getAsrStreamUrl())
       let resolved = false
       let settled = false
+      let terminal = false
 
       const fail = (message: string) => {
+        if (terminal) return
+        terminal = true
         onError(message)
         if (!settled) {
           settled = true
@@ -1631,6 +1856,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
+        if (terminal) return
         onDebug(`ws open; contextLength=${context.length} language=auto`)
         socket.send(JSON.stringify({
           type: 'start',
@@ -1640,6 +1866,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
 
       socket.onmessage = (event) => {
+        if (terminal) return
         try {
           const payload = JSON.parse(String(event.data))
           if (payload.type === 'ready') {
@@ -1667,6 +1894,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 }
               },
               cancel: () => {
+                terminal = true
                 onDebug('ws cancel called')
                 try {
                   socket.close()
@@ -1683,6 +1911,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           }
 
           if (payload.type === 'final') {
+            terminal = true
             onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
@@ -1707,8 +1936,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
 
       socket.onclose = () => {
-        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)}`)
-        if (!resolved && !settled) {
+        onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)} terminal=${String(terminal)}`)
+        if (terminal) return
+        if (resolved) fail('Streaming ASR connection closed before the final transcript')
+        else {
+          terminal = true
+          settled = true
           reject(new Error('Streaming ASR connection closed before ready'))
         }
       }
@@ -1779,7 +2012,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               showUserMessageMetadata={showUserMessageMetadata}
               onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
-              onOpenDebugInfo={handleOpenDebugInfo}
+              onOpenDebugInfo={experimentalTextOnly ? undefined : handleOpenDebugInfo}
             />
           </>
         )}
@@ -1835,24 +2068,26 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               </div>
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
-              <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
-              </ToolScriptProgressContext.Provider>
+              <ThreadCardHeightContext.Provider value={cardHeightContext}>
+                <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                </ToolScriptProgressContext.Provider>
+              </ThreadCardHeightContext.Provider>
             </div>
             <ProcessingStatus
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
-              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
+              turnIncomplete={!experimentalTextOnly && sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
               onStop={handleStop}
-              onRunQueued={handleRunQueued}
-              onContinue={handleContinue}
+              onRunQueued={experimentalTextOnly ? undefined : handleRunQueued}
+              onContinue={experimentalTextOnly ? undefined : handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -1886,6 +2121,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       </div>
 
       <ChatComposer
+        experimentalTextOnly={experimentalTextOnly}
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
@@ -1895,6 +2131,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         sessionModel={sessionRecord?.model || null}
         defaultModelKey={sessionRecord?.defaultModelKey}
         childModelDefault={sessionRecord?.childModelDefault || null}
+        childModelPolicySource={sessionRecord?.childModelPolicySource}
+        childPolicyChain={sessionRecord?.childPolicyChain}
         effectiveChildModelKey={sessionRecord?.effectiveChildModelKey}
         effort={sessionRecord?.effort || null}
         effectiveEffort={sessionRecord?.effectiveEffort}
@@ -1916,9 +2154,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         sendKeyMode={sendKeyMode}
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
-        onTranscribeAudio={handleTranscribeAudio}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
-        onDraftEdited={onDraftEdited}
       />
 
       {showDebugInfo && (
@@ -1950,6 +2186,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   )
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
+  prev.experimentalTextOnly === next.experimentalTextOnly &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenTerminal === next.onOpenTerminal

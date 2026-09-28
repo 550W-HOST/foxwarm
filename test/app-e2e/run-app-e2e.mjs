@@ -19,6 +19,10 @@ const logsRoot = path.join(runRoot, 'logs')
 const screenshotsRoot = path.join(runRoot, 'screenshots')
 const token = 'synthetic-app-e2e-token'
 const toolFile = path.join(runRoot, 'tool-work', 'roundtrip.txt')
+// Targeted debugging runs: `FOXWARM_APP_E2E_FILES=a,b` or `restart:<file>` to
+// restart the application before that file. The scripted provider still fails on
+// unexpected requests, but the global request order is not enforced.
+const selectedFiles = (process.env.FOXWARM_APP_E2E_FILES || '').split(',').map(value => value.trim()).filter(Boolean)
 let provider
 let appPort
 let baseUrl
@@ -104,7 +108,7 @@ async function startApplication() {
   baseUrl = `http://127.0.0.1:${appPort}`
   const providerDelayMs = process.env.FOXWARM_APP_E2E_PROVIDER_ALLOCATION_DELAY === '1' ? 2000 : 0
   if (providerDelayMs) console.log('APP_E2E_PROVIDER_ALLOCATION_PENDING')
-  const createdProvider = await startMockProvider({ toolFile, log: appendProviderLog, readyDelayMs: providerDelayMs })
+  const createdProvider = await startMockProvider({ toolFile, log: appendProviderLog, readyDelayMs: providerDelayMs, enforceSequence: selectedFiles.length === 0 })
   if (receivedSignal) {
     await createdProvider.close()
     throwIfCancelled()
@@ -112,9 +116,13 @@ async function startApplication() {
   provider = createdProvider
   await fs.writeFile(path.join(stateRoot, 'config.yaml'), `bot:\n  name: synthetic-e2e\n  httpPort: ${appPort}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(path.join(stateRoot, 'mcp.json'))}\n`)
   throwIfCancelled()
-  await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n`)
+  await fs.writeFile(path.join(stateRoot, 'models.yaml'), `default: responses/mock-responses\nproviders:\n  responses:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-responses]\n  chat:\n    providerType: openai-completions\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-chat]\n  ws:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws]\n  wsbg:\n    providerType: openai-ws\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: true\n    effort:\n      allowed: [none]\n      default: none\n    models: [mock-ws-bg]\n  images:\n    providerType: openai-responses\n    baseUrl: ${provider.baseUrl}/v1\n    apiKey: synthetic-provider-token\n    asyncCompact: false\n    effort:\n      allowed: [none]\n      default: none\n    imageGeneration:\n      enabled: true\n      outputFormat: png\n    models: [mock-image]\n`)
   throwIfCancelled()
-  const createdAppLog = await fs.open(path.join(logsRoot, 'app.log'), 'w')
+  await spawnApplication('app.log')
+}
+
+async function spawnApplication(logName) {
+  const createdAppLog = await fs.open(path.join(logsRoot, logName), 'w')
   if (receivedSignal) {
     await createdAppLog.close()
     throwIfCancelled()
@@ -138,6 +146,20 @@ async function startApplication() {
     await stopOwnedProcess(app)
     throwIfCancelled()
   }
+}
+
+// Restart the application against the same data root so a scenario can prove
+// that persisted content survives a real process restart. The port comes from
+// the written config file, so the existing base URL stays valid.
+async function restartApplication() {
+  await stopOwnedProcess(app)
+  app = undefined
+  if (appLog) {
+    await appLog.close().catch(() => {})
+    appLog = undefined
+  }
+  await spawnApplication('app-restart.log')
+  await waitForReady(baseUrl)
 }
 
 function stopProcess(child, signal = 'SIGTERM') {
@@ -278,7 +300,11 @@ try {
   if (process.env.FOXWARM_APP_E2E_DIAGNOSTIC_ALLOCATION_DELAY === '1') {
     await diagnosticScreenshot(baseUrl, 'allocation-probe')
   }
-  const files = process.env.FOXWARM_APP_E2E_CORE_ONLY === '1'
+  const files = selectedFiles.length > 0
+    ? selectedFiles.map(value => value.startsWith('restart:')
+      ? { file: value.slice('restart:'.length), restartBefore: true }
+      : value)
+    : process.env.FOXWARM_APP_E2E_CORE_ONLY === '1'
     ? ['test/app-e2e/core.e2e.mjs']
     : [
       'test/app-e2e/core.e2e.mjs',
@@ -288,9 +314,18 @@ try {
       'packages/webui/test/sessionListDrag.e2e.mjs',
       'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
       'packages/webui/test/systemTabs.e2e.mjs',
+      'test/app-e2e/imageGeneration.e2e.mjs',
+      // Runs after a real application restart against the same data root.
+      { file: 'test/app-e2e/imageGenerationRestart.e2e.mjs', restartBefore: true },
     ]
-  for (const file of files) {
+  for (const entry of files) {
+    const file = typeof entry === 'string' ? entry : entry.file
     if (receivedSignal) throw new Error(`Full-application E2E cancelled by ${receivedSignal}`)
+    if (typeof entry !== 'string' && entry.restartBefore) {
+      console.log('APP_E2E_RESTART_PENDING')
+      await restartApplication()
+      console.log('APP_E2E_RESTART_READY')
+    }
     await runTestFile(file, baseUrl)
   }
   provider.assertConsumed()

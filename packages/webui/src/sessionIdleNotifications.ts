@@ -8,6 +8,7 @@ export interface SessionIdleNotificationSession extends RuntimeStateSessionLike 
   id: string
   displayName?: string
   aliases?: string[]
+  queueLength?: number
 }
 
 export interface SessionIdleNotificationHandle {
@@ -184,6 +185,7 @@ export class SessionIdleNotificationTracker {
 
       const state = getSessionRuntimeStateName(session)
       const isBusy = isSessionRuntimeActive(session)
+      const queueLength = session.runtimeState?.queueLength ?? session.queueLength ?? 0
       const previous = this.baselines.get(session.id)
 
       if (!previous) {
@@ -192,7 +194,7 @@ export class SessionIdleNotificationTracker {
       }
 
       const sawBusy = previous.sawBusy || isBusy
-      if (previous.state !== 'idle' && state === 'idle' && sawBusy) {
+      if (previous.state !== 'idle' && state === 'idle' && queueLength === 0 && sawBusy) {
         notifications.push(session)
         this.baselines.set(session.id, { state, sawBusy: false })
       } else {

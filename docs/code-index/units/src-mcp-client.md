@@ -12,8 +12,8 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - `MIN_MCP_TOOL_TIMEOUT_SECONDS`, `MAX_MCP_TOOL_TIMEOUT_SECONDS` — managed per-server tool-call timeout bounds (1-3600 seconds; zero is accepted only as a clearing input).
 - `createMcpConfigStore(filePath?)`, `setMcpConfigStoreForTests(store)`.
 - `summarizeServerConfig(name, server)`, `summarizeServers(servers)`.
-- `listTools(serverName?)`.
-- `callTool(serverName, tool, args?)`.
+- `listTools(serverName?, signal?)`.
+- `callTool(serverName, tool, args?, options?)` — optional inbound-only AbortSignal/raw SDK result; normal internal calls retain canonical normalization.
 - `upsertServer(name, server)`, `setServerEnabled(name, enable)`.
 - `normalizeManagedMcpServerConfig(server)` — canonical semantic validation of a fully merged managed update before persistence/publication.
 - `getServers()` — raw configured server record for trusted runtime callers.
@@ -39,6 +39,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration).
 - Managed upsert merges with the current named server and then runs one authoritative transport validator inside `mcpClient`: `stdio` requires a command, all HTTP/SSE/auto placements require a URL, and unknown transports fail before any durable write or live-snapshot publication. Tool wrappers retain argument parsing and user-facing success messages but do not duplicate these semantics.
 - Optional `timeoutSeconds` controls only `client.callTool`. Omission sends no request override and retains the installed SDK default (currently 60 seconds); managed input accepts finite 1-3600 seconds, while zero removes the persisted field and restores that default. Invocation converts the override to milliseconds and passes it through the SDK call's third `RequestOptions` argument. Connection setup, tool listing, retry/progress policy, and pool keys are unchanged.
+- The external inbound adapter can supply an SDK request AbortSignal to listing/calling and request the raw SDK result to preserve original text, structured content, images and `isError`. Internal callers pass no new options and keep canonical normalization. When an external HTTP call is cancelled, the short-lived outgoing transport waits briefly for the SDK's asynchronous best-effort cancellation notification before closing; completion of a remote effect is not guaranteed to stop.
 - `stdio` requires a command and uses a pooled client keyed by server name plus command/args/env/cwd/stderr signature. A config change selects a new key for later calls; the old keyed entry is not synchronously invalidated and closes through its idle TTL or transport `onclose` path.
 - `streamable-http` and `sse` require a URL and use short-lived standard connections.
 - `auto` tries streamable HTTP and falls back to SSE.
@@ -63,7 +64,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 
 ## Integration
 
-- `src/mcpExternalService.ts` is the sole production caller of raw list/discovery/call/config mutation exports. It owns the versioned local service boundary while this unit remains authoritative for the live snapshot, persistence, transports, pooling, and normalization.
+- `src/mcpExternalService.ts` remains the sole production caller of raw list/discovery/call/config mutation exports. Its original exact-internal-Session RPC service and new Main-local authenticated external facade share this client's authoritative live snapshot, persistence, transports and pooling.
 - `src/tools/mcpTools.ts` calls the MCP external service for configuration/server summaries, while `src/tools/unifiedSearch.ts` owns MCP discovery and unified invocation.
 - ToolScript calls the unified `call_tool` wrapper and receives this client's normalized result through the same service.
 - `MCP_CONFIG_PATH` and durable JSON behavior come from config/utilities.

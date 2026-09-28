@@ -31,6 +31,7 @@ targets.push({
     options: {
         ...prettyBaseOptions,
         destination: path.join(LOG_DIR, logFileName),
+        mkdir: true,
     }
 });
 

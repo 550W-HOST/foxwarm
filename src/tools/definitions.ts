@@ -46,7 +46,7 @@ const TOOL_RULES_SCHEMA = {
 const FORCE_MODEL_SCHEMA = {
     type: 'object',
     additionalProperties: false,
-    description: "Override the model or effort for the new session. Omit to use the normal inherited defaults; an empty object also leaves them unchanged.",
+    description: "Only use when the user explicitly requests a model or effort override for this task or session. Otherwise omit this parameter to use the normal inherited defaults; an empty object also leaves them unchanged.",
     properties: {
         modelId: { type: 'string', description: "Configured model key to use." },
         effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: "Effort override. Can be set without modelId to use the otherwise selected model." },
@@ -271,6 +271,7 @@ Example:
                 properties: {
                     agentName: { type: 'string', description: "Existing agent that will own the child. Omit to use this session's agent." },
                     suffix: { type: 'string', description: "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID." },
+                    displayName: { type: 'string', description: "Display name for the new child session. This does not change its session ID." },
                     fork: { type: 'boolean', description: "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.", default: false },
                     message: { type: 'string', description: "Initial task or message to send immediately after creation. Omit to create the child without starting a turn." },
                     afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session." },
@@ -300,7 +301,8 @@ Example:
             description: "End the current turn and wait for more information before continuing. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
             parameters: {
                 type: 'object',
-                allOf: [{ not: { required: ['waitAllSessions', 'waitAnySessions'] } }],
+                // Anthropic-compatible gateways reject top-level schema combinators.
+                // tool_wait enforces mutual exclusion before starting a wait.
                 properties: {
                     reason: { type: 'string', description: "Briefly explain what you are waiting for." },
                     wakeIfNoActivityAfterSeconds: { type: 'number', exclusiveMinimum: 0, description: "Resume after this many seconds if nothing else has resumed the session. Use this as a fallback so you can check progress or decide what to do next." },
@@ -897,7 +899,7 @@ Example:
         },
         {
             name: 'create_session',
-            description: "Create a conversation under an existing agent, reusing that agent's memory and workspace. Use forceModel only when intentionally overriding the normal model or effort defaults.",
+            description: "Create a conversation under an existing agent, reusing that agent's memory and workspace.",
             parameters: {
                 type: 'object',
                 properties: {

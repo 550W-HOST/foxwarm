@@ -29,8 +29,8 @@ export function resolveChildHandoffBoundary(session: Session): boolean {
   return true;
 }
 
-export function shouldQueueChildHandoffReminder(session: Session): boolean | undefined {
+export function shouldQueueChildHandoffReminder(session: Session): boolean {
   const state = session.childHandoffState;
-  if (!state) return undefined;
+  if (!state) return false;
   return state.boundary === 'report-required' && !state.resolved;
 }

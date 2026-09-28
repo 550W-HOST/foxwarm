@@ -9,6 +9,7 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 - [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
 - [src-docker-worktree-provider](../units/src-docker-worktree-provider.md) — resident first-party Linux Docker provider for one existing worktree, read-only Git metadata, strict lifecycle state, and shared file capabilities.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
+- [src-nodes-external-exec-ownership](../units/src-nodes-external-exec-ownership.md) — ephemeral Main authority for external CLI command IDs, signed receipts and scoped results.
 - [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, provider lifecycle, and compound copy.
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
 - [src-nodes-registry](../units/src-nodes-registry.md) — pending/approved registry, pairing lifecycle, credential hashes, rename/removal, and durable storage.
@@ -55,7 +56,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
 - Executable providers are startup-only trusted configuration and advertise sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional exec backends. Core derives canonical file tools over parent/stat/ranged-read/readdir/whole-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
-- Docker worktree providers are startup-configured resident Main providers. They accept only existing allowlisted Git worktrees, mount source writable and Git administration read-only, and implement only provider-neutral filesystem primitives plus canonical resident exec.
+- Docker worktree providers are startup-configured resident Main providers. They accept only existing allowlisted Git worktrees, mount source writable and Git administration read-only, and implement provider-neutral filesystem primitives plus canonical resident exec. Already-ready first-party instances also accept verified inbound external owners through the same primitives and generation runtime; external file reads cannot open their execution-artifact directory. See [inbound Node execution](../units/src-mcp-inbound-node-service.md).
 - Node lifecycle is a provider-neutral Main-owned control plane through the existing `node` builtin. Create/ensure route by exact configured provider ID; inspect/destroy resolve the exact existing Node owner. Provider effect and data-retention text remains descriptive rather than a generic deletion or security guarantee.
 
 ## Compatibility

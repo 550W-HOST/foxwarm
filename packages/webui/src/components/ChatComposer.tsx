@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowUp, Mic, Paperclip, Plus, Settings, Square } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, GitBranch, Link2, SlidersHorizontal, Mic, Paperclip, Plus, RefreshCw, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { loadPageOnce } from '../modelOptionsLoader'
 import {
@@ -15,10 +15,10 @@ import {
   type SlashCommandOption,
   type SlashCommandSuggestion,
 } from './chatShared'
-import { filterModelOptions, formatModelLabel } from './modelFilter'
+import { filterModelOptions, formatVirtualModelDetail, groupModelOptionsByProvider, resolveModelDisplayName, resolveModelTriggerDisplayName } from './modelFilter'
+import { buildChildModelComposerState, type ChildPolicyChainEntry } from './childModelState'
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
 import {
-  appendTextToComposerDraft,
   clearComposerDraft,
   getPlainComposerDraftText,
   loadComposerDraft,
@@ -34,12 +34,18 @@ export type ModelOption = {
   label: string
   isDefault?: boolean
   contextLimit?: number | null
+  providerKey?: string | null
+  modelId?: string | null
+  providerType?: string | null
+  isVirtual?: boolean
+  targets?: string[]
   allowedEfforts?: string[]
   defaultEffort?: string | null
 }
 
 interface ChatComposerProps {
   sessionId: string
+  experimentalTextOnly?: boolean
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -48,6 +54,8 @@ interface ChatComposerProps {
   sessionModel?: string | null
   defaultModelKey?: string
   childModelDefault?: string | null
+  childModelPolicySource?: 'explicit' | 'follow-parent'
+  childPolicyChain?: ChildPolicyChainEntry[]
   effectiveChildModelKey?: string
   effort?: string | null
   effectiveEffort?: string
@@ -69,13 +77,6 @@ interface ChatComposerProps {
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: Array<{ ref: string; file: File }> }) => Promise<boolean>
-  onTranscribeAudio: (file: File, context: string) => Promise<{
-    text: string
-    status: number
-    rawLength: number
-    textLength: number
-    responsePreview: string
-  }>
   onCreateStreamingTranscriber: (options: {
     draftText: string
     onPartial: (text: string) => void
@@ -87,7 +88,6 @@ interface ChatComposerProps {
     stop: () => void
     cancel: () => void
   }>
-  onDraftEdited?: (draftText: string) => void
 }
 
 function formatEffortLabel(value: string): string {
@@ -104,12 +104,133 @@ function getBrowserScrollbarWidth(): number {
   return width
 }
 
+function EffortRangeControl({
+  scopeLabel, values, value, effectiveValue, automaticValue, staleLabel, busy, descriptionId, onCommit,
+}: {
+  scopeLabel: string
+  values: string[]
+  value: string | null
+  effectiveValue: string | null
+  automaticValue: string | null
+  staleLabel: string | null
+  busy: boolean
+  descriptionId: string
+  onCommit: (value: string | null) => Promise<void>
+}) {
+  const [draft, setDraft] = useState<{ value: string | null } | null>(null)
+  const [saving, setSaving] = useState(false)
+  const pendingRef = useRef(false)
+  const draggingRef = useRef(false)
+  const selectedValue = draft ? draft.value : value
+  const isFollowing = selectedValue === null
+  const resolvedValue = draft
+    ? (draft.value ?? automaticValue)
+    : effectiveValue
+  const isStale = !draft && !!staleLabel
+  const resolvedIndex = resolvedValue ? values.indexOf(resolvedValue) : -1
+  const safeIndex = Math.max(0, resolvedIndex)
+  const progress = values.length <= 1 ? 0 : safeIndex / (values.length - 1) * 100
+  const shortValue = ({ none: 'Off', low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max' } as Record<string, string>)[resolvedValue || ''] || 'Auto'
+  const policyLabel = scopeLabel === 'Child' ? 'Follow this session' : 'Use model default'
+  const description = `${scopeLabel} effort: ${isStale ? staleLabel : `${isFollowing ? policyLabel + ' · ' : ''}${resolvedValue || 'per-leaf default'}`}`
+  const PolicyIcon = scopeLabel === 'Child' ? Link2 : SlidersHorizontal
+  const tone = `var(--foxwarm-color-${({ max: 'danger', xhigh: 'special', high: 'warning', medium: 'success', low: 'info', none: 'neutral' } as Record<string, string>)[resolvedValue || ''] || 'accent'})`
+
+  const commit = async (nextValue: string | null) => {
+    if (pendingRef.current || busy) return
+    if (nextValue === value) { setDraft(null); return }
+    pendingRef.current = true
+    setDraft({ value: nextValue })
+    setSaving(true)
+    try {
+      await onCommit(nextValue)
+    } catch {
+      // The parent exposes the server error; restore its last confirmed state.
+    } finally {
+      pendingRef.current = false
+      setSaving(false)
+      setDraft(null)
+    }
+  }
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <button
+        type="button"
+        disabled={busy || saving || (isFollowing && resolvedIndex < 0)}
+        aria-pressed={isFollowing}
+        onClick={() => void commit(isFollowing ? resolvedValue : null)}
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${isFollowing ? 'text-fw-accent' : 'text-fw-text-muted opacity-40'}`}
+        title={policyLabel}
+        aria-label={`${scopeLabel}: ${policyLabel}`}
+      >
+        <PolicyIcon aria-hidden="true" className="h-3.5 w-3.5" />
+      </button>
+      <div
+        className="foxwarm-effort-slider-wrap relative min-w-0 flex-1"
+        style={{
+          '--foxwarm-effort-progress': `${progress}%`,
+          '--foxwarm-effort-color': tone,
+        } as React.CSSProperties}
+      >
+        <span className="foxwarm-effort-slider-track" aria-hidden="true">
+          <span className="foxwarm-effort-slider-fill" />
+        </span>
+        <input
+          type="range"
+          aria-label={`${scopeLabel} effort`}
+          aria-describedby={descriptionId}
+          aria-valuetext={description}
+          data-unresolved={resolvedIndex < 0 ? "true" : undefined}
+          min={0}
+          max={Math.max(0, values.length - 1)}
+          step={1}
+          disabled={busy || saving || values.length === 0}
+          value={safeIndex}
+          onPointerDown={(event) => {
+            draggingRef.current = true
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onInput={(event) => setDraft({ value: values[Number(event.currentTarget.value)] })}
+          onPointerUp={(event) => {
+            draggingRef.current = false
+            void commit(values[Number(event.currentTarget.value)])
+          }}
+          onPointerCancel={() => {
+            draggingRef.current = false
+            setDraft(null)
+          }}
+          onKeyUp={(event) => {
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+              void commit(values[Number(event.currentTarget.value)])
+            }
+          }}
+          className="foxwarm-model-effort-slider"
+          title={description}
+        />
+      </div>
+      <span
+        className={`w-[5ch] shrink-0 text-right text-[11px] font-medium ${isStale ? 'text-fw-danger' : 'text-fw-text-strong'}`}
+        title={description}
+        data-model-effort-value="true"
+      >
+        {shortValue}
+      </span>
+      <span id={descriptionId} className="sr-only">{description}</span>
+    </div>
+  )
+}
+
+type ModelSelectorScope = 'current' | 'child'
+
 function ModelSelector({
+  experimentalCurrentOnly = false,
   options,
   currentModelKey,
   sessionModel,
   defaultModelKey,
   childModelDefault,
+  childModelPolicySource,
+  childPolicyChain,
   effectiveChildModelKey,
   effort,
   effectiveEffort,
@@ -129,11 +250,14 @@ function ModelSelector({
   onRefreshModels,
   onOpenModelSettings,
 }: {
+  experimentalCurrentOnly?: boolean
   options: ModelOption[]
   currentModelKey?: string
   sessionModel?: string | null
   defaultModelKey?: string
   childModelDefault?: string | null
+  childModelPolicySource?: 'explicit' | 'follow-parent'
+  childPolicyChain?: ChildPolicyChainEntry[]
   effectiveChildModelKey?: string
   effort?: string | null
   effectiveEffort?: string
@@ -154,22 +278,26 @@ function ModelSelector({
   onOpenModelSettings: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [activeScope, setActiveScope] = useState<ModelSelectorScope>('current')
   const [filterQuery, setFilterQuery] = useState('')
-  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
+  const [childFilterQuery, setChildFilterQuery] = useState('')
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed', visibility: 'hidden' })
   const [scrollbarWidth] = useState(() => getBrowserScrollbarWidth())
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const popupRef = useRef<HTMLDivElement | null>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
+  const childFilterInputRef = useRef<HTMLInputElement | null>(null)
   const effortDescriptionId = useId()
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
-  const childFollows = !childModelDefault
+  const childFollows = experimentalCurrentOnly || !childModelDefault
   const filteredOptions = useMemo(
     () => filterModelOptions(options, filterQuery, defaultModelKey),
     [defaultModelKey, filterQuery, options],
   )
+  const childFilteredOptions = useMemo(() => filterModelOptions(options, childFilterQuery, defaultModelKey), [options, childFilterQuery, defaultModelKey])
   const currentCapability = options.find(option => option.key === (currentModelKey || defaultModelKey))
   const childCapability = options.find(option => option.key === effectiveChildModelKey)
   const currentAllowedEfforts = currentCapability?.allowedEfforts || effortAllowed
@@ -184,38 +312,36 @@ function ModelSelector({
   const childFallbackLabel = effectiveChildEffort === 'default'
     ? 'per-leaf default'
     : (effectiveChildEffort || childConfiguredDefault || 'per-leaf default')
-  const currentDefaultFullLabel = `default (${currentFallbackLabel === 'per-leaf default' ? 'per leaf' : currentFallbackLabel})`
-  const childDefaultFullLabel = `follow/default (${childFallbackLabel === 'per-leaf default' ? 'per leaf' : childFallbackLabel})`
-  const currentDefaultShortLabel = currentFallbackLabel === 'per-leaf default'
-    ? 'Per leaf'
-    : 'Default'
-  const childDefaultShortLabel = childFallbackLabel === 'per-leaf default'
-    ? 'Per leaf'
-    : 'Follow'
   const currentStaleFullLabel = currentStaleEffort
     ? `${currentStaleEffort} (unavailable; using ${currentFallbackLabel})`
     : null
-  const childStaleFullLabel = childStaleEffort
-    ? `${childStaleEffort} (unavailable; using ${childFallbackLabel})`
-    : null
+  const childModelState = buildChildModelComposerState({
+    childModelDefault,
+    effectiveChildModelKey,
+    childModelPolicySource,
+    childPolicyChain,
+    childEffortDefault,
+    effectiveChildEffort,
+    childAllowedEfforts,
+    childStaleEffort,
+    childFallbackLabel,
+  })
+  const childStaleFullLabel = childModelState.staleEffortLabel
 
-  const toggleOpen = useCallback(() => {
-    if (open) {
-      setOpen(false)
-      return
-    }
-    setFilterQuery('')
-    filterComposingRef.current = false
-    setOpen(true)
-    void onRefreshModels()
-  }, [onRefreshModels, open])
-
+  const currentDisplayName = resolveModelTriggerDisplayName(currentModelKey || defaultModelKey, options) || 'model'
+  const currentKeyFull = currentModelKey || defaultModelKey || 'model'
+  const triggerEffort = formatEffortLabel(effectiveEffort || effort || 'default')
+  const currentDefaultTargetName = resolveModelTriggerDisplayName(defaultModelKey || currentModelKey, options) || 'model'
+  const childResolvedTargetName = resolveModelTriggerDisplayName(
+    childModelDefault || effectiveChildModelKey || currentModelKey || defaultModelKey,
+    options,
+  ) || 'model'
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(600, Math.max(0, window.innerWidth - 16))
+    const width = Math.min(childFollows ? 360 : 720, Math.max(0, window.innerWidth - 16))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
-    const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
+    const preferredMaxHeight = Math.min(window.innerWidth <= 640 ? 560 : 400, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
     const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12)
     const openAbove = spaceAbove >= 180 || spaceAbove >= spaceBelow
@@ -237,11 +363,28 @@ function ModelSelector({
         maxHeight,
       })
     }
-  }, [])
+  }, [childFollows])
+
+  const toggleOpen = useCallback(() => {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setFilterQuery('')
+    setChildFilterQuery('')
+    filterComposingRef.current = false
+    setActiveScope('current')
+    updatePopupPosition()
+    void onRefreshModels()
+    setOpen(true)
+  }, [onRefreshModels, open, updatePopupPosition])
+
+  useLayoutEffect(() => {
+    if (open) updatePopupPosition()
+  }, [open, updatePopupPosition])
 
   useEffect(() => {
     if (!open) return
-    updatePopupPosition()
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node
@@ -278,16 +421,16 @@ function ModelSelector({
     let focusFrame = 0
     if (open) {
       focusFrame = requestAnimationFrame(() => {
-        filterInputRef.current?.focus()
+        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
-    } else if (wasOpenRef.current) {
-      buttonRef.current?.focus()
+    } else if (!open && wasOpenRef.current) {
+      buttonRef.current?.focus({ preventScroll: true })
     }
     wasOpenRef.current = open
     return () => {
       if (focusFrame) cancelAnimationFrame(focusFrame)
     }
-  }, [open])
+  }, [open, activeScope, childFollows])
 
   const applyCurrentModel = useCallback((model: string | null) => {
     if (busy) return
@@ -299,56 +442,96 @@ function ModelSelector({
     void onChangeChildModel(model).catch(() => {})
   }, [busy, onChangeChildModel])
 
-  const handleFilterKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleFilterKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, scope: ModelSelectorScope) => {
+    const matchingOptions = scope === 'current' ? filteredOptions : childFilteredOptions
     if (event.key !== 'Enter') return
     if (filterComposingRef.current || event.nativeEvent.isComposing) return
-    if (busy || filteredOptions.length !== 1) return
+    if (busy || matchingOptions.length !== 1) return
     event.preventDefault()
-    applyCurrentModel(filteredOptions[0].key)
+    const key = matchingOptions[0].key
+    if (scope === 'child') applyChildModel(key)
+    else applyCurrentModel(key)
     setOpen(false)
-  }, [applyCurrentModel, busy, filteredOptions])
+  }
 
-  const renderCheckbox = (checked: boolean, label: string) => (
-    <span
-      aria-label={label}
-      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[12px] font-semibold ${checked ? 'border-fw-accent-border bg-fw-accent text-fw-text-inverse' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}
+  const renderOptionRow = (params: {
+    optionKey: string | null
+    label: string
+    selected: boolean
+    title: string
+    resolvedTarget?: string | null
+    onSelect: () => void
+  }) => (
+    <button
+      key={params.optionKey || '__default__'}
+      type="button"
+      disabled={busy}
+      onClick={params.onSelect}
+      title={params.title}
+      aria-pressed={params.selected}
+      data-model-option-row="true"
+      data-model-option-key={params.optionKey || '__default__'}
+      data-model-option-selected={params.selected ? 'true' : 'false'}
+      className={`flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-xs transition-colors focus-visible:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-60 ${params.selected ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/30 dark:text-fw-accent' : 'text-fw-text-strong hover:bg-fw-hover dark:hover:bg-fw-hover'}`}
     >
-      ✓
-    </span>
+      <span className="min-w-0 flex-1 truncate">{params.label}</span>
+      {params.resolvedTarget && (
+        <span className="max-w-[45%] shrink-0 truncate text-[11px] text-fw-text-muted" data-model-option-target="true" title={params.resolvedTarget}>{params.resolvedTarget}</span>
+      )}
+      <Check aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${params.selected ? 'text-fw-accent' : 'text-transparent'}`} />
+    </button>
   )
 
-  const renderRow = (row: { key: string | null; label: string; title: string; currentChecked: boolean; childChecked: boolean; defaultRow?: boolean }) => (
-    <div
-      key={row.key || '__default__'}
-      className="foxwarm-model-selector-grid grid items-stretch border-t border-fw-border-muted text-xs first:border-t-0 dark:border-fw-border-muted"
-      data-model-selector-row="true"
-    >
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => applyCurrentModel(row.key)}
-        className={`col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_100px] items-stretch text-left transition-colors hover:bg-fw-accent-surface focus-visible:bg-fw-accent-surface disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-fw-accent-surface-strong/30 dark:focus-visible:bg-fw-accent-surface-strong/30 ${row.currentChecked ? 'text-fw-accent dark:text-fw-accent' : 'text-fw-text-strong'}`}
-        title={row.title}
-        aria-label={`Use ${row.label} as current session model`}
-        data-model-current-region="true"
-      >
-        <span className="min-w-0 px-3 py-2" data-model-selector-column="model"><span className="block truncate font-medium">{row.label}</span></span>
-        <span className="flex items-center justify-center border-l border-fw-border-muted dark:border-fw-border-muted" data-model-selector-column="current">
-          {renderCheckbox(row.currentChecked, 'current model selected')}
-        </span>
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => applyChildModel(row.key)}
-        className="flex items-center justify-center transition hover:bg-fw-special-surface disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-fw-special-surface/30"
-        title={`Use ${row.label} as child default model`}
-        data-model-selector-column="child"
-      >
-        {renderCheckbox(row.childChecked, 'child default selected')}
-      </button>
-    </div>
+  const renderModelGroups = (selectedKey: string | null, onSelect: (key: string) => void, matchingOptions: ModelOption[]) => {
+    const optionGroups = groupModelOptionsByProvider(matchingOptions)
+    return (
+    optionGroups.length === 0
+      ? <div className="px-3 py-3 text-xs text-fw-text-muted">No matching models</div>
+      : optionGroups.map(group => (
+        <div key={group.provider || '__unscoped__'} data-model-option-group={group.provider || ''}>
+          {group.provider && (
+            <div className="px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-fw-text-muted">{group.provider}</div>
+          )}
+          {group.options.map(option => renderOptionRow({
+            optionKey: option.key,
+            label: resolveModelDisplayName(option.key, [option]),
+            selected: selectedKey === option.key,
+            title: option.key,
+            resolvedTarget: formatVirtualModelDetail(option),
+            onSelect: () => onSelect(option.key),
+          }))}
+        </div>
+      ))
   )
+
+  }
+
+  const renderEffortControl = (scope: ModelSelectorScope) => {
+    const isCurrent = scope === 'current'
+    const scopeLabel = isCurrent ? 'Current' : 'Child'
+    const staleFullLabel = isCurrent ? currentStaleFullLabel : childStaleFullLabel
+    const allowedEfforts = isCurrent ? currentAllowedEfforts : childAllowedEfforts
+    const value = isCurrent ? (effort || '') : (childEffortDefault || '')
+    const onChange = isCurrent ? onChangeEffort : onChangeChildEffort
+    const descriptionId = `${effortDescriptionId}-${isCurrent ? 'current' : 'child'}`
+    const effective = isCurrent ? currentFallbackLabel : childFallbackLabel
+    const autoValue = isCurrent ? currentConfiguredDefault
+      : (effort && allowedEfforts.includes(effort) ? effort : childConfiguredDefault)
+    return (
+      <EffortRangeControl
+        key={`${scopeLabel}:${isCurrent ? currentModelKey : effectiveChildModelKey}`}
+        scopeLabel={scopeLabel}
+        values={allowedEfforts}
+        value={value || null}
+        effectiveValue={allowedEfforts.includes(effective) ? effective : null}
+        automaticValue={autoValue && allowedEfforts.includes(autoValue) ? autoValue : null}
+        staleLabel={staleFullLabel}
+        busy={busy}
+        descriptionId={descriptionId}
+        onCommit={onChange}
+      />
+    )
+  }
 
   return (
     <div ref={rootRef} className="foxwarm-model-selector-root relative flex min-w-0 max-w-[30rem] flex-1" title={error || undefined}>
@@ -356,101 +539,106 @@ function ModelSelector({
         ref={buttonRef}
         type="button"
         onClick={toggleOpen}
-        className="foxwarm-model-selector-trigger inline-flex h-8 min-w-0 max-w-full shrink items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+        className="foxwarm-model-selector-trigger inline-flex h-8 min-w-0 max-w-full shrink items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-fw-text-muted transition hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring dark:hover:bg-fw-hover"
         aria-haspopup="dialog"
         aria-expanded={open}
       >
-        <span className="shrink-0 text-fw-text-muted">Model</span>
-        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'} · {effectiveEffort || effort || 'default'}</span>
-        {(childModelDefault || childEffortDefault) && (
-          <>
-            <span className="hidden shrink-0 text-fw-text-muted sm:inline">/</span>
-            <span className="hidden min-w-0 truncate text-fw-text-muted sm:inline" title={childModelDefault || 'follow'}>child {childModelDefault || 'follow'} · {effectiveChildEffort || childEffortDefault || 'default'}</span>
-          </>
+        <span className="min-w-0 truncate font-medium text-fw-text-strong" title={currentKeyFull} data-model-trigger-name="true">{currentDisplayName}</span>
+        <span className="h-3.5 w-px shrink-0 bg-fw-border" aria-hidden="true" />
+        <span className="shrink-0 text-fw-text-muted" data-model-trigger-effort="true">{triggerEffort}</span>
+        {error && <span className="shrink-0 text-fw-danger" aria-hidden="true">!</span>}
+        {!childFollows && (
+          <span title={childModelDefault || undefined} data-model-trigger-child="true" className="foxwarm-model-child-trigger inline-flex min-w-0 items-center gap-1 text-xs text-fw-text-muted">
+            <GitBranch aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{childResolvedTargetName}{childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}</span>
+          </span>
         )}
-        {(busy || refreshing) && <span className="shrink-0 text-fw-text-muted">…</span>}
-        {error && <span className="shrink-0 text-fw-danger dark:text-fw-danger">!</span>}
+        <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && createPortal(
         <div
           ref={popupRef}
-          className="foxwarm-model-selector-popup z-[1000] overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
+          className="foxwarm-model-selector-popup z-[1000] flex flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
           style={{
             ...popupStyle,
+            height: popupStyle.maxHeight,
             '--foxwarm-model-selector-scrollbar-width': `${scrollbarWidth}px`,
           } as React.CSSProperties}
           role="dialog"
           aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
+          data-model-saving={busy ? "true" : undefined}
         >
-          <div
-            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-b border-fw-border bg-fw-surface-sunken px-0 text-[11px] font-semibold uppercase tracking-wide text-fw-text-muted dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-muted"
-            data-model-selector-header="true"
-          >
-            <div className="flex items-center px-3 py-2">Model id</div>
-            <div className="flex items-center justify-center border-l border-fw-border/80 px-2 py-2 text-center dark:border-fw-border/80">Current</div>
-            <div className="flex items-center justify-center border-l border-fw-border/80 px-2 py-2 text-center dark:border-fw-border/80">Child</div>
-          </div>
-          <div className="overflow-y-scroll" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 144 : 110) : undefined }} data-model-selector-scroll="true">
-            {renderRow({
-              key: null,
-              label: 'default / follow',
-              title: `Current default: ${defaultModelKey || currentModelKey || 'model'}; child follows: ${effectiveChildModelKey || currentModelKey || 'model'}`,
-              currentChecked: currentIsDefault,
-              childChecked: childFollows,
-              defaultRow: true,
+          <div className="foxwarm-model-columns min-h-0 flex-1" data-model-columns={childFollows ? '1' : '2'}>
+            {(['current', ...(!childFollows ? ['child'] : [])] as ModelSelectorScope[]).map(scope => {
+              const isCurrent = scope === 'current'
+              const staleLabel = isCurrent ? currentStaleFullLabel : childStaleFullLabel
+              return (
+                <section key={scope} className="foxwarm-model-column flex min-h-0 min-w-0 flex-col" data-model-column={scope} aria-label={isCurrent ? 'Current session' : 'Children'}>
+                  <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-fw-border bg-fw-surface-sunken px-3">
+                    <span className="text-xs font-semibold text-fw-text-strong">{isCurrent ? 'Current session' : 'Children'}</span>
+                    {isCurrent ? (
+                      childFollows && !experimentalCurrentOnly && <button type="button" disabled={busy} data-model-child-mode="specific" onClick={() => {
+                        setActiveScope('child')
+                        applyChildModel(effectiveChildModelKey || currentModelKey || defaultModelKey || options[0]?.key || null)
+                      }} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover disabled:opacity-50">
+                        <GitBranch className="h-3 w-3" aria-hidden="true" />Set child model
+                      </button>
+                    ) : (
+                      <button type="button" disabled={busy} data-model-child-mode="follow" onClick={() => { setActiveScope('current'); applyChildModel(null) }} className="rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover disabled:opacity-50">Follow this session</button>
+                    )}
+                  </div>
+                  <div className="shrink-0 border-b border-fw-border px-2 py-1.5" data-model-selector-search="true">
+                    <input
+                      ref={isCurrent ? filterInputRef : childFilterInputRef}
+                      type="search"
+                      value={isCurrent ? filterQuery : childFilterQuery}
+                      onChange={event => (isCurrent ? setFilterQuery : setChildFilterQuery)(event.target.value)}
+                      onKeyDown={event => handleFilterKeyDown(event, scope)}
+                      onCompositionStart={() => { filterComposingRef.current = true }}
+                      onCompositionEnd={() => { filterComposingRef.current = false }}
+                      aria-label={isCurrent ? 'Filter models' : 'Filter child models'}
+                      placeholder="Filter models"
+                      className="foxwarm-model-filter-input h-7 w-full min-w-0 rounded-md border border-fw-border bg-fw-surface px-2 text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring"
+                    />
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto" data-model-selector-scroll="true">
+                    {isCurrent && renderOptionRow({
+                      optionKey: null,
+                      label: 'Use global default',
+                      selected: currentIsDefault,
+                      title: `Global default (${currentDefaultTargetName})`,
+                      resolvedTarget: currentDefaultTargetName,
+                      onSelect: () => applyCurrentModel(null),
+                    })}
+                    {renderModelGroups(isCurrent ? (sessionModel || null) : (childModelDefault || null), isCurrent ? applyCurrentModel : applyChildModel, isCurrent ? filteredOptions : childFilteredOptions)}
+                  </div>
+                  <div className="shrink-0 border-t border-fw-border px-3 py-2" data-model-effort-footer="true">
+                    {renderEffortControl(scope)}
+                    {staleLabel && <span className="sr-only">{staleLabel}</span>}
+                  </div>
+                </section>
+              )
             })}
-            {filteredOptions.map((option) => renderRow({
-              key: option.key,
-              label: formatModelLabel(option, defaultModelKey),
-              title: option.key,
-              currentChecked: sessionModel === option.key,
-              childChecked: childModelDefault === option.key,
-            }))}
           </div>
           {error && <div className="border-t border-fw-danger-border px-3 py-2 text-xs text-fw-danger dark:border-fw-danger-border/50 dark:text-fw-danger">{error}</div>}
           <div
-            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-t border-fw-border bg-fw-surface-sunken/70 text-[11px] font-semibold uppercase tracking-wide text-fw-text-muted dark:border-fw-border dark:bg-fw-surface/70 dark:text-fw-text-muted"
-            data-model-effort-footer="true"
+            className="flex shrink-0 items-center gap-1.5 border-t border-fw-border px-2 py-1.5 dark:border-fw-border"
+            data-model-actions="true"
           >
-            <div className="flex items-center px-3 py-1.5">Effort</div>
-            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-0.5 py-1 dark:border-fw-border/80">
-              <select
-                aria-label="Current effort"
-                aria-describedby={`${effortDescriptionId}-current`}
-                disabled={busy}
-                value={effort || ''}
-                onChange={(event) => void onChangeEffort(event.target.value || null).catch(() => {})}
-                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-fw-border bg-fw-surface/90 px-1 text-[11px] font-medium normal-case tracking-normal text-fw-text outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring disabled:opacity-60 dark:border-fw-border-strong dark:bg-fw-canvas/90 dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring"
-                title={`Current effort: ${currentStaleFullLabel || (effort || currentDefaultFullLabel)}`}
-              >
-                <option value="" label={currentDefaultShortLabel} title={currentDefaultFullLabel}>{currentDefaultFullLabel}</option>
-                {currentStaleEffort && <option value={currentStaleEffort} label={`${formatEffortLabel(currentStaleEffort)} ⚠`} title={currentStaleFullLabel || undefined} aria-label={currentStaleFullLabel || undefined} disabled>{currentStaleFullLabel}</option>}
-                {currentAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
-              </select>
-              <span id={`${effortDescriptionId}-current`} className="sr-only">Current effort: {currentStaleFullLabel || (effort || currentDefaultFullLabel)}</span>
-            </label>
-            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-0.5 py-1 dark:border-fw-border/80">
-              <select
-                aria-label="Child effort"
-                aria-describedby={`${effortDescriptionId}-child`}
-                disabled={busy}
-                value={childEffortDefault || ''}
-                onChange={(event) => void onChangeChildEffort(event.target.value || null).catch(() => {})}
-                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-fw-border bg-fw-surface/90 px-1 text-[11px] font-medium normal-case tracking-normal text-fw-text outline-none focus:border-fw-special-border focus:ring-1 focus:ring-fw-focus-ring disabled:opacity-60 dark:border-fw-border-strong dark:bg-fw-canvas/90 dark:text-fw-text-strong dark:focus:border-fw-special-border dark:focus:ring-fw-focus-ring"
-                title={`Child effort: ${childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}`}
-              >
-                <option value="" label={childDefaultShortLabel} title={childDefaultFullLabel}>{childDefaultFullLabel}</option>
-                {childStaleEffort && <option value={childStaleEffort} label={`${formatEffortLabel(childStaleEffort)} ⚠`} title={childStaleFullLabel || undefined} aria-label={childStaleFullLabel || undefined} disabled>{childStaleFullLabel}</option>}
-                {childAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
-              </select>
-              <span id={`${effortDescriptionId}-child`} className="sr-only">Child effort: {childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}</span>
-            </label>
-          </div>
-          <div className="flex min-w-0 items-center gap-1.5 border-t border-fw-border p-1.5 dark:border-fw-border">
             <button
+              type="button"
+              onClick={() => void onRefreshModels()}
+              disabled={refreshing}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fw-text hover:bg-fw-hover hover:text-fw-text-strong disabled:opacity-60 dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+              aria-label="Refresh models"
+              title="Refresh models"
+            >
+              <RefreshCw aria-hidden="true" className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+            {!experimentalCurrentOnly && <button
               type="button"
               onClick={() => {
                 setOpen(false)
@@ -461,19 +649,7 @@ function ModelSelector({
               title="Configure models"
             >
               <Settings aria-hidden="true" className="h-3.5 w-3.5" />
-            </button>
-            <input
-              ref={filterInputRef}
-              type="search"
-              value={filterQuery}
-              onChange={(event) => setFilterQuery(event.target.value)}
-              onKeyDown={handleFilterKeyDown}
-              onCompositionStart={() => { filterComposingRef.current = true }}
-              onCompositionEnd={() => { filterComposingRef.current = false }}
-              aria-label="Filter models"
-              placeholder="Filter models"
-              className="foxwarm-model-filter-input h-8 min-w-0 flex-1 rounded-lg border border-fw-border bg-fw-surface px-2.5 text-xs text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring dark:border-fw-border dark:bg-fw-canvas-edge dark:text-fw-text-strong dark:placeholder:text-fw-text-muted"
-            />
+            </button>}
           </div>
         </div>,
         document.body,
@@ -487,11 +663,14 @@ const ChatComposer = memo(function ChatComposer({
   sessionMissing,
   loading,
   asrAvailable,
+  experimentalTextOnly = false,
   modelOptions,
   currentModelKey,
   sessionModel,
   defaultModelKey,
   childModelDefault,
+  childModelPolicySource,
+  childPolicyChain,
   effectiveChildModelKey,
   effort,
   effectiveEffort,
@@ -513,9 +692,7 @@ const ChatComposer = memo(function ChatComposer({
   sendKeyMode = 'modEnter',
   onHeightChange,
   onSend,
-  onTranscribeAudio,
   onCreateStreamingTranscriber,
-  onDraftEdited,
 }: ChatComposerProps) {
   const loadedDraft = useMemo(() => loadComposerDraft(sessionId), [sessionId])
   const [draftState, setDraftState] = useState<{ sessionId: string; draft: ComposerDraft }>(() => ({ sessionId, draft: loadedDraft }))
@@ -526,9 +703,8 @@ const ChatComposer = memo(function ChatComposer({
   const [isDragging, setIsDragging] = useState(false)
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [transcribingAudio, setTranscribingAudio] = useState(false)
+  const [recordingLocked, setRecordingLocked] = useState(false)
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
-  const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState('')
-  const [waveformBars, setWaveformBars] = useState<number[]>(() => Array.from({ length: 5 }, () => 0.22))
   const [availableCommands, setAvailableCommands] = useState<SlashCommandOption[]>([])
   const [commandsLoading, setCommandsLoading] = useState(false)
   const [commandsError, setCommandsError] = useState<string | null>(null)
@@ -545,12 +721,9 @@ const ChatComposer = memo(function ChatComposer({
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const audioGainRef = useRef<GainNode | null>(null)
-  const audioAnalyserRef = useRef<AnalyserNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
   const audioSampleRateRef = useRef<number>(16000)
   const recordingActiveRef = useRef(false)
-  const waveformFrameRef = useRef<number | null>(null)
-  const waveformPeakRef = useRef<number>(0.12)
   const audioChunkCountRef = useRef(0)
   const audioMaxPeakRef = useRef(0)
   const audioMaxRmsRef = useRef(0)
@@ -566,6 +739,13 @@ const ChatComposer = memo(function ChatComposer({
   const submitInFlightRef = useRef(false)
   const activeSessionIdRef = useRef(sessionId)
   activeSessionIdRef.current = sessionId
+  const recordingGenerationRef = useRef(0)
+  const recordingLockRef = useRef(false)
+  const unlockRecording = useCallback((focus = false) => {
+    recordingLockRef.current = false
+    setRecordingLocked(false)
+    editorRef.current?.endTranscription(focus)
+  }, [])
 
   const persistDraftSafely = useCallback((targetSessionId: string, nextDraft: ComposerDraft) => {
     try {
@@ -586,8 +766,7 @@ const ChatComposer = memo(function ChatComposer({
     if (activeSessionIdRef.current !== targetSessionId) return
     draftRef.current = nextDraft
     setDraftState({ sessionId: targetSessionId, draft: nextDraft })
-    onDraftEdited?.(serializeComposerDraft(nextDraft))
-  }, [onDraftEdited, persistDraftSafely, sessionId])
+  }, [persistDraftSafely, sessionId])
 
   useEffect(() => {
     let cancelled = false
@@ -632,9 +811,11 @@ const ChatComposer = memo(function ChatComposer({
     setDraftState({ sessionId, draft: savedDraft })
     setDraftPersistenceError(null)
     setIsRecordingAudio(false)
+    setTranscribingAudio(false)
+    recordingGenerationRef.current += 1
+    recordingLockRef.current = false
+    setRecordingLocked(false)
     setTranscribeError(null)
-    setLiveTranscriptionPreview('')
-    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
     setDismissedSlashQuery(null)
     submitInFlightRef.current = false
     const frame = requestAnimationFrame(() => {
@@ -645,10 +826,6 @@ const ChatComposer = memo(function ChatComposer({
 
   const cleanupRecording = useCallback(async () => {
     recordingActiveRef.current = false
-    if (waveformFrameRef.current !== null) {
-      cancelAnimationFrame(waveformFrameRef.current)
-      waveformFrameRef.current = null
-    }
     if (streamingFlushTimerRef.current) {
       clearInterval(streamingFlushTimerRef.current)
       streamingFlushTimerRef.current = null
@@ -656,21 +833,17 @@ const ChatComposer = memo(function ChatComposer({
     audioProcessorRef.current?.disconnect()
     audioSourceRef.current?.disconnect()
     audioGainRef.current?.disconnect()
-    audioAnalyserRef.current?.disconnect()
     audioStreamRef.current?.getTracks().forEach(track => track.stop())
 
     audioProcessorRef.current = null
     audioSourceRef.current = null
     audioGainRef.current = null
-    audioAnalyserRef.current = null
     audioStreamRef.current = null
-    waveformPeakRef.current = 0.12
     audioChunkCountRef.current = 0
     audioMaxPeakRef.current = 0
     audioMaxRmsRef.current = 0
     audioRmsSumRef.current = 0
     pendingStreamingChunksRef.current = []
-    setWaveformBars(Array.from({ length: 5 }, () => 0.22))
 
     if (audioContextRef.current) {
       await audioContextRef.current.close().catch(() => {})
@@ -680,11 +853,12 @@ const ChatComposer = memo(function ChatComposer({
 
   useEffect(() => {
     return () => {
+      recordingGenerationRef.current += 1
       streamingSessionRef.current?.cancel()
       streamingSessionRef.current = null
       void cleanupRecording()
     }
-  }, [cleanupRecording])
+  }, [cleanupRecording, sessionId])
 
   useEffect(() => {
     const root = rootRef.current
@@ -744,7 +918,7 @@ const ChatComposer = memo(function ChatComposer({
   }, [showSlashCommandMenu, highlightedCommandIndex])
 
   const applySlashCommand = useCallback((suggestion: SlashCommandSuggestion) => {
-    if (!slashCompletion) return
+    if (!slashCompletion || recordingLockRef.current) return
 
     const nextValue = applySlashCommandSuggestion(slashCompletion, suggestion)
     const nextDraft = makePlainComposerDraft(nextValue)
@@ -770,7 +944,7 @@ const ChatComposer = memo(function ChatComposer({
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if (sessionMissing || loading || submitInFlightRef.current) return
+    if (sessionMissing || loading || recordingLockRef.current || submitInFlightRef.current) return
     const submittedDraft = editorRef.current?.flushForSubmit() || draftRef.current
     const submittedInput = serializeComposerDraft(submittedDraft)
     if (!submittedInput.trim() && attachmentSegments.length === 0) return
@@ -881,26 +1055,13 @@ const ChatComposer = memo(function ChatComposer({
     e.stopPropagation()
     setIsDragging(false)
 
+    if (recordingLockRef.current) return
+
     const files = Array.from(e.dataTransfer.files)
     if (files.length > 0) {
       editorRef.current?.insertAttachments(files, { x: e.clientX, y: e.clientY })
     }
   }, [])
-
-  const appendTranscriptToDraft = useCallback((transcript: string) => {
-    if (!transcript.trim()) return
-    const targetSessionId = sessionId
-    const currentDraft = activeSessionIdRef.current === targetSessionId
-      ? draftRef.current
-      : loadComposerDraft(targetSessionId)
-    const nextDraft = appendTextToComposerDraft(currentDraft, transcript)
-    commitDraft(nextDraft, targetSessionId)
-    if (activeSessionIdRef.current === targetSessionId) editorRef.current?.replaceDraft(nextDraft)
-
-    requestAnimationFrame(() => {
-      if (activeSessionIdRef.current === targetSessionId) editorRef.current?.focusEnd()
-    })
-  }, [commitDraft, sessionId])
 
   const pushAsrDebug = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString([], { hour12: false })
@@ -988,97 +1149,8 @@ const ChatComposer = memo(function ChatComposer({
     streamingSession.sendAudioChunk(payload)
   }, [mergePcmChunksToBuffer, pushAsrDebug])
 
-  const startWaveformLoop = useCallback(() => {
-    const analyser = audioAnalyserRef.current
-    if (!analyser) return
-
-    const data = new Uint8Array(analyser.frequencyBinCount)
-    const barCount = 5
-    const minVoiceHz = 120
-    const maxVoiceHz = 4000
-
-    const tick = () => {
-      const activeAnalyser = audioAnalyserRef.current
-      if (!recordingActiveRef.current || !activeAnalyser) {
-        waveformFrameRef.current = null
-        return
-      }
-
-      activeAnalyser.getByteFrequencyData(data)
-      const sampleRate = activeAnalyser.context.sampleRate || 16000
-      const binHz = sampleRate / activeAnalyser.fftSize
-      const startBin = Math.max(0, Math.floor(minVoiceHz / binHz))
-      const endBinExclusive = Math.max(startBin + 1, Math.min(data.length, Math.ceil(maxVoiceHz / binHz)))
-      const voiceBinCount = Math.max(1, endBinExclusive - startBin)
-      const binsPerBar = Math.max(1, Math.floor(voiceBinCount / barCount))
-
-      const rawBars = Array.from({ length: barCount }, (_, index) => {
-        const start = startBin + index * binsPerBar
-        const end = index === barCount - 1
-          ? endBinExclusive
-          : Math.min(endBinExclusive, start + binsPerBar)
-        let sum = 0
-        for (let i = start; i < end; i++) {
-          sum += data[i]
-        }
-        const avg = end > start ? sum / (end - start) : 0
-        return avg / 255
-      })
-
-      const framePeak = rawBars.reduce((max, value) => Math.max(max, value), 0)
-      waveformPeakRef.current = Math.max(framePeak, waveformPeakRef.current * 0.92, 0.06)
-
-      // Auto-normalize quiet input for display only, capped at +20 dB (~10x amplitude).
-      const targetPeak = 0.78
-      const normalizationScale = Math.min(10, targetPeak / waveformPeakRef.current)
-      const centerWeight = [0.72, 0.88, 1, 0.88, 0.72]
-      const nextBars = rawBars.map((value, index) => {
-        const weighted = value * normalizationScale * centerWeight[index]
-        return Math.max(0.22, Math.min(1, weighted))
-      })
-
-      setWaveformBars(nextBars)
-      waveformFrameRef.current = requestAnimationFrame(tick)
-    }
-
-    if (waveformFrameRef.current !== null) {
-      cancelAnimationFrame(waveformFrameRef.current)
-    }
-    waveformFrameRef.current = requestAnimationFrame(tick)
-  }, [])
-
-  const handleAudioPick = useCallback(async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-
-    const file = files[0]
-    setTranscribeError(null)
-    setTranscribingAudio(true)
-    pushAsrDebug(`file start; name=${file.name} size=${file.size} type=${file.type || 'unknown'}`)
-
-    try {
-      const result = await onTranscribeAudio(file, input)
-      pushAsrDebug(`file response; status=${result.status} rawLength=${result.rawLength} textLength=${result.textLength}`)
-      if (result.responsePreview) {
-        pushAsrDebug(`file preview=${JSON.stringify(result.responsePreview)}`)
-      }
-      const transcript = result.text
-      if (!transcript.trim()) {
-        throw new Error(`ASR returned empty text (status=${result.status}, rawLength=${result.rawLength}, textLength=${result.textLength})`)
-      }
-
-      appendTranscriptToDraft(transcript)
-      pushAsrDebug(`file append success; trimmedLength=${transcript.trim().length}`)
-    } catch (e) {
-      console.error('ASR transcription failed:', e)
-      setTranscribeError(e instanceof Error ? e.message : 'ASR transcription failed')
-      pushAsrDebug(`file error; ${e instanceof Error ? e.message : 'ASR transcription failed'}`)
-    } finally {
-      setTranscribingAudio(false)
-    }
-  }, [appendTranscriptToDraft, input, onTranscribeAudio, pushAsrDebug])
-
   const handleRecordToggle = useCallback(async () => {
-    if (transcribingAudio) return
+    if (transcribingAudio || (recordingLockRef.current && !isRecordingAudio)) return
 
     if (isRecordingAudio) {
       setIsRecordingAudio(false)
@@ -1097,67 +1169,85 @@ const ChatComposer = memo(function ChatComposer({
       try {
         flushPendingStreamingChunks('stop')
         await cleanupRecording()
-        streamingSessionRef.current?.stop()
+        if (activeSessionIdRef.current === sessionId) streamingSessionRef.current?.stop()
       } catch (e) {
+        if (activeSessionIdRef.current !== sessionId) return
         console.error('Failed to stop streaming audio recording:', e)
         setTranscribeError(e instanceof Error ? e.message : 'Failed to stop streaming audio recording')
         pushAsrDebug(`rec stop error; ${e instanceof Error ? e.message : 'Failed to stop streaming audio recording'}`)
         setTranscribingAudio(false)
+        recordingGenerationRef.current += 1
+        streamingSessionRef.current?.cancel()
+        streamingSessionRef.current = null
+        unlockRecording()
       }
       return
     }
 
+    if (loading || sessionMissing || !editorRef.current?.beginTranscription()) return
+    const generation = ++recordingGenerationRef.current
+    const isCurrent = () => recordingGenerationRef.current === generation && activeSessionIdRef.current === sessionId
+    recordingLockRef.current = true
+    setRecordingLocked(true)
+
     if (!navigator.mediaDevices?.getUserMedia) {
       setTranscribeError('Current browser does not support microphone recording')
+      unlockRecording()
       return
     }
 
+    let pendingStream: MediaStream | null = null
     try {
       setTranscribeError(null)
-      setLiveTranscriptionPreview('')
       pushAsrDebug('rec start requested')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      pendingStream = stream
+      if (!isCurrent()) { stream.getTracks().forEach(track => track.stop()); return }
       pushAsrDebug('mic stream granted')
       const streamingSession = await onCreateStreamingTranscriber({
-        draftText: input,
+        draftText: serializeComposerDraft(draftRef.current),
         onPartial: (text) => {
-          setLiveTranscriptionPreview(text)
+          if (isCurrent()) editorRef.current?.updateTranscription(text)
         },
         onFinal: (text) => {
-          setLiveTranscriptionPreview(text)
-          if (text.trim()) {
-            appendTranscriptToDraft(text)
-            pushAsrDebug(`rec append success; trimmedLength=${text.trim().length}`)
-          } else {
+          if (!isCurrent()) return
+          if (text.trim()) editorRef.current?.updateTranscription(text)
+          else {
             pushAsrDebug('rec final text empty after trim')
           }
+          recordingGenerationRef.current += 1
+          unlockRecording(true)
           setTranscribingAudio(false)
           setIsRecordingAudio(false)
           streamingSessionRef.current = null
-          setTimeout(() => {
-            setLiveTranscriptionPreview('')
-          }, 1200)
+          void cleanupRecording()
         },
         onError: (message) => {
+          if (!isCurrent()) return
+          recordingGenerationRef.current += 1
           setTranscribeError(message)
           setTranscribingAudio(false)
           setIsRecordingAudio(false)
-          setLiveTranscriptionPreview('')
+          unlockRecording()
           streamingSessionRef.current = null
           void cleanupRecording()
         },
         onDebug: pushAsrDebug,
       })
+      if (!isCurrent()) { streamingSession.cancel(); stream.getTracks().forEach(track => track.stop()); return }
 
       const audioContext = new AudioContext()
       await audioContext.resume().catch(() => {})
+      if (!isCurrent()) {
+        streamingSession.cancel()
+        stream.getTracks().forEach(track => track.stop())
+        void audioContext.close()
+        return
+      }
       const source = audioContext.createMediaStreamSource(stream)
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
       const gain = audioContext.createGain()
-      const analyser = audioContext.createAnalyser()
       gain.gain.value = 0
-      analyser.fftSize = 512
-      analyser.smoothingTimeConstant = 0.82
 
       audioSampleRateRef.current = audioContext.sampleRate
       recordingActiveRef.current = true
@@ -1189,7 +1279,6 @@ const ChatComposer = memo(function ChatComposer({
         }
       }
 
-      source.connect(analyser)
       source.connect(processor)
       processor.connect(gain)
       gain.connect(audioContext.destination)
@@ -1198,28 +1287,31 @@ const ChatComposer = memo(function ChatComposer({
       audioSourceRef.current = source
       audioProcessorRef.current = processor
       audioGainRef.current = gain
-      audioAnalyserRef.current = analyser
       audioStreamRef.current = stream
       setIsRecordingAudio(true)
       pushAsrDebug(`rec started; audioContextSampleRate=${audioContext.sampleRate}; streaming batched by 600ms window`)
-      startWaveformLoop()
     } catch (e) {
+      pendingStream?.getTracks().forEach(track => track.stop())
+      if (!isCurrent()) return
       console.error('Failed to start microphone recording:', e)
       setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
       pushAsrDebug(`rec start error; ${e instanceof Error ? e.message : 'Failed to start microphone recording'}`)
+      recordingGenerationRef.current += 1
       streamingSessionRef.current?.cancel()
       streamingSessionRef.current = null
       await cleanupRecording()
       setIsRecordingAudio(false)
+      setTranscribingAudio(false)
+      if (activeSessionIdRef.current === sessionId) unlockRecording()
     }
-  }, [analyzeAudioChunk, appendTranscriptToDraft, cleanupRecording, floatChunkToPcm16Buffer, flushPendingStreamingChunks, input, isRecordingAudio, onCreateStreamingTranscriber, pushAsrDebug, transcribingAudio])
+  }, [analyzeAudioChunk, cleanupRecording, floatChunkToPcm16Buffer, flushPendingStreamingChunks, isRecordingAudio, loading, onCreateStreamingTranscriber, pushAsrDebug, sessionId, sessionMissing, transcribingAudio, unlockRecording])
 
   return (
     <div
       ref={rootRef}
       className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
     >
-      {isDragging && (
+      {isDragging && !experimentalTextOnly && (
         <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">
           <div className="inline-flex items-center gap-2 rounded-lg border border-fw-accent-border dark:border-fw-accent-border bg-fw-surface/90 dark:bg-fw-canvas/80 px-4 py-3 text-fw-accent dark:text-fw-accent text-base font-semibold shadow-sm">
             <Paperclip size={18} />
@@ -1230,28 +1322,15 @@ const ChatComposer = memo(function ChatComposer({
 
       <div
         className="foxwarm-chat-composer-inner pointer-events-auto mx-auto max-w-5xl"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={experimentalTextOnly ? undefined : handleDragOver}
+        onDragLeave={experimentalTextOnly ? undefined : handleDragLeave}
+        onDrop={experimentalTextOnly ? undefined : handleDrop}
       >
         {transcribeError && (
-          <div className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
-            ASR 实验入口失败：{transcribeError}
+          <div role="alert" className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
+            Transcription failed: {transcribeError}
           </div>
         )}
-        {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
-          <div className="mb-3 flex justify-start">
-            <div className="max-w-[min(100%,32rem)] rounded-2xl border border-fw-accent-border bg-fw-accent-surface px-4 py-3 text-sm text-fw-accent shadow-sm dark:border-fw-accent-border/80 dark:bg-fw-accent-surface-strong/20 dark:text-fw-accent">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-fw-accent dark:text-fw-accent">
-                <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
-              </div>
-              <div className="whitespace-pre-wrap break-words">
-                {liveTranscriptionPreview || (isRecordingAudio ? 'Listening…' : 'Waiting for final transcript…')}
-              </div>
-            </div>
-          </div>
-        )}
-
         {sessionMissing && (
           <div className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
             Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
@@ -1326,42 +1405,32 @@ const ChatComposer = memo(function ChatComposer({
               isDragging ? 'border-fw-accent-border dark:border-fw-accent-border' : ''
             }`}
           >
-        <input
+        {!experimentalTextOnly && <input
           type="file"
           id="file-upload"
           multiple
           onChange={(e) => {
-            if (e.target.files) {
+            if (!recordingLockRef.current && e.target.files) {
               editorRef.current?.insertAttachments(Array.from(e.target.files))
-              e.currentTarget.value = ''
             }
-          }}
-          className="hidden"
-        />
-        <input
-          type="file"
-          id="audio-upload"
-          accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm"
-          onChange={(e) => {
-            void handleAudioPick(e.target.files)
             e.currentTarget.value = ''
           }}
           className="hidden"
-        />
+        />}
         <InlineComposerEditor
           ref={editorRef}
           draftId={sessionId}
           value={draft}
-          disabled={loading || sessionMissing}
+          disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
-            : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : experimentalTextOnly ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
           }}
           onBlur={() => persistDraftSafely(sessionId, draftRef.current)}
-          onAttachFiles={(files) => createMessageAttachmentDrafts(sessionId, files, draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
+          onAttachFiles={(files) => experimentalTextOnly ? [] : createMessageAttachmentDrafts(sessionId, files, draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
             type: 'attachment',
             ref,
             name: file.name || 'attachment',
@@ -1376,60 +1445,37 @@ const ChatComposer = memo(function ChatComposer({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
-              <label
+              {!experimentalTextOnly && <label
                 htmlFor="file-upload"
-                className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
+                onClick={(event) => { if (recordingLockRef.current) event.preventDefault() }}
+                className={`inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse ${recordingLocked ? 'pointer-events-none opacity-50' : ''}`}
                 title="Attach files"
                 aria-label="Attach files"
               >
                 <Plus size={18} />
-              </label>
+              </label>}
               {asrAvailable && (
-                <div className="inline-flex shrink-0 items-center rounded-full bg-transparent">
-                  <button
-                    type="button"
-                    onClick={() => void handleRecordToggle()}
-                    disabled={transcribingAudio}
-                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-l-full rounded-r-none px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger hover:bg-fw-danger-surface-strong dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/60' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : ''}`}
-                    title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
-                  >
-                    {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
-                    {!isRecordingAudio && (
-                      <span className="leading-none">Rec</span>
-                    )}
-                    {(isRecordingAudio || transcribingAudio) && (
-                      <span className="ml-1 inline-flex h-[14px] items-center gap-[2px] self-center">
-                        {waveformBars.map((value, index) => (
-                          <span
-                            key={index}
-                            className={`w-[3px] rounded-full transition-all duration-75 ${isRecordingAudio ? 'bg-current opacity-90' : 'bg-current opacity-60'}`}
-                            style={{ height: `${Math.max(4, Math.round(value * 14))}px` }}
-                          />
-                        ))}
-                      </span>
-                    )}
-                  </button>
-                  <label
-                    htmlFor="audio-upload"
-                    onClick={(e) => {
-                      if (isRecordingAudio || transcribingAudio) {
-                        e.preventDefault()
-                      }
-                    }}
-                    className={`inline-flex h-8 shrink-0 items-center justify-center rounded-r-full rounded-l-none px-3 text-[13px] font-medium transition ${isRecordingAudio || transcribingAudio ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger' : ''}`}
-                    title="Upload audio file and append transcript to draft"
-                  >
-                    <span>file</span>
-                  </label>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRecordToggle()}
+                  disabled={transcribingAudio}
+                  className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger hover:bg-fw-danger-surface-strong dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/60' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : ''}`}
+                  title={transcribingAudio ? 'Finalizing transcription' : isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                  aria-label={transcribingAudio ? 'Finalizing transcription' : isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
+                >
+                  {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
+                </button>
               )}
             </div>
             <ModelSelector
+              experimentalCurrentOnly={experimentalTextOnly}
               options={modelOptions}
               currentModelKey={currentModelKey}
               sessionModel={sessionModel}
               defaultModelKey={defaultModelKey}
               childModelDefault={childModelDefault}
+              childModelPolicySource={childModelPolicySource}
+              childPolicyChain={childPolicyChain}
               effectiveChildModelKey={effectiveChildModelKey}
               effort={effort}
               effectiveEffort={effectiveEffort}
@@ -1452,7 +1498,7 @@ const ChatComposer = memo(function ChatComposer({
           </div>
           <button
             type="submit"
-            disabled={loading || sessionMissing || (!input.trim() && attachmentSegments.length === 0)}
+            disabled={loading || sessionMissing || recordingLocked || (!input.trim() && attachmentSegments.length === 0)}
             className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             aria-label="Send message"
             title="Send message"

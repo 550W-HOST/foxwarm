@@ -128,12 +128,28 @@ function normalizeToolEffort(value: unknown): ModelEffort | null {
   return normalized as ModelEffort;
 }
 
-function formatChildModelEffortStatus(session: Pick<Session, 'id' | 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>): string {
-  const view = buildSessionModelEffortPresentation(session);
+function formatChildModelEffortStatus(session: Pick<Session, 'id' | 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault' | 'parentSessionId'>): string {
+  const view = buildSessionModelEffortPresentation(session, undefined, sessionId => {
+    const candidate = sessionManager.getSessionCatalog(sessionId);
+    if (!candidate) return undefined;
+    return {
+      id: candidate.id,
+      model: candidate.model,
+      effort: candidate.effort,
+      childModelDefault: candidate.childModelDefault,
+      childEffortDefault: candidate.childEffortDefault,
+      parentSessionId: candidate.parentSessionId,
+    };
+  });
+  const chain = [...view.childPolicyChain].reverse()
+    .map(entry => `${entry.supplies ? '*' : ''}${entry.childModelDefault || entry.modelKey || 'follow'}`)
+    .join(' → ');
   return [
     `Session \`${session.id}\` child model/effort defaults:`,
     `model override: ${view.childModelDefault ? `\`${view.childModelDefault}\`` : 'follow current model'}`,
+    `policy source: ${view.childModelPolicySource}`,
     `effective model: \`${view.effectiveChildModelKey}\``,
+    `policy chain: ${chain || 'n/a'}`,
     `effort override: ${view.childEffort.raw || 'unset'}`,
     `effective effort: ${view.childEffort.effective}`,
     `allowed: ${view.childEffort.allowed.join(', ')}`,

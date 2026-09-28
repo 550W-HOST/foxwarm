@@ -6,6 +6,7 @@ import { logger } from './common';
 import * as llm from './llm';
 import * as managedSessions from './managedSessions';
 import { resolveAgentPath } from './utils/pathResolve';
+import { isToolResultImageRefPart } from './toolImages';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
@@ -140,6 +141,8 @@ type ToolScriptResult = {
   cancelledAt?: number;
   result?: any;
   error?: string;
+  /** Canonical image parts promoted from the script result, handed to the tool-result image pipeline. */
+  imageParts?: MessagePart[];
 };
 
 type RuntimeState = {
@@ -611,31 +614,60 @@ function buildWaitingFor(run: ToolScriptRunRecord): any {
   return undefined;
 }
 
-function extractAndCleanInlineData(lastResult: any): { inlineDataFields: { inlineData?: any; inlineDataItems?: any[] }; cleanedResult: any } {
+function extractAndCleanInlineData(lastResult: any): {
+  inlineDataFields: { inlineData?: any; inlineDataItems?: any[]; imageParts?: MessagePart[] };
+  cleanedResult: any;
+} {
   if (!lastResult || typeof lastResult !== 'object' || Array.isArray(lastResult)) {
     return { inlineDataFields: {}, cleanedResult: lastResult };
   }
-  const inlineDataFields: { inlineData?: any; inlineDataItems?: any[] } = {};
-  let hasInlineData = false;
+  const inlineDataFields: { inlineData?: any; inlineDataItems?: any[]; imageParts?: MessagePart[] } = {};
+  let hasPromotedImages = false;
   if (lastResult.inlineData && typeof lastResult.inlineData === 'object' && typeof lastResult.inlineData.data === 'string') {
     inlineDataFields.inlineData = lastResult.inlineData;
-    hasInlineData = true;
+    hasPromotedImages = true;
   }
   if (Array.isArray(lastResult.inlineDataItems) && lastResult.inlineDataItems.length > 0) {
     inlineDataFields.inlineDataItems = lastResult.inlineDataItems;
-    hasInlineData = true;
+    hasPromotedImages = true;
   }
-  if (!hasInlineData) {
+  // Canonical image parts returned by a script keep their bytes in the image
+  // Blob store, so only the reference travels to the outer tool result, where
+  // the tool-result image pipeline turns it into a session image part.
+  let promotedImageParts: MessagePart[] | undefined;
+  let remainingParts: any[] | undefined;
+  if (Array.isArray(lastResult.parts)) {
+    const candidates = lastResult.parts.filter((part: any) => isToolResultImageRefPart(part)) as MessagePart[];
+    if (candidates.length > 0) {
+      promotedImageParts = candidates;
+      remainingParts = lastResult.parts.filter((part: any) => !isToolResultImageRefPart(part));
+      hasPromotedImages = true;
+    }
+  }
+  if (!hasPromotedImages) {
     return { inlineDataFields, cleanedResult: lastResult };
   }
-  // Strip inlineData from result and replace with a placeholder so the base64 blob
-  // does not bloat the text representation seen by the model.
+  // Strip raw image bytes and promoted references from result and replace them with
+  // bounded placeholders so they do not bloat the text representation seen by the model.
+  // Unrelated result fields, including a `parts` list without promoted image parts,
+  // are preserved verbatim.
   const { inlineData, inlineDataItems, ...rest } = lastResult;
   if (inlineData) {
     rest.inlineData = `[image promoted, mimeType=${inlineData.mimeType || 'unknown'}]`;
   }
   if (inlineDataItems) {
     rest.inlineDataItems = `[${inlineDataItems.length} image(s) promoted]`;
+  }
+  if (promotedImageParts) {
+    inlineDataFields.imageParts = promotedImageParts;
+    const placeholder = `[${promotedImageParts.length} image part(s) promoted]`;
+    // Text that rode along on a promoted part stays visible; only the promoted
+    // image entries themselves are replaced by the bounded placeholder.
+    const retainedTexts = promotedImageParts
+      .filter(part => typeof part.text === 'string' && part.text.length > 0)
+      .map(part => ({ text: part.text }));
+    const survivors = [...(remainingParts || []), ...retainedTexts];
+    rest.parts = survivors.length > 0 ? [...survivors, placeholder] : placeholder;
   }
   return { inlineDataFields, cleanedResult: rest };
 }
@@ -809,7 +841,35 @@ function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtime
   return augmentWithContext(String(error));
 }
 
-async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string }> {
+/**
+ * Projects a low-level model result into the canonical parts a script may hand
+ * back: text parts and image parts whose bytes stay in the image Blob store.
+ * Reasoning, function calls, provider metadata, and raw image bytes are not
+ * exposed to the script or to the outer tool result.
+ */
+function projectOneShotResultParts(allParts: MessagePart[] | undefined): MessagePart[] {
+  const parts: MessagePart[] = [];
+  for (const part of allParts || []) {
+    // A provider part is not an exclusive union, so text and an image reference
+    // are projected independently and neither can silently drop the other.
+    const projected: MessagePart = {};
+    if (typeof part.text === 'string' && part.text.length > 0) {
+      projected.text = part.text;
+    }
+    const ref = part.inlineDataRef;
+    if (ref && typeof ref.blobId === 'string' && ref.blobId.length > 0) {
+      // `apiPath` is WebUI transport state and never belongs to a canonical part.
+      const { apiPath: _apiPath, ...canonicalRef } = ref;
+      projected.inlineDataRef = canonicalRef;
+    }
+    if (projected.text !== undefined || projected.inlineDataRef) {
+      parts.push(projected);
+    }
+  }
+  return parts;
+}
+
+async function requestModelWithoutContext(prompt: string, session: Session, model?: string): Promise<{ text: string; parts: MessagePart[] }> {
   const result = await llm.requestLlmOnce({
     contents: [{
       role: 'user',
@@ -826,7 +886,10 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     purpose: 'toolscript-one-shot',
   });
 
-  return { text: result.text || '' };
+  return {
+    text: result.text || '',
+    parts: projectOneShotResultParts(result.allParts),
+  };
 }
 
 function getToolScriptSession(ctx: ToolContext, functionName: string): Session {

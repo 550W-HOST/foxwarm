@@ -299,7 +299,7 @@ export const COMMANDS: Record<string, CommandDef> = {
           return
         }
         ctx.reply('▶️ Continuing interrupted turn...')
-        await sessionRuntime.control(sessionId, 'retry', ctx)
+        await sessionRuntime.control(sessionId, 'retry')
       } catch (e: any) {
         if (e?.code === 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN') {
           ctx.reply('⚠️ Continue outcome is unknown: it may already be committed or delivered. Inspect session history before continuing again.')

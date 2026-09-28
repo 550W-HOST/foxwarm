@@ -140,7 +140,6 @@ test('message router queues direct user messages into managed inbox instead of a
       username: 'managed-user',
       channelUserId: conversationId,
       conversationId,
-      preferDirectReply: true,
     } as any;
 
     await router.handleMessage(ctx, {

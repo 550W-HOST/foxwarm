@@ -44,7 +44,7 @@ test('oversized safety buffering metadata is reduced to bounded useful fields', 
   assert.ok(JSON.stringify(bounded).length <= 2048);
 });
 
-test('stream watchdog uses three minutes to first activity and one minute between increments', () => {
+test('stream watchdog uses three minutes to first activity and three minutes between increments', () => {
   assert.equal(DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS, 3 * 60 * 1000);
   assert.equal(DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS, 60 * 1000);
   const timers = new FakeTimers();
@@ -157,4 +157,89 @@ test('progress can continue beyond five minutes without an implicit overall stre
   }
   assert.equal(timers.entries.some(entry => entry.delayMs === 5 * 60 * 1000), false);
   watchdog.finish();
+});
+
+test('custom inactivity preserves first-content and hard limits; safety buffering never shortens it', () => {
+  for (const timeout of [300_000, 900_000]) {
+    const timers = new FakeTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    const watchdog = createStreamingAttemptWatchdog({
+      streamContentInactivityTimeoutMs: timeout, hardTimeoutMs: 7_000,
+      onTimeout: () => assert.fail('finished watchdog must not fire'),
+    });
+    assert.deepEqual(timers.entries.map(entry => entry.delayMs), [180_000, 7_000]);
+    watchdog.markMeaningfulProgress();
+    assert.equal(timers.entries.at(-1)!.delayMs, timeout);
+    assert.equal(watchdog.enterSafetyBuffering({ type: 'safety_buffering' }), Math.max(timeout, 600_000));
+    watchdog.markMeaningfulProgress();
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    watchdog.finish();
+    assert.ok(timers.entries.every(entry => entry.cleared));
+    for (const entry of timers.entries) entry.callback();
+  }
+});
+
+test('hosted image generation extends short custom inactivity for the rest of the attempt', () => {
+  for (const timeout of [300_000, 900_000]) {
+    const timers = new FakeTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    const watchdog = createStreamingAttemptWatchdog({
+      streamContentInactivityTimeoutMs: timeout,
+      onTimeout: () => assert.fail('finished watchdog must not fire'),
+    });
+    watchdog.reportImageGenerationActivity();
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    // Later progress and further image activity keep the extended window.
+    watchdog.markMeaningfulProgress();
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    assert.equal(watchdog.enterSafetyBuffering({ type: 'safety_buffering' }), Math.max(timeout, 600_000));
+    watchdog.reportImageGenerationActivity();
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    watchdog.finish();
+    for (const entry of timers.entries) entry.callback();
+  }
+});
+
+test('a later attempt starts from the configured inactivity until its own image begins', () => {
+  for (const timeout of [300_000, 900_000]) {
+    const timers = new FakeTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    const imageAttempt = createStreamingAttemptWatchdog({
+      streamContentInactivityTimeoutMs: timeout,
+      onTimeout: () => assert.fail('finished watchdog must not fire'),
+    });
+    imageAttempt.reportImageGenerationActivity();
+    assert.equal(timers.entries.at(-1)!.delayMs, Math.max(timeout, 600_000));
+    imageAttempt.finish();
+
+    const freshAttempt = createStreamingAttemptWatchdog({
+      streamContentInactivityTimeoutMs: timeout,
+      onTimeout: () => assert.fail('finished watchdog must not fire'),
+    });
+    freshAttempt.markMeaningfulProgress();
+    assert.equal(timers.entries.at(-1)!.delayMs, timeout);
+    freshAttempt.finish();
+  }
+});
+
+test('every reported image activity restarts the extended window', () => {
+  const timers = new FakeTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  const fired: string[] = [];
+  const watchdog = createStreamingAttemptWatchdog({
+    streamContentInactivityTimeoutMs: 300_000,
+    onTimeout: (_error, kind) => fired.push(kind),
+  });
+  watchdog.reportImageGenerationActivity();
+  const firstWindow = timers.entries.at(-1)!;
+  assert.equal(firstWindow.delayMs, 600_000);
+  // A later status event replaces the window instead of leaving the first report
+  // as a fixed per-attempt deadline.
+  watchdog.reportImageGenerationActivity();
+  assert.equal(firstWindow.cleared, true);
+  assert.notEqual(timers.entries.at(-1), firstWindow);
+  assert.equal(timers.entries.at(-1)!.delayMs, 600_000);
+  assert.deepEqual(fired, []);
+  watchdog.finish();
+  for (const entry of timers.entries) entry.callback();
 });

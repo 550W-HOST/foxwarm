@@ -170,7 +170,6 @@ test('QQ Bot optionally accepts ordinary group messages and canonicalizes AT/non
   assert.equal(received.length, 1);
   assert.equal(received[0].ctx.conversationId, 'group:group-1');
   assert.equal(received[0].ctx.senderId, 'member-1');
-  assert.equal(received[0].ctx.qqbotMessageId, 'ordinary-group-message');
   assert.deepEqual(received[0].message.parts, [{ text: 'ordinary group message' }]);
 
   await received[0].ctx.reply('passive group reply');
@@ -313,7 +312,6 @@ test('QQ Bot mention mode buffers ordinary context, upgrades duplicate AT delive
 
   assert.equal(received.length, 1);
   assert.equal(received[0].ctx.senderId, 'member-2');
-  assert.equal(received[0].ctx.qqbotMessageId, 'trigger-1');
   assert.deepEqual(received[0].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
   const text = received[0].message.parts[0].text;
   assert.match(text, /^<foxwarm-qqbot-context count="1" untrusted="true">/);
@@ -346,7 +344,6 @@ test('QQ Bot mention mode keeps ordinary slash-shaped chatter as ambient context
   });
 
   assert.equal(received.length, 1);
-  assert.equal(received[0].ctx.qqbotMessageId, 'real-trigger');
   assert.match(received[0].message.parts[0].text, /<foxwarm-qqbot-context count="1" untrusted="true">[\s\S]*\/stop[\s\S]*answer this$/);
 });
 
@@ -510,7 +507,6 @@ test('QQ Bot always mode uses a fixed non-sliding window, isolates groups, and f
   await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', ordinary('g1-3', 'before at'));
   await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', ordinary('g1-at', 'urgent at'));
   assert.equal(received.length, 2);
-  assert.equal(received[1].ctx.qqbotMessageId, 'g1-at');
   assert.deepEqual(received[1].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
   assert.match(received[1].message.parts[0].text, /before at[\s\S]*urgent at$/);
   await clock.advance(4_000);
@@ -652,7 +648,6 @@ test('QQ Bot zero context limit still upgrades an ordinary representation into i
   await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', { ...base, content: 'ordinary form' });
   await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', { ...base, content: 'AT form' });
   assert.equal(received.length, 1);
-  assert.equal(received[0].ctx.qqbotMessageId, 'same-zero');
   assert.equal(received[0].message.parts[0].text, 'AT form');
 });
 
@@ -843,8 +838,7 @@ test('QQ Bot routes C2C text and uses the latest conversation-local passive repl
   assert.equal(received[0].ctx.channelType, 'qqbot');
   assert.equal(received[0].ctx.conversationId, 'c2c:openid-1');
   assert.equal(received[0].ctx.senderId, 'openid-1');
-  assert.equal(received[0].ctx.qqbotMessageId, 'incoming-1');
-  assert.equal(received[0].ctx.preferDirectReply, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(received[0].ctx, 'preferDirectReply'), false);
   assert.deepEqual(received[0].message.parts, [{ text: 'hello' }]);
   emitGateway(socket, { op: 0, s: 5, t: 'C2C_MESSAGE_CREATE', d: { id: 'incoming-1', content: 'duplicate', author: { user_openid: 'openid-1' } } });
   emitGateway(socket, { op: 0, s: 6, t: 'C2C_MESSAGE_CREATE', d: { id: 'incoming-2', content: 'new message', author: { user_openid: 'openid-1' } } });
@@ -1435,7 +1429,7 @@ test('QQ Bot fences queued source-bound replies across stop and a new generation
   assert.equal((channel as any).passiveReplyChains.size, 0);
 });
 
-test('QQ Bot source-bound final failure completes through MessageRouter without a second reply', async () => {
+test('QQ Bot automatic final uses latest passive context and completes without a second reply', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const channel = new QQBotChannel(
     { appId: 'app-id', clientSecret: 'secret' },
@@ -1449,20 +1443,19 @@ test('QQ Bot source-bound final failure completes through MessageRouter without 
     },
   );
   activateForDirectSend(channel);
-  let sourceCtx: any;
-  channel.onMessage(async (ctx) => { sourceCtx = ctx; });
+  channel.onMessage(async () => {});
   await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
     id: 'router-failure-id', content: 'inbound', author: { user_openid: 'openid-1' },
   });
 
   const router = new MessageRouter() as any;
   const runner = router.turnRunner as any;
-  const source = runner.snapshotSource(sourceCtx);
-  const session = { broadcast: () => {} };
-  await runner.deliverProviderResultText(
-    session, sourceCtx, source, 'model final', false, session.broadcast,
-    runner.getTurnChannelOptions(sourceCtx, source),
-  );
+  let delivery: Promise<void> | undefined;
+  const session = { broadcast: (text: string, options?: any) => {
+    delivery = channel.sendMessage('c2c:openid-1', text, options);
+  } };
+  await runner.deliverProviderResultText(session, 'model final', false, session.broadcast, 'qq-router-turn');
+  await delivery;
   const outbound = calls.filter(call => String(call.url).includes('/v2/users/'));
   assert.equal(outbound.length, 1);
   assert.equal(JSON.parse(String(outbound[0].init?.body)).msg_id, 'router-failure-id');
@@ -1502,7 +1495,6 @@ test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media uns
   socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'GROUP_MESSAGE_CREATE', d: { id: 'group-ordinary', content: 'ordinary group hello', group_openid: 'group-1', author: { member_openid: 'member-2', username: 'Member 2' } } })));
   await flush();
   assert.equal(received[1].ctx.conversationId, 'group:group-1');
-  assert.equal(received[1].ctx.qqbotMessageId, 'group-ordinary');
 
   await channel.sendMessage('group:group-1', 'group reply', { replyToId: 'group-incoming' });
   await channel.sendMessage('guild:channel-1', 'guild reply', { replyToId: 'guild-incoming' });

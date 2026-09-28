@@ -28,11 +28,14 @@ export default defineConfig({
         { label: 'Start here', items: [
           { label: 'Documentation', slug: 'docs' },
           { label: 'Install Foxwarm', slug: 'docs/installing' },
-          { label: 'Set up your first model', slug: 'docs/model-setup' }
+          { label: 'Set up your first model', slug: 'docs/model-setup' },
+          { label: 'Model options and routing', slug: 'docs/model-options' }
         ] },
         { label: 'Use Foxwarm', items: [
           { label: 'Agents, sessions, and memory', slug: 'docs/agents-sessions-memory' },
+          { label: 'Long conversations and history search', slug: 'docs/history-search' },
           { label: 'Tools, skills, and MCP', slug: 'docs/tools-skills-mcp' },
+          { label: 'Connect an external MCP client', slug: 'docs/mcp-inbound' },
           { label: 'Optional Nodes', slug: 'docs/nodes' },
           { label: 'Channels', slug: 'docs/channels' }
         ] },

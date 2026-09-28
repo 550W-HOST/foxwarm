@@ -61,6 +61,8 @@ export interface MessageProviderMeta {
 export interface FunctionResponse {
   tool_use_id: string;
   name: string;
+  /** Measured duration of the tool invocation until its result returns. */
+  executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
   /**
    * Internal timing for the model request which produced this tool batch.
    * It is persisted with the first tool response so serializers never need to
@@ -101,6 +103,12 @@ export interface InlineDataRef {
 
 export interface ImageMeta {
   imageId: string;
+  /**
+   * Provider-neutral provenance. `generated` marks an assistant image created
+   * by a hosted image-generation tool, so incompatible-model projections can
+   * describe it honestly even after opaque provider metadata is stripped.
+   */
+  origin?: 'generated' | 'uploaded' | 'tool';
   mimeType?: string;
   width?: number;
   height?: number;
@@ -296,9 +304,6 @@ export interface QueueSource {
   conversationId?: string; // Preferred channel-side conversation target id
   username?: string;
   senderId?: string;
-  weworkStreamId?: string; // WeWork intelligent-bot stream id for binding channel broadcasts to the originating turn
-  qqbotMessageId?: string; // QQ Bot inbound msg_id for binding a passive reply to the originating turn
-  preferDirectReply?: boolean; // Persisted routing intent; true targets the originating live reply path when available
 }
 
 export interface QueueItem {
@@ -319,6 +324,17 @@ export interface QueueItem {
   waitLivenessWaitId?: string;
   /** Durable producer identity used to make acknowledged external events idempotent. */
   externalEventId?: string;
+}
+
+/** Presentation-only queue-origin history append; never persisted as Session state. */
+export interface QueueHistoryAppendPresentation {
+  messages: Message[];
+  queuedMessages: Message[];
+  queueLength: number;
+  queuedPreviewOmittedCount: number;
+  messageCount: number;
+  historyVersion: number;
+  latestSeq: number;
 }
 
 export interface CompactionRequest {

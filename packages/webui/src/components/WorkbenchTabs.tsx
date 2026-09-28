@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Bookmark, Code2, Copy, MessageSquareText, Settings, SquareTerminal, Users, X } from 'lucide-react'
+import { Bookmark, Code2, Copy, ExternalLink, MessageSquareText, Settings, SquareTerminal, Users, X } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
@@ -16,6 +16,8 @@ interface WorkbenchTabsProps {
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
+  onMoveTabToNewWindow: (tabId: string) => void
+  canMoveTabToNewWindow: (tabId: string) => boolean
   onCloseOtherTabs: (tabId: string) => void
   onCloseAllTabs: () => void
 }
@@ -285,6 +287,8 @@ export default function WorkbenchTabs({
   onSelectTab,
   onCloseTab,
   onKeepTab,
+  onMoveTabToNewWindow,
+  canMoveTabToNewWindow,
   onCloseOtherTabs,
   onCloseAllTabs,
 }: WorkbenchTabsProps) {
@@ -329,6 +333,15 @@ export default function WorkbenchTabs({
       })
     }
 
+    entries.push({ key: 'separator-window', type: 'separator' })
+    entries.push({
+      key: 'move-new-window',
+      label: 'Move to new window',
+      icon: <ExternalLink className="h-4 w-4" />,
+      disabled: !canMoveTabToNewWindow(contextMenuTab.id),
+      onSelect: () => onMoveTabToNewWindow(contextMenuTab.id),
+    })
+
     entries.push({ key: 'separator-close', type: 'separator' })
     entries.push({
       key: 'close',
@@ -354,7 +367,7 @@ export default function WorkbenchTabs({
     })
 
     return entries
-  }, [contextMenuTab, onCloseAllTabs, onCloseOtherTabs, onCloseTab, onKeepTab, tabs.length])
+  }, [canMoveTabToNewWindow, contextMenuTab, onCloseAllTabs, onCloseOtherTabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, tabs.length])
 
   const openContextMenu = (tabId: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault()

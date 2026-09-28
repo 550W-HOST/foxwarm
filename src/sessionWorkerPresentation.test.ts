@@ -6,7 +6,6 @@ import test from 'node:test';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { createSessionWorkerPresentationServiceHandler } from './sessionWorkerPresentationService';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { LocalRpcTransport, RpcServiceRegistry } from './rpc';
@@ -47,23 +46,23 @@ function baseSession(id: string): Session {
 
 function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const receivedMessages: any[] = [];
+  const receivedBatches: any[] = [];
   const receivedEvents: any[] = [];
-  const receivedPresentation: Array<{ kind: 'message' | 'event'; value: any }> = [];
+  const receivedPresentation: Array<{ kind: 'message' | 'batch' | 'event'; value: any }> = [];
   const readySessions: string[] = [];
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...extraEnv },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
     presentationSink: {
       broadcastMessage: (_sessionId, message) => { receivedMessages.push(message); receivedPresentation.push({ kind: 'message', value: message }); },
+      broadcastQueueHistoryAppend: (_sessionId, append) => { receivedBatches.push(append); receivedPresentation.push({ kind: 'batch', value: append }); },
       notifySessionEvent: (_sessionId, event) => { receivedEvents.push(event); receivedPresentation.push({ kind: 'event', value: event }); },
     },
     onWorkerReady: sessionId => { readySessions.push(sessionId); },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
-  return { store, sourceContexts, supervisor, ingress, receivedMessages, receivedEvents, receivedPresentation, readySessions };
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  return { store, supervisor, ingress, receivedMessages, receivedBatches, receivedEvents, receivedPresentation, readySessions };
 }
 
 test('subscribed workers forward appended messages and coalesced stream deltas as pure presentation', async () => {
@@ -85,12 +84,17 @@ test('subscribed workers forward appended messages and coalesced stream deltas a
 
     await fixture.supervisor.setPresentationSubscription(sessionId, true);
     await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'second question' }] });
-    await waitFor(() => fixture.receivedMessages.length >= 2 && fixture.receivedEvents.some(e => e.type === 'model-stream-update'));
+    await waitFor(() => fixture.receivedBatches.length >= 1
+      && fixture.receivedMessages.length >= 1
+      && fixture.receivedEvents.some(e => e.type === 'model-stream-update'));
 
-    // Message copies arrive in order (user then model), pure presentation.
-    assert.equal(fixture.receivedMessages[0].role, 'user');
-    assert.equal(fixture.receivedMessages[1].role, 'model');
-    assert.ok(JSON.stringify(fixture.receivedMessages[1]).includes('deterministic child answer'));
+    // The queue-origin user row remains one canonical batch, followed by the
+    // ordinary provider-model presentation on the same ordered tail.
+    assert.equal(fixture.receivedBatches[0].messages.length, 1);
+    assert.equal(fixture.receivedBatches[0].messages[0].role, 'user');
+    assert.ok(JSON.stringify(fixture.receivedBatches[0].messages[0]).includes('second question'));
+    assert.equal(fixture.receivedMessages[0].role, 'model');
+    assert.ok(JSON.stringify(fixture.receivedMessages[0]).includes('deterministic child answer'));
 
     // Three rapid deltas coalesce into one cumulative frame; the turn-end flush
     // delivers the latest; the structural reset forwards immediately.
@@ -100,7 +104,11 @@ test('subscribed workers forward appended messages and coalesced stream deltas a
     assert.ok(fixture.receivedEvents.some(e => e.type === 'model-stream-reset'), 'reset forwards immediately');
     const updateIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'event' && item.value.type === 'model-stream-update');
     const resetIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'event' && item.value.type === 'model-stream-reset');
+    const batchIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'batch');
+    const modelIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'message' && item.value.role === 'model');
+    assert.ok(batchIndex >= 0 && batchIndex < updateIndex, 'the canonical user batch precedes provider streaming');
     assert.ok(updateIndex >= 0 && updateIndex < resetIndex, 'a coalesced update cannot arrive after its structural reset');
+    assert.ok(resetIndex < modelIndex, 'the structural reset precedes the ordinary canonical model row');
   } finally {
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
@@ -201,6 +209,7 @@ test('presentation handler fences non-exact sources and never touches semantic s
   const handler = createSessionWorkerPresentationServiceHandler({
     expected: { sessionId: 's1', generation: 2, incarnationId: 'inc-a' },
     broadcastMessage: () => { calls.push('message'); },
+    broadcastQueueHistoryAppend: () => { calls.push('append'); },
     notifySessionEvent: () => { calls.push('event'); },
   });
   await assert.rejects(
@@ -219,7 +228,7 @@ test('presentation channel registers on the worker reverse registry', async () =
   const registry = new RpcServiceRegistry();
   registry.register(sessionWorkerPresentationServiceDescriptor, createSessionWorkerPresentationServiceHandler({
     expected: { sessionId: 's', generation: 1, incarnationId: 'i' },
-    broadcastMessage: () => {}, notifySessionEvent: () => {},
+    broadcastMessage: () => {}, broadcastQueueHistoryAppend: () => {}, notifySessionEvent: () => {},
   }));
   const transport = new LocalRpcTransport(registry);
   assert.ok(transport, 'descriptor registers');

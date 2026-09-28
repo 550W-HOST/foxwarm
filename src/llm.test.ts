@@ -1215,7 +1215,7 @@ test('all provider protocols receive the same provider-safe HEIC hydration clone
     assert.equal(captured.length, 3);
     for (const payload of captured) {
       const serialized = JSON.stringify(payload);
-      assert.equal(serialized.includes('image/jpeg'), true);
+      assert.equal(serialized.includes('image/webp'), true);
       assert.equal(/image\/(?:heic|heif)/.test(serialized), false);
       assert.equal(serialized.includes(originalBytes.toString('base64')), false);
     }

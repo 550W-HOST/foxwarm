@@ -97,7 +97,7 @@ function requireBoundedPath(value: unknown, field: string): string {
   return value;
 }
 
-function plainJsonWithin(value: unknown, maxBytes: number): unknown | undefined {
+export function plainJsonWithin(value: unknown, maxBytes: number): unknown | undefined {
   const seen = new WeakSet<object>();
   const copy = (item: unknown, depth: number): unknown => {
     if (item === null || typeof item === 'boolean') return item;

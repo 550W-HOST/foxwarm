@@ -549,3 +549,20 @@ test('global refresh scheduler dispose cancels pending and trailing work', async
   assert.equal(refreshCount, 1)
   assert.equal(clock.pendingCount(), 0)
 })
+
+test('sidebar session node resolution prefers the running tool node, then the session default', async () => {
+  const { getResolvedSessionNodeId, isRemoteSessionNode } = await loadTypeScriptModule('../src/sessionNode.ts')
+  assert.equal(getResolvedSessionNodeId({}), 'master')
+  assert.equal(getResolvedSessionNodeId({ currentNode: 'master' }), 'master')
+  assert.equal(getResolvedSessionNodeId({ currentNode: '', runtimeState: null }), 'master')
+  assert.equal(getResolvedSessionNodeId({ currentNode: 'visualdust-a6000-ws1' }), 'visualdust-a6000-ws1')
+  assert.equal(isRemoteSessionNode({ currentNode: 'visualdust-a6000-ws1' }), true)
+  assert.equal(isRemoteSessionNode({ currentNode: 'master', runtimeState: { tool: { name: 'exec', executionNode: 'master', startedAt: 1 } } }), false)
+  assert.equal(getResolvedSessionNodeId({
+    currentNode: 'visualdust-a6000-ws1',
+    runtimeState: { tool: { name: 'exec', executionNode: 'gpu-box-2', startedAt: 1 } },
+  }), 'gpu-box-2')
+  assert.equal(getResolvedSessionNodeId({ runtimeState: { tool: { name: 'exec', executionNode: 'mac-mini', startedAt: 1 } } }), 'mac-mini')
+  assert.equal(getResolvedSessionNodeId({ currentNode: 'visualdust-a6000-ws1', runtimeState: { tool: undefined } }), 'visualdust-a6000-ws1')
+  assert.equal(getResolvedSessionNodeId({ runtimeState: {} }), 'master')
+})

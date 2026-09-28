@@ -7,7 +7,6 @@ import test from 'node:test';
 import * as sessionManager from './sessionManager';
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
-import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
@@ -29,14 +28,12 @@ function baseSession(id: string): Session {
 
 function makeFixture(root: string, hangSessionId: string) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
-  const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_HANG_TURN: '1', FOXWARM_TEST_HANG_SESSION: hangSessionId },
-    resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
-  return { store, sourceContexts, supervisor, ingress };
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  return { store, supervisor, ingress };
 }
 
 async function crashMidTurn(root: string, fixture: ReturnType<typeof makeFixture>, sessionId: string): Promise<void> {
