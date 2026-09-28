@@ -525,6 +525,7 @@ test('SessionRuntime list pagination is catalog-indexed and returns a stable tot
   try {
     for (let index = 0; index < ids.length; index += 1) {
       const { session } = await sessionManager.createEmptySession(ids[index]);
+      session.agent = index === 1 ? `${ids[0]}-foreign-agent` : `${ids[0]}-own-agent`;
       session.meta = { ...(session.meta || {}), lastMessageTime: Number.MAX_SAFE_INTEGER - index, messageCount: index };
       if (index === 0) {
         session.promptCacheKey = 'normal-save-cache-key'; session.lastAppliedMailboxId = 8;
@@ -561,6 +562,12 @@ test('SessionRuntime list pagination is catalog-indexed and returns a stable tot
       const page = await client.call('listSessions', { limit: 2, offset: 1 });
       assert.ok(page.total >= 3);
       assert.deepEqual(page.sessions.map(session => session.id), [ids[1], ids[2]]);
+      const ownPage = await client.call('listSessions', { agent: `${ids[0]}-own-agent`, limit: 1, offset: 1 });
+      assert.equal(ownPage.total, 2);
+      assert.deepEqual(ownPage.sessions.map(session => session.id), [ids[2]]);
+      const foreignPage = await client.call('listSessions', { agent: `${ids[0]}-foreign-agent`, limit: 1 });
+      assert.equal(foreignPage.total, 1);
+      assert.deepEqual(foreignPage.sessions.map(session => session.id), [ids[1]]);
     } finally { transport.close(); }
   } finally {
     for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});

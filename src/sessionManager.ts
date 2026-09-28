@@ -3115,13 +3115,13 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
   return result.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
 }
 
-export function listSessionCatalogPage(limit: number, offset: number = 0): { sessions: Session[]; total: number } {
+export function listSessionCatalogPage(limit: number, offset: number = 0, agent?: string): { sessions: Session[]; total: number } {
   const boundedLimit = Math.max(0, Math.floor(limit));
   const boundedOffset = Math.max(0, Math.floor(offset));
-  const metadata = sessionCatalogStore.list({ limit: boundedLimit, offset: boundedOffset });
+  const metadata = sessionCatalogStore.list({ limit: boundedLimit, offset: boundedOffset, agent });
   return {
     sessions: metadata.map(row => sessions.get(row.id)).filter((session): session is Session => !!session),
-    total: sessionCatalogStore.count(),
+    total: sessionCatalogStore.count({ agent }),
   };
 }
 

@@ -361,13 +361,14 @@ Example:
         {
             name: 'session',
             defaultInject: true,
-            description: "Inspect this session's status, list sessions, or change a session's display name. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.",
+            description: "Inspect this session's status, list sessions in the current Agent by default, or change a session's display name. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.",
             parameters: {
                 type: 'object',
                 properties: {
                     action: { type: 'string', enum: ['status', 'list', 'update-display-name'], description: "status (default) inspects this session; list returns a page of sessions; update-display-name sets or clears a session's display name." },
                     start: { type: 'number', description: "Zero-based offset for list, ordered by most recent activity. Defaults to 0." },
                     count: { type: 'number', description: "Number of sessions to return for list. Defaults to 20." },
+                    scope: { type: 'string', enum: ['current-agent', 'all'], description: "Scope for list. Defaults to current-agent; use all to include sessions from other Agents." },
                     sessionId: { type: 'string', description: "Target for update-display-name. Defaults to this session; status always describes this session." },
                     name: { type: 'string', description: "New display name for update-display-name. An empty string clears it." }
                 },

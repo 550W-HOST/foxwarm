@@ -70,7 +70,7 @@ export async function listSessions(): Promise<SessionRuntimeSessionDto[]> {
   return (await listSessionsPage()).sessions;
 }
 
-export async function listSessionsPage(options: { limit?: number; offset?: number } = {}): Promise<{ sessions: SessionRuntimeSessionDto[]; total: number }> {
+export async function listSessionsPage(options: { limit?: number; offset?: number; agent?: string } = {}): Promise<{ sessions: SessionRuntimeSessionDto[]; total: number }> {
   return (await getClient()).call('listSessions', options);
 }
 

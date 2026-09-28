@@ -295,6 +295,11 @@ test('main-management facade forks read-only, rejects stale generations, and val
     assert.ok(String(messages?.result).includes('fork parent message one'), 'detached read serves fenced authority content');
     const list: any = await client.call('execute', { sourceSessionId: parentId, operation: 'session_list', args: {} });
     assert.ok(String(list?.result).includes(parentId));
+    assert.ok(!String(list?.result).includes(targetChildId), 'Worker default list excludes another Agent');
+    const allList: any = await client.call('execute', { sourceSessionId: parentId, operation: 'session_list', args: { scope: 'all', count: 100 } });
+    assert.ok(String(allList?.result).includes(targetChildId), 'Worker explicit all includes another Agent');
+    const ownList: any = await client.call('execute', { sourceSessionId: parentId, operation: 'session_list', args: { scope: 'current-agent' } });
+    assert.ok(!String(ownList?.result).includes(targetChildId));
     assert.equal(parent.history.length, 2, 'Main catalog session for the fenced parent is never rehydrated');
   } finally {
     transport.close();

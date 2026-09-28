@@ -80,7 +80,9 @@ timers remain outside this catalog.
   parent foreign key rejects tolerated legacy topology.
 - Recent, agent, parent/root, current-node, and restart-recovery queries use
   concrete indexes. Global, per-agent, and per-parent counts are maintained by
-  catalog transactions.
+  catalog transactions. The model-facing `session(action=list)` uses the
+  per-agent page by default; its scope contract is owned by
+  [D-session-tool-list-scope](../units/src-tools-session-agent.md#d-session-tool-list-scope).
 - Ordered pages use an indexed recent-rank key and keyset cursors where the
   caller supports them. Compatibility offset callers still execute against the
   same ordered index and never force a table sort.
