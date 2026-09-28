@@ -63,6 +63,21 @@ export function mergeModelStreamDeltaEvents(left: SessionStreamEvent | undefined
         : {}),
     });
   }
+  const parts = new Map<string, NonNullable<SessionStreamEvent['partDeltas']>[number]>();
+  const partKey = (part: NonNullable<SessionStreamEvent['partDeltas']>[number]) =>
+    `${part.outputIndex}:${part.kind}:${part.contentIndex ?? ''}:${part.summaryIndex ?? ''}`;
+  for (const part of left.partDeltas || []) parts.set(partKey(part), { ...part });
+  for (const part of right.partDeltas || []) {
+    const key = partKey(part);
+    const previous = parts.get(key);
+    parts.set(key, previous ? {
+      ...previous,
+      ...part,
+      ...(previous.added ? { added: true } : {}),
+      ...(mergeTextDelta(previous.textDelta, part.textDelta)
+        ? { textDelta: mergeTextDelta(previous.textDelta, part.textDelta) } : {}),
+    } : { ...part });
+  }
   const reasoningDelta = mergeTextDelta(left.reasoningDelta, right.reasoningDelta);
   const textDelta = mergeTextDelta(left.textDelta, right.textDelta);
   return {
@@ -77,6 +92,7 @@ export function mergeModelStreamDeltaEvents(left: SessionStreamEvent | undefined
     ...(reasoningDelta ? { reasoningDelta } : {}),
     ...(textDelta ? { textDelta } : {}),
     ...(calls.size ? { toolCallDeltas: [...calls.values()] } : {}),
+    ...(parts.size ? { partDeltas: [...parts.values()] } : {}),
   };
 }
 

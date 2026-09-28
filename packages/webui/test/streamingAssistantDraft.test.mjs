@@ -47,6 +47,49 @@ test('legacy cumulative events remain compatible', () => {
   assert.equal(draft.toolCalls[0].name, 'exec')
 })
 
+test('Responses ordered slices keep separate reasoning items around commentary and image progress', () => {
+  let draft = applyModelStreamEvent(null, {
+    type: 'model-stream-reset', streamVersion: 2, streamId: 'ordered', sequenceStart: 1, sequence: 1,
+    startedAt: 100, llmRequestId: 'request-ordered',
+  })
+  draft = applyModelStreamEvent(draft, {
+    type: 'model-stream-update', streamVersion: 2, streamId: 'ordered', sequenceStart: 2, sequence: 3,
+    partDeltas: [
+      { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, added: true, textDelta: { offset: 0, text: 'first' } },
+      { outputIndex: 0, kind: 'reasoning', summaryIndex: 1, added: true, textDelta: { offset: 0, text: 'second' } },
+      { outputIndex: 1, kind: 'text', contentIndex: 0, added: true, phase: 'commentary', textDelta: { offset: 0, text: 'Drawing' } },
+    ],
+    reasoningDelta: { offset: 0, text: 'first\nsecond' }, textDelta: { offset: 0, text: 'Drawing' },
+  })
+  const joined = applyModelStreamSnapshot({ streamId: 'ordered', iteration: 0, sequence: 3,
+    startedAt: 100, llmRequestId: 'request-ordered', reasoning: draft.reasoning, text: draft.text,
+    toolCalls: [], parts: draft.parts })
+  const covered = applyModelStreamEvent(joined, {
+    type: 'model-stream-update', streamVersion: 2, streamId: 'ordered', sequenceStart: 2, sequence: 3,
+    partDeltas: [{ outputIndex: 1, kind: 'text', contentIndex: 0, textDelta: { offset: 0, text: 'Wrong duplicate' } }],
+  })
+  assert.equal(covered, joined)
+  draft = applyModelStreamEvent(joined, {
+    type: 'model-stream-update', streamVersion: 2, streamId: 'ordered', sequenceStart: 4, sequence: 5,
+    partDeltas: [
+      { outputIndex: 2, kind: 'image-generation', added: true, status: 'in_progress' },
+      { outputIndex: 3, kind: 'reasoning', summaryIndex: 0, added: true, textDelta: { offset: 0, text: 'third' } },
+      { outputIndex: 4, kind: 'tool-call', added: true },
+    ],
+    toolCallDeltas: [{ index: 4, id: 'call', name: 'read', argumentsDelta: { offset: 0, text: '{"path":"x"}' } }],
+  })
+  assert.equal(draft.incompletePrefix, false)
+  assert.deepEqual(buildStreamingAssistantMessage(draft).parts, [
+    { thinking: 'first\nsecond' }, { text: 'Drawing', phase: 'commentary' },
+    { system: 'Generating image…' }, { thinking: 'third' },
+    { functionCall: { id: 'call', name: 'read', args: { path: 'x' } } },
+  ])
+  assert.equal(shouldClearDraftForCommittedModel(draft, 101), true)
+  assert.equal(shouldClearDraftAfterHistory({ draftAtRequestStart: draft, currentDraft: draft,
+    hasNewerStreamEvent: false, snapshotMessages: [{ role: 'model', parts: [{ text: 'Drawing' }], __meta: { llmRequestId: 'request-ordered' } }],
+  }), true)
+})
+
 test('midstream delta subscription is marked incomplete instead of presented as a full prefix', () => {
   const draft = applyModelStreamEvent(null, {
     type: 'model-stream-update', streamVersion: 2, streamId: 's', sequence: 4,

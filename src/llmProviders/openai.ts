@@ -1,6 +1,6 @@
 import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
-import { Message, MessagePart, OpenAIResponsesContent } from '../types';
+import { Message, MessagePart, ModelStreamPart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { appendImageGuidanceText, buildImageGuidanceText } from '../toolImages';
@@ -76,6 +76,7 @@ export type OpenAIStreamProgressSnapshot = {
     reasoning?: string;
     text?: string;
     toolCalls?: OpenAIStreamToolCallSnapshot[];
+    parts?: ModelStreamPart[];
 };
 
 type OpenAIStreamProgressOptions = {
@@ -819,10 +820,51 @@ export async function collectOpenAIResponsesStream(
                     ...(typeof item.arguments === 'string' ? { arguments: item.arguments } : {}),
                 }));
 
+        const buildOrderedPartsSnapshot = (): ModelStreamPart[] =>
+            Array.from(outputItems.entries())
+                .sort(([left], [right]) => left - right)
+                .flatMap(([outputIndex, item]): ModelStreamPart[] => {
+                    if (item?.type === 'reasoning') {
+                        const streamed = Array.from(summaryParts.entries())
+                            .map(([key, text]) => {
+                                const [itemIndex, summaryIndex] = key.split(':').map(Number);
+                                return { itemIndex, summaryIndex, text };
+                            })
+                            .filter(entry => entry.itemIndex === outputIndex)
+                            .sort((left, right) => left.summaryIndex - right.summaryIndex);
+                        const summaries: Array<{ summaryIndex: number; text: string }> = streamed.length > 0 ? streamed : (Array.isArray(item.summary)
+                            ? item.summary.map((part: any, summaryIndex: number) => ({
+                                summaryIndex,
+                                text: typeof part?.text === 'string' ? part.text : '',
+                            })) : []);
+                        return summaries.length > 0
+                            ? summaries.map(entry => ({ outputIndex, kind: 'reasoning', summaryIndex: entry.summaryIndex, text: entry.text }))
+                            : [{ outputIndex, kind: 'reasoning' }];
+                    }
+                    if (item?.type === 'message' && item.role === 'assistant' && Array.isArray(item.content)) {
+                        return item.content.flatMap((part: any, contentIndex: number): ModelStreamPart[] => {
+                            const text = part?.type === 'output_text' ? part.text
+                                : part?.type === 'refusal' ? part.refusal : undefined;
+                            if (typeof text !== 'string') return [];
+                            return [{ outputIndex, kind: 'text', contentIndex, text,
+                                ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}),
+                            }];
+                        });
+                    }
+                    if (item?.type === 'function_call') return [{ outputIndex, kind: 'tool-call' }];
+                    if (item?.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                        return [{ outputIndex, kind: 'image-generation',
+                            ...(typeof item.status === 'string' ? { status: item.status } : {}),
+                        }];
+                    }
+                    return [];
+                });
+
         const buildProgressSnapshot = (): OpenAIStreamProgressSnapshot => ({
             reasoning: buildReasoningSummaryText(summaryParts),
             text: buildTextSnapshot(),
             toolCalls: buildToolCallSnapshot(),
+            parts: buildOrderedPartsSnapshot(),
         });
 
         const emitProgressUpdate = () => {
@@ -949,11 +991,21 @@ export async function collectOpenAIResponsesStream(
                 case 'response.image_generation_call.generating':
                 case 'response.image_generation_call.completed':
                 case 'response.image_generation_call.partial_image':
-                    // Lifecycle-only activity. The final bytes always come from
-                    // the complete output item, never from these events, so they
-                    // are reported as activity and their payload is discarded.
-                    // V1 never persists or forwards a partial preview either.
+                    // Report watchdog activity and status-only progress for a
+                    // known item. The final bytes come from the complete output
+                    // item; never store or forward a partial preview.
                     options?.onImageGenerationActivity?.();
+                    if (typeof event.output_index === 'number'
+                        && outputItems.get(event.output_index)?.type === OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE) {
+                        const previousStatus = outputItems.get(event.output_index)?.status;
+                        const status = event.type === 'response.image_generation_call.completed' || previousStatus === 'completed'
+                            ? 'completed' : 'in_progress';
+                        ensureOutputItem(event.output_index, {
+                            type: OPENAI_IMAGE_GENERATION_CALL_ITEM_TYPE,
+                            status,
+                        });
+                        if (status !== previousStatus) emitProgressUpdate();
+                    }
                     return;
                 case 'response.content_part.added':
                 case 'response.content_part.done':
@@ -1043,18 +1095,22 @@ export async function collectOpenAIResponsesStream(
                         }
                     }
                     return;
+                case 'response.reasoning_summary_part.added':
                 case 'response.reasoning_summary_part.done':
-                    if (event.part?.text) {
+                    if (typeof event.output_index === 'number') ensureOutputItem(event.output_index, { type: 'reasoning', summary: [] });
+                    if (typeof event.part?.text === 'string') {
                         summaryParts.set(key, event.part.text);
                         emitSummaryUpdate();
                     }
                     return;
                 case 'response.reasoning_summary_text.delta':
+                    if (typeof event.output_index === 'number') ensureOutputItem(event.output_index, { type: 'reasoning', summary: [] });
                     if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
                     emitSummaryUpdate();
                     return;
                 case 'response.reasoning_summary_text.done':
+                    if (typeof event.output_index === 'number') ensureOutputItem(event.output_index, { type: 'reasoning', summary: [] });
                     summaryParts.set(key, event.text || summaryParts.get(key) || '');
                     emitSummaryUpdate();
                     return;

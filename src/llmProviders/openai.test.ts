@@ -323,6 +323,20 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.equal(progress.at(-1)?.toolCalls?.[0]?.arguments, '{"filePath":"x"}');
 });
 
+test('Responses progress learns a commentary phase only when the completed message item reports it', async () => {
+  const progress: any[] = [];
+  const response = await collectOpenAIResponsesStream(makeStream([
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Working' },
+    { type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Working' }] } },
+    { type: 'response.completed', response: { id: 'response-phase', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
+  ]), new AbortController().signal, { onProgress: snapshot => progress.push(structuredClone(snapshot)) });
+  assert.equal(progress.find(snapshot => snapshot.parts?.[0]?.text === 'Working')?.parts[0].phase, undefined);
+  assert.equal(progress.at(-1).parts[0].phase, 'commentary');
+  assert.equal(response.output[0].phase, 'commentary');
+});
+
 test('collectOpenAIResponsesStream preserves indexed reasoning summary boundaries over condensed completed output', async () => {
   const firstSummary = '**Preparing final test report and preview options**';
   const secondSummary = '**Confirming no live deployment without user approval**';

@@ -20,6 +20,8 @@ import * as tools from './tools';
 import * as llmModule from './llm';
 import { nodesManager } from './nodes/manager';
 import { getModelStreamDraft } from './modelStreamDraft';
+import { collectOpenAIResponsesStream } from './llmProviders/openai';
+import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -104,8 +106,73 @@ test('model stream emitter sends offset deltas and throttles tool arguments unti
   assert.deepEqual(events.at(-1).toolCallDeltas[0].argumentsDelta, { offset: 0, text: '{"filePath":"x"}' });
   assert.equal(events.at(-1).streamVersion, 2);
   assert.equal(getModelStreamDraft('stream-test')?.text, 'Hi!');
+  emitter.reset();
+  emitter.emit({ parts: [{ outputIndex: 4, kind: 'tool-call' }], toolCalls: [{ index: 4, id: 'ordered', name: 'read', arguments: '{"file' }] });
+  now += 80;
+  runDue();
+  assert.deepEqual(events.at(-1).partDeltas, [{ outputIndex: 4, kind: 'tool-call', added: true }]);
+  assert.equal(events.at(-1).toolCallDeltas[0].argumentsDelta, undefined);
+  const beforeArgumentUpdate = events.length;
+  emitter.emit({ parts: [{ outputIndex: 4, kind: 'tool-call' }], toolCalls: [{ index: 4, id: 'ordered', name: 'read', arguments: '{"filePath":"x"}' }] });
+  now += 80;
+  runDue();
+  assert.equal(events.length, beforeArgumentUpdate);
+  emitter.flush();
+  assert.deepEqual(events.at(-1).toolCallDeltas[0].argumentsDelta, { offset: 0, text: '{"filePath":"x"}' });
+  assert.equal(events.at(-1).partDeltas, undefined);
   emitter.close();
   assert.equal(getModelStreamDraft('stream-test'), null);
+});
+
+test('Responses SSE output boundaries survive collector, emitter, Worker coalescing, and owner snapshot', async () => {
+  const frames = new PassThrough();
+  const events: any[] = [];
+  const emitter = createModelStreamEventEmitter({
+    enabled: true, sessionId: 'ordered-stream-test', iteration: 0, llmRequestId: 'ordered-request',
+    currentSessionEffects: { notifySessionEvent: (_id: string, event: any) => events.push(event) } as any,
+  });
+  const frame = (event: any) => frames.write(`data: ${JSON.stringify(event)}\n\n`);
+  emitter.reset();
+  const collecting = collectOpenAIResponsesStream(frames, new AbortController().signal, {
+    onProgress: snapshot => { emitter.emit(snapshot); emitter.flush(); },
+  });
+  frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], encrypted_content: 'opaque-do-not-stream' } });
+  frame({ type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: 'first' });
+  frame({ type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: 'first' });
+  frame({ type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 1, text: 'second' });
+  frame({ type: 'response.output_item.added', output_index: 1, item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] } });
+  frame({ type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: 'Drawing' });
+  await new Promise(resolve => setImmediate(resolve));
+  const snapshot = getModelStreamDraft('ordered-stream-test');
+  assert.deepEqual(snapshot?.parts?.map(part => [part.outputIndex, part.kind, part.summaryIndex, part.text, part.phase]), [
+    [0, 'reasoning', 0, 'first', undefined], [0, 'reasoning', 1, 'second', undefined],
+    [1, 'text', undefined, 'Drawing', 'commentary'],
+  ]);
+  assert.equal(JSON.stringify(snapshot).includes('opaque-do-not-stream'), false);
+  frame({ type: 'response.output_item.added', output_index: 2, item: { type: 'image_generation_call', status: 'in_progress', result: 'image-bytes-not-for-presentation' } });
+  frame({ type: 'response.image_generation_call.partial_image', output_index: 2, partial_image_b64: 'preview-bytes-not-for-presentation' });
+  frame({ type: 'response.output_item.done', output_index: 2, item: { type: 'image_generation_call', status: 'completed' } });
+  frame({ type: 'response.reasoning_summary_text.delta', output_index: 3, summary_index: 0, delta: 'third' });
+  frame({ type: 'response.completed', response: { id: 'r1', output: [], usage: { input_tokens: 2, output_tokens: 3 } } });
+  frames.end();
+  const collected = await collecting;
+  emitter.close();
+  assert.deepEqual(collected.output.map((item: any) => item.type), ['reasoning', 'message', 'image_generation_call', 'reasoning']);
+  assert.deepEqual(collected.output[0].summary.map((part: any) => part.text), ['first', 'second']);
+  const updates = events.filter(event => event.type === 'model-stream-update');
+  const combined = updates.reduce((previous, current) => mergeModelStreamDeltaEvents(previous, current), undefined);
+  assert.equal(combined.sequenceStart, updates[0].sequence);
+  assert.equal(combined.sequence, updates.at(-1).sequence);
+  assert.deepEqual(combined.partDeltas.map((part: any) => [part.outputIndex, part.kind, part.summaryIndex, part.textDelta?.text, part.phase]), [
+    [0, 'reasoning', undefined, undefined, undefined],
+    [0, 'reasoning', 0, 'first', undefined], [0, 'reasoning', 1, 'second', undefined],
+    [1, 'text', undefined, 'Drawing', 'commentary'],
+    [2, 'image-generation', undefined, undefined, undefined],
+    [3, 'reasoning', 0, 'third', undefined],
+  ]);
+  assert.equal(JSON.stringify(updates).includes('image-bytes-not-for-presentation'), false);
+  assert.equal(JSON.stringify(updates).includes('preview-bytes-not-for-presentation'), false);
+  assert.equal(getModelStreamDraft('ordered-stream-test'), null);
 });
 
 test('Anthropic serialization deduplicates repeated ordinary and tool-result images without mutating history', () => {
