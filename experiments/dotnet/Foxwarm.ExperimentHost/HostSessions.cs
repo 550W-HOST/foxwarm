@@ -71,6 +71,8 @@ internal sealed class HostSessions : IAsyncDisposable
     public IEnumerable<object> List() => sessions.OrderBy(pair => pair.Key).Select(pair => pair.Value.State());
 
     public bool Accepting => accepting;
+    public string RequestModel => clientOptions.RequestModel;
+    public string ConcreteModel => clientOptions.ConcreteModelId;
 
     public HostedSession? Find(string id) => IsOwnedId(id) && sessions.TryGetValue(id, out var value) ? value : null;
 
@@ -93,14 +95,17 @@ internal sealed class HostSessions : IAsyncDisposable
 
     private HostedSession MakeSession(string id, PersistentSessionAuthorityStore store)
     {
-        var hosted = new HostedSession(id);
+        var hosted = new HostedSession(id, clientOptions.RequestModel, clientOptions.ConcreteModelId);
         var chat = new ResponsesChatService(http, clientOptions, (sessionId, update) =>
+        {
+            hosted.PublishDraftProgress(update);
             hosted.Broadcast(new JsonObject
             {
                 ["type"] = "model-progress", ["sessionId"] = sessionId,
                 ["text"] = update.Text, ["reasoning"] = update.Reasoning
-            }));
-        var registry = new SessionRegistry(store, chat, tools);
+            });
+        });
+        var registry = new SessionRegistry(store, new WebUiChatService(chat, hosted), new WebUiToolExecutor(tools, hosted));
         hosted.Registry = registry;
         registry.TriggerOverride = _ => hosted.StartProcessing();
         return hosted;
@@ -135,7 +140,7 @@ internal sealed class HostSessions : IAsyncDisposable
         && id.AsSpan(2).ToString().All(Uri.IsHexDigit);
 }
 
-internal sealed class HostedSession
+internal sealed partial class HostedSession
 {
     private readonly ConcurrentDictionary<long, Task> running = new();
     private readonly ConcurrentDictionary<long, Channel<JsonObject>> listeners = new();
@@ -143,11 +148,22 @@ internal sealed class HostedSession
     private long nextRun;
     private long lastNotifiedSeq;
     private int lastReportedFailureCount;
+    private readonly string requestModel;
+    private readonly string concreteModel;
     public string Id { get; }
     public SessionRegistry Registry { get; set; } = null!;
     public SessionEntry Entry => Registry.GetRequired(Id);
 
-    public HostedSession(string id) => Id = id;
+    public HostedSession(string id, string requestModel, string concreteModel)
+    {
+        Id = id;
+        this.requestModel = requestModel;
+        this.concreteModel = concreteModel;
+    }
+
+    public JsonObject WebUiState() => WebUiContract.Session(Entry.Snapshot(), requestModel, concreteModel, toolActive);
+    public JsonObject WebUiHistory(SessionSnapshot snapshot, int? tail, int? prefix, long? afterSeq) =>
+        WebUiContract.History(snapshot, requestModel, concreteModel, toolActive, tail, prefix, afterSeq);
 
     public object State()
     {
@@ -175,8 +191,11 @@ internal sealed class HostedSession
                 if (seq <= lastNotifiedSeq) continue;
                 lastNotifiedSeq = seq;
                 Broadcast(new JsonObject { ["type"] = "message-committed", ["message"] = message.DeepClone() });
+                Broadcast(new JsonObject { ["type"] = "message", ["sessionId"] = Id, ["message"] = message.DeepClone() });
+                ClearCommittedDraft(message);
             }
             Broadcast(new JsonObject { ["type"] = "session-state", ["session"] = JsonSerializerNode(State()) });
+            Broadcast(new JsonObject { ["type"] = "webui-session-state", ["sessionId"] = Id, ["session"] = WebUiState() });
         };
     }
 
@@ -196,6 +215,7 @@ internal sealed class HostedSession
             }
             finally
             {
+                ClearDraft();
                 var failures = Entry.BackgroundProcessorFailureCount;
                 if (failures != lastReportedFailureCount)
                 {
@@ -203,6 +223,7 @@ internal sealed class HostedSession
                     Broadcast(new JsonObject { ["type"] = "processing-error", ["message"] = Entry.LastBackgroundProcessorFailure?.Message });
                 }
                 Broadcast(new JsonObject { ["type"] = "session-state", ["session"] = JsonSerializerNode(State()) });
+                Broadcast(new JsonObject { ["type"] = "webui-session-state", ["sessionId"] = Id, ["session"] = WebUiState() });
                 running.TryRemove(index, out _);
             }
         }
