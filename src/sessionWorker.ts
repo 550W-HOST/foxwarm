@@ -16,7 +16,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import * as vector from './vector';
 import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, publishPresentationQueueHistoryAppend, shutdownSessionWorkerPresentation } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
-import { deliverCommittedFinal, deliverIntermediateText, finishChannelProgress, initializeSessionTurnDelivery, reportChannelProgress, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
+import { deliverCommittedFinal, deliverGeneratedImages, deliverIntermediateText, finishChannelProgress, initializeSessionTurnDelivery, reportChannelProgress, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import { shutdownToolScriptRuntime } from './toolscript';
 import { VECTOR_ENABLED } from './config';
 import * as agentMetadata from './session/agentMetadata';
@@ -50,6 +50,7 @@ async function start(): Promise<void> {
     publishCommitted: projection => publishCommitted(identity, projection),
     deliverIntermediateText: (text, turnId) => deliverIntermediateText({ sourceSessionId: sessionId, text, ...(turnId ? { turnId } : {}) }).then(() => {}),
     deliverCommittedFinal: (text, outcome, turnId) => deliverCommittedFinal({ sourceSessionId: sessionId, text, outcome, ...(turnId ? { turnId } : {}) }).then(() => {}),
+    deliverGeneratedImages: images => deliverGeneratedImages({ sourceSessionId: sessionId, images }).then(() => {}),
     reportChannelProgress: (turnId, progress) => reportChannelProgress({ sourceSessionId: sessionId, turnId, progress }),
     finishChannelProgress: turnId => finishChannelProgress({ sourceSessionId: sessionId, turnId }),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),

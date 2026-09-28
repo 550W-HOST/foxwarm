@@ -3,7 +3,7 @@ import { logger } from '../common';
 import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
-import { appendImageGuidanceText } from '../toolImages';
+import { appendImageGuidanceText, buildImageGuidanceText } from '../toolImages';
 import { deduplicateProviderRequestImages } from '../providerImageDedup';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSystemPartForModel } from '../utils/promptWrappers';
@@ -426,7 +426,7 @@ export function convertToOpenAIFormat(
                     // Hosted image generation is Responses-only; describe a
                     // generated image honestly instead of replaying it as an
                     // assistant image_url on Chat Completions.
-                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                    content.push({ type: 'text', text: `${formatGeneratedImageModelPlaceholder()}\n${buildImageGuidanceText([part])}` });
                 } else {
                     content.push({
                         type: 'image_url',
@@ -655,6 +655,8 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                     if (role === 'assistant' && typeof part.inlineData?.data === 'string' && part.inlineData.data.length > 0) {
                         responseInput.push(buildImageGenerationReplayItem(responsesMeta.outputItem, part.inlineData.data));
                         inlineConsumed = true;
+                        prepareMessageContent(role, content, part, fallbackPhase);
+                        content.push({ type: 'output_text', text: buildImageGuidanceText([part]) });
                     } else {
                         throw new GeneratedImageReplayError('Cannot replay a generated image call: the local image bytes are missing or unreadable.');
                     }
@@ -698,7 +700,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                         // Incompatible concrete model: keep honest text context
                         // without leaking provider metadata or faking vision.
                         prepareMessageContent(role, content, part, fallbackPhase);
-                        content.push({ type: 'output_text', text: formatGeneratedImageModelPlaceholder() });
+                        content.push({ type: 'output_text', text: `${formatGeneratedImageModelPlaceholder()}\n${buildImageGuidanceText([part])}` });
                     } else {
                         logger.warn('Dropping assistant inlineData for Responses API history');
                     }

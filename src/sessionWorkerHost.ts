@@ -20,7 +20,7 @@ import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManua
 import { beginCompactionSessionRuntimeState, clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
-import type { ChannelTurnProgress } from './types';
+import type { ChannelTurnProgress, InlineDataRef } from './types';
 import {
   buildSessionWorkerProjection,
   SessionWorkerPersistence,
@@ -88,6 +88,7 @@ export type SessionWorkerHostDependencies = {
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
   deliverIntermediateText?: (text: string, turnId?: string) => Promise<void>;
   deliverCommittedFinal?: (text: string, outcome: SessionTurnFinalKind, turnId?: string) => Promise<void>;
+  deliverGeneratedImages?: (images: InlineDataRef[]) => Promise<void>;
   reportChannelProgress?: (turnId: string, progress: ChannelTurnProgress) => Promise<void>;
   finishChannelProgress?: (turnId: string) => Promise<void>;
   /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
@@ -763,6 +764,12 @@ export class SessionWorkerHost {
           deliverCommittedFinal: async (_session, text, outcome, turnId) => {
             try { await this.dependencies.deliverCommittedFinal!(text, outcome, turnId); }
             catch (error) { logger.error({ err: error, sessionId: owner.id, outcome }, 'Committed final reverse delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.deliverGeneratedImages ? {
+          deliverGeneratedImages: async (_session, images) => {
+            try { await this.dependencies.deliverGeneratedImages!(images); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id }, 'Generated image reverse delivery failed'); }
           },
         } : {}),
         ...(this.dependencies.deliverIntermediateText ? {

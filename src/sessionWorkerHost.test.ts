@@ -19,7 +19,7 @@ import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlSer
 import { SessionWorkerHost } from './sessionWorkerHost';
 import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
-import type { Session } from './types';
+import type { InlineDataRef, Session } from './types';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
@@ -61,6 +61,7 @@ async function withLocalHost(
   publishCommitted?: (projection: any) => Promise<void>,
   deliverCommittedFinal?: (source: any, text: string, outcome: any) => Promise<void>,
   deliverIntermediateText?: (source: any, text: string) => Promise<void>,
+  deliverGeneratedImages?: (images: InlineDataRef[]) => Promise<void>,
 ): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
@@ -85,6 +86,7 @@ async function withLocalHost(
     deliverCommittedFinal: deliverCommittedFinal
       ? (text, outcome) => deliverCommittedFinal(undefined, text, outcome)
       : undefined,
+    deliverGeneratedImages,
   });
   try {
     await (host as any).ensureLoaded();
@@ -93,6 +95,31 @@ async function withLocalHost(
     await testBody({ host, store, session: (host as any).session, turnHost, readDurable: () => structuredClone(durable) });
   } finally { store.close(); await fs.remove(root); }
 }
+
+test('Worker exact-owner media hook forwards only committed generated refs across its reverse dependency', async () => {
+  const initial = baseSession(`worker-generated-image-${Date.now()}`);
+  const originalChat = llm.chat;
+  const received: InlineDataRef[][] = [];
+  const ref: InlineDataRef = {
+    imageId: 'ig_worker', blobId: `${'a'.repeat(64)}.png`, mimeType: 'image/png',
+    byteLength: 7, sha256: 'a'.repeat(64),
+  };
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    const assistant = { role: 'model', parts: [{ inlineDataRef: ref, imageMeta: { imageId: ref.imageId, origin: 'generated' } }] };
+    await options.appendMessage(assistant);
+    await options.onCommittedAssistantMessage(assistant);
+    return { text: '', allParts: assistant.parts };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'worker-generated-image', 'enqueue', { type: 'background', parts: [{ text: 'draw' }] });
+      await host.runPending(8);
+      assert.deepEqual(received, [[ref]]);
+      assert.equal(readDurable().history.filter((message: any) => message.role === 'model').length, 1);
+    }, true, undefined, undefined, undefined, async images => { received.push(images); });
+  } finally { (llm as any).chat = originalChat; }
+});
 
 test('worker external event receipts bridge mailbox replay and applied-row cleanup', async () => {
   const initial = baseSession('worker-external-event-receipts');

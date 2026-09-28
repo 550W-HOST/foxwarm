@@ -853,6 +853,37 @@ test('convertToOpenAIResponsesFormat replays ordered web search metadata only to
   ]);
 });
 
+test('generated images retain one native same-model replay and expose local IDs to later models without vision', () => {
+  const bytes = Buffer.from('fixture-native-image-bytes').toString('base64');
+  const part: Message['parts'][number] = {
+    inlineData: { mimeType: 'image/jpeg', data: bytes },
+    imageMeta: { imageId: 'ig_local123', origin: 'generated', mimeType: 'image/jpeg', width: 2, height: 3 },
+    providerMeta: { openaiResponses: {
+      sourceModelId: 'openai/source',
+      outputItem: { type: 'image_generation_call', id: 'ig_remote123', status: 'completed', output_format: 'jpeg' },
+    } },
+  };
+  const history: Message[] = [{ role: 'model', parts: [part] }];
+  const before = structuredClone(history);
+  const sameModel = convertToOpenAIResponsesFormat(history, 'openai/source');
+  assert.equal(sameModel.filter(item => item.type === 'image_generation_call').length, 1);
+  assert.equal(sameModel[0].result, bytes);
+  assert.equal(sameModel.filter(item => item.type === 'message').length, 1);
+  assert.match(JSON.stringify(sameModel), /\[IMAGE: id=ig_local123, size=2x3\]/);
+  assert.match(JSON.stringify(sameModel), /artifacts\/ig_local123.jpg/);
+  assert.doesNotMatch(JSON.stringify(sameModel), /input_image/);
+
+  const otherResponses = convertToOpenAIResponsesFormat(history, 'openai/other');
+  const otherChat = convertToOpenAIFormat(history);
+  for (const projection of [otherResponses, otherChat]) {
+    const serialized = JSON.stringify(projection);
+    assert.match(serialized, /does not receive its image content/);
+    assert.match(serialized, /\[IMAGE: id=ig_local123/);
+    assert.doesNotMatch(serialized, /input_image|image_url|fixture-native-image-bytes|ig_remote123/);
+  }
+  assert.deepEqual(history, before, 'provider guidance and replay bytes do not mutate canonical history');
+});
+
 test('convertToOpenAIResponsesFormat preserves explicit assistant phases and applies the legacy tool-call heuristic', () => {
   const history: Message[] = [{
     role: 'model',

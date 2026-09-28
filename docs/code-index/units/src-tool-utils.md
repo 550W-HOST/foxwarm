@@ -55,7 +55,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 | `getImageMetaFromPart(part)` | ~145–170 | Extracts ImageMeta from message part with fallbacks |
 | `formatImageSize(meta)` | ~172 | Formats width×height string |
 | `sanitizeSuggestedFileName(imageId)` | ~176 | Cleans image ID for use as filename |
-| `buildImageGuidanceLabel(meta)` | ~179 | Builds model-facing label with crop/write hints |
+| `buildImageGuidanceLabel(meta)` | ~179 | Builds model-facing label with crop/write hints and a MIME-appropriate example filename extension |
 | `buildImageGuidanceText(parts)` | ~185 | Joins guidance labels for multiple image parts |
 | `appendImageGuidanceText(parts, existingText)` | ~192 | Prepends image guidance to existing text |
 | `resolveArchiveInlineDataPath(refPath)` | ~198 | Resolves relative archive path to absolute |

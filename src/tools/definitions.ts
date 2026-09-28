@@ -220,11 +220,11 @@ Example:
         {
             name: 'image_crop',
             defaultInject: true,
-            description: "Crop an image previously returned by a tool in this session. Returns a new image that can be viewed, cropped again, or saved with image_write_to_file.",
+            description: "Crop an image from this session, including a generated image or one returned by a tool. Returns a new image that can be viewed, cropped again, or saved with image_write_to_file.",
             parameters: {
                 type: 'object',
                 properties: {
-                    id: { type: 'string', description: "Image ID from a tool result, such as the value in [IMAGE: id=...]." },
+                    id: { type: 'string', description: "Image ID shown in this session, such as the value in [IMAGE: id=...]." },
                     x: { type: 'number', description: "Left edge of the crop, in pixels." },
                     y: { type: 'number', description: "Top edge of the crop, in pixels." },
                     width: { type: 'number', description: "Crop width in pixels." },
@@ -236,11 +236,11 @@ Example:
         {
             name: 'image_write_to_file',
             defaultInject: true,
-            description: "Save an image previously returned by a tool in this session. The saved file can be reused or delivered with send_file.",
+            description: "Save an image from this session, including a generated image or one returned by a tool. The saved file can be reused or delivered with send_file.",
             parameters: {
                 type: 'object',
                 properties: {
-                    id: { type: 'string', description: "Image ID from a previous tool result." },
+                    id: { type: 'string', description: "Image ID shown in this session." },
                     filePath: { type: 'string', description: "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
                     node: { type: 'string', description: "Node on which to save the image. Defaults to the current Node." },

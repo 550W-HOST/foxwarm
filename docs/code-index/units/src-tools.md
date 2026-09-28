@@ -67,8 +67,8 @@ Implements the core tool registry and execution layer for the agent system. Defi
 ### tools/imageTools.ts — Image operations
 | Function | Description |
 |----------|-------------|
-| `tool_image_crop` | Crops a region from a referenced image |
-| `tool_image_write_to_file` | Writes a referenced image to disk |
+| `tool_image_crop` | Crops a region from a referenced session image, including generated images |
+| `tool_image_write_to_file` | Writes a referenced session image, including generated images, to disk |
 
 ### tools/browserTools.ts — Headless browser
 | Function | Description |

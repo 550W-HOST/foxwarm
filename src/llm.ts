@@ -40,7 +40,7 @@ import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseF
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
-import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { appendImageGuidanceText, buildImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
 import { deduplicateProviderRequestImages } from './providerImageDedup';
 import { guardToolOutputForModel } from './toolOutputGuard';
@@ -1552,7 +1552,7 @@ export function convertToAnthropicFormat(contents: Message[], config: ModelConfi
                 if (msg.role === 'model' && part.imageMeta?.origin === 'generated') {
                     // Cross-provider edit is out of V1 scope. Describe the image
                     // honestly instead of sending an assistant image block.
-                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                    content.push({ type: 'text', text: `${formatGeneratedImageModelPlaceholder()}\n${buildImageGuidanceText([part])}` });
                     continue;
                 }
                 content.push({
@@ -2174,6 +2174,7 @@ export async function chat(
         turnId?: string;
         currentSessionEffects?: CurrentSessionEffects;
         snapshotAuthority?: 'authoritative' | 'detached';
+        onCommittedAssistantMessage?: (message: Message) => void | Promise<void>;
     },
 ): Promise<ChatResult> {
     const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
@@ -2261,6 +2262,7 @@ export async function chat(
         resolveSystemPromptForModel,
     });
     const result = completion.result;
+    let committedAssistantMessage: Message | undefined;
 
     try {
         if (result.usage) {
@@ -2295,6 +2297,7 @@ export async function chat(
                 { appended: true, message: assistantMsg },
                 'Failed to finalize provider state after assistant history commit',
             );
+            committedAssistantMessage = assistantMsg;
         } else {
             settleHistoryAppendFinalizer(
                 completion.finalizeHistoryAppend,
@@ -2309,6 +2312,17 @@ export async function chat(
             'Failed to discard provider state after assistant history failure',
         );
         throw error;
+    }
+
+    // Normal turns may deliver generated media after the assistant message has
+    // committed. Delivery is not a provider effect and must never retry a
+    // successful generation or undo its canonical history append.
+    if (committedAssistantMessage && options?.onCommittedAssistantMessage) {
+        try {
+            await options.onCommittedAssistantMessage(committedAssistantMessage);
+        } catch (error) {
+            logger.error({ err: error, sessionId: session.id }, 'Committed assistant media delivery failed');
+        }
     }
 
     return result;

@@ -12,13 +12,13 @@ import { isSessionArchiveCommitError } from './session/archive';
 import { isSessionAuthorityPostCommitError } from './session/stateFile';
 import { isSessionTurnIncomplete, SessionContinuationUnavailableError } from './sessionContinuation';
 import { buildSessionRuntimeState } from './sessionRuntimeState';
-import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
+import { deliverGeneratedImagesToAttachments, snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
 import { applyChildHandoffQueueItem, resolveChildHandoffBoundary, shouldQueueChildHandoffReminder } from './session/childHandoffState';
 import * as sessionManager from './sessionManager';
 import { finishChannelTurnProgress, reportChannelTurnProgress } from './session/channels';
 import { armMainWaitLiveness } from './mainManagementTools';
 import * as llm from './llm';
-import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, type InlineDataRef, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatFoxwarmSystemTag } from './utils/promptWrappers';
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
@@ -102,13 +102,14 @@ export interface SessionTurnHost {
   ingestPendingQueue?(session: Session): Promise<void>;
   deliverIntermediateText?(session: Session, text: string, turnId: string): Promise<void>;
   deliverCommittedFinal?(session: Session, text: string, outcome: SessionTurnFinalKind, turnId: string): Promise<void>;
+  deliverGeneratedImages?(session: Session, images: InlineDataRef[]): Promise<void>;
   reportChannelProgress?(session: Session, turnId: string, progress: ChannelTurnProgress): void | Promise<void>;
   finishChannelProgress?(session: Session, turnId: string): Promise<void>;
 }
 
 export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
   'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
-  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'ingestPendingQueue' | 'deliverIntermediateText' | 'deliverCommittedFinal'
+  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'ingestPendingQueue' | 'deliverIntermediateText' | 'deliverCommittedFinal' | 'deliverGeneratedImages'
   | 'reportChannelProgress' | 'finishChannelProgress'>>;
 
 /** Existing in-process effects, exposed without changing their behavior. */
@@ -116,6 +117,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
   readonly deliverCommittedFinal?: SessionTurnHost['deliverCommittedFinal'];
   readonly deliverIntermediateText?: SessionTurnHost['deliverIntermediateText'];
+  readonly deliverGeneratedImages?: SessionTurnHost['deliverGeneratedImages'];
   readonly ingestPendingQueue?: SessionTurnHost['ingestPendingQueue'];
 
   constructor(
@@ -169,6 +171,9 @@ export class LocalSessionTurnHost implements SessionTurnHost {
     };
     this.deliverCommittedFinal = overrides.deliverCommittedFinal;
     this.deliverIntermediateText = overrides.deliverIntermediateText;
+    this.deliverGeneratedImages = overrides.deliverGeneratedImages || (async (session, images) => {
+      await deliverGeneratedImagesToAttachments(session.id, images);
+    });
     this.ingestPendingQueue = overrides.ingestPendingQueue;
   }
 
@@ -882,6 +887,14 @@ export class SessionTurnRunner {
         try {
           result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
+            onCommittedAssistantMessage: async message => {
+              const images = message.parts
+                .filter(part => part.imageMeta?.origin === 'generated' && !!part.inlineDataRef?.blobId)
+                .map(part => part.inlineDataRef!);
+              if (images.length && this.host.deliverGeneratedImages) {
+                await this.host.deliverGeneratedImages(session, images);
+              }
+            },
             turnId,
           });
         } catch (e: any) {

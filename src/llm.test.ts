@@ -163,6 +163,19 @@ test('Anthropic repeated tool results mark later suppressed image bytes as dedup
   assert.match(serialized, /second/);
 });
 
+test('Anthropic generated image history identifies the locally saved image without pretending to see it', () => {
+  const history: Message[] = [{ role: 'model', parts: [{
+    inlineData: { mimeType: 'image/webp', data: Buffer.from('fixture').toString('base64') },
+    imageMeta: { origin: 'generated', imageId: 'ig_anthropic_hint', mimeType: 'image/webp' },
+  }] }];
+  const projection = convertToAnthropicFormat(history, { baseUrl: 'https://anthropic.test' } as any);
+  const serialized = JSON.stringify(projection);
+  assert.match(serialized, /does not receive its image content/);
+  assert.match(serialized, /\[IMAGE: id=ig_anthropic_hint/);
+  assert.match(serialized, /artifacts\/ig_anthropic_hint.webp/);
+  assert.doesNotMatch(serialized, /"type":"image"|"type":"base64"/);
+});
+
 function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = {
   prompt_tokens: 1,
   completion_tokens: 1,
@@ -1525,6 +1538,49 @@ test('chat persists a provider-reported reasoning component on model message usa
       totalOutputTokens: 13,
       lastUsage: null,
     });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('assistant post-commit hook runs once only after append and its failure cannot retry provider or change history', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('committed_media_hook'));
+  let providerCalls = 0;
+  let deliveries = 0;
+  (axios as any).post = async () => {
+    providerCalls++;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('done') };
+  };
+  try {
+    const result = await chat([{ text: 'hello' }], session, 0, {
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+      appendMessage: async message => {
+        if (message.role === 'model') assert.equal(deliveries, 0);
+        session.history.push(message);
+      },
+      onCommittedAssistantMessage: message => {
+        deliveries++;
+        assert.strictEqual(session.history.at(-1), message);
+        throw new Error('synthetic file adapter failure');
+      },
+    });
+    assert.equal(result.text, 'done');
+    assert.equal(providerCalls, 1);
+    assert.equal(deliveries, 1);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+
+    const failureSession = createOpenAITestSession(makeId('committed_media_hook_failed_append'));
+    let dispatched = 0;
+    await assert.rejects(() => chat([{ text: 'hello' }], failureSession, 0, {
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+      appendMessage: async message => {
+        if (message.role === 'model') throw new Error('synthetic assistant append failure');
+        failureSession.history.push(message);
+      },
+      onCommittedAssistantMessage: () => { dispatched++; },
+    }), /synthetic assistant append failure/);
+    assert.equal(dispatched, 0);
   } finally {
     (axios as any).post = originalPost;
   }

@@ -9,6 +9,9 @@ import { readSessionHistorySnapshot } from './session/metadataStore';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import type { Message, QueueItem, Session } from './types';
 import { logger } from './common';
+import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
+import fs from 'fs-extra';
+import sharp from 'sharp';
 
 function createSession(id: string, text: string): Session {
   return {
@@ -122,6 +125,57 @@ test('detached exact owner completes canonical foreground provider turn', async 
     assert.equal(events.filter(event => event.startsWith('persist:')).at(-1), 'persist:idle:2');
   } finally {
     (llm as any).chat = originalChat;
+  }
+});
+
+test('normal turn delivers only this committed response images, independently of empty text and later turns', async () => {
+  await initArchiveStore();
+  const session = createSession(`generated_media_runner_${Date.now()}`, 'draw one');
+  const effects = createEffects(session, []);
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#4488aa' } }).png().toBuffer();
+  const first = await putImageBlob({ buffer: png, mimeType: 'image/png', imageId: 'ig_one' });
+  const second = { ...first, imageId: 'ig_two' };
+  const deliveries: string[][] = [];
+  const host = new LocalSessionTurnHost(effects, session, {
+    deliverGeneratedImages: async (_session, images) => { deliveries.push(images.map(image => image.imageId)); },
+  });
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let calls = 0;
+  const toolCall = { id: 'generated_media_test_call', name: 'synthetic', args: {} };
+  (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
+    assert.strictEqual(owner, session);
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    calls++;
+    const assistant: Message = {
+      role: 'model',
+      parts: calls === 1
+        ? [{ inlineDataRef: first, imageMeta: { imageId: first.imageId, origin: 'generated' } }]
+        : calls === 2 ? [{ text: 'second reply' },
+          { inlineDataRef: second, imageMeta: { imageId: second.imageId, origin: 'generated' } },
+          { inlineDataRef: first, imageMeta: { imageId: first.imageId, origin: 'generated' } },
+          { functionCall: toolCall }] : [{ text: 'follow-up after tool' }],
+    };
+    await options.appendMessage(assistant);
+    await options.onCommittedAssistantMessage(assistant);
+    return { text: calls === 1 ? '' : calls === 2 ? 'second reply' : 'follow-up after tool',
+      allParts: assistant.parts, ...(calls === 2 ? { toolCalls: [toolCall] } : {}) };
+  };
+  (llm as any).executeTools = async () => ({ role: 'tool', parts: [{
+    functionResponse: { tool_use_id: toolCall.id, name: toolCall.name, response: { output: 'ok' } },
+  }] });
+  try {
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
+    assert.deepEqual(deliveries, [['ig_one']]);
+    session.queue.push({ type: 'background', parts: [{ text: 'draw another' }] });
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
+    assert.deepEqual(deliveries, [['ig_one'], ['ig_two', 'ig_one']]);
+    assert.equal(calls, 3);
+    assert.equal(session.history.filter(message => message.role === 'model').length, 3);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    await fs.remove(resolveImageBlobPath(first.blobId!));
   }
 });
 
