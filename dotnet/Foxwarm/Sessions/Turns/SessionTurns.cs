@@ -284,6 +284,50 @@ public sealed class SessionSaveLane
             entry.InvokeCommitted(entry.Snapshot());
         });
 
+    /// <summary>Strict same-owner admission of one exec completion, not ordinary best-effort ingress.</summary>
+    public async Task<bool> CommitBackgroundExecCompletionAsync(string execId, string message)
+    {
+        var admitted = false;
+        await EnqueueOperationAsync(async () =>
+        {
+            var eventId = "exec-completion:" + execId;
+            var prepared = entry.WithState(state =>
+            {
+                var prior = state.Meta["acceptedExternalEventIds"] as JsonArray;
+                var receipts = prior?.Select(value => value is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : null)
+                    .Where(value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).ToList() ?? [];
+                if (receipts.Contains(eventId, StringComparer.Ordinal)) return (Snapshot: (SessionSnapshot?)null, Item: (QueueItem?)null, Receipts: (JsonArray?)null);
+                receipts.Add(eventId);
+                var accepted = new JsonArray(receipts.TakeLast(32).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
+                var item = new QueueItem(QueueItemType.Background,
+                    [new JsonObject { ["system"] = message }],
+                    OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId });
+                var snapshot = state.Snapshot();
+                var meta = (JsonObject)snapshot.Meta.DeepClone();
+                meta["acceptedExternalEventIds"] = accepted.DeepClone();
+                return (Snapshot: (SessionSnapshot?)(snapshot with { Queue = snapshot.Queue.Append(item).ToArray(), Meta = meta }),
+                    Item: (QueueItem?)item, Receipts: (JsonArray?)accepted);
+            });
+            if (prepared.Snapshot is null || prepared.Item is null || prepared.Receipts is null) return;
+            void Publish(SessionState state)
+            {
+                state.Meta["acceptedExternalEventIds"] = prepared.Receipts.DeepClone();
+                state.Queue.Add(prepared.Item.CloneItem());
+                admitted = true;
+            }
+            try { await store.CommitAsync(prepared.Snapshot, SaveKind.Strict).ConfigureAwait(false); }
+            catch (AuthorityCommittedException)
+            {
+                entry.WithState(Publish);
+                entry.InvokeQueuedCommitted(entry.Snapshot());
+                throw;
+            }
+            entry.WithState(Publish);
+            entry.InvokeQueuedCommitted(entry.Snapshot());
+        }).ConfigureAwait(false);
+        return admitted;
+    }
+
     private static void Set(JsonObject root, string key, bool supplied, string? value)
     {
         if (!supplied) return;
@@ -535,10 +579,11 @@ public sealed class SessionEntry
 public sealed class CancellationHandle : IDisposable
 {
     private int disposed;
-    internal CancellationHandle(CancellationTokenSource source) => Source = source;
+    internal CancellationHandle(CancellationTokenSource source) { Source = source; Token = source.Token; }
     internal CancellationTokenSource Source { get; }
     internal bool TakenByStop { get; set; }
-    public CancellationToken Token => Source.Token;
+    // Stop may dispose the source while an already-started tool finishes its paired response.
+    public CancellationToken Token { get; }
     public void Cancel() => Source.Cancel();
     public void Dispose()
     {

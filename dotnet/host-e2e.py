@@ -61,10 +61,10 @@ class Provider(BaseHTTPRequestHandler):
         assert self.path == '/responses'
         assert self.headers.get('Authorization') == 'Bearer ' + PROVIDER_TOKEN
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'recall', 'submit_compact_plan']
+        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'submit_compact_plan']
         assert payload['tools'][1]['parameters']['required'] == ['filePath', 'content']
-        assert payload['tools'][2]['parameters']['properties']['target']['pattern'] == '^msg#[1-9][0-9]*$'
-        assert payload['tools'][3]['parameters']['required'] == ['replaceAsBlocks']
+        assert payload['tools'][6]['parameters']['properties']['target']['pattern'] == '^msg#[1-9][0-9]*$'
+        assert payload['tools'][7]['parameters']['required'] == ['replaceAsBlocks']
         input_text = json.dumps(payload['input'], ensure_ascii=False)
         with REQUEST_LOCK:
             REQUESTS.append(payload)

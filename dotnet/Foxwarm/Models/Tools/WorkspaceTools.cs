@@ -5,14 +5,16 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Models;
 
 /// <summary>Only a path-level boundary within a dedicated experiment workspace, not an OS sandbox.</summary>
-public sealed class WorkspaceTools : ITurnToolExecutor
+public sealed partial class WorkspaceTools : ITurnToolExecutor
 {
     private const int MaxBytes = 1024 * 1024;
     private readonly string root;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     // The caller-approved model-facing definitions are intentionally kept verbatim.
-    public static JsonArray Definitions() => new(
+    public static JsonArray Definitions()
+    {
+        var definitions = new JsonArray(
         new JsonObject
         {
             ["type"] = "function", ["name"] = "read",
@@ -45,6 +47,10 @@ public sealed class WorkspaceTools : ITurnToolExecutor
             },
             ["strict"] = false
         });
+        definitions.Add(EditDefinition());
+        definitions.Add(PatchDefinition());
+        return definitions;
+    }
 
     public WorkspaceTools(string root)
     {
@@ -60,6 +66,8 @@ public sealed class WorkspaceTools : ITurnToolExecutor
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>();
         var args = functionCall["args"] as JsonObject;
+        if (name is "edit" or "apply_patch")
+            return await ExecuteEditPatchAsync(name, args, cancellationToken);
         if (name is not ("read" or "write")) return Error("unknown_tool", "Unsupported workspace tool.");
         if (args is null || args["filePath"] is not JsonValue pathValue || !pathValue.TryGetValue<string>(out var pathText))
             return Error("invalid_tool_arguments", "Invalid workspace tool arguments.");

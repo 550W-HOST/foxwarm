@@ -13,6 +13,7 @@ internal sealed class HostSessions : IAsyncDisposable
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
     private readonly WorkspaceTools tools;
+    private readonly LocalExecManager executor;
     private readonly HttpClient http = new();
     private readonly ConcurrentDictionary<string, HostedSession> sessions = new();
     private volatile bool accepting = true;
@@ -27,7 +28,18 @@ internal sealed class HostSessions : IAsyncDisposable
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
         Directory.CreateDirectory(this.root);
         tools = new WorkspaceTools(workspaceRoot);
+        executor = new LocalExecManager(this.root, workspaceRoot, async (sessionId, execId, message) =>
+        {
+            if (!accepting || Find(sessionId) is not { } current)
+                throw new InvalidOperationException("Exec completion owner is unavailable; retry after recovery.");
+            var detail = message.StartsWith("Background Process Finished\n", StringComparison.Ordinal)
+                ? message["Background Process Finished\n".Length..] : message;
+            var eventPart = $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{detail}\n</foxwarm-system>";
+            await current.Entry.SaveLane.CommitBackgroundExecCompletionAsync(execId, eventPart);
+            if (!current.Entry.WithState(state => state.Busy || state.Stopping)) current.Registry.Trigger(sessionId);
+        });
         var definitions = WorkspaceTools.Definitions();
+        foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
         definitions.Add(CompactPrompt.ToolDefinition());
         clientOptions = options with { Tools = definitions };
@@ -70,6 +82,7 @@ internal sealed class HostSessions : IAsyncDisposable
                 if (!ids.Contains(reader.GetString(0)))
                     throw new InvalidDataException("Active Session authority is missing while Archive rows exist; Archive cannot rebuild history.");
         }
+        await executor.InitializeAsync(id => sessions.ContainsKey(id));
     }
 
     public IEnumerable<object> List() => sessions.OrderBy(pair => pair.Key).Select(pair => pair.Value.State());
@@ -100,6 +113,7 @@ internal sealed class HostSessions : IAsyncDisposable
     {
         var hosted = new HostedSession(id, models);
         hosted.Archive = store.Archive;
+        hosted.Executor = executor;
         var chat = new HostModelChatService(http, clientOptions, hosted, models, (sessionId, update) =>
         {
             hosted.PublishDraftProgress(update);
@@ -136,6 +150,7 @@ internal sealed class HostSessions : IAsyncDisposable
 
     public void BeginShutdown()
     {
+        executor.BeginShutdown();
         lock (lifecycle)
         {
             accepting = false;
@@ -143,7 +158,11 @@ internal sealed class HostSessions : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync() => http.Dispose();
+    public async ValueTask DisposeAsync()
+    {
+        await executor.DisposeAsync();
+        http.Dispose();
+    }
 
     internal static bool IsOwnedId(string id) => id.Length == 34 && id.StartsWith("s_", StringComparison.Ordinal)
         && id.AsSpan(2).ToString().All(Uri.IsHexDigit);
@@ -162,6 +181,7 @@ internal sealed partial class HostedSession
     public SessionRegistry Registry { get; set; } = null!;
     public SessionCompactor Compactor { get; set; } = null!;
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
+    public LocalExecManager Executor { get; set; } = null!;
     public SessionEntry Entry => Registry.GetRequired(Id);
 
     public HostedSession(string id, HostModels models)

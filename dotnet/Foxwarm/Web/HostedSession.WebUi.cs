@@ -234,7 +234,12 @@ internal sealed class WebUiToolExecutor(ITurnToolExecutor inner, HostedSession h
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (functionCall["name"]?.GetValue<string>() == "recall")
+            var name = functionCall["name"]?.GetValue<string>();
+            if (name == "exec")
+                return await hosted.Executor.ExecuteAsync(hosted.Id, functionCall["args"] as JsonObject, cancellationToken);
+            if (name == "read_exec")
+                return await hosted.Executor.ReadAsync(hosted.Id, functionCall["args"] as JsonObject);
+            if (name == "recall")
                 return ArchiveRecallTool.Execute(hosted.Archive, functionCall["args"] as JsonObject);
             return await inner.ExecuteAsync(functionCall, cancellationToken);
         }

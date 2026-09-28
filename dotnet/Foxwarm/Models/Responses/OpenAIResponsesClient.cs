@@ -276,6 +276,17 @@ public static partial class ResponsesRequestSerializer
             && response["totalCharacters"] is JsonValue
             && response.All(item => item.Key is "target" or "offset" or "text" or "totalCharacters" or "nextOffset"))
             return response.ToJsonString();
+        if (response.Count == 6 && response["status"] is JsonValue status
+            && status.TryGetValue<string>(out var state) && state is "running" or "finished"
+            && response["output"] is JsonValue execOutput && execOutput.TryGetValue<string>(out var excerpt)
+            && excerpt.Length <= 16 * 1024
+            && response["offset"] is JsonValue start && start.TryGetValue<long>(out var startByte) && startByte >= 0
+            && response["totalBytes"] is JsonValue total && total.TryGetValue<long>(out var totalBytes) && totalBytes >= 0
+            && (response["nextOffset"] is null || response["nextOffset"] is JsonValue next
+                && next.TryGetValue<long>(out var nextByte) && nextByte >= startByte && nextByte <= totalBytes)
+            && (response["exitCode"] is null || response["exitCode"] is JsonValue code && code.TryGetValue<int>(out _))
+            && response.All(item => item.Key is "status" or "exitCode" or "output" or "offset" or "nextOffset" or "totalBytes"))
+            return response.ToJsonString();
         throw new UnsupportedResponsesFeatureException("non-bounded tool response formatting");
     }
 
