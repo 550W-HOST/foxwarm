@@ -12,7 +12,7 @@ import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
-import { logger } from '../common';
+import { logger, MAIN_LOG_PATH } from '../common';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { deleteSessionLifecycle } from '../sessionDeletion';
@@ -52,6 +52,7 @@ import {
   repeatedFocusIds,
 } from '../webuiSessionListQueries';
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
+import { WebUiLogFile, registerWebUiLogRoutes } from './webuiLogs';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
@@ -847,6 +848,7 @@ export class WebUIChannel implements Channel {
   private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
+  private logs = new WebUiLogFile(MAIN_LOG_PATH);
   private presentationSubscriberSessions = new Set<string>();
   private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void | Promise<void>;
 
@@ -971,6 +973,7 @@ export class WebUIChannel implements Channel {
         }
         return { type: 'session-list-delta', sessions, deletedIds };
       },
+      subscribeLogs: this.enableWebUI ? (request, emit, canSend) => this.logs.subscribe(request, emit, canSend) : undefined,
       onSessionSubscriptionChanged: sessionId => this.refreshPresentationSubscription(sessionId),
     });
     httpServerInstance.addWebSocket(WEBUI_REALTIME_PATH, async (ws, req) => {
@@ -1005,6 +1008,7 @@ export class WebUIChannel implements Channel {
     // WebUI API endpoints
     if (this.enableWebUI) {
       registerVscodeWebRoutes(httpServerInstance);
+      registerWebUiLogRoutes(httpServerInstance, this.logs);
 
       // Auth endpoint
       httpServerInstance.addRoute({
@@ -3581,6 +3585,8 @@ export class WebUIChannel implements Channel {
 
   async stop(): Promise<void> {
     // HTTP server is managed globally, no need to stop here
+    this.logs.dispose();
+    this.realtimeHub?.dispose();
     logger.info('WebUI channel stopped');
     return Promise.resolve();
   }

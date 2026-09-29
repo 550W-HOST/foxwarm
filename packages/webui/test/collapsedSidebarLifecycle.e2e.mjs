@@ -14,6 +14,9 @@ async function buildFixture() {
     import CollapsedSidebarContainer from './src/components/CollapsedSidebarContainer'
     import { useBoundedSessionList } from './src/boundedSessionList'
     import { webUiRealtime } from './src/realtime'
+    import { initializeThemeRuntime } from './src/theme/runtime'
+
+    initializeThemeRuntime()
 
     function AsyncLaneOwner({ currentSession }) {
       const controller = useBoundedSessionList({ focusIds: [currentSession], includeGlobalSummary: true, connectStream: false })
@@ -157,6 +160,7 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.deepEqual(await page.evaluate(() => ({ requests: window.__requests.length, sockets: window.__sockets.length })), { requests: 0, sockets: 1 })
 
+    const listenerBaseline = await page.evaluate(() => ({ adds: { ...window.__listenerAdds }, removes: { ...window.__listenerRemoves } }))
     await page.evaluate(() => window.foxwarmCollapsedLifecycle.setSurface('collapsed-desktop'))
     await page.waitForFunction(() => window.__requests.length >= 2 && window.__sockets.length === 1)
     await page.waitForFunction(() => window.__sockets[0].sent.at(-1)?.sessionListActive === true)
@@ -192,7 +196,7 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
     assert.equal(cleanup.requests, beforeUnmount, 'unmount cancels the pending open-resync timer')
     assert.equal(cleanup.lastSubscription?.sessionListActive, false, 'unmount removes the collapsed logical list subscription while the main controller keeps the socket alive')
     for (const event of ['foxwarm-idle-watch-changed', 'foxwarm-idle-unread-changed', 'storage']) {
-      assert.equal(cleanup.removes[event], cleanup.adds[event], `${event} listener is removed on unmount`)
+      assert.equal((cleanup.removes[event] || 0) - (listenerBaseline.removes[event] || 0), (cleanup.adds[event] || 0) - (listenerBaseline.adds[event] || 0), `${event} rail-owned listener is removed on unmount`)
     }
 
     await page.evaluate(() => {

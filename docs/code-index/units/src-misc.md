@@ -9,6 +9,7 @@ This unit provides miscellaneous infrastructure utilities: logging setup, startu
 ## Key Exports
 
 - `logger` — configured pino logger instance (file + optional console)
+- `MAIN_LOG_PATH` — the canonical current logger-file destination used by the WebUI Logs service
 - `startWithRetry` — retries an async startup function with configurable attempts/delay
 - `isJsonObject`, `parseJsonObjectString`, `resolveObjectArgWithJsonFallback`, `requireStringMapObject` — JSON object argument parsing and validation utilities
 - `getAsrServiceBaseUrl`, `getAsrServiceHeaders`, `getAsrServiceStatus`, `transcribeWithAsrService`, `createAsrServiceWebSocket` — ASR service client functions
@@ -77,13 +78,13 @@ This unit provides miscellaneous infrastructure utilities: logging setup, startu
 
 ## Behavior
 
-- **Logger** creates its file destination directory and writes to the file on first use; console output is suppressed when TUI mode or `FOXWARM_NO_CONSOLE_LOG` is set. `FOXWARM_SYNC_FILE_LOG=1` selects a synchronous file destination for short-lived compiled-module consumers such as `foxwarm model`, avoiding transport-worker shutdown hangs while leaving normal server logging unchanged.
+- **Logger** creates its file destination directory and writes to the file on first use; console output is suppressed when TUI mode or `FOXWARM_NO_CONSOLE_LOG` is set. `FOXWARM_SYNC_FILE_LOG=1` selects a synchronous file destination for short-lived compiled-module consumers such as `foxwarm model`, avoiding transport-worker shutdown hangs while retaining the normal asynchronous server transport. Normal pretty file output includes full local date/time and numeric time zone with color disabled; console keeps its existing time-only treatment. See [WebUI Logs](./webui-logs.md#time-navigation).
 - **startWithRetry** attempts a startup function up to N+1 times with a configurable delay, returning null on exhaustion.
 - **JSON args** utilities handle the dual-path pattern where a tool argument can be either a native object or a JSON string, with clear error messages.
 - **ASR client** communicates with an external speech recognition service via HTTP (transcription, health) and WebSocket (streaming), using bearer token auth.
 - **Log rotation** archives date-named directories into tar.gz files, prunes old archives, and cleans up legacy directory structures. Runs on a 10-hour interval.
 - **Node file transfer** enforces path traversal protection (restricts to agent directory by default), computes SHA-256 checksums, and handles base64 encoding/decoding.
-- **Tests** verify async logger directory creation, final-record persistence, and natural process exit; guest agent session creation (single and inherited modes, isolated and non-isolated initial-node variants); concurrent first-message provisioning without orphan sessions; inherited guest retry after an archived generated main ID; channel authorization semantics; and systemPromptFiles behavior including isolation enforcement.
+- **Tests** verify async logger directory creation, dated/color-free file output, unchanged console timestamps, final-record persistence, and natural process exit in both asynchronous pretty and synchronous JSON modes; guest agent session creation (single and inherited modes, isolated and non-isolated initial-node variants); concurrent first-message provisioning without orphan sessions; inherited guest retry after an archived generated main ID; channel authorization semantics; and systemPromptFiles behavior including isolation enforcement.
 
 ## Integration
 

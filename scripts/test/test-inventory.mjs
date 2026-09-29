@@ -21,6 +21,7 @@ export const standaloneSelftests = [
 // provider, so they are never run standalone by the routine unit groups.
 export const appHarnessE2e = [
   'test/app-e2e/core.e2e.mjs',
+  'test/app-e2e/logs.e2e.mjs',
   'test/app-e2e/imageGeneration.e2e.mjs',
   'test/app-e2e/imageGenerationRestart.e2e.mjs',
 ]

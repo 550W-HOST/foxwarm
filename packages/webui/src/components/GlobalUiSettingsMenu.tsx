@@ -8,10 +8,11 @@ interface GlobalUiSettingsMenuProps {
   menuAlign?: 'start' | 'end'
   menuSide?: 'top' | 'bottom'
   onOpenSetup?: () => void
+  onOpenLogs?: () => void
   setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, onOpenLogs, setupActive = false }: GlobalUiSettingsMenuProps) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
   const [menuOffset, setMenuOffset] = useState(0)
@@ -138,14 +139,15 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bo
                   }}
                   className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs ${setupActive ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'}`}
                 >
-                  <span>WebUI: Open setup</span>
+                  <span>Open setup</span>
                   {setupActive && <span className="text-[10px] uppercase tracking-wide">active</span>}
                 </button>
               )}
               <ReloadAppButton className={menuButtonClass}>
-                <span>WebUI: reload</span>
+                <span>Reload WebUI</span>
                 <RefreshCw className="h-3.5 w-3.5" />
               </ReloadAppButton>
+              {onOpenLogs && <button type="button" className={menuButtonClass} onClick={() => { onOpenLogs(); setOpen(false) }}>Open logs</button>}
             </div>
           </div>
         </div>

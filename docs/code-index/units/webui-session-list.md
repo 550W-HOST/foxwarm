@@ -12,7 +12,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - `SessionListCore` — default export; renders the fixed search/mode toolbar plus the recursive scrollable session tree with all interactive behaviors
 - `Session` — TypeScript interface describing a session object (exported from `SessionListCore`)
 - `useBoundedSessionList` — normalized server-page/exact/search cache and bounded realtime controller used by App and embedded Sidebar roots
-- `SessionList` — default export; full sidebar/page wrapper around `SessionListCore`, including pass-through of global UI controls such as color mode
+- `SessionList` — default export; full sidebar/page wrapper around `SessionListCore`, including pass-through of global UI controls such as color mode, Setup and Logs actions
 
 ## Function Index
 

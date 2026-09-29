@@ -10,6 +10,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-session-list](../units/webui-session-list.md) — hierarchy, search, order, pinning, and drag behavior.
 - [webui-architecture-view](../units/webui-architecture-view.md) — agent/session architecture.
 - [webui-chat](../units/webui-chat.md) — per-session history, logical realtime events, sending/commands, ASR, and viewport state.
+- [webui-logs](../units/webui-logs.md) — bounded fixed-file logger history, live tail, and approximate date navigation.
 - [webui-realtime](../units/webui-realtime.md) — one page-scoped multiplexed WebSocket, revisioned logical subscriptions, and server hub.
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
 - [webui-chat-shared](../units/webui-chat-shared.md), [timeline](../units/webui-chat-timeline.md), [pasted text](../units/webui-pasted-text.md), [tool timeline](../units/webui-tool-timeline.md) — sanitized rendering, user pasted-text previews, and progress/tool cards.
@@ -29,7 +30,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - `makeApiUrl` returns a URL object; `makeWebSocketUrl` changes its protocol to `ws:`/`wss:`.
 - Code routes remove the `/api` suffix and append deployment-relative `/vscode-web/`.
 - Main WebUI and the persistent Code frame validate exact origin plus window source. Nested Foxwarm leaf iframes post to their parent with `'*'`; the outer Code extension validates exact source plus channel/version/random nonce (not `event.origin`), then sends outer-to-inner messages to the exact leaf `frameOrigin`. These bridges are not API URL transport.
-- Top-level tab popups use a separate versioned same-origin URL mode. They mount one Chat, terminal, Agents, or Setup leaf without the workbench store; Code uses its existing standalone `/vscode-web/` URL. Popup target IDs may be URL parameters, but authentication tokens never are.
+- Top-level tab popups use a separate versioned same-origin URL mode. They mount one Chat, terminal, Agents, Search, Logs, or Setup leaf without the workbench store; Code uses its existing standalone `/vscode-web/` URL. Popup target IDs may be URL parameters, but authentication tokens never are.
 - Download and extension routes preserve reverse-proxy prefixes and do not assume site root.
 
 ## State ownership
@@ -92,7 +93,7 @@ All REST, SSE, WebSocket, download, Code, extension, and embedded URLs derive fr
 
 ### D-webui-workbench-shell
 
-Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and Setup are singleton tabs; forced initial Setup is non-closable.
+Chat, terminal, Agents, Setup, Search, Logs, and Code use one tab/pane workbench. Agents, Setup, Search, and Logs are singleton tabs; forced initial Setup is non-closable.
 
 ### D-webui-tab-popout
 
@@ -120,7 +121,7 @@ The Chat model popup reuses the page-lifetime singleton `/api/models` result; op
 
 ### D-webui-settings-placement
 
-[2026-09-06] The global sidebar settings menu is limited to the quick color-mode control plus Setup/reload actions. Browser-local Input and Chat preferences belong in each Chat session header menu, where `Show user message metadata` defaults off and hides only already-classified lightweight direct-user metadata; attachment descriptor tags remain visible, and heavy/system-like cards are unchanged. All ordinary and embedded Chat roots read/write the same local-storage keys and consume `storage` updates without echo writes. Instance-wide browser name and tab icon controls belong below theme management in Setup's Appearance tab; each save sends only its changed field and merges only that field from the response, so overlapping opposite-field responses cannot restore a stale sibling value. Appearance is Setup's first/default tab, while explicit model-configuration navigation still activates and focuses Models. Moving controls does not change their browser-local versus server-backed authority.
+[2026-09-06] The global sidebar settings menu is limited to the quick color-mode control plus Setup/reload/Logs actions. Logs behavior is canonical in [D-webui-logs-fixed-file-and-near-time](../units/webui-logs.md#d-webui-logs-fixed-file-and-near-time). Browser-local Input and Chat preferences belong in each Chat session header menu, where `Show user message metadata` defaults off and hides only already-classified lightweight direct-user metadata; attachment descriptor tags remain visible, and heavy/system-like cards are unchanged. All ordinary and embedded Chat roots read/write the same local-storage keys and consume `storage` updates without echo writes. Instance-wide browser name and tab icon controls belong below theme management in Setup's Appearance tab; each save sends only its changed field and merges only that field from the response, so overlapping opposite-field responses cannot restore a stale sibling value. Appearance is Setup's first/default tab, while explicit model-configuration navigation still activates and focuses Models. Moving controls does not change their browser-local versus server-backed authority.
 
 ### D-webui-removed-workspace
 

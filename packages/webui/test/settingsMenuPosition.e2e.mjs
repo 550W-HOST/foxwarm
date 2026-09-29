@@ -30,7 +30,7 @@ async function buildFixtureBundle() {
         React.createElement(location.search === '?mobile-list' ? SessionList : Sidebar, {
           sessions: Array.from({ length: 50 }, (_, i) => ({ id: 'demo/s' + i, displayName: 'Session ' + i, messageCount: 2, lastMessageTime: 100-i, parentSessionId: null })),
           agents: [], currentSession: 'demo/s0', currentView: view,
-          onSelectSession: noop, onSelectArchitecture: noop, onSelectSearch: noop, onSelectSetup: () => setView('setup'),
+          onSelectSession: noop, onSelectArchitecture: noop, onSelectSearch: noop, onSelectSetup: () => setView('setup'), onSelectLogs: () => setView('logs'),
           codePath: '/', codeNodeId: 'master', codeOpenInNewWindow: false, codeActive: false,
           nodeTargets: [], onRefreshNodeTargets: noop, onOpenCode: noop, onCodeNodeChange: noop,
           onCodePathChange: noop, onCodeOpenInNewWindowChange: noop, onCreateTerminalTab: noop,
@@ -57,6 +57,7 @@ async function buildFixtureBundle() {
           React.createElement(GlobalUiSettingsMenu, {
             menuAlign: align,
             onOpenSetup() {},
+            onOpenLogs() {},
           })
         ),
         React.createElement('button', { id: 'outside', type: 'button' }, 'Outside')
@@ -277,11 +278,12 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     if (mobile) await page.tap(trigger)
     else await page.click(trigger)
     await page.waitForSelector('[data-global-ui-settings-menu]')
-    await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent.includes('WebUI: Open setup')).click())
+    await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent.includes('Open setup')).click())
     assert.equal(await page.$eval(trigger, e => e.getAttribute('aria-pressed')), 'true')
     await page.click(trigger)
     assert.ok(await page.$('[data-global-ui-settings-menu]'))
-    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.includes('WebUI: reload'))), true)
+    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.includes('Reload WebUI'))), true)
+    assert.equal(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.some(e => e.textContent.trim() === 'Open logs')), true)
     await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.find(e => e.textContent === 'dark').click())
     assert.equal(await page.$('[data-global-ui-settings-menu]'), null)
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true)
