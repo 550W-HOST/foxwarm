@@ -113,7 +113,7 @@ test('tool Code paths keep plain text and expose only an adjacent native icon ac
   assert.match(component, /foxwarm-tool-code-open/)
   assert.match(component, /aria-label=\{`Open \$\{filePath\} in Code`\}/)
   assert.match(component, /<Code2 size=\{13\} aria-hidden="true"/)
-  assert.match(component, /onOpenCodeFile\(filePath, lines\)/)
+  assert.match(component, /onOpenCodeFile\(filePath, lines, target\)/)
   assert.match(component, /<span[^>]*className=\{pathClass\}>\{filePath\}<\/span>/)
   assert.doesNotMatch(component, /role="button"|tabIndex=/)
   assert.doesNotMatch(component, /hover:underline cursor-pointer|text-blue|dark:text-blue/)

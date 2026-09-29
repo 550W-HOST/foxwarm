@@ -12,7 +12,7 @@ export const CLI_NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
-          filePath: { type: 'string' , description: "File or directory path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+          filePath: { type: 'string' , description: "File or directory path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
           startLine: { type: 'number', description: "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning." },
           endLine: { type: 'number', description: "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range." },
         },
@@ -25,7 +25,7 @@ export const CLI_NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
-          filePath: { type: 'string' , description: "Destination path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+          filePath: { type: 'string' , description: "Destination path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
           content: { type: 'string' , description: "Complete file contents."},
           overwrite: { type: 'boolean' , description: "Allow replacement of an existing file. Defaults to false."},
           createDirs: { type: 'boolean', description: "Create missing parent directories. Defaults to false." },
@@ -39,7 +39,7 @@ export const CLI_NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
-          filePath: { type: 'string' , description: "File to edit on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+          filePath: { type: 'string' , description: "File to edit on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
           oldText: { type: 'string' , description: "Exact text to replace; it must identify a single occurrence."},
           newText: { type: 'string' , description: "Replacement text."},
         },
@@ -48,7 +48,7 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'apply_patch',
-      description: "Add, modify, or delete files on this Node using the apply_patch format with *** Begin Patch and *** End Patch. Relative paths in patch headers use the session working directory supplied for this Node, or its agent directory if unset.",
+      description: "Add, modify, or delete files on this Node using the apply_patch format with *** Begin Patch and *** End Patch. Relative paths in patch headers use the session working directory supplied for this Node, or its agent directory if unset. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected.",
       parameters: {
         type: 'object',
         properties: { input: { type: 'string' , description: "Complete patch text with Add File, Update File, or Delete File operations."} },
@@ -57,12 +57,12 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'exec',
-      description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream.",
+      description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream. For temporary files, prefer $fw_tmp ($env:fw_tmp in PowerShell) over /tmp; fw_agentdir gives the Agent directory. These environment variables are set for Agent-owned commands on Main and CLI Nodes.",
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string' , description: "Shell command or pipeline to execute."},
-          cwd: { type: 'string' , description: "Working directory for this command. Relative paths use the session working directory supplied for this Node, or the Node process working directory if unset. With no cwd, execution uses that same default chain."},
+          cwd: { type: 'string' , description: "Working directory for this command. Relative paths use the session working directory supplied for this Node, or the Node process working directory if unset. With no cwd, execution uses that same default chain. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
           timeout: { type: 'number', minimum: 1, description: "Seconds to wait before returning a still-running command as a background execution. Defaults to 15; values above 60 are reduced to 60 with a warning." },
         },
         required: ['command'],

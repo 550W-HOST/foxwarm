@@ -144,7 +144,7 @@ interface ChatProps {
   onOpenTerminal?: () => void
   onOpenCode?: () => void
   onOpenCodeNewWindow?: () => void
-  onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
+  onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: { nodeId: string; resolvedPath: string }) => void
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
   sendKeyMode?: 'modEnter' | 'enter'

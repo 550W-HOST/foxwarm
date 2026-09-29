@@ -16,13 +16,16 @@ import {
 } from './helpers';
 import { checkPathAccess } from '../isolatedCheck';
 import { nativeFileOperations } from '../../packages/shared/dist/fileOperations';
+import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 
 export async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const { filePath, startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    return readResolvedPath(fullPath, filePath, startLine, endLine, ctx.fileOperations || nativeFileOperations);
+    const result = await readResolvedPath(fullPath, filePath, startLine, endLine, ctx.fileOperations || nativeFileOperations);
+    ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
+    return result;
 }
 
 export async function tool_write(args: ToolArgs, ctx: ToolContext) {
@@ -48,6 +51,7 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
                 : undefined,
         }, ctx.fileOperations || nativeFileOperations);
         deletePendingWriteRef(contentRef);
+        ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
         return 'File written successfully';
     }
 
@@ -75,6 +79,7 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
                 : ` The attempted content was too large to cache for contentRef retry; call write again with content and createDirs=true if you want to create missing parent directories.`;
         },
     }, ctx.fileOperations || nativeFileOperations);
+    ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
     return 'File written successfully';
 }
 
@@ -84,6 +89,7 @@ export async function tool_edit(args: ToolArgs, ctx: ToolContext) {
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
     await editResolvedPath(fullPath, oldText, newText, ctx.fileOperations || nativeFileOperations);
+    ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
     return 'File edited successfully';
 }
 
@@ -95,14 +101,18 @@ export async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     }
 
     const agentName = ctx.session?.agent || 'main';
-    return applyPatchOperations(input, (filePath) => {
+    const paths: ResolvedToolPath[] = [];
+    const result = await applyPatchOperations(input, (filePath) => {
         const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
         if (shouldEnforceIsolatedMasterPathAccess(ctx)) {
             checkPathAccess(fullPath, agentName);
         }
+        paths.push({ raw: filePath, resolved: fullPath });
         return {
             fullPath,
             displayPath: filePath,
         };
     }, ctx.fileOperations || nativeFileOperations);
+    ctx.onResolvedPaths?.(paths);
+    return result;
 }

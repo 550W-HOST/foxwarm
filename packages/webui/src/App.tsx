@@ -1419,13 +1419,17 @@ function App() {
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
-          onOpenCodeFile={(filePath, lines) => {
-            const request = resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, sessionRecord?.cwd, lines)
+          onOpenCodeFile={(filePath, lines, target) => {
+            const request = target
+              ? resolveToolCodeFileTarget(target.resolvedPath, target.nodeId, undefined, lines)
+              : (filePath.startsWith('/') ? resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, undefined, lines) : null)
             if (!request) {
-              window.alert('This path cannot be opened in Code yet. Tool file links require a valid node and either an absolute path or a session cwd.')
+              window.alert('This path cannot be opened in Code yet.')
               return
             }
-            const workspaceTarget = resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
+            const workspaceTarget = target
+              ? resolveSessionCodeTarget(request.nodeId, request.path.substring(0, request.path.lastIndexOf('/')) || '/')
+              : resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
             openCodeFile(request, workspaceTarget)
           }}
           onOpenCodeCommit={openCodeCommit}

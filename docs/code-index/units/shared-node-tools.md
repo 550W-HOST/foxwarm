@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 ## Purpose
@@ -94,6 +94,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `./fileOperations` — injected low-level target-local file primitives; production root and CLI Node callers use the native implementation
 - `./nodeFileTransfer` — `detectTransferMimeType`, `getNodeAgentDir`, `resolveNodePath`
 - `./persistentExec` — `PersistentExecManager`, timeout constants, exec types
+
+- `packages/shared/src/agentPathVariables.ts` expands only exact leading `$fw_agentdir`/`$fw_tmp` with the actual native Agent root; primitive/external contexts reject leading tokens without a root. `packages/shared/src/resolvedPathMetadata.ts` carries only first-party CLI successful file paths to the dispatch extractor. Canonical contract: [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Behavior
 

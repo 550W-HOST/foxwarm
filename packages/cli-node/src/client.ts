@@ -12,6 +12,8 @@ import { setNodeProcessTitle } from './processTitle';
 import WebSocket from 'ws';
 import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
 import { expandHomePath } from '../../shared/dist/execCwd';
+import { withResolvedPathSidecar, type ResolvedToolPath } from '../../shared/dist/resolvedPathMetadata';
+import { rejectUnsupportedAgentPathVariable } from '../../shared/dist/agentPathVariables';
 import { PersistentExecManager } from '../../shared/dist/persistentExec';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
@@ -788,6 +790,7 @@ export class NodeClient {
         throw new Error(`Tool \`${tool}\` not found`);
       }
 
+      const resolvedPaths: ResolvedToolPath[] = [];
       const ctx = {
         sessionId,
         session: {
@@ -809,6 +812,7 @@ export class NodeClient {
           });
         },
         fileOperations: nativeFileOperations,
+        onResolvedPaths: (paths: ResolvedToolPath[]) => { resolvedPaths.push(...paths); },
         broadcast: async (text: string) => {
           this.send({
             type: 'broadcast',
@@ -822,7 +826,7 @@ export class NodeClient {
       };
 
       const rawResult = await toolFn(args, ctx);
-      const result = this.normalizeToolResult(rawResult);
+      const result = withResolvedPathSidecar(this.normalizeToolResult(rawResult), resolvedPaths);
 
       this.send({
         type: 'tool_call_response',
@@ -872,6 +876,7 @@ export class NodeClient {
         runtimeNodeId: this.connectedNodeId || this.requestedName,
         fileOperations: nativeFileOperations,
         resolveFilePath: (filePath: string) => {
+          rejectUnsupportedAgentPathVariable(filePath);
           const expanded = expandHomePath(filePath);
           return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
         },

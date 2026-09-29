@@ -93,6 +93,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - Foreground and timeout-preview formatting preserves boundary whitespace in every non-empty captured/displayed output, including whitespace-only output. Only a zero-byte output uses the no-output placeholder. Metadata starts after the existing trailing LF or one added separator LF; when the capture had no trailing LF, the footer says so without treating the separator as command output.
 - Immediate background-timeout results place partial output before a metadata footer beginning with `---`. That footer says the process remains outstanding until its completion event and includes a best-effort process view. Native POSIX/Windows runtimes use the bounded managed-shell tree. An injected target boundary may supply a truthful formatter when its managed host PID represents a launcher rather than the shell itself, without changing lifecycle or output semantics. Snapshot races, permissions, unsupported platforms, and inspection failures produce an unavailable line instead of failing the exec result. Canonical contract: [D-persistent-exec-background-timeout-footer-tree](#d-persistent-exec-background-timeout-footer-tree).
 
+- The optional `getAgentDir` callback supplies the real native Agent root independently of default cwd and retained exec artifacts. Agent launches ensure `tmp` before validating cwd and inject reserved env only into spawn; external/primitive runtimes omit the root and strip inherited reserved values. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+
 ## Integration
 
 - Used by agent execution infrastructure to run shell commands with timeout/background semantics.

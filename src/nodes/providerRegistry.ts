@@ -4,6 +4,8 @@ import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabiliti
 import type { ExternalNodeOwner } from '../../packages/shared/dist/nodeProtocol';
 import { describeNodeProtocolCompatibility, type NodeProtocolCompatibility } from '../../packages/shared/dist/nodeProtocol';
 import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
+import { parseApplyPatchInput } from '../../packages/shared/dist/applyPatch';
+import { rejectUnsupportedAgentPathVariable } from '../../packages/shared/dist/agentPathVariables';
 import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
 
 export type NodeKind = 'master' | 'remote' | 'sandbox';
@@ -352,6 +354,7 @@ export class NodeProviderRegistry {
     }
     const source = request.owner ? { owner: request.owner } : { sourceSessionId: request.sourceSessionId };
     if (request.toolName === 'exec') {
+      rejectUnsupportedAgentPathVariable(request.args.cwd);
       if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
         throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`exec\` not available on node \`${request.nodeId}\`.`);
       }
@@ -361,6 +364,11 @@ export class NodeProviderRegistry {
     const mutation = request.toolName === 'write' || request.toolName === 'edit' || request.toolName === 'apply_patch';
     if (!access || (mutation && access !== 'read-write') || !provider.invokeFilesystem) {
       throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
+    }
+    if (request.toolName === 'apply_patch' && typeof request.args.input === 'string') {
+      for (const operation of parseApplyPatchInput(request.args.input)) rejectUnsupportedAgentPathVariable(operation.filePath);
+    } else {
+      rejectUnsupportedAgentPathVariable(request.args.filePath);
     }
     let externalMutationAttempted = false;
     const call = async (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => {

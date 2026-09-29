@@ -1,6 +1,6 @@
 # Unit: webui-tool-timeline
 
-Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
+Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolResolvedPathNavigation.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
 Secondary files: packages/webui/test/threadCardSurfaces.e2e.mjs
 
 ## Purpose
@@ -55,6 +55,8 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `extractCodeLikePaths(text)` | ~10 | Extracts file paths from text using regex |
 | `inferExecOutputFilePath(command, output)` | ~20 | Heuristically determines output language for syntax highlighting |
 | `ExecOutputText({ text, command })` | ~5 | Renders exec output with inferred syntax highlighting or ANSI parsing |
+
+- A successful native file response may carry ordered per-call `resolvedPaths`. Code icons open the persisted target Node and absolute path while leaving the visible raw label and read line range intact; Update/Add headers use their own operation index. Older relative/`~` paths without metadata are not inferred from current cwd; older absolute paths retain their existing fallback. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Dependencies
 

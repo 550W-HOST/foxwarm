@@ -878,6 +878,7 @@ export class SessionWorkerHost {
     return createExecRuntime({
       getDefaultCwd: getAgentDir,
       getExecTempDir: agent => path.join(getAgentDir(agent), '.temp', 'exec'),
+      getAgentDir,
       registryPath: path.join(workerDir, 'running-exec.json'),
       nodeId: 'master',
       completionDispatcher: async (entry, _status, message) => this.commitExecCompletion(entry.id, message),

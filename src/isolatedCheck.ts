@@ -12,6 +12,7 @@ import {
   ResolvedToolPermissionIdentity,
 } from './permissions';
 import { expandHomePath } from './utils/pathResolve';
+import { expandAgentPathVariable } from '../packages/shared/dist/agentPathVariables';
 import * as agentMetadata from './session/agentMetadata';
 import type { Session } from './types';
 import {
@@ -176,8 +177,8 @@ function resolvePermissionPath(filePath: unknown, agentName: string): string | n
   if (typeof filePath !== 'string' || filePath.trim().length === 0) {
     return null;
   }
-  const expandedPath = expandHomePath(filePath.trim());
   const agentDir = getAgentDir(agentName);
+  const expandedPath = expandHomePath(expandAgentPathVariable(filePath.trim(), agentDir));
   return path.normalize(path.isAbsolute(expandedPath) ? path.resolve(expandedPath) : path.resolve(agentDir, expandedPath));
 }
 

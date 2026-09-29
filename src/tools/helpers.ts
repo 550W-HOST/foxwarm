@@ -16,6 +16,7 @@ import {
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
 import type { ExecRuntime } from '../execManager';
+import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 import {
     fileOperationPathExists,
     nativeFileOperations,
@@ -48,6 +49,8 @@ export interface ToolContext {
     toolExecutionSnapshot?: { currentNode: string; cwd?: string };
     /** Trusted in-process placement, supplied by turn effects and never tool arguments. */
     sessionPlacement?: 'local' | 'session-worker';
+    /** Per-invocation UI-only file paths, never included in model-visible tool results. */
+    onResolvedPaths?: (paths: ResolvedToolPath[]) => void;
 }
 
 // Tool function type

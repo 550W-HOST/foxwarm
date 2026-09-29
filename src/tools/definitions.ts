@@ -61,7 +61,7 @@ const baseDefinitions = [
             parameters: {
                 type: 'object',
                 properties: { 
-                    filePath: { type: 'string' , description: "File or directory path. Relative paths use the session working directory, or the agent directory if no working directory is set. Absolute paths and ~/ paths are accepted subject to permissions."},
+                    filePath: { type: 'string' , description: "File or directory path. Relative paths use the session working directory, or the agent directory if no working directory is set. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
                     startLine: { type: 'number', description: "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning." },
                     endLine: { type: 'number', description: "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range." }
                 },
@@ -77,7 +77,7 @@ const baseDefinitions = [
                 properties: { 
                     content: { type: 'string' , description: "Complete file contents. Use either content or contentRef, not both."},
                     contentRef: { type: 'string', description: "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same session/agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived." },
-                    filePath: { type: 'string' , description: "Destination path. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+                    filePath: { type: 'string' , description: "Destination path. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
                     createDirs: { type: 'boolean', description: "Create missing parent directories. Defaults to false." }
                 },
@@ -91,7 +91,7 @@ const baseDefinitions = [
             parameters: {
                 type: 'object',
                 properties: { 
-                    filePath: { type: 'string' , description: "File to edit. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions."},
+                    filePath: { type: 'string' , description: "File to edit. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
                     oldText: { type: 'string', description: "Exact text to replace; it must identify a single occurrence." },
                     newText: { type: 'string', description: "Replacement text." },
                 },
@@ -101,7 +101,7 @@ const baseDefinitions = [
         {
             name: 'apply_patch',
             defaultInject: true,
-            description: `Add, modify, or delete files with a line-based patch. Relative paths in patch headers use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. Supply the patch as input.
+            description: `Add, modify, or delete files with a line-based patch. Relative paths in patch headers use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected. Supply the patch as input.
 
 The patch must be enclosed in \`*** Begin Patch\` / \`*** End Patch\`. Each file operation starts with a header line:
 - \`*** Update File: <path>\` — modify an existing file
@@ -209,9 +209,9 @@ Example:
                 type: 'object',
                 properties: {
                     sourceNode: { type: 'string', description: "Node containing the source file. Use master for the Main host." },
-                    sourcePath: { type: 'string', description: "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted." },
+                    sourcePath: { type: 'string', description: "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
                     targetNode: { type: 'string', description: "Node that will receive the file. Use master for the Main host." },
-                    targetPath: { type: 'string', description: "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted." },
+                    targetPath: { type: 'string', description: "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing destination file. Defaults to false." },
                 },
                 required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
@@ -241,7 +241,7 @@ Example:
                 type: 'object',
                 properties: {
                     id: { type: 'string', description: "Image ID shown in this session." },
-                    filePath: { type: 'string', description: "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted." },
+                    filePath: { type: 'string', description: "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
                     node: { type: 'string', description: "Node on which to save the image. Defaults to the current Node." },
                 },
@@ -251,12 +251,12 @@ Example:
         {
             name: 'exec',
             defaultInject: true,
-            description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream.",
+            description: "Run a shell command on the current Node. Output is saved in a command log and shown as a bounded preview. If the command outlasts timeout, it continues in the background and returns an execId; a later event reports completion. The timeout does not kill the command. Avoid adding head or tail just to shorten the preview: that changes the captured output. If you need both a complete log and a filtered view, save the complete output separately or use tee with a filter that consumes the whole stream. For temporary files, prefer $fw_tmp ($env:fw_tmp in PowerShell) over /tmp; fw_agentdir gives the Agent directory. These environment variables are set for Agent-owned commands on Main and CLI Nodes.",
             parameters: {
                 type: 'object',
                 properties: {
                     command: { type: 'string' , description: "Shell command or pipeline to execute."},
-                    cwd: { type: 'string', description: "Working directory for this command. Relative paths use the session working directory, or the Node's default directory if unset. When omitted, execution uses that same default chain; on master, the final default is the agent directory." },
+                    cwd: { type: 'string', description: "Working directory for this command. Relative paths use the session working directory, or the Node's default directory if unset. When omitted, execution uses that same default chain; on master, the final default is the agent directory. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
                     timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, description: `Seconds to wait before returning a still-running command as a background execution. Defaults to ${DEFAULT_EXEC_TIMEOUT_SECONDS}; values above ${MAX_EXEC_TIMEOUT_SECONDS} are reduced to ${MAX_EXEC_TIMEOUT_SECONDS} with a warning.` }
                 },
                 required: ['command']
@@ -350,7 +350,7 @@ Example:
                 properties: {
                     channelTargetId: { type: 'string', description: "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with sessionId." },
                     sessionId: { type: 'string', description: "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId." },
-                    filePath: { type: 'string', description: "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted." },
+                    filePath: { type: 'string', description: "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
                     node: { type: 'string', description: "Node containing the file. Defaults to the current Node." },
                     caption: { type: 'string', description: "Text to accompany the file, where the destination supports captions." },
                     text: { type: 'string', description: "Alternative name for caption." }
@@ -952,7 +952,7 @@ Example:
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML policy." }
+                    filePath: { type: 'string', description: "Path on master to the complete candidate YAML policy. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected." }
                 },
                 required: ['filePath'],
                 additionalProperties: false
