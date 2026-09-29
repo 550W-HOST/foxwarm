@@ -19,7 +19,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - `ProcessingStatus` — Canonical thinking/tool/waiting status indicator plus queued/loading actions
-- `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering through the shared model-thread-card chrome
+- `ReasoningCard` — Collapsible card displaying AI reasoning/thinking Markdown through the shared model-thread-card chrome; an optional Search reveal opens only its body without changing manual disclosure.
 - `ReloadAppButton` — Button that clears service workers and caches before hard-reloading
 - `Sidebar` — Main application sidebar with session list, navigation, and settings
 - `SyntaxHighlightedText` — Lightweight regex-based syntax highlighter for code snippets

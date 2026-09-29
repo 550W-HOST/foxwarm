@@ -13,6 +13,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `ToolCallsBlock` — renders tool calls from a single message (no responses yet)
 - `ToolResponsesBlock` — renders tool responses from a single message (orphaned)
 - `ToolGroupSummaryCard` — persistent counted-tag header and Tool-style outer card for a historical tool group
+- `getToolCallSearchText` / `getToolResponseSearchText` — text projection from the corresponding expanded Tool arguments/result formatter; `getGroupedToolEntries` supplies the same call/result ownership to pane-local Search and the renderer.
 - `OpenCodeFileHandler` / `ToolCodePath` — callback contract and plain-path wrapper with a keyboard-accessible Code icon action for supported direct file-tool paths
 - `ExecCommandText` — syntax-highlighted shell command with heredoc support
 - `ExecOutputText` — syntax-highlighted or ANSI-parsed command output
@@ -73,6 +74,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 - Tool and counted-group headers publish their own `data-tool-header-tone` for theme-specific surfaces; nested success/error headers are not recolored by a neutral group ancestor.
 
+- An optional selected pane-local Search target reveals its exact Tool card and full argument/result body in the rendered view without changing manual disclosure, starting a height animation, or inserting hidden full-text DOM while Search is closed.
 - Tool cards use the shared one-shot measured height transition for local expand/collapse and return to natural height for streaming content; group-wide collapse controls/transition belong to `ChatTimeline` (see [D-webui-tool-group-collapse](#d-webui-tool-group-collapse)).
 - Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets.
 - A valid persisted `executionTiming` adds a small invocation duration beside the tool tag in the existing header; malformed or legacy responses show none. This is the call-to-return duration, not the lifetime of a background process or the interval between model requests. Collapse behavior and result layout stay unchanged.

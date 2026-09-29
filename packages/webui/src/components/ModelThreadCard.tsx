@@ -15,6 +15,7 @@ interface ModelThreadCardProps {
   children: ReactNode
   tone?: ModelThreadTone
   defaultExpanded?: boolean
+  searchReveal?: boolean
 }
 
 const lineToneClasses: Record<ModelThreadTone, string> = {
@@ -56,8 +57,10 @@ const ModelThreadCard = ({
   children,
   tone = 'message',
   defaultExpanded,
+  searchReveal = false,
 }: ModelThreadCardProps) => {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? tone === 'processing')
+  const [manualExpanded, setExpanded] = useState(defaultExpanded ?? tone === 'processing')
+  const expanded = manualExpanded || searchReveal
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const toggle = () => { prepare(); setExpanded(current => !current) }
   const previewFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)

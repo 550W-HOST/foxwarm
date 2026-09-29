@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-react'
+import { ChevronDown, ChevronUp, Code2, ExternalLink, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
 import type { ChildPolicyChainEntry } from './childModelState'
 import ChatTimeline from './ChatTimeline'
+import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields } from './chatSessionSearch'
 import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
@@ -229,6 +230,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchId, setSearchMatchId] = useState<string | null>(null)
+  const [searchNavigation, setSearchNavigation] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchAppliedNavigationRef = useRef(0)
+  const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
   const [earlierHistoryError, setEarlierHistoryError] = useState(false)
@@ -1548,6 +1556,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   const hiddenMessageCount = messages.length - visibleMessages.length
 
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, groupTools) : [], [groupTools, messages, searchOpen])
+  const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
+  const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
+  const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
+
   const streamingAssistantMessage = useMemo(() => (
     buildStreamingAssistantMessage(streamingAssistantDraft)
   ), [streamingAssistantDraft])
@@ -1556,6 +1569,66 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages])
+
+  const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
+    if (!match) return
+    leaveBottomFollow()
+    if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
+    setSearchMatchId(match.id)
+    setSearchNavigation(value => value + 1)
+  }, [leaveBottomFollow, messages.length, showFullTimeline])
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchMatchId(null)
+    lastSearchQueryRef.current = ''
+  }, [])
+
+  const stepSearch = useCallback((direction: -1 | 1) => {
+    if (!searchMatches.length) return
+    const index = currentSearchIndex < 0 ? 0 : currentSearchIndex
+    navigateSearch(searchMatches[(index + direction + searchMatches.length) % searchMatches.length])
+  }, [currentSearchIndex, navigateSearch, searchMatches])
+
+  const lastSearchQueryRef = useRef('')
+  useLayoutEffect(() => {
+    if (!searchOpen || lastSearchQueryRef.current === searchQuery) return
+    lastSearchQueryRef.current = searchQuery
+    setSearchMatchId(null)
+    navigateSearch(searchMatches[0] || null)
+  }, [navigateSearch, searchMatches, searchOpen, searchQuery])
+
+  useEffect(() => { if (searchOpen) searchInputRef.current?.focus() }, [searchOpen])
+  useLayoutEffect(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchMatchId(null)
+    lastSearchQueryRef.current = ''
+  }, [sessionId])
+
+  useLayoutEffect(() => {
+    const registry = CSS.highlights
+    registry?.delete(searchHighlightName)
+    if (!searchOpen || !selectedSearchMatch) return
+    const timeline = committedTimelineRef.current
+    const surface = timeline ? findSearchSurface(timeline, selectedSearchMatch) : null
+    const range = surface ? findRenderedMatchRange(surface, selectedSearchMatch.query, selectedSearchMatch.ordinal) : null
+    if (!range) return
+    if (registry && typeof Highlight === 'function') registry.set(searchHighlightName, new Highlight(range))
+    if (searchNavigation !== searchAppliedNavigationRef.current) {
+      const container = messagesContainerRef.current
+      if (container) {
+        const rect = range.getBoundingClientRect()
+        const viewport = container.getBoundingClientRect()
+        container.scrollTop += rect.top - viewport.top - Math.min(96, container.clientHeight * 0.25)
+        currentViewportGeometryRef.current = null
+        captureCurrentViewportState()
+        searchAppliedNavigationRef.current = searchNavigation
+      }
+    }
+    return () => { registry?.delete(searchHighlightName) }
+  }, [captureCurrentViewportState, searchHighlightName, searchNavigation, searchOpen, selectedSearchMatch, showFullTimeline, timelineMessages])
 
   useLayoutEffect(() => {
     if (!pendingScrollToTrueTopRef.current) return
@@ -1970,6 +2043,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   return (
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+      {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}
         title={sessionDisplayName || sessionRecord?.displayName || sessionId}
@@ -1980,8 +2054,33 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         )}
         onBack={isMobile ? onBack : undefined}
         sticky
+        below={searchOpen ? (
+          <div role="search" className="flex min-w-0 items-center gap-2" data-chat-search>
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
+                if (event.key === 'Enter') { event.preventDefault(); stepSearch(event.shiftKey ? -1 : 1) }
+              }}
+              type="search"
+              aria-label="Search loaded messages"
+              placeholder="Search loaded messages"
+              className="min-w-0 flex-1 rounded-md border border-fw-border bg-fw-surface px-3 py-1.5 text-sm text-fw-text-strong focus:outline-fw-accent dark:border-fw-border-strong"
+            />
+            <span aria-live="polite" className="shrink-0 text-xs text-fw-text-muted tabular-nums">{searchQuery ? `${selectedSearchMatch ? Math.max(currentSearchIndex, 0) + 1 : 0}/${searchMatches.length}` : '0/0'}</span>
+            <button type="button" onClick={() => stepSearch(-1)} disabled={!searchMatches.length} aria-label="Previous match" className="rounded p-1.5 text-fw-text-muted hover:bg-fw-hover disabled:opacity-40"><ChevronUp size={16} /></button>
+            <button type="button" onClick={() => stepSearch(1)} disabled={!searchMatches.length} aria-label="Next match" className="rounded p-1.5 text-fw-text-muted hover:bg-fw-hover disabled:opacity-40"><ChevronDown size={16} /></button>
+            <button type="button" onClick={closeSearch} aria-label="Close search" className="rounded p-1.5 text-fw-text-muted hover:bg-fw-hover"><X size={16} /></button>
+            {!isFullHistoryLoaded && <span className="hidden text-xs text-fw-text-muted lg:inline">Earlier messages may still load.</span>}
+          </div>
+        ) : undefined}
         actions={(
           <>
+            <button type="button" onClick={() => setSearchOpen(true)} aria-label="Search messages" title="Search messages" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+              <Search className="h-4 w-4" /><span className="hidden sm:inline">Search</span>
+            </button>
             {(onOpenCode || onOpenCodeNewWindow) && (
               <div className="flex items-stretch">
                 {onOpenCode && (
@@ -2083,7 +2182,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen ? selectedSearchMatch : null} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>

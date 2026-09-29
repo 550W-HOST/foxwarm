@@ -34,11 +34,48 @@ import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
 import { formatCompactDuration } from '../usageTiming'
+import type { SessionSearchMatch } from './chatSessionSearch'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
+
+/** Search the same expanded text surfaces as a Tool card, never its raw JSON view or response metadata. */
+export const getToolCallSearchText = (call: FunctionCall): string => {
+  if (call.argsParseError && typeof call.rawArgsText === 'string') return call.rawArgsText
+  const args = call.args || {}
+  if (call.name === 'read') return `${args.filePath || ''}${args.startLine || args.endLine ? ` (lines ${args.startLine || 1}-${args.endLine || 'end'})` : ''}`
+  if (call.name === 'write') return [args.filePath, args.content].filter(value => typeof value === 'string').join('\u0000')
+  if (isLegacyDiffToolName(call.name) && hasLegacyDiffPayload(call)) return [args.filePath, args.oldText, args.newText].join('\u0000')
+  if (isPatchToolName(call.name)) {
+    try {
+      return parseApplyPatchPreview(args.input).flatMap(operation => [
+        operation.filePath,
+        ...(operation.action === 'update' ? operation.hunks.flatMap(hunk => {
+          const snippets = buildPatchHunkSnippets(hunk)
+          return [...hunk.anchors, snippets.oldText, snippets.newText]
+        }) : operation.action === 'add' ? operation.lines : []),
+      ]).join('\u0000')
+    } catch { return String(args.input || JSON.stringify(args, null, 2)) }
+  }
+  if (call.name === 'exec') return String(args.command || '')
+  if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
+  if (call.name === 'create_child_session') return [args.suffix, args.message].filter(value => typeof value === 'string').join('\u0000')
+  return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
+}
+
+export const getToolResponseSearchText = (resp: FunctionResponse): string => {
+  if (resp.name === 'read') {
+    const content = resp.response?.content ?? resp.response?.output
+    return typeof content === 'string' ? content : content !== undefined ? formatCompactObjectPreview(content) : formatToolResponseText(resp)
+  }
+  if (resp.name === 'exec' && typeof resp.response?.output === 'string') {
+    return resp.response.output.replace(/\x1b\[[0-9;]+m/g, '')
+  }
+  if (TOOLSCRIPT_TOOL_NAMES.has(resp.name)) return formatCompactObjectPreview(stripToolScriptSubCallsFromResponse(resp.response))
+  return formatToolResponseText(resp)
+}
 
 const getToolInvocationDuration = (timing: FunctionResponse['executionTiming']): number | null => {
   if (!timing || typeof timing !== 'object'
@@ -582,20 +619,27 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   imageParts,
   modelMessage,
   onOpenCodeFile,
+  toolIndex,
+  searchTarget,
 }: {
   call?: FunctionCall
   responses: FunctionResponse[]
   imageParts: MessagePart[]
   modelMessage?: Message
   onOpenCodeFile?: OpenCodeFileHandler
+  toolIndex: number
+  searchTarget?: SessionSearchMatch | null
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [manualExpanded, setExpanded] = useState(false)
+  const searchReveal = searchTarget?.toolIndex === toolIndex && (searchTarget.surface === 'call' || searchTarget.surface === 'response')
+  const expanded = manualExpanded || searchReveal
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const toggle = () => { prepare(); setExpanded(current => !current) }
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
-  const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && viewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
-  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && viewMode === 'default')
-  const jsonFade = useThreadCardOverflowFade<HTMLPreElement>('bottom', !expanded && viewMode === 'json')
+  const displayedViewMode = searchReveal ? 'default' : viewMode
+  const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && displayedViewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
+  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && displayedViewMode === 'default')
+  const jsonFade = useThreadCardOverflowFade<HTMLPreElement>('bottom', !expanded && displayedViewMode === 'json')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
@@ -692,7 +736,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
       </div>
       {includeExpandedCall && expandedCallContent && (
-        <div className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>
+        <div data-search-surface="call" className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>
           {expandedCallContent}
         </div>
       )}
@@ -702,6 +746,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   return (
     <div
       ref={heightRef}
+      data-search-tool-index={toolIndex}
       className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''}`}
     >
       <ThreadLineButton
@@ -711,11 +756,11 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
       <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-1 top-0.5 flex gap-0.5 opacity-0 transition-opacity`}>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={viewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
-        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={viewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('default') }} active={displayedViewMode === 'default'} title="Default"><Eye size={12} /></IconToggleButton>
+        <IconToggleButton onClick={(e) => { e.stopPropagation(); setToolViewMode('json') }} active={displayedViewMode === 'json'} title="JSON"><FileJson size={14} /></IconToggleButton>
       </div>
 
-      {viewMode === 'json' ? (
+      {displayedViewMode === 'json' ? (
         <div className={baseTextClass}>
           {header()}
           <pre ref={jsonFade.ref} {...jsonFade.overflowFadeProps} className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : { ...clampContentStyle(6), ...jsonFade.overflowFadeProps.style }}>{jsonText}</pre>
@@ -737,7 +782,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               {hasResponseContent && !hasToolScriptProgress && (
                 <div className="text-fw-text">
                   {responses.length > 0 && responses.map((resp, idx) => (
-                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? resultSeparatorClass : ''}>
+                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} data-search-surface="response" data-search-response-index={idx} className={idx > 0 ? resultSeparatorClass : ''}>
                       {renderToolResponseContent(resp, true, call)}
                     </div>
                   ))}
@@ -757,7 +802,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                   {responses.length > 0 && responses.map((resp, idx) => {
                     const content = renderToolScriptResultContent(resp, true)
                     return content ? (
-                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? resultSeparatorClass : ''}>
+                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} data-search-surface="response" data-search-response-index={idx} className={idx > 0 ? resultSeparatorClass : ''}>
                         {content}
                       </div>
                     ) : null
@@ -780,7 +825,7 @@ interface ToolTimelineEntry {
   modelMessage?: Message
 }
 
-const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix: string): ToolTimelineEntry[] => {
+export const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix: string): ToolTimelineEntry[] => {
   const functionCalls = msg.parts.filter(p => p.functionCall).map(p => p.functionCall!)
   const responseEntriesById = new Map<string, FunctionResponse[]>()
   const imageEntriesById = new Map<string, MessagePart[]>()
@@ -840,14 +885,16 @@ const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix:
   ]
 }
 
-export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, onOpenCodeFile }: { msg: Message; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler }) {
+export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, onOpenCodeFile, searchTarget }: { msg: Message; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null }) {
   const entries = useMemo(() => getGroupedToolEntries(msg, nextMsg, messageKeyPrefix), [messageKeyPrefix, msg, nextMsg])
 
   return (
     <div>
-      {entries.map((entry) => (
+      {entries.map((entry, index) => (
         <ToolCallResponseItem
           key={entry.key}
+          toolIndex={index}
+          searchTarget={searchTarget}
           call={entry.call}
           responses={entry.responses}
           imageParts={entry.imageParts}
@@ -859,20 +906,20 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
   )
 })
 
-export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile }: { msg: Message; onOpenCodeFile?: OpenCodeFileHandler }) {
+export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile, searchTarget }: { msg: Message; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null }) {
   const functionCalls = useMemo(() => msg.parts.filter(p => p.functionCall).map(p => p.functionCall!), [msg.parts])
   if (functionCalls.length === 0) return null
 
   return (
     <div>
       {functionCalls.map((call, callIdx) => (
-        <ToolCallResponseItem key={`call-${call.id || callIdx}`} call={call} responses={[]} imageParts={[]} modelMessage={msg} onOpenCodeFile={onOpenCodeFile} />
+        <ToolCallResponseItem key={`call-${call.id || callIdx}`} toolIndex={callIdx} searchTarget={searchTarget} call={call} responses={[]} imageParts={[]} modelMessage={msg} onOpenCodeFile={onOpenCodeFile} />
       ))}
     </div>
   )
 })
 
-export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg }: { msg: Message }) {
+export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, searchTarget }: { msg: Message; searchTarget?: SessionSearchMatch | null }) {
   const functionResponses = useMemo(() => msg.parts.filter(p => p.functionResponse).map(p => p.functionResponse!), [msg.parts])
   if (functionResponses.length === 0) return null
 
@@ -881,6 +928,8 @@ export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg }: { ms
       {functionResponses.map((resp, respIdx) => (
         <ToolCallResponseItem
           key={`resp-${resp.tool_use_id || respIdx}`}
+          toolIndex={respIdx}
+          searchTarget={searchTarget}
           responses={[resp]}
           imageParts={[]}
         />

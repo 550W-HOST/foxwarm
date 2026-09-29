@@ -10,6 +10,8 @@ interface ReasoningCardProps {
   tone?: ReasoningTone
   debounceMs?: number
   defaultExpanded?: boolean
+  searchReveal?: boolean
+  searchPartIndex?: number
 }
 
 const extractOpenAIReasoningSummaryTitles = (text: string): string[] => {
@@ -40,6 +42,8 @@ const ReasoningCard = memo(function ReasoningCard({
   tone = 'message',
   debounceMs = 0,
   defaultExpanded,
+  searchReveal,
+  searchPartIndex,
 }: ReasoningCardProps) {
   const [displayThinking, setDisplayThinking] = useState(thinking)
 
@@ -71,8 +75,11 @@ const ReasoningCard = memo(function ReasoningCard({
       previewClassName={collapsedPreview.isOpenAISummary ? 'font-semibold' : 'font-normal'}
       tone={tone}
       defaultExpanded={defaultExpanded}
+      searchReveal={searchReveal}
     >
       <div
+        data-search-surface="reasoning"
+        data-search-part-index={searchPartIndex}
         className={`foxwarm-markdown foxwarm-reasoning-body prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${modelThreadBodyClasses[tone]}`}
         onClick={handleMarkdownLinkClick}
       >
