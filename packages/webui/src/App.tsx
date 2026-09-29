@@ -3,6 +3,7 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
+import HistorySearchView from './components/HistorySearchView'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
@@ -61,6 +62,7 @@ const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
 const AGENTS_TAB_ID = 'system:agents'
 const SETUP_TAB_ID = 'system:setup'
+const SEARCH_TAB_ID = 'system:search'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
@@ -418,7 +420,7 @@ function makeSetupTab(): WorkbenchTab {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID
 }
 
 function App() {
@@ -946,6 +948,11 @@ function App() {
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id, origin)
   }
+
+  const openSearchTab = () => {
+    upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'Search history' }, { activate: true })
+    navigateToTab(SEARCH_TAB_ID)
+  }
   notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
 
   const getPaneHeight = (paneId: string): number => {
@@ -1096,6 +1103,8 @@ function App() {
         ? { kind: 'chat', sessionId: targetTab.sessionId, title: targetTab.title }
         : targetTab.type === 'terminal'
           ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
+          : targetTab.type === 'search'
+            ? { kind: 'search' }
           : targetTab.type === 'agents'
             ? { kind: 'agents' }
             : { kind: 'setup' }
@@ -1445,6 +1454,15 @@ function App() {
         />
       )
     }
+
+    if (tab.type === 'search') return <HistorySearchView
+      isMobile={isMobile}
+      groupTools={groupTools}
+      showUsageBadge={showUsageBadge}
+      showUserMessageMetadata={showUserMessageMetadata}
+      knownSessions={sidebarSessions.map(session => session.id)}
+      onBack={onBack}
+    />
 
     if (tab.type === 'agents') {
       return (
@@ -1804,6 +1822,7 @@ function App() {
           onSelectSession={openChatTab}
           onKeepSession={openPersistentChatTab}
           onSelectArchitecture={openAgentsView}
+          onSelectSearch={openSearchTab}
           onSelectSetup={openSetupView}
           codePath={codePath}
           codeNodeId={codeNodeId}
@@ -1851,6 +1870,7 @@ function App() {
             onSelectSession={openChatTab}
             onKeepSession={openPersistentChatTab}
             onSelectArchitecture={openAgentsView}
+            onSelectSearch={openSearchTab}
             onSelectSetup={openSetupView}
             codePath={codePath}
             codeNodeId={codeNodeId}
@@ -1882,6 +1902,7 @@ function App() {
         <CollapsedSidebarContainer
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
+          onSelectSearch={openSearchTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
           unreadSessionIds={unreadSessionIds}

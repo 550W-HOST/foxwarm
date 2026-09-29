@@ -54,6 +54,8 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Canonical threads
 
+- [Global history search viewer](../units/webui-history-search.md) — read-only Search workbench tab, exact message references, and independent result timelines; retrieval contract is [D-context-history-search-viewer](../threads/context-compaction-and-recall.md#d-context-history-search-viewer).
+
 - [streaming pipeline](../threads/streaming-pipeline.md)
 - [context compaction and recall](../threads/context-compaction-and-recall.md)
 - [image blob lifecycle](../threads/image-blob-lifecycle.md)

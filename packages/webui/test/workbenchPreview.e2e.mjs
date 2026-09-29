@@ -350,3 +350,16 @@ test('old preview records disappear without removing kept or system tabs; canoni
     assert.equal((await state(page)).tabsById['chat:e2e-c'].preview, false)
   } finally { await page.close() }
 })
+
+test('global history entry opens a persistent workbench tab without a chat composer', async () => {
+  const page = await openFixture()
+  try {
+    await page.click('button[title="Search history"]')
+    await page.waitForSelector('[data-tab-id="system:search"]')
+    await page.waitForSelector('[data-history-search-view]')
+    assert.equal(await page.$('[data-history-search-view] [aria-label="Message"]'), null)
+    assert.equal((await state(page)).root.activeTabId, 'system:search')
+    assert.equal((await state(page)).tabsById['system:search'].type, 'search')
+    assert.equal((await state(page)).hash, '#tab/system:search')
+  } finally { await page.close() }
+})

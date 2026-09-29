@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen, Workflow } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Search, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -18,6 +18,7 @@ interface SidebarProps {
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onSelectSearch: () => void
   onSelectSetup: () => void
   codePath: string
   codeNodeId: string
@@ -50,6 +51,7 @@ export default function Sidebar({
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
+  onSelectSearch,
   onSelectSetup,
   codePath,
   codeNodeId,
@@ -113,6 +115,9 @@ export default function Sidebar({
               onCreateSession={onCreateSession}
             />
           </div>
+          <button type="button" onClick={onSelectSearch} className="flex w-full items-center justify-center gap-2 rounded-lg bg-fw-neutral-surface px-3 py-2 text-sm font-medium text-fw-text hover:bg-fw-hover" title="Search history">
+            <Search className="h-4 w-4" /> Search history
+          </button>
           <CodeLaunchButton
             path={codePath}
             nodeId={codeNodeId}
