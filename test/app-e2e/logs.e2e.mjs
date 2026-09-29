@@ -17,6 +17,7 @@ let protocol
 const sockets = new Set()
 const frames = []
 const errors = []
+const timeQueries = []
 
 async function button(label, target = page) {
   const clicked = await target.evaluate(text => {
@@ -37,7 +38,7 @@ async function openMenu(target = page) {
 async function waitLoaded(target = page) {
   await target.waitForFunction(() => {
     const view = document.querySelector('[data-logs-view]')
-    return view && !view.querySelector('[role="status"]')?.textContent.includes('Loading')
+    return view?.getAttribute('aria-busy') === 'false'
   })
 }
 
@@ -47,6 +48,11 @@ before(async () => {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
   page = await browser.newPage()
   page.on('pageerror', error => errors.push(error.message))
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname.endsWith('/api/webui/logs') && url.searchParams.has('time')) timeQueries.push(url.searchParams.get('time'))
+  })
+  await page.emulateTimezone('Pacific/Kiritimati')
   protocol = await page.createCDPSession()
   await protocol.send('Network.enable')
   protocol.on('Network.webSocketCreated', event => { if (event.url.includes('/api/webui/stream')) sockets.add(event.requestId) })
@@ -72,6 +78,13 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
   assert.ok(labels.includes('Open logs'))
   await button('Open logs')
   await waitText('synthetic latest')
+  const initialTime = await page.$eval('input[aria-label="Log date and time"]', input => {
+    const parts = new Intl.DateTimeFormat('en', { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+    const date = Object.fromEntries(parts.map(part => [part.type, part.value]))
+    return { actual: input.value, expected: `${date.year}-${date.month}-${date.day}T00:00` }
+  })
+  assert.equal(initialTime.actual, initialTime.expected)
+  assert.deepEqual(timeQueries, [], 'opening Logs does not run a time query')
   assert.equal(sockets.size, 1, 'Logs uses the existing page realtime WebSocket')
   await page.click('button[title="Collapse sidebar"]')
   await openMenu()
@@ -85,6 +98,14 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
   assert.equal(await page.$('[data-logs-text] img'), null)
   assert.equal(await page.evaluate(() => !!window.logsMarkupExecuted), false)
   assert.ok(!snapshot.text.includes('\u001b'))
+  const count = await page.$eval('[data-logs-line-count]', element => ({ text: element.textContent, inToolbar: !!element.closest('[data-logs-toolbar]'), right: element.getBoundingClientRect().right, top: element.getBoundingClientRect().top }))
+  const toolbar = await page.$eval('[data-logs-toolbar]', element => ({ right: element.getBoundingClientRect().right, top: element.getBoundingClientRect().top }))
+  const lineCount = snapshot.text.split('\n').length - (snapshot.text.endsWith('\n') ? 1 : 0)
+  assert.equal(count.text, `${lineCount} lines shown`)
+  assert.equal(count.inToolbar, true)
+  assert.ok(toolbar.right - count.right < 16 && count.top - toolbar.top < 24)
+  assert.equal(await page.$eval('[data-logs-text]', element => element.nextElementSibling), null, 'there is no footer below the log text')
+  assert.equal(await page.$('[data-logs-view] [role="status"]'), null)
   await fs.appendFile(logPath, 'synthetic live append\n')
   await waitText('synthetic live append')
   await button('Older')
@@ -92,7 +113,6 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
   const old = await page.$eval('[data-logs-text]', element => ({ text: element.textContent, start: Number(element.dataset.startOffset), end: Number(element.dataset.endOffset) }))
   assert.ok(old.end <= snapshot.end)
   assert.equal(old.text.includes('synthetic latest'), false)
-  await page.waitForFunction(() => document.querySelector('[data-logs-view] [role="status"]')?.textContent === 'History')
   await fs.appendFile(logPath, 'synthetic while browsing\n')
   await new Promise(resolve => setTimeout(resolve, 400))
   assert.equal(await page.$eval('[data-logs-text]', element => element.textContent), old.text)
@@ -107,7 +127,7 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '1900-01-01T00:00:00')
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
-  await button('Jump near time')
+  await button('Jump')
   await page.waitForSelector('[data-logs-view] [role="alert"]')
   assert.equal(await page.$eval('[data-logs-text]', element => element.dataset.startOffset), position, 'failed time lookup preserves the history window')
   await page.evaluate(() => {
@@ -117,11 +137,19 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, local)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
-  await button('Jump near time')
+  await button('Jump')
   await page.waitForFunction(() => document.querySelector('[data-logs-view]')?.textContent.includes('Located near'))
   assert.ok(await page.$eval('[data-logs-view]', element => element.textContent.includes('(approximate)')))
+  const chosenTime = await page.$eval('input[aria-label="Log date and time"]', input => input.value)
   await button('Latest · Live')
   await waitText('synthetic while browsing')
+  assert.equal(await page.$eval('input[aria-label="Log date and time"]', input => input.value), chosenTime, 'Live keeps the chosen date')
+  await button('Older')
+  await waitLoaded()
+  assert.equal(await page.$eval('input[aria-label="Log date and time"]', input => input.value), chosenTime, 'paging keeps the chosen date')
+  await button('Latest · Live')
+  await waitText('synthetic while browsing')
+  await page.screenshot({ path: path.join(artifactDir, 'logs-toolbar-desktop.png') })
   await page.reload({ waitUntil: 'networkidle2' })
   await waitText('synthetic while browsing')
   assert.equal(decodeURIComponent(await page.evaluate(() => location.hash)), '#tab/system:logs')
@@ -184,6 +212,11 @@ test('Logs menu, bounded history/live, approximate time jump, restoration, popup
     await page.waitForSelector('[data-logs-view] [role="alert"]')
     await button('Latest · Live')
     await waitText('synthetic replacement')
+    assert.equal(await page.$eval('[data-logs-line-count]', element => element.textContent), '1 line shown')
+    const mobile = await page.$eval('[data-logs-toolbar]', element => ({ width: element.clientWidth, scrollWidth: element.scrollWidth, right: element.getBoundingClientRect().right, top: element.getBoundingClientRect().top, countRight: element.querySelector('[data-logs-line-count]').getBoundingClientRect().right, countTop: element.querySelector('[data-logs-line-count]').getBoundingClientRect().top }))
+    assert.ok(mobile.scrollWidth <= mobile.width)
+    assert.ok(mobile.right <= 390 && mobile.right - mobile.countRight < 16 && mobile.countTop - mobile.top < 24)
+    assert.equal(await page.$eval('[data-logs-text]', element => element.nextElementSibling), null)
     await page.screenshot({ path: path.join(artifactDir, 'logs-mobile-dark.png') })
   } finally {
     await fs.rm(logPath, { force: true })

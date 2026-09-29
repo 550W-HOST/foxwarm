@@ -36,9 +36,13 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
   const [live, setLive] = useState(true)
   const [liveEpoch, setLiveEpoch] = useState(0)
   const [busy, setBusy] = useState(true)
-  const [status, setStatus] = useState('Connecting…')
   const [error, setError] = useState('')
-  const [time, setTime] = useState('')
+  const [time, setTime] = useState(() => {
+    const today = new Date()
+    const month = String(today.getMonth() + 1).padStart(2, '0')
+    const day = String(today.getDate()).padStart(2, '0')
+    return `${today.getFullYear()}-${month}-${day}T00:00`
+  })
   const [locatedTime, setLocatedTime] = useState('')
   const viewport = useRef<HTMLPreElement>(null)
   const follow = useRef(true)
@@ -59,7 +63,6 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
     setError('')
     setLocatedTime('')
     const unsubscribe = webUiRealtime.subscribeLogs({
-      onStatus: value => { if (active) setStatus(value === 'connected' ? 'Live' : value === 'reconnecting' ? 'Reconnecting…' : 'Connecting…') },
       onMessage: message => {
         if (!active) return
         if (message.type === 'logs-snapshot') {
@@ -122,7 +125,6 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
       blocksRef.current = [data.window]
       setBlocks([data.window])
       setLocatedTime(data.locatedTime || '')
-      setStatus('History')
       if (viewport.current) viewport.current.scrollTop = 0
     } catch (cause) {
       if (epoch === generation.current && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Unable to read logs.')
@@ -138,18 +140,20 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
   }
   const buttonClass = 'rounded border border-fw-border px-2 py-1.5 text-xs text-fw-text hover:bg-fw-hover disabled:opacity-40'
 
-  return <section data-logs-view className="flex h-full min-h-0 flex-col bg-fw-canvas text-fw-text">
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-fw-border bg-fw-surface p-3">
-      {onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
-      <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4" />Logs</h2>
-      <button type="button" className={buttonClass} disabled={busy || !first || first.startOffset === 0} onClick={() => void load('before')}>Older</button>
-      <button type="button" className={buttonClass} disabled={busy || live || !last || last.endOffset >= last.size - last.pendingBytes} onClick={() => void load('after')}>Newer</button>
-      <button type="button" className={buttonClass} onClick={latest}>Latest · Live</button>
-      <form className="flex min-w-0 flex-wrap items-center gap-2" onSubmit={event => { event.preventDefault(); void load('time') }}>
-        <input type="datetime-local" step="1" aria-label="Log date and time" value={time} onChange={event => setTime(event.target.value)} className="min-w-0 rounded border border-fw-border bg-fw-surface px-2 py-1 text-xs text-fw-text" />
-        <button type="submit" className={buttonClass} disabled={busy || !first?.fileId || !time} title="Approximate lookup. Older time-only logs cannot be located by date.">Jump near time</button>
-      </form>
-      <span className="text-xs text-fw-text-muted" role="status">{busy ? 'Loading…' : live ? status : 'History'}</span>
+  return <section data-logs-view aria-busy={busy} className="flex h-full min-h-0 flex-col bg-fw-canvas text-fw-text">
+    <div data-logs-toolbar className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-b border-fw-border bg-fw-surface p-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
+        <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4" />Logs</h2>
+        <button type="button" className={buttonClass} disabled={busy || !first || first.startOffset === 0} onClick={() => void load('before')}>Older</button>
+        <button type="button" className={buttonClass} disabled={busy || live || !last || last.endOffset >= last.size - last.pendingBytes} onClick={() => void load('after')}>Newer</button>
+        <button type="button" className={buttonClass} onClick={latest}>Latest · Live</button>
+        <form className="flex min-w-0 flex-wrap items-center gap-2" onSubmit={event => { event.preventDefault(); void load('time') }}>
+          <input type="datetime-local" step="1" aria-label="Log date and time" value={time} onChange={event => setTime(event.target.value)} className="min-w-0 rounded border border-fw-border bg-fw-surface px-2 py-1 text-xs text-fw-text" />
+          <button type="submit" className={buttonClass} disabled={busy || !first?.fileId || !time} title="Approximate lookup. Older time-only logs cannot be located by date.">Jump</button>
+        </form>
+      </div>
+      <span data-logs-line-count className="whitespace-nowrap pt-1.5 text-right text-xs text-fw-text-muted">{lines} {lines === 1 ? 'line' : 'lines'} shown</span>
     </div>
     {error && <div role="alert" className="shrink-0 border-b border-fw-border bg-fw-danger-surface px-3 py-2 text-sm text-fw-danger">{error}</div>}
     {locatedTime && <div className="shrink-0 px-3 py-2 text-xs text-fw-text-muted">Located near {new Date(locatedTime).toLocaleString()} (approximate)</div>}
@@ -158,11 +162,5 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
       const element = viewport.current
       if (element) follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 4
     }} className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5" tabIndex={0}>{text}</pre>
-    <div className="flex shrink-0 flex-wrap gap-3 border-t border-fw-border bg-fw-surface px-3 py-2 text-xs text-fw-text-muted">
-      <span>{lines} {lines === 1 ? 'line' : 'lines'} shown</span>
-      {first?.startsMidLine && <span>First line continues from earlier logs</span>}
-      {last?.endsMidLine && <span>Last line is incomplete</span>}
-      {!!last?.pendingBytes && <span>Waiting for a complete character</span>}
-    </div>
   </section>
 }
