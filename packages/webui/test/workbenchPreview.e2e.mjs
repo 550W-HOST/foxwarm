@@ -302,6 +302,15 @@ test('single pane with one tab omits its strip without leaving header height; Si
     assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
     assert.equal(await page.$$eval(paneButtons, nodes => nodes.length), 3)
     assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, false)
+    // Wait for the drag's document-level click guard to clear before a real Close click.
+    await page.waitForFunction(() => {
+      let delivered = false
+      const probe = () => { delivered = true }
+      document.body.addEventListener('click', probe, { once: true })
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      document.body.removeEventListener('click', probe)
+      return delivered
+    })
     await page.click('[data-tab-id="chat:e2e-b"] button[title="Close tab"]')
     await page.waitForFunction(() => {
       const state = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state
@@ -309,6 +318,7 @@ test('single pane with one tab omits its strip without leaving header height; Si
         && !document.querySelector('[data-tab-id]')
         && !!document.querySelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
     })
+    assert.equal((await state(page)).hash, '#tab/chat:e2e-a')
     assert.equal(await page.$(paneButtons), null)
   } finally { await page.close() }
 })
