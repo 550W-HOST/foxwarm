@@ -1493,6 +1493,41 @@ export async function readEffectiveArchiveMessages(sessionId: string, startSeq?:
   return results.sort((a, b) => a.seq - b.seq || Number(a.timestamp) - Number(b.timestamp));
 }
 
+/** Read a small page across a fork lineage without materializing the rest of any branch. */
+export async function readEffectiveArchiveMessagePage(
+  sessionId: string,
+  options: { beforeSeq?: number; afterSeq?: number; startSeq?: number; endSeq?: number; limit: number },
+): Promise<{ records: EffectiveArchiveMessageRecord[]; hasMore: boolean }> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const limit = Math.max(1, Math.min(100, Math.floor(options.limit) || 20));
+  const descending = options.beforeSeq !== undefined;
+  if (descending && options.afterSeq !== undefined) throw new Error('Choose beforeSeq or afterSeq, not both.');
+  const records: EffectiveArchiveMessageRecord[] = [];
+  for (const entry of buildLineage(sessionId)) {
+    const end = Math.min(options.endSeq ?? Number.MAX_SAFE_INTEGER, entry.maxMessageSeq ?? Number.MAX_SAFE_INTEGER);
+    if (end < (options.startSeq ?? 1)) continue;
+    const rows = getDb().prepare(`
+      SELECT agent, seq, timestamp, role, message_json FROM archive_messages
+      WHERE session_id = ? AND seq >= ? AND seq <= ?
+        AND (? IS NULL OR seq < ?) AND (? IS NULL OR seq > ?)
+      ORDER BY seq ${descending ? 'DESC' : 'ASC'} LIMIT ?
+    `).all(entry.sessionId, options.startSeq ?? 1, end,
+      options.beforeSeq ?? null, options.beforeSeq ?? null,
+      options.afterSeq ?? null, options.afterSeq ?? null, limit + 1) as any[];
+    records.push(...rows.map(row => ({
+      v: 1 as const, kind: 'message' as const, sessionId: entry.sessionId,
+      agent: row.agent || 'main', seq: Number(row.seq), timestamp: Number(row.timestamp),
+      role: row.role, message: JSON.parse(row.message_json) as Message,
+      sourceSessionId: entry.sessionId, inherited: entry.inherited,
+    })));
+  }
+  records.sort((a, b) => descending ? b.seq - a.seq : a.seq - b.seq);
+  const hasMore = records.length > limit;
+  const selected = records.slice(0, limit);
+  return { records: descending ? selected.reverse() : selected, hasMore };
+}
+
 export async function getEffectiveArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
   initArchiveStoreSync();
   sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);

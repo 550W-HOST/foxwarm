@@ -18,6 +18,7 @@ import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { logger } from '../common';
 import { formatMessageText } from '../utils/messageFormat';
+import { hasArchivedSessionId, readEffectiveArchiveMessagePage } from '../session/archiveStore';
 import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission, checkArchivedReadPermissionForSession } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
 import { fuseDenseAndLexicalHits, searchArchiveLexicalSideChannel } from './archiveLexicalRecall';
@@ -1129,7 +1130,7 @@ export async function renderContextBlockExpansion(args: {
   }
 
   const session = sessionManager.getSessionCatalog(targetSessionId);
-  if (!session) {
+  if (!session && !await hasArchivedSessionId(targetSessionId)) {
     throw contextBlockExpansionError(`Session \`${targetSessionId}\` not found.`, 404, 'SESSION_NOT_FOUND');
   }
 
@@ -1425,22 +1426,37 @@ export function selectVectorRawMessageWindow(
   };
 }
 
-async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRenderOptions, vectorQuery: string): Promise<ContextPreviewItem[]> {
+export type StructuredRecallSource = {
+  key: string;
+  sessionId: string;
+  kind: 'messages' | 'block' | 'unavailable';
+  sourceRange?: { startSeq: number; endSeq: number };
+  messages: Message[];
+  matchedFacts?: Array<{ kind?: string; text: string }>;
+  fallbackExcerpt?: string;
+  partialSource?: boolean;
+};
+
+async function vectorHitToPreviewItems(
+  hit: any, renderOptions: ContextPreviewRenderOptions, vectorQuery: string,
+  structured?: StructuredRecallSource[], bounded = false, viewerSessionId?: string,
+): Promise<ContextPreviewItem[]> {
   const sourceSessionId = String(hit.session_id || '');
   if (!sourceSessionId) {
     return [];
   }
+  const readSessionId = bounded && viewerSessionId ? viewerSessionId : sourceSessionId;
 
   const modernFact = hit.kind === 'fact' && typeof hit.block_id === 'number';
   let missingBlockSource = false;
   if ((hit.kind === 'block' || modernFact) && typeof hit.block_id === 'number') {
-    const result = await sessionManager.getArchivedBlocks(sourceSessionId, {
+    const result = await sessionManager.getArchivedBlocks(readSessionId, {
       startId: hit.block_id,
       endId: hit.block_id,
     });
     const block = (result.records as ArchiveBlockRecord[]).find(record => record.id === hit.block_id) || result.records[0];
     if (block) {
-      const hydrated = await hydrateRecallBlockTimeRange(sourceSessionId, block as ArchiveBlockRecord);
+      const hydrated = await hydrateRecallBlockTimeRange(readSessionId, block as ArchiveBlockRecord);
       const item = createArchivedBlockContextPreviewItem({
         key: `vector:block:${sourceSessionId}:${hydrated.id}`,
         headingPrefix: `[vector source session:${sourceSessionId}] `,
@@ -1448,6 +1464,13 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
         includeSourceText: formatArchiveSourceLabel(hydrated.sourceKind, hydrated.sourceStart, hydrated.sourceEnd, hydrated.sourceBlockIds),
       });
       const matchedFacts = Array.isArray(hit.matched_facts) ? hit.matched_facts.slice(0, 3) : [];
+      structured?.push({
+        key: String(hit.source_family || `vector:block:${sourceSessionId}:${hydrated.id}`),
+        sessionId: readSessionId, kind: 'block',
+        sourceRange: { startSeq: hydrated.rawStartSeq, endSeq: hydrated.rawEndSeq },
+        messages: [buildContextBlockExpansionBlockItem(hydrated).message],
+        matchedFacts: matchedFacts.map((fact: any) => ({ kind: typeof fact.fact_kind === 'string' ? fact.fact_kind : undefined, text: truncateUnicodeSafe(String(fact.text || ''), 300) })),
+      });
       if (matchedFacts.length > 0) {
         const factDetails = matchedFacts.map((fact: any) => {
           const labels = [fact.fact_kind, fact.attributed_to ? `attributed:${fact.attributed_to}` : undefined].filter(Boolean).join(', ');
@@ -1462,6 +1485,7 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
     if (modernFact) {
       const range = vectorHitRawRange(hit);
       warnVectorRecallCompatibilityFallback(hit, sourceSessionId, range, 'archive-block-source-missing');
+      structured?.push({ key: String(hit.source_family || hit.id), sessionId: readSessionId, kind: 'unavailable', messages: [], fallbackExcerpt: truncateUnicodeSafe(String(hit.text || hit.chunk_text || ''), 500) });
       const seqLabel = range ? formatMessageLogRange(range.startSeq, range.endSeq) : `seq:${hit.seq ?? '?'}`;
       return [{
         key: `vector:fallback:${String(hit.id || `${sourceSessionId}:${seqLabel}`)}`,
@@ -1475,12 +1499,22 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
   const range = vectorHitRawRange(hit);
   let missingMessageSource = false;
   if (range) {
-    const result = await sessionManager.getArchivedMessages(sourceSessionId, {
-      startSeq: range.startSeq,
-      endSeq: range.endSeq,
-    });
+    const boundedPage = bounded ? await readEffectiveArchiveMessagePage(readSessionId, {
+      startSeq: range.startSeq, endSeq: range.endSeq, limit: 100,
+    }) : undefined;
+    const result = boundedPage
+      ? { records: boundedPage.records }
+      : await sessionManager.getArchivedMessages(sourceSessionId, { startSeq: range.startSeq, endSeq: range.endSeq });
     if (result.records.length > 0) {
       const window = selectVectorRawMessageWindow(result.records, vectorQuery, String(hit.chunk_text || ''), renderOptions);
+      structured?.push({
+        key: String(hit.source_family || `vector:raw:${sourceSessionId}:${range.startSeq}-${range.endSeq}`),
+        sessionId: readSessionId, kind: 'messages', sourceRange: range,
+        messages: window.records.map((record: any) => buildContextBlockExpansionMessageItem({
+          ...record, timestamp: record.timestamp || record.message?.__meta?.timestamp,
+        }).message),
+        ...(boundedPage?.hasMore ? { partialSource: true } : {}),
+      });
       const messageItems = window.records.map((record: any) => createMessageContextPreviewItem({
         key: `vector:msg:${sourceSessionId}:${record.seq}`,
         heading: formatMessageHeading({
@@ -1514,6 +1548,7 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
         ? 'archive-message-source-missing'
         : 'legacy-source-identity-unavailable',
   );
+  structured?.push({ key: String(hit.source_family || hit.id || `${sourceSessionId}:${range?.startSeq || '?'}`), sessionId: readSessionId, kind: 'unavailable', messages: [], fallbackExcerpt: truncateUnicodeSafe(String(hit.text || hit.chunk_text || ''), 500) });
   const seqLabel = range ? formatMessageLogRange(range.startSeq, range.endSeq) : `seq:${hit.seq ?? '?'}`;
   return [{
     key: `vector:fallback:${String(hit.id || `${sourceSessionId}:${seqLabel}`)}`,
@@ -1523,27 +1558,24 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
   }];
 }
 
-async function buildRecallVectorQuery(
-  args: ToolArgs,
-  ctx: ToolContext | undefined,
-  targetSessionId: string,
-  renderOptions: ContextPreviewRenderOptions,
-): Promise<string> {
-  const vectorQuery = typeof args.vector_query === 'string' ? args.vector_query.trim() : '';
-  if (!vectorQuery) {
-    throw new Error('recall vector_query must be a non-empty string.');
-  }
-
-  const limit = normalizeRecallVectorLimit(args.limit);
-  const { searchOptions, effectiveScope, resolvedSessionId } = await resolveMemorySearchOptions({
-    scope: args.scope,
-    targetSessionId: args.sessionId || (args.scope === 'current-session' ? targetSessionId : undefined),
-    targetAgentName: args.agentName,
-  }, ctx);
+export async function searchStructuredRecallSources(options: {
+  vectorQuery: string;
+  limit: number;
+  searchOptions: { sessionIds?: string[]; agent?: string; lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }> };
+  effectiveScope: string;
+  resolvedSessionId?: string;
+  renderOptions?: ContextPreviewRenderOptions;
+  preferBlocks?: boolean;
+  bounded?: boolean;
+}): Promise<{ items: ContextPreviewItem[]; sources: StructuredRecallSource[]; searchLabel: string; hitCount: number }> {
+  const { vectorQuery, searchOptions, effectiveScope, resolvedSessionId } = options;
+  if (!vectorQuery.trim()) throw new Error('Search query must be non-empty.');
+  const limit = normalizeRecallVectorLimit(options.limit);
+  const renderOptions = options.renderOptions || {};
   const candidateLimit = Math.max(limit * 4, 20);
   const detailed = await vector.searchDetailed(vectorQuery, candidateLimit, false, {
     ...searchOptions,
-    preferBlocks: args.preferBlocks,
+    preferBlocks: options.preferBlocks,
   });
   const denseOrHybridHits = detailed.hits as any[];
   let hits = denseOrHybridHits;
@@ -1564,20 +1596,25 @@ async function buildRecallVectorQuery(
   }
 
   const items: ContextPreviewItem[] = [];
+  const sources: StructuredRecallSource[] = [];
   const seen = new Set<string>();
+  const maxSelectedGroups = options.bounded ? limit : candidateLimit;
   for (const hit of hits) {
-    const hitItems = await vectorHitToPreviewItems(hit, renderOptions, vectorQuery);
+    const hitSources: StructuredRecallSource[] | undefined = options.bounded ? [] : undefined;
+    const hitItems = await vectorHitToPreviewItems(hit, renderOptions, vectorQuery, hitSources, options.bounded === true,
+      options.bounded ? resolvedSessionId : undefined);
     for (const item of hitItems) {
       if (seen.has(item.key)) {
         continue;
       }
       seen.add(item.key);
       items.push(item);
-      if (items.length >= candidateLimit) {
+      if (hitSources?.[0]) sources.push(hitSources[0]);
+      if (items.length >= maxSelectedGroups) {
         break;
       }
     }
-    if (items.length >= candidateLimit) {
+    if (items.length >= maxSelectedGroups) {
       break;
     }
   }
@@ -1589,9 +1626,30 @@ async function buildRecallVectorQuery(
     : fallbackUsed
       ? 'semantic search with bounded identifier fallback'
       : 'vector search';
+  return { items, sources, searchLabel, hitCount: hits.length };
+}
+
+async function buildRecallVectorQuery(
+  args: ToolArgs,
+  ctx: ToolContext | undefined,
+  targetSessionId: string,
+  renderOptions: ContextPreviewRenderOptions,
+): Promise<string> {
+  const vectorQuery = typeof args.vector_query === 'string' ? args.vector_query.trim() : '';
+  if (!vectorQuery) throw new Error('recall vector_query must be a non-empty string.');
+  const limit = normalizeRecallVectorLimit(args.limit);
+  const { searchOptions, effectiveScope, resolvedSessionId } = await resolveMemorySearchOptions({
+    scope: args.scope,
+    targetSessionId: args.sessionId || (args.scope === 'current-session' ? targetSessionId : undefined),
+    targetAgentName: args.agentName,
+  }, ctx);
+  const { items, searchLabel, hitCount } = await searchStructuredRecallSources({
+    vectorQuery, limit, searchOptions, effectiveScope, resolvedSessionId,
+    renderOptions, preferBlocks: args.preferBlocks,
+  });
   const rendered = renderContextPreviewItems({
     items,
-    title: ({ matchedCount, totalMatchedCount }) => `Recall ${searchLabel} for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${matchedCount} unique source group(s)${totalMatchedCount > matchedCount ? ` of ${totalMatchedCount} matched` : ''} from ${hits.length} ranked source group(s).`,
+    title: ({ matchedCount, totalMatchedCount }) => `Recall ${searchLabel} for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${matchedCount} unique source group(s)${totalMatchedCount > matchedCount ? ` of ${totalMatchedCount} matched` : ''} from ${hitCount} ranked source group(s).`,
     emptyMessage: 'No archived source messages or blocks found for this vector_query.',
     options: renderOptions,
     maxItems: limit,

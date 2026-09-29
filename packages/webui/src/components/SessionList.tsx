@@ -1,4 +1,4 @@
-import { Workflow } from 'lucide-react'
+import { Search, Workflow } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -18,6 +18,7 @@ interface SessionListProps {
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onSelectSearch: () => void
   onSelectSetup: () => void
   codePath: string
   codeNodeId: string
@@ -48,6 +49,7 @@ export default function SessionList({
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
+  onSelectSearch,
   onSelectSetup,
   codePath,
   codeNodeId,
@@ -101,6 +103,10 @@ export default function SessionList({
             onCreateSession={onCreateSession}
           />
         </div>
+
+        <button type="button" onClick={onSelectSearch} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-fw-neutral-surface px-3 py-2 text-sm text-fw-text hover:bg-fw-hover">
+          <Search className="h-4 w-4" /> Search history
+        </button>
 
         <div className="mt-2">
           <CodeLaunchButton

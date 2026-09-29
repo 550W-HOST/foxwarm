@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import Chat from './components/Chat'
 import TerminalView from './components/TerminalView'
+import HistorySearchView from './components/HistorySearchView'
 import { API_BASE_PATH } from './config'
 import { readEmbeddedSessionLink } from './embeddedWebUi'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
@@ -35,7 +36,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   }, [])
 
   useEffect(() => {
-    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
+    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'search' ? 'Search history' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
   }, [target])
 
   useEffect(() => {
@@ -102,6 +103,8 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
     )
   } else if (target.kind === 'terminal') {
     content = <TerminalView initialTerminalId={target.terminalId} />
+  } else if (target.kind === 'search') {
+    content = <HistorySearchView isMobile={window.innerWidth < 768} groupTools={preferences.groupTools} showUsageBadge={preferences.showUsageBadge} showUserMessageMetadata={preferences.showUserMessageMetadata} />
   } else if (target.kind === 'agents') {
     content = (
       <Suspense fallback={<PopupLeafFallback label="Agents" />}>

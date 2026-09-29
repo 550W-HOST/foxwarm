@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -30,6 +30,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - One authenticated multiplexed `/api/webui/stream` WebSocket for current clients, plus legacy per-session and global session-list SSE routes.
 - File upload and authenticated download.
 - Authenticated content-addressed image blob delivery.
+- Authenticated read-only global history search (`GET /api/history/search`) and bounded exact/adjacent archive viewing (`GET /api/history/window`). The search route accepts optional Agent or Session scope, returns structured source groups, and reports Vector-disabled/unavailable separately; the exact route does not require Vector. Viewer message transport uses image-blob projection and drops provider replay-only opaque fields without changing archived data or the existing Chat DTO.
 - Model/provider and channel configuration, validation, and connectivity tests.
 - ASR and messaging-platform setup helpers.
 - Browser terminal REST/WebSocket routes.

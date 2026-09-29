@@ -68,6 +68,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `buildRecallMessagesForBlock` | Returns messages covered by a block |
 | `buildRecallMessagesByRange` | Returns messages in a sequence range |
 | `renderContextBlockExpansion` | Read-only WebUI helper that expands one CTX-BLOCK layer into structured child block/raw message items without session queue/tool mutation |
+| `searchStructuredRecallSources` | Shared ranked source-family retrieval and Archive reload used by model recall and the authenticated history viewer; caller supplies the already-authorized scope. The viewer requests bounded raw source reads and structured Timeline messages, while model recall retains its existing renderer and preview budget. |
 | `formatArchivedMessagePreview` | Formats a single archived message for display |
 | `formatArchivedBlockPreview` | Formats archived blocks listing |
 

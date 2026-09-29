@@ -31,6 +31,7 @@ test('parses only versioned single-leaf popup targets', () => {
     kind: 'terminal', terminalId: 'term-1', title: 'Shell',
   })
   assert.deepEqual(parseFoxwarmPopupTarget(`?foxwarmPopup=agents&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}`), { kind: 'agents' })
+  assert.deepEqual(parseFoxwarmPopupTarget(`?foxwarmPopup=search&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}`), { kind: 'search' })
   assert.deepEqual(parseFoxwarmPopupTarget(`?foxwarmPopup=setup&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}`), { kind: 'setup' })
   assert.equal(parseFoxwarmPopupTarget('?foxwarmPopup=chat&sessionId=agent/task'), null)
   assert.equal(parseFoxwarmPopupTarget(`?foxwarmPopup=chat&foxwarmPopupVersion=${FOXWARM_POPUP_VERSION}&sessionId=`), null)
@@ -50,6 +51,7 @@ test('builds deployment-relative popup URLs without retaining workbench or embed
     title: 'Task',
   })
   assert.deepEqual(parseFoxwarmPopupTarget(chat.search), { kind: 'chat', sessionId: 'agent/task', title: 'Task' })
+  assert.equal(makeFoxwarmPopupUrl(chat, { kind: 'search' }).searchParams.get('foxwarmPopup'), 'search')
 
   const terminal = makeFoxwarmPopupUrl(chat, { kind: 'terminal', terminalId: 'term-1' })
   assert.deepEqual(Object.fromEntries(terminal.searchParams), {

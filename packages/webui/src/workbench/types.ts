@@ -8,6 +8,7 @@ export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; createMode?: 'new' | 'reuse' })
   | (WorkbenchTabBase & { type: 'vscode' })
   | (WorkbenchTabBase & { type: 'agents' })
+  | (WorkbenchTabBase & { type: 'search' })
   | (WorkbenchTabBase & { type: 'setup' })
 
 export type WorkbenchPaneNode = {

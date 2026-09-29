@@ -1,4 +1,4 @@
-import { PanelLeftOpen, Plus } from 'lucide-react'
+import { PanelLeftOpen, Plus, Search } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
@@ -7,6 +7,7 @@ interface CollapsedSidebarProps {
   currentSession: string
   onSelectSession: (sessionId: string) => void
   onCreateSession: () => void
+  onSelectSearch: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>
 }
@@ -24,6 +25,7 @@ export default function CollapsedSidebar({
   currentSession,
   onSelectSession,
   onCreateSession,
+  onSelectSearch,
   onToggleCollapsed,
   unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
@@ -34,6 +36,10 @@ export default function CollapsedSidebar({
     <div className="h-full w-12 flex flex-col items-center bg-fw-surface border-r border-fw-border">
       {/* Header */}
       <div className="flex flex-col items-center gap-2 py-3 border-b border-fw-border w-full">
+        <button
+          type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover"
+        ><Search className="h-4 w-4" /></button>
         <button
           type="button"
           onClick={onToggleCollapsed}

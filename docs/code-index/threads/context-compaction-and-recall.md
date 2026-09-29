@@ -74,6 +74,10 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 The WebUI block endpoint expands exactly one layer into structured timeline messages. A block backed by lower-level blocks returns child CTX-BLOCK messages; a message-backed/L1 block returns raw archive messages. Parent and immediate source records are loaded once and shared by structured output plus the compatible text formatter. Expansion is local read-only UI state and never changes history, queue, or broadcasts.
 
+### D-context-history-search-viewer
+
+[2026-09-29] Authenticated Main WebUI can search archived history across all Agents/Sessions, optionally narrowed to an Agent or one Session, and browse exact `msg#N[-M]` references without invoking a model tool or creating a Session. Global search consumes the same ranked Vector/Archive source-family selection as model recall, but returns structured messages for independent result timelines instead of parsing its formatted preview; model-facing recall keeps its own Agent/Session permissions, output format, filters and budget. Search remains unavailable when Vector is disabled; exact and adjacent archive reads remain available. Read-only adjacent pages use bounded SQLite sequence-ordered reads across historical aliases and effective fork caps, and transport preserves normal image/CTX display metadata while excluding opaque provider replay data. The viewer never reconstructs active history from Archive.
+
 ## Modules and units
 
 - [session context](../modules/session-context.md)

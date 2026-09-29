@@ -13,7 +13,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - `WorkbenchTabs` — single-row sortable tab strip with context menu
 - `useWorkbenchStore` — Zustand store with all workbench state and actions
 - `getWorkbenchTabById` — standalone accessor for a tab by ID
-- `WorkbenchTab`, `WorkbenchLayoutNode`, `WorkbenchPaneNode`, `WorkbenchSplitNode`, `WorkbenchPersistedState`, `WorkbenchDropTarget` — core types, including `chat`, `terminal`, `vscode`, `agents`, and `setup` tab records
+- `WorkbenchTab`, `WorkbenchLayoutNode`, `WorkbenchPaneNode`, `WorkbenchSplitNode`, `WorkbenchPersistedState`, `WorkbenchDropTarget` — core types, including `chat`, `terminal`, `vscode`, `agents`, `search`, and `setup` tab records
 - `createPaneNode`, `createSplitNode`, `createWorkbenchId`, `findPaneNode`, `findPaneContainingTab`, `getPaneIds`, `getPaneNodes`, `getFlattenedTabIds`, `mapLayoutTree`, `removePaneFromLayout`, `replacePaneWithSplit`, `normalizePersistedWorkbenchState`, `findPaneBelow` — layout tree utilities
 
 ## Function Index
