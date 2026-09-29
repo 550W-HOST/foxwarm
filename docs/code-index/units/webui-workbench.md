@@ -74,6 +74,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - Splitting a pane creates a new split node wrapping the original pane and a new sibling pane; empty panes are automatically removed from the tree after tab moves.
 - `normalizeLayoutNode` collapses single-child splits and deduplicates tab IDs on every tree mutation.
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.
+- The tab Close button stops its pointer-down event before the sortable tab drag listener; pointer motion within that small control cannot start a tab drag instead of closing it. The rest of the tab remains draggable.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
 - A pane with exactly one tab hides its split and close-pane toolbar buttons. When it is also the only pane, the entire tab strip is omitted without leaving header space; content and pane drop zones remain mounted. Other panes retain their tab strips, and empty panes retain their existing controls.
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.

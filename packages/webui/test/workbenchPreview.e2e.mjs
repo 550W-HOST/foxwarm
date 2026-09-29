@@ -313,6 +313,32 @@ test('single pane with one tab omits its strip without leaving header height; Si
   } finally { await page.close() }
 })
 
+test('Close tab owns a small pointer move inside its button instead of starting a tab drag', async () => {
+  const page = await openFixture({ tabs: [system, chat('e2e-a', false), chat('e2e-b', false)], activeTabId: 'chat:e2e-b' })
+  try {
+    const selector = '[data-tab-id="chat:e2e-b"] button[title="Close tab"]'
+    await page.waitForSelector(selector)
+    const box = await (await page.$(selector)).boundingBox()
+    assert.ok(box && box.width > 14, 'close control has room for a short movement entirely inside it')
+    const startX = box.x + box.width / 2 - 4
+    const endX = startX + 8 // Cross the workbench's 6px drag threshold without leaving the button.
+    const y = box.y + box.height / 2
+    assert.equal(await page.evaluate(({ startX, endX, y }) => [startX, endX].every(x => document.elementFromPoint(x, y)?.closest('button[title="Close tab"]')?.closest('[data-tab-id]')?.getAttribute('data-tab-id') === 'chat:e2e-b'), { startX, endX, y }), true)
+    await page.mouse.move(startX, y)
+    await page.mouse.down()
+    await page.mouse.move(endX, y, { steps: 4 })
+    const dragBeforeRelease = await page.$('[data-pane-id="pane-main"] > .pointer-events-none')
+    await page.mouse.up()
+    assert.equal(dragBeforeRelease, null, 'moving within Close must not activate the tab drag overlay')
+    await page.waitForFunction(() => {
+      const state = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state
+      return state.root.tabIds.join(',') === 'system:agents,chat:e2e-a'
+        && state.root.activeTabId === 'chat:e2e-a'
+        && !document.querySelector('[data-tab-id="chat:e2e-b"]')
+    })
+  } finally { await page.close() }
+})
+
 test('multi-pane single-tab strips remain visible while pane controls follow each tab count', async () => {
   const page = await openFixture({ split: true })
   try {

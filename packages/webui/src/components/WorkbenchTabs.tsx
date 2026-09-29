@@ -265,6 +265,7 @@ function SortableTab({
       <TabIcon type={tab.type} />
       <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
       <button
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation()
           onCloseTab(tab.id)
