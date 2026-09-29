@@ -19,7 +19,7 @@ before(async () => {
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
     const old = Array.from({length: 108}, (_, i) => ({ role: i % 2 ? 'model' : 'user', parts: [{text: i === 4 ? 'OLD_ONLY_MATCH' : 'Earlier ordinary message ' + i}], __meta: { seq: i + 1, timestamp: 1700000000000 + i } }))
-    old[10].parts[0].text = '<pasted-text>' + 'P'.repeat(95) + 'PASTED_DEEP_SEARCH' + '</pasted-text>'
+    old[10].parts[0].text = '<pasted-text>' + 'P'.repeat(95) + 'PASTED_DEEP_SEARCH <foxwarm-system kind="opaque" note="OPAQUE_TAG_TARGET">literal</foxwarm-system>' + '</pasted-text>'
     old[12].parts[0].text = 'See <attachment-ref ref="attachment1" />\\n<foxwarm-file name="attachment1_attachment-marker-only.txt" mime="text/plain" />'
     const call = (id, seq, name, args) => ({role:'model',parts:[{functionCall:{id,name,args}}],__meta:{seq,timestamp:1700000000000+seq}})
     const response = (id, seq, name, data) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:data}}],__meta:{seq,timestamp:1700000000000+seq}})
@@ -31,12 +31,20 @@ before(async () => {
       {role:'model',parts:[{thinking:'Reasoning **thought-needle** here'},{text:'Final hello **world** &amp; safe content'},{text:'Text plus image keeps visible-needle',inlineData:{mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='}}],__meta:{seq:115,timestamp:1700000000115}},
       {role:'model',parts:[{text:'[CTX-BLOCK L1 B#7 raw#1-#3] ' + 'summary line\\n'.repeat(10) + 'CTX摘要末尾'}],__meta:{seq:116,timestamp:1700000000116,contextBlock:{id:7,level:1,rawStartSeq:1,rawEndSeq:3,sourceKind:'message'}}},
       {role:'user',parts:[{system:'<foxwarm-system kind="goal-reminder">\\n' + 'reminder line\\n'.repeat(10) + 'SYSTEM_BODY_HIDDEN_TARGET\\n</foxwarm-system>'}],__meta:{seq:117,timestamp:1700000000117}},
+      call('group-a',118,'exec',{command:'echo group start'}), response('group-a',119,'exec',{output:'start done'}),
+      {role:'user',parts:[{system:'<foxwarm-system kind="event" type="fixture">\\nGROUP_EVENT_TARGET\\n</foxwarm-system>'}],__meta:{seq:120,timestamp:1700000000120}},
+      {role:'user',parts:[{system:'<foxwarm-system kind="goal-reminder">\\nGROUP_GOAL_TARGET\\n</foxwarm-system>'}],__meta:{seq:121,timestamp:1700000000121}},
+      call('group-b',122,'read',{filePath:'group.txt'}), response('group-b',123,'read',{output:'group finished'}),
+      call('group-edit',124,'edit',{filePath:'sample.txt',oldText:'keep DIFF_SHARED_ONLY\\nold',newText:'keep DIFF_SHARED_ONLY\\nnew'}), response('group-edit',125,'edit',{output:'done'}),
+      {role:'model',parts:[{text:'İ UNIQUEOFFSET tail'}],__meta:{seq:126,timestamp:1700000000126}},
+      {role:'user',parts:[{text:'<pasted-text>dupeWORD first, dupeWORD second</pasted-text> plain dupeWORD one and dupeWORD two'}],__meta:{seq:127,timestamp:1700000000127}},
+      {role:'model',parts:[{text:'start\\n\\n\\\\[\\nZ\\n\\\\]\\n\\nZ after'}],__meta:{seq:128,timestamp:1700000000128}},
     ]
     window.fixture = { archiveRequests:0, get history(){return history}, emitStream(text){this.socket?.onmessage?.({data:JSON.stringify({type:'session-event',sessionId:'fixture/main',event:{type:'model-stream-update',streamId:'fixture-search-stream',text}})})} }
     window.fetch = async input => {
       const url = String(input)
       if (url.includes('/context-blocks/')) {window.fixture.archiveRequests++;return new Response('{}',{status:404})}
-      if (url.includes('/history')) return new Response(JSON.stringify({session:{id:'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:history.length,historyVersion:0,modelKey:'fixture/model'},messages:history,queuedMessages:[],queueLength:0,latestSeq:117,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+      if (url.includes('/history')) return new Response(JSON.stringify({session:{id:'fixture/main',busy:false,runtimeState:{state:'idle'},queueLength:0,messageCount:history.length,historyVersion:0,modelKey:'fixture/model'},messages:history,queuedMessages:[],queueLength:0,latestSeq:128,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
       if (url.includes('/commands')) return new Response(JSON.stringify({commands:[]}),{status:200})
@@ -68,7 +76,7 @@ const snapshot = () => page.evaluate(() => {
   const highlights=[...CSS.highlights].filter(([name])=>name.startsWith('foxwarm-chat-search-'))
   const range=highlights[0]?.[1].values().next().value
   const rect=range?.getBoundingClientRect(),viewport=container?.getBoundingClientRect()
-  return {hits:document.querySelector('[role="search"] [aria-live]')?.textContent,highlight:range?.toString(),visible:!!(rect&&viewport&&rect.top>=viewport.top-2&&rect.bottom<=viewport.bottom+2),rect:rect&&{top:rect.top,bottom:rect.bottom},viewport:viewport&&{top:viewport.top,bottom:viewport.bottom},scrollTop:container?.scrollTop,groups:[...document.querySelectorAll('[data-tool-group]')].map(el=>el.dataset.toolGroupExpanded),archive:window.fixture.archiveRequests,oldMounted:!!document.querySelector('[data-search-row="seq-local-5"]'),distance:container?.scrollHeight-container?.scrollTop-container?.clientHeight}
+  return {hits:document.querySelector('[role="search"] [aria-live]')?.textContent,highlight:range?.toString(),surface:range?.startContainer.parentElement?.closest('[data-search-surface]')?.getAttribute('data-search-surface'),visible:!!(rect&&viewport&&rect.top>=viewport.top-2&&rect.bottom<=viewport.bottom+2),rect:rect&&{top:rect.top,bottom:rect.bottom},viewport:viewport&&{top:viewport.top,bottom:viewport.bottom},scrollTop:container?.scrollTop,groups:[...document.querySelectorAll('[data-tool-group]')].map(el=>el.dataset.toolGroupExpanded),archive:window.fixture.archiveRequests,oldMounted:!!document.querySelector('[data-search-row="seq-local-5"]'),distance:container?.scrollHeight-container?.scrollTop-container?.clientHeight}
 })
 
 test('finds the complete tool tail through a folded group and inner card, and restores disclosure on close',async()=>{
@@ -80,6 +88,7 @@ test('finds the complete tool tail through a folded group and inner card, and re
   const state=await snapshot()
   assert.equal(state.hits,'1/1');assert.equal(state.highlight,'CJK目标尾部');assert.equal(state.visible,true)
   assert.equal(state.groups[0],'true');assert.equal(state.archive,0)
+  assert.equal(state.oldMounted,false,'a recent match does not mount the older loaded prefix')
   assert.ok(await page.$eval('[data-search-surface="response"]',el=>el.textContent.includes('CJK目标尾部')))
   if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_PATH})
   await page.click('[aria-label="Close search"]')
@@ -103,13 +112,14 @@ test('literal matching and local keyboard navigation keep the match counter in s
   await page.click('[aria-label="Search messages"]')
   await page.type('[aria-label="Search loaded messages"]','earlier ordinary message')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/105',{timeout:5000})
+  await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString().toLowerCase()==='earlier ordinary message'),{timeout:5000})
   await page.keyboard.press('Enter')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='2/105',{timeout:5000})
   await page.keyboard.down('Shift');await page.keyboard.press('Enter');await page.keyboard.up('Shift')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/105',{timeout:5000})
-  for(const excluded of ['iVBORw0KGgoAAAANSUhEUg','attachment1_attachment-marker-only','attachment-ref ref=','foxwarm-system kind=','functionResponse.__meta','**world**','a.*']){
+  for(const excluded of ['iVBORw0KGgoAAAANSUhEUg','attachment1_attachment-marker-only','attachment-ref ref=','foxwarm-system kind="goal-reminder"','functionResponse.__meta','**world**','a.*']){
     await page.click('[aria-label="Search loaded messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(excluded)
-    await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='0/0')
+    await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='0/0',{timeout:2500})
   }
   await page.keyboard.press('Escape')
   assert.equal(await page.$('[data-chat-search]'),null)
@@ -139,4 +149,91 @@ test('disabling Group tools leaves call and result matches searchable in their o
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='json-needle'))
   const state=await snapshot();assert.equal(state.visible,true);assert.equal(state.hits,'1/1')
   await page.click('[aria-label="Close search"]')
+})
+
+test('historical grouped Event and Goal reminder bodies remain searchable without opening unrelated groups',async()=>{
+  await page.evaluate(()=>window.fixture.setGroupTools(true))
+  await page.waitForFunction(()=>document.querySelectorAll('[data-tool-group]').length===2)
+  await page.click('[aria-label="Search messages"]')
+  try {
+    for (const term of ['GROUP_EVENT_TARGET','GROUP_GOAL_TARGET']) {
+      await query(term)
+      await page.waitForFunction(value=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000},term)
+      await page.waitForFunction(value=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()===value),{timeout:2500},term)
+      const state=await snapshot()
+      assert.equal(state.highlight,term)
+      assert.equal(state.surface,'system')
+      assert.equal(state.visible,true)
+      assert.deepEqual(state.groups,['false','true'])
+    }
+  } finally { await page.click('[aria-label="Close search"]') }
+})
+
+test('user and pasted surfaces retain separate ordinals for the same visible word',async()=>{
+  await page.click('[aria-label="Search messages"]')
+  try {
+    await query('dupeWORD')
+    await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='dupeWORD'),{timeout:2500})
+    for (const [ordinal,surface] of ['user','user','pasted','pasted'].entries()) {
+      await page.waitForFunction(value=>document.querySelector('[role="search"] [aria-live]')?.textContent===value,{timeout:2000},`${ordinal+1}/4`)
+      const state=await snapshot()
+      assert.equal(state.highlight,'dupeWORD',JSON.stringify(state))
+      assert.equal(state.surface,surface,JSON.stringify(state))
+      assert.equal(state.visible,true,JSON.stringify(state))
+      if(ordinal<3) await page.click('[aria-label="Next match"]')
+    }
+  } finally { await page.click('[aria-label="Close search"]') }
+})
+
+test('quoted metadata-shaped text inside a pasted segment remains searchable',async()=>{
+  await page.click('[aria-label="Search messages"]')
+  try {
+    await query('OPAQUE_TAG_TARGET')
+    await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000})
+    await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='OPAQUE_TAG_TARGET'),{timeout:2500})
+    const state=await snapshot()
+    assert.equal(state.highlight,'OPAQUE_TAG_TARGET',JSON.stringify(state))
+    assert.equal(state.surface,'pasted')
+    assert.equal(state.visible,true)
+  } finally { await page.click('[aria-label="Close search"]') }
+})
+
+test('unified edit diff indexes a shared context line only once',async()=>{
+  await page.click('[aria-label="Search messages"]')
+  try {
+    await query('DIFF_SHARED_ONLY')
+    await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent?.endsWith('/2')||document.querySelector('[role="search"] [aria-live]')?.textContent?.endsWith('/1'),{timeout:2000})
+    assert.equal((await snapshot()).hits,'1/1','a common diff context line is rendered only once in unified mode')
+    await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='DIFF_SHARED_ONLY'),{timeout:2500})
+    const state=await snapshot()
+    assert.equal(state.surface,'call')
+    assert.equal(state.visible,true)
+  } finally { await page.click('[aria-label="Close search"]') }
+})
+
+test('case-insensitive matching locates the original offset after a multi-unit lowercase character',async()=>{
+  await page.click('[aria-label="Search messages"]')
+  try {
+    await query('UNIQUEOFFSET')
+    await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000})
+    await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='UNIQUEOFFSET'),{timeout:2500})
+    const state=await snapshot()
+    assert.equal(state.highlight,'UNIQUEOFFSET',JSON.stringify(state))
+    assert.equal(state.visible,true,JSON.stringify(state))
+  } finally { await page.click('[aria-label="Close search"]') }
+})
+
+test('excluded display-math controls do not take the ordinary Markdown hit',async()=>{
+  await page.click('[aria-label="Search messages"]')
+  try {
+    await query('Z')
+    await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000})
+    await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='Z'),{timeout:2500})
+    const actual=await page.evaluate(()=>{
+      const entry=[...CSS.highlights].find(([name])=>name.startsWith('foxwarm-chat-search-'))
+      const range=entry?.[1].values().next().value
+      return { text:range?.toString(), inSpecial:!!range?.endContainer.parentElement?.closest('[data-special-block]') }
+    })
+    assert.deepEqual(actual,{text:'Z',inSpecial:false})
+  } finally { await page.click('[aria-label="Close search"]') }
 })

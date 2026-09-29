@@ -30,7 +30,7 @@ import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiTool
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
-import DiffPreview from './DiffPreview'
+import DiffPreview, { getUnifiedDiffSearchText } from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
 import { formatCompactDuration } from '../usageTiming'
@@ -47,14 +47,14 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
   const args = call.args || {}
   if (call.name === 'read') return `${args.filePath || ''}${args.startLine || args.endLine ? ` (lines ${args.startLine || 1}-${args.endLine || 'end'})` : ''}`
   if (call.name === 'write') return [args.filePath, args.content].filter(value => typeof value === 'string').join('\u0000')
-  if (isLegacyDiffToolName(call.name) && hasLegacyDiffPayload(call)) return [args.filePath, args.oldText, args.newText].join('\u0000')
+  if (isLegacyDiffToolName(call.name) && hasLegacyDiffPayload(call)) return [args.filePath, getUnifiedDiffSearchText(args.oldText, args.newText)].join('\u0000')
   if (isPatchToolName(call.name)) {
     try {
       return parseApplyPatchPreview(args.input).flatMap(operation => [
         operation.filePath,
         ...(operation.action === 'update' ? operation.hunks.flatMap(hunk => {
           const snippets = buildPatchHunkSnippets(hunk)
-          return [...hunk.anchors, snippets.oldText, snippets.newText]
+          return [...hunk.anchors, getUnifiedDiffSearchText(snippets.oldText, snippets.newText)]
         }) : operation.action === 'add' ? operation.lines : []),
       ]).join('\u0000')
     } catch { return String(args.input || JSON.stringify(args, null, 2)) }
@@ -114,6 +114,7 @@ const ToolDownloadButton = memo(function ToolDownloadButton({ url, fileName }: {
   return (
     <button
       type="button"
+      data-search-exclude
       onClick={(e) => {
         e.stopPropagation()
         triggerBrowserDownload(url)
@@ -643,6 +644,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
+  const displayedDiffViewMode = searchReveal ? 'unified' : diffViewMode
 
   const setToolViewMode = useCallback((mode: ToolViewMode) => {
     if (mode === 'json') {
@@ -713,12 +715,12 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const expandedCallContent = call ? (
     <div className={`text-fw-text ${showDiffToggles ? 'relative' : ''}`}>
       {showDiffToggles && (
-        <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute top-1 right-0 flex gap-1`} onClick={(e) => e.stopPropagation()}>
-          <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={diffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
-          <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
+        <div data-search-exclude className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute top-1 right-0 flex gap-1`} onClick={(e) => e.stopPropagation()}>
+          <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('unified') }} active={displayedDiffViewMode === 'unified'} title="Unified">Unified</MiniToggleButton>
+          <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={displayedDiffViewMode === 'split'} title="Split">Split</MiniToggleButton>
         </div>
       )}
-      {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}
+      {renderToolCallExpandedContent(call, displayedDiffViewMode, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}
     </div>
   ) : null
 

@@ -1573,7 +1573,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
     leaveBottomFollow()
-    if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
+    const inGroup = match.groupKey && (match.surface === 'call' || match.surface === 'response' || match.surface === 'reasoning' || match.surface === 'system')
+    const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
+    if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
     setSearchMatchId(match.id)
     setSearchNavigation(value => value + 1)
   }, [leaveBottomFollow, messages.length, showFullTimeline])
@@ -1587,17 +1589,25 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   const stepSearch = useCallback((direction: -1 | 1) => {
     if (!searchMatches.length) return
-    const index = currentSearchIndex < 0 ? 0 : currentSearchIndex
+    if (currentSearchIndex < 0) { navigateSearch(searchMatches[0]); return }
+    const index = currentSearchIndex
     navigateSearch(searchMatches[(index + direction + searchMatches.length) % searchMatches.length])
   }, [currentSearchIndex, navigateSearch, searchMatches])
 
   const lastSearchQueryRef = useRef('')
-  useLayoutEffect(() => {
-    if (!searchOpen || lastSearchQueryRef.current === searchQuery) return
-    lastSearchQueryRef.current = searchQuery
-    setSearchMatchId(null)
-    navigateSearch(searchMatches[0] || null)
-  }, [navigateSearch, searchMatches, searchOpen, searchQuery])
+  useEffect(() => {
+    if (!searchOpen) return
+    const queryChanged = lastSearchQueryRef.current !== searchQuery
+    if (!queryChanged && currentSearchIndex >= 0) return
+    if (queryChanged) {
+      lastSearchQueryRef.current = searchQuery
+      setSearchMatchId(null)
+    }
+    if (!searchMatches.length) return
+    // Let a person finish typing before mounting a loaded-but-windowed old row.
+    const timer = window.setTimeout(() => navigateSearch(searchMatches[0]), 150)
+    return () => window.clearTimeout(timer)
+  }, [currentSearchIndex, navigateSearch, searchMatches, searchOpen, searchQuery])
 
   useEffect(() => { if (searchOpen) searchInputRef.current?.focus() }, [searchOpen])
   useLayoutEffect(() => {
@@ -1610,7 +1620,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   useLayoutEffect(() => {
     const registry = CSS.highlights
     registry?.delete(searchHighlightName)
-    if (!searchOpen || !selectedSearchMatch) return
+    if (!searchOpen || !selectedSearchMatch || selectedSearchMatch.id !== searchMatchId) return
     const timeline = committedTimelineRef.current
     const surface = timeline ? findSearchSurface(timeline, selectedSearchMatch) : null
     const range = surface ? findRenderedMatchRange(surface, selectedSearchMatch.query, selectedSearchMatch.ordinal) : null
@@ -1628,7 +1638,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       }
     }
     return () => { registry?.delete(searchHighlightName) }
-  }, [captureCurrentViewportState, searchHighlightName, searchNavigation, searchOpen, selectedSearchMatch, showFullTimeline, timelineMessages])
+  }, [captureCurrentViewportState, searchHighlightName, searchMatchId, searchNavigation, searchOpen, selectedSearchMatch, showFullTimeline, timelineMessages])
 
   useLayoutEffect(() => {
     if (!pendingScrollToTrueTopRef.current) return
@@ -2182,7 +2192,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen ? selectedSearchMatch : null} />
+                  <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>

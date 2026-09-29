@@ -46,7 +46,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ## Viewport behavior
 
-- A Search navigation detaches bottom-follow and expands the already-loaded timeline window if needed; the selected rendered Range is positioned in the existing message scroller once, while later stream/layout updates and closing Search retain ordinary viewport ownership.
+- Search derives each committed match’s source index and owning group start; it mounts the full already-loaded timeline only if the selected row or required grouped/paired call is outside the newest 100 messages. Query edits update the counter immediately but briefly delay their automatic jump so transient prefixes do not mount old rows. An actual navigation detaches bottom-follow and positions its rendered Range in the existing scroller once; later stream/layout updates and closing Search retain ordinary viewport ownership.
 - Streaming follow is an explicit latch. Upward wheel/keyboard/touch/scrollbar intent detaches before a token/layout update can undo it.
 - Only actual-bottom tolerance or the bottom action re-enables follow.
 - Remount state is in-memory by canonical session ID: either `bottom` or a stable committed-message anchor plus pixel offset.

@@ -352,15 +352,19 @@ const MarkdownContent = memo(function MarkdownContent({ text, className }: { tex
         }
         if (segment.kind === 'latex') {
           return (
-            <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="latex" label="LaTeX" raw={segment.raw}>
-              <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
-            </SpecialBlock>
+            <div key={`markdown-token-${segment.tokenIndex}`} data-search-exclude className="contents">
+              <SpecialBlock kind="latex" label="LaTeX" raw={segment.raw}>
+                <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
+              </SpecialBlock>
+            </div>
           )
         }
         return (
-          <SpecialBlock key={`markdown-token-${segment.tokenIndex}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
-            <MermaidDiagram source={segment.source} />
-          </SpecialBlock>
+          <div key={`markdown-token-${segment.tokenIndex}`} data-search-exclude className="contents">
+            <SpecialBlock kind="mermaid" label="Mermaid" raw={segment.raw}>
+              <MermaidDiagram source={segment.source} />
+            </SpecialBlock>
+          </div>
         )
       })}
     </div>
@@ -814,13 +818,13 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
               className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
             />
           ) : segment.kind === 'commit' ? (
-            <CommitMarkerCard key={`commit-${index}-${segment.target.commitId}`} target={segment.target} onOpen={onOpenCodeCommit} />
+            <div key={`commit-${index}-${segment.target.commitId}`} data-search-exclude className="contents"><CommitMarkerCard target={segment.target} onOpen={onOpenCodeCommit} /></div>
           ) : (
             <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
               {segment.raw}
             </pre>
           ))}
-          <WebSearchCitationLinks annotations={annotations} />
+          <div data-search-exclude className="contents"><WebSearchCitationLinks annotations={annotations} /></div>
         </div>
       ) : displayedViewMode === 'raw' ? (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
