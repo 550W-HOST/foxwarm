@@ -56,6 +56,7 @@ type OpenAIWsRequestOptions = {
     diagnostics?: OpenAIWsAttemptDiagnostics;
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     onOutputItemDone?: (entry: { outputIndex: number; item: any }) => void;
+    onResponseCompleted?: () => void;
     onImageGenerationActivity?: () => void;
     onRawFrame?: (frame: string) => void;
 };
@@ -606,6 +607,7 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
             onOutputItemDone: options.onOutputItemDone,
+            onResponseCompleted: options.onResponseCompleted,
             onSafetyBuffering: handleSafetyBuffering,
             onImageGenerationActivity: () => {
                 watchdog.reportImageGenerationActivity();

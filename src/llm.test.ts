@@ -58,10 +58,33 @@ const TEST_MODELS_CONFIG = loadModelsConfigFromObject({
       imageGeneration: { enabled: true },
       models: ['model'],
     },
+    'responses-keep-fixture': {
+      providerType: 'openai-responses',
+      baseUrl: 'https://responses-keep.test/v1',
+      apiKey: 'test-key',
+      keepReasoningOnError: true,
+      models: ['enabled', { id: 'disabled', keepReasoningOnError: false }],
+    },
+    'responses-keep-route': {
+      providerType: 'session-hash',
+      targets: ['responses-keep-fixture/enabled'],
+    },
+    'responses-keep-failover': {
+      providerType: 'failover',
+      targets: ['responses-keep-fixture/enabled', 'responses-fixture/model'],
+      failureThreshold: 1,
+    },
     'responses-ws-fixture': {
       providerType: 'openai-ws',
       baseUrl: 'https://responses-ws.test/v1',
       apiKey: 'test-key',
+      models: ['model'],
+    },
+    'responses-keep-ws-fixture': {
+      providerType: 'openai-ws',
+      baseUrl: 'https://responses-keep-ws.test/v1',
+      apiKey: 'test-key',
+      keepReasoningOnError: true,
       models: ['model'],
     },
   },
@@ -1793,6 +1816,354 @@ test('partial Responses failure retries as a new journaled request from committe
     (axios as any).post = originalPost;
     firstStream.destroy();
   }
+});
+
+test('opted-in completed encrypted reasoning survives a broken Responses stream and reaches a new request and journal', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_reasoning_checkpoint_retry'));
+  session.model = 'responses-keep-route';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-route" />\n\nsystem prompt';
+  const firstStream = new PassThrough();
+  const bodies: any[] = [];
+  const delivered: string[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    return { status: 200, statusText: 'OK', headers: {},
+      data: bodies.length === 1 ? firstStream : makeResponsesStream('After retry') };
+  };
+  const frame = (event: any) => firstStream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'reason first' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: text => { delivered.push(text); },
+    });
+    for (let tries = 0; tries < 100 && bodies.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'private-rs-id', summary: [] } });
+    frame({ type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: 'thinking first' });
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'reasoning', id: 'private-rs-id', summary: [{ type: 'summary_text', text: 'thinking first' }], encrypted_content: 'opaque-checkpoint' } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    firstStream.destroy(new Error('synthetic network stream loss'));
+    const result = await pending;
+    assert.equal(result.text, 'After retry');
+    assert.equal(bodies.length, 2);
+    const models = session.history.filter(message => message.role === 'model');
+    assert.equal(models.length, 2);
+    assert.deepEqual(models[0].__meta?.llmSegment, { outputStart: 0, outputEndExclusive: 1, complete: false });
+    assert.equal(models[0].__meta?.modelId, 'responses-keep-fixture/enabled');
+    assert.equal(models[0].parts[0].providerMeta?.encryptedThinking, 'opaque-checkpoint');
+    assert.deepEqual(delivered, [], 'opaque reasoning checkpoint sends no empty Channel text');
+    const firstId = models[0].__meta?.llmRequestId as string;
+    const nextId = result.llmRequestId!;
+    assert.notEqual(firstId, nextId);
+    assert.equal(models[1].__meta?.llmRequestId, nextId);
+    const secondInput = JSON.stringify(bodies[1].input);
+    assert.ok(secondInput.includes('opaque-checkpoint'));
+    assert.equal(secondInput.includes('private-rs-id'), false, 'native replay does not include provider reasoning IDs');
+    const firstJournal = await reconstructLlmRequest(firstId);
+    const secondJournal = await reconstructLlmRequest(nextId);
+    assert.equal(firstJournal.completeness, 'complete');
+    assert.equal(secondJournal.completeness, 'complete');
+    if (firstJournal.completeness === 'complete' && secondJournal.completeness === 'complete') {
+      assert.equal(firstJournal.attempts[0].result?.outcome, 'failure');
+      assert.equal(secondJournal.attempts[0].result?.outcome, 'success');
+      assert.ok(JSON.stringify(secondJournal.messages).includes('opaque-checkpoint'));
+    }
+  } finally { (axios as any).post = originalPost; firstStream.destroy(); }
+});
+
+test('reasoning checkpoints require an opted-in concrete model and contiguous completed encrypted output', async () => {
+  const originalPost = axios.post;
+  const reasoning = (index: number, encrypted?: string) => ({ type: 'response.output_item.done', output_index: index,
+    item: { type: 'reasoning', summary: [{ type: 'summary_text', text: `summary ${index}` }],
+      ...(encrypted ? { encrypted_content: encrypted } : {}) } });
+  const cases = [
+    { model: 'responses-fixture/model', events: [reasoning(0, 'private-default')], kept: 0 },
+    { model: 'responses-keep-fixture/disabled', events: [reasoning(0, 'private-disabled')], kept: 0 },
+    { model: 'responses-keep-fixture/enabled', events: [reasoning(0)], kept: 0 },
+    { model: 'responses-keep-fixture/enabled', events: [
+      { type: 'response.output_item.added', output_index: 0,
+        item: { type: 'reasoning', encrypted_content: 'not-yet-complete' } },
+    ], kept: 0 },
+    { model: 'responses-keep-fixture/enabled', events: [reasoning(1, 'not-contiguous')], kept: 0 },
+    { model: 'responses-keep-fixture/enabled', events: [
+      { type: 'response.output_item.done', output_index: 0,
+        item: { type: 'function_call', call_id: 'not-executed', name: 'read', arguments: '{}' } },
+      reasoning(1, 'after-unexecuted-tool'),
+    ], kept: 0 },
+    { model: 'responses-keep-fixture/enabled', events: [reasoning(0, 'safe-first'), reasoning(1), reasoning(2, 'must-not-skip-summary')], kept: 1 },
+    { model: 'responses-keep-fixture/enabled', events: [reasoning(0, 'safe-before-image'),
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'image_generation_call', status: 'in_progress' } }], kept: 1 },
+  ];
+  try {
+    for (const [caseIndex, entry] of cases.entries()) {
+      const session = createOpenAITestSession(makeId(`reasoning_error_case_${caseIndex}`));
+      session.model = entry.model;
+      session.persistentMemorySnapshot = `<foxwarm-current-model model-id="${entry.model}" />\n\nsystem prompt`;
+      const stream = new PassThrough();
+      let requests = 0;
+      let deliveries = 0;
+      (axios as any).post = async () => { requests++; return { status: 200, statusText: 'OK', headers: {}, data: stream }; };
+      const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+      try {
+        const pending = chat([{ text: 'work' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false, maxRetries: 1,
+          appendMessage: async message => { session.history.push(message); },
+          onIntermediateAssistantText: () => { deliveries++; },
+        });
+        for (let tries = 0; tries < 100 && requests === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+        assert.equal(requests, 1);
+        await new Promise(resolve => setImmediate(resolve));
+        for (const event of entry.events) frame(event);
+        frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
+        stream.end();
+        await assert.rejects(pending, error => error instanceof LlmRequestError);
+        const models = session.history.filter(message => message.role === 'model');
+        assert.equal(models.length, entry.kept, `${entry.model} / ${caseIndex}`);
+        if (entry.kept) {
+          assert.deepEqual(models[0].__meta?.llmSegment, { outputStart: 0, outputEndExclusive: 1, complete: false });
+          assert.ok(models[0].parts[0].providerMeta?.encryptedThinking);
+          assert.equal(isSessionTurnIncomplete(session.history), true);
+        }
+        assert.equal(deliveries, 0);
+        assert.equal(requests, 1, 'no attempt remains for automatic retry');
+      } finally { stream.destroy(); }
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('a failed stream checkpoints only reasoning after already committed commentary', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_commentary_then_reasoning_error'));
+  session.model = 'responses-keep-fixture/enabled';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-fixture/enabled" />\n\nsystem prompt';
+  const firstStream = new PassThrough();
+  const bodies: any[] = [];
+  const delivered: string[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    return { status: 200, statusText: 'OK', headers: {}, data: bodies.length === 1 ? firstStream : makeResponsesStream('Finished') };
+  };
+  const frame = (event: any) => firstStream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'show work' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: text => { delivered.push(text); },
+    });
+    for (let tries = 0; tries < 100 && bodies.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Drawing' }] } });
+    for (let tries = 0; tries < 100 && delivered.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(delivered, ['Drawing']);
+    frame({ type: 'response.output_item.done', output_index: 1,
+      item: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'After drawing' }], encrypted_content: 'opaque-after-commentary' } });
+    frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
+    firstStream.end();
+    await pending;
+    const models = session.history.filter(message => message.role === 'model');
+    assert.equal(models.length, 3);
+    assert.deepEqual(models.map(message => message.__meta?.llmSegment), [
+      { outputStart: 0, outputEndExclusive: 1, complete: false },
+      { outputStart: 1, outputEndExclusive: 2, complete: false },
+      undefined,
+    ]);
+    assert.equal(models[0].parts[0].text, 'Drawing');
+    assert.equal(models[1].parts[0].providerMeta?.encryptedThinking, 'opaque-after-commentary');
+    assert.deepEqual(delivered, ['Drawing']);
+    assert.equal(bodies.length, 2);
+    const input = JSON.stringify(bodies[1].input);
+    assert.equal(input.split('Drawing').length - 1, 1);
+    assert.equal(input.split('opaque-after-commentary').length - 1, 1);
+  } finally { (axios as any).post = originalPost; firstStream.destroy(); }
+});
+
+test('successful Responses reasoning is not segmented; Stop and local append failure never checkpoint or retry', async () => {
+  const originalPost = axios.post;
+  try {
+    for (const mode of ['success', 'stop', 'local-failure'] as const) {
+      const session = createOpenAITestSession(makeId(`responses_reasoning_${mode}`));
+      session.model = 'responses-keep-fixture/enabled';
+      session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-fixture/enabled" />\n\nsystem prompt';
+      const stream = new PassThrough();
+      const stop = new AbortController();
+      let calls = 0;
+      let retries = 0;
+      let deliveries = 0;
+      (axios as any).post = async () => { calls++; return { status: 200, statusText: 'OK', headers: {}, data: stream }; };
+      const frame = (event: any) => stream.write(`data: ${JSON.stringify(event)}\n\n`);
+      try {
+        const pending = chat([{ text: 'work' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false, abortSignal: stop.signal, maxRetries: 2,
+          appendMessage: async message => {
+            if (mode === 'local-failure' && message.role === 'model') throw new Error('checkpoint storage failed');
+            session.history.push(message);
+          },
+          onIntermediateAssistantText: () => { deliveries++; },
+          onRetry: () => { retries++; },
+        });
+        for (let tries = 0; tries < 100 && calls === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+        assert.equal(calls, 1);
+        await new Promise(resolve => setImmediate(resolve));
+        frame({ type: 'response.output_item.done', output_index: 0,
+          item: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'complete reasoning' }], encrypted_content: 'opaque-success' } });
+        if (mode === 'success') {
+          frame({ type: 'response.output_item.done', output_index: 1,
+            item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Final' }] } });
+          frame({ type: 'response.completed', response: { output: [], usage: { input_tokens: 3, output_tokens: 4 } } });
+          stream.end();
+          await pending;
+          const models = session.history.filter(message => message.role === 'model');
+          assert.equal(models.length, 1);
+          assert.equal(models[0].__meta?.llmSegment, undefined);
+          assert.equal(models[0].parts[0].providerMeta?.encryptedThinking, 'opaque-success');
+          assert.deepEqual(models[0].__meta?.usage, { inputTokens: 3, outputTokens: 4, cachedTokens: 0 });
+        } else {
+          if (mode === 'stop') {
+            await new Promise(resolve => setTimeout(resolve, 20));
+            stop.abort();
+            await assert.rejects(pending, (error: any) => error?.name === 'AbortError');
+          } else {
+            frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
+            stream.end();
+            await assert.rejects(pending, /checkpoint storage failed/);
+          }
+          assert.equal(session.history.some(message => message.role === 'model'), false);
+          assert.equal(calls, 1);
+          assert.equal(retries, 0);
+        }
+        assert.equal(deliveries, 0);
+      } finally { stream.destroy(); }
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('a completed Responses payload rejected during local image validation does not become an interrupted reasoning checkpoint', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_complete_local_validation_error'));
+  session.model = 'responses-keep-fixture/enabled';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-fixture/enabled" />\n\nsystem prompt';
+  let calls = 0;
+  (axios as any).post = async () => {
+    calls++;
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      for (const event of [
+        { type: 'response.output_item.done', output_index: 0,
+          item: { type: 'reasoning', encrypted_content: 'must-not-checkpoint', summary: [] as any[] } },
+        { type: 'response.output_item.done', output_index: 1,
+          item: { type: 'image_generation_call', status: 'completed', result: 'not-a-raster-image' } },
+        { type: 'response.completed', response: { output: [] as any[], usage: { input_tokens: 2, output_tokens: 3 } } },
+      ]) stream.write(`data: ${JSON.stringify(event)}\n\n`);
+      stream.end();
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  try {
+    await assert.rejects(() => chat([{ text: 'work' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 1,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: () => {},
+    }), error => error instanceof LlmRequestError);
+    assert.equal(calls, 1);
+    assert.equal(session.history.some(message => message.role === 'model'), false);
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('OpenAI Responses WebSocket stream loss saves opted-in encrypted reasoning before a fresh attempt', async () => {
+  class BrokenSocket extends EventEmitter {
+    readyState: number = WebSocket.CONNECTING;
+    sent: any[] = [];
+    _socket = { ref() {}, unref() {} };
+    constructor(private readonly first: boolean) {
+      super();
+      process.nextTick(() => { this.readyState = WebSocket.OPEN; this.emit('open'); });
+    }
+    send(raw: string) {
+      this.sent.push(JSON.parse(raw));
+      process.nextTick(() => {
+        if (this.first) {
+          this.emit('message', Buffer.from(JSON.stringify({ type: 'response.output_item.done', output_index: 0,
+            item: { type: 'reasoning', id: 'ws-private-id', summary: [], encrypted_content: 'ws-opaque' } })));
+          this.readyState = WebSocket.CLOSED;
+          this.emit('close', 1006, Buffer.from('upstream closed'));
+        } else {
+          this.emit('message', Buffer.from(JSON.stringify({ type: 'response.output_item.done', output_index: 0,
+            item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'WS recovered' }] } })));
+          this.emit('message', Buffer.from(JSON.stringify({ type: 'response.completed', response: {
+            id: 'ws-complete-after-retry', output: [], usage: { input_tokens: 3, output_tokens: 4 },
+          } })));
+        }
+      });
+    }
+    close() { this.readyState = WebSocket.CLOSED; this.emit('close', 1000, Buffer.alloc(0)); }
+    terminate() { this.close(); }
+  }
+  const sockets: BrokenSocket[] = [];
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    const socket = new BrokenSocket(sockets.length === 0);
+    sockets.push(socket);
+    return socket as any;
+  } });
+  const session = createOpenAITestSession(makeId('responses_ws_reasoning_error'));
+  session.model = 'responses-keep-ws-fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-ws-fixture/model" />\n\nsystem prompt';
+  try {
+    const result = await chat([{ text: 'reason over socket' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: () => {},
+    });
+    assert.equal(result.text, 'WS recovered');
+    assert.equal(sockets.length, 2);
+    const input = JSON.stringify(sockets[1].sent[0].input);
+    assert.ok(input.includes('ws-opaque'));
+    assert.equal(input.includes('ws-private-id'), false);
+    assert.equal(session.history.filter(message => message.role === 'model').length, 2);
+    assert.deepEqual(session.history.find(message => message.role === 'model')?.__meta?.llmSegment,
+      { outputStart: 0, outputEndExclusive: 1, complete: false });
+  } finally { setOpenAIWsTransportTestHooks(); clearOpenAIWsCompletedChains(); }
+});
+
+test('error-checkpoint encrypted reasoning stays out of a different concrete failover wire request', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('responses_reasoning_failover_filter'));
+  session.model = 'responses-keep-failover';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-failover" />\n\nsystem prompt';
+  const first = new PassThrough();
+  const bodies: any[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    return { status: 200, statusText: 'OK', headers: {},
+      data: bodies.length === 1 ? first : makeResponsesStream('Other leaf finished') };
+  };
+  const frame = (event: any) => first.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const pending = chat([{ text: 'switch after error' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      onIntermediateAssistantText: () => {},
+    });
+    for (let tries = 0; tries < 100 && bodies.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'reasoning', encrypted_content: 'only-original-leaf', summary: [] } });
+    frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
+    first.end();
+    assert.equal((await pending).text, 'Other leaf finished');
+    assert.equal(bodies.length, 2);
+    const models = session.history.filter(message => message.role === 'model');
+    assert.equal(models[0].__meta?.modelId, 'responses-keep-fixture/enabled');
+    assert.equal(models[1].__meta?.modelId, 'responses-fixture/model');
+    assert.equal(models[0].parts[0].providerMeta?.encryptedThinking, 'only-original-leaf');
+    assert.equal(JSON.stringify(bodies[1].input).includes('only-original-leaf'), false);
+  } finally { (axios as any).post = originalPost; first.destroy(); }
 });
 
 test('Responses commentary followed by no further items commits usage-only completion without invented final text', async () => {

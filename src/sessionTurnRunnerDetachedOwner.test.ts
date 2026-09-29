@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as llm from './llm';
+import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import * as configModule from './config';
+import { loadModelsConfigFromObject } from './config';
 import * as sessionManager from './sessionManager';
 import { initArchiveStore } from './session/archiveStore';
 import { readArchiveMessages } from './session/archive';
@@ -125,6 +129,85 @@ test('detached exact owner completes canonical foreground provider turn', async 
     assert.equal(events.filter(event => event.startsWith('persist:')).at(-1), 'persist:idle:2');
   } finally {
     (llm as any).chat = originalChat;
+  }
+});
+
+test('real exact-owner Responses stream durably archives commentary and error-checkpoint reasoning before retry input', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_responses_checkpoint_${Date.now()}`, 'work on an image');
+  session.model = 'fixture/enabled';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/enabled" />\n\nsystem prompt';
+  const effects = createEffects(session, []);
+  const deliveries: string[] = [];
+  session.broadcast = text => { if (text) deliveries.push(text); };
+  const originalResolve = configModule.resolveModelConfig;
+  const originalPost = axios.post;
+  const models = loadModelsConfigFromObject({
+    default: 'fixture/enabled',
+    providers: { fixture: { providerType: 'openai-responses', baseUrl: 'https://example.test/v1',
+      apiKey: 'test-key', keepReasoningOnError: true, models: ['enabled'] } },
+  });
+  (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+  const firstStream = new PassThrough();
+  const bodies: any[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) return { status: 200, statusText: 'OK', headers: {}, data: firstStream };
+    const second = new PassThrough();
+    process.nextTick(() => {
+      for (const event of [
+        { type: 'response.output_item.done', output_index: 0,
+          item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'done' }] } },
+        { type: 'response.completed', response: { output: [] as any[], usage: { input_tokens: 6, output_tokens: 3 } } },
+      ]) second.write(`data: ${JSON.stringify(event)}\n\n`);
+      second.end();
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: second };
+  };
+  const frame = (event: any) => firstStream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const running = withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(new LocalSessionTurnHost(effects, session))
+      .processSessionQueue(session.id));
+    for (let tries = 0; tries < 150 && bodies.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Drafting' }] } });
+    for (let tries = 0; tries < 150 && !deliveries.includes('Drafting'); tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(deliveries.includes('Drafting'));
+    let persisted = await readSessionHistorySnapshot(session.id);
+    let archived = await readArchiveMessages(session.id);
+    assert.deepEqual(persisted?.history.filter((message: Message) => message.role === 'model').map((message: Message) => message.parts[0]?.text), ['Drafting']);
+    assert.deepEqual(archived.filter(record => record.message.role === 'model').map(record => record.message.parts[0]?.text), ['Drafting']);
+    assert.equal(bodies.length, 1, 'commentary is durable before the first provider response ends');
+    frame({ type: 'response.output_item.done', output_index: 1,
+      item: { type: 'reasoning', id: 'drop-this-upstream-id', summary: [{ type: 'summary_text', text: 'opaque progress' }],
+        encrypted_content: 'archive-opaque-checkpoint' } });
+    frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
+    firstStream.end();
+    for (let tries = 0; tries < 150 && bodies.length < 2; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 2);
+    persisted = await readSessionHistorySnapshot(session.id);
+    archived = await readArchiveMessages(session.id);
+    const persistedModels: Message[] = persisted?.history.filter((message: Message) => message.role === 'model') || [];
+    assert.deepEqual(persistedModels.slice(0, 2).map(message => message.__meta?.llmSegment), [
+      { outputStart: 0, outputEndExclusive: 1, complete: false },
+      { outputStart: 1, outputEndExclusive: 2, complete: false },
+    ]);
+    assert.equal(persistedModels[1].parts[0].providerMeta?.encryptedThinking, 'archive-opaque-checkpoint');
+    assert.equal(archived.filter(record => record.message.role === 'model')[1].message.parts[0].providerMeta?.encryptedThinking,
+      'archive-opaque-checkpoint');
+    assert.equal(JSON.stringify(bodies[1].input).includes('archive-opaque-checkpoint'), true);
+    assert.equal(JSON.stringify(bodies[1].input).includes('drop-this-upstream-id'), false);
+    await running;
+    assert.deepEqual(session.history.filter(message => message.role === 'model' && message.modelVisible !== false)
+      .map(message => message.parts[0]?.text), ['Drafting', undefined, 'done']);
+    assert.equal(deliveries.filter(text => text === 'Drafting').length, 1);
+  } finally {
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = originalResolve;
+    firstStream.destroy();
   }
 });
 

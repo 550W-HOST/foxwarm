@@ -83,6 +83,7 @@ type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     /** Provider-complete output item; the caller owns any asynchronous canonical side effect. */
     onOutputItemDone?: (entry: { outputIndex: number; item: any }) => void;
+    onResponseCompleted?: () => void;
     onMeaningfulProgress?: () => void;
     onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     /** Hosted image generation lifecycle; used for watchdog state only. */
@@ -1127,6 +1128,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.completed':
+                    options?.onResponseCompleted?.();
                     completedResponse = event.response;
                     if (completedResponse) {
                         completedResponse.output = mergeCompletedOutputItems(completedResponse.output);

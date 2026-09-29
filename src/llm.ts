@@ -3209,6 +3209,31 @@ function createResponsesPrefixCommitLane(args: {
     let failure: unknown;
     let tail: Promise<void> = Promise.resolve();
 
+    const commitSegment = async (start: number, end: number, output: any[], deliver: boolean) => {
+        const parsed = await parseConcreteProviderResponse(args.plan, { output }, !deliver, args.generatedImageBudget, start);
+        if (!parsed.allParts?.length) throw new Error('Completed Responses prefix had no replayable assistant content.');
+        args.emitter.flush();
+        const message = await args.onCommit({
+            parts: parsed.allParts,
+            text: parsed.text,
+            ...(parsed.providerMeta ? { providerMeta: parsed.providerMeta } : {}),
+            modelId: args.plan.modelId,
+            ...(args.virtualModelKey ? { virtualModelKey: args.virtualModelKey } : {}),
+            llmRequestId: args.requestId,
+            llmAttempt: args.attempt,
+            outputStart: start,
+            outputEndExclusive: end,
+        });
+        committedMessages.push(message);
+        committedEnd = end;
+        try { args.emitter.commitPrefix(end); }
+        catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant draft trim failed'); }
+        if (deliver) {
+            try { await args.onDelivered?.(message, parsed.text); }
+            catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant channel delivery failed'); }
+        }
+    };
+
     const onOutputItemDone = ({ outputIndex, item }: { outputIndex: number; item: any }) => {
         if (args.abortController.signal.aborted || failure || !Number.isSafeInteger(outputIndex) || outputIndex < 0) return;
         completed.set(outputIndex, item);
@@ -3233,26 +3258,7 @@ function createResponsesPrefixCommitLane(args: {
         scheduledEnd = end;
         tail = tail.then(async () => {
             if (args.abortController.signal.aborted || failure) return;
-            const parsed = await parseConcreteProviderResponse(args.plan, { output }, false, args.generatedImageBudget, start);
-            if (!parsed.allParts?.length) throw new Error('Completed commentary prefix had no replayable assistant content.');
-            args.emitter.flush();
-            const message = await args.onCommit({
-                parts: parsed.allParts,
-                text: parsed.text,
-                ...(parsed.providerMeta ? { providerMeta: parsed.providerMeta } : {}),
-                modelId: args.plan.modelId,
-                ...(args.virtualModelKey ? { virtualModelKey: args.virtualModelKey } : {}),
-                llmRequestId: args.requestId,
-                llmAttempt: args.attempt,
-                outputStart: start,
-                outputEndExclusive: end,
-            });
-            committedMessages.push(message);
-            committedEnd = end;
-            try { args.emitter.commitPrefix(end); }
-            catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant draft trim failed'); }
-            try { await args.onDelivered?.(message, parsed.text); }
-            catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant channel delivery failed'); }
+            await commitSegment(start, end, output, true);
         }).catch(error => {
             failure = error;
             args.abortController.abort();
@@ -3262,6 +3268,26 @@ function createResponsesPrefixCommitLane(args: {
     return {
         onOutputItemDone,
         async settle() { await tail; if (failure) throw failure; },
+        async commitReasoningOnError() {
+            if (failure || args.abortController.signal.aborted) return;
+            const start = committedEnd;
+            let end = start;
+            while (completed.has(end)) {
+                const item = completed.get(end);
+                if (item?.type !== 'reasoning' || (item.status && item.status !== 'completed')
+                    || typeof item.encrypted_content !== 'string' || !item.encrypted_content.trim()) break;
+                end += 1;
+            }
+            if (end === start) return;
+            const output = Array.from({ length: end - start }, (_, offset) => completed.get(start + offset));
+            try {
+                await commitSegment(start, end, output, false);
+            } catch (error) {
+                failure = error;
+                args.abortController.abort();
+                throw error;
+            }
+        },
         get failure() { return failure; },
         get committedEnd() { return committedEnd; },
         get committedMessages() { return [...committedMessages]; },
@@ -3499,6 +3525,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             let responseHeaders: any;
             let cleanupStreamingAttempt = () => {};
             let streamingTimeoutError: Error | undefined;
+            let providerResponseCompleted = false;
+            let upstreamStreamInterrupted = false;
+            let streamCallbackFailed = false;
             const generatedImageBudget = createGeneratedImageExternalizationBudget();
             const prefixLane = (plan.useOpenAIResponsesApi && (plan.useStreamingApi || plan.useOpenAIResponsesWs)
                 && options.purpose === 'normal-turn' && options.onPartialAssistantCommit && options.getCommittedHistoryForRetry)
@@ -3555,46 +3584,62 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
                     };
                 }
+                const withLocalStreamCallback = <T>(callback: () => T): T => {
+                    try { return callback(); }
+                    catch (error) { streamCallbackFailed = true; throw error; }
+                };
                 const streamCollectOptions = {
                     onProgress: shouldNotifySessionEvents
-                        ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
+                        ? (snapshot: any) => withLocalStreamCallback(() => modelStreamEmitter.emit(snapshot))
                         : undefined,
-                    onOutputItemDone: prefixLane?.onOutputItemDone,
-                    onMeaningfulProgress: markMeaningfulProgress,
-                    onSafetyBuffering: handleSafetyBuffering,
-                    onImageGenerationActivity: () => {
-                        imageGenerationWatchdog?.reportImageGenerationActivity();
-                    },
-                    onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
-                    onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
+                    onOutputItemDone: prefixLane
+                        ? (entry: { outputIndex: number; item: any }) => withLocalStreamCallback(() => prefixLane.onOutputItemDone(entry))
+                        : undefined,
+                    onResponseCompleted: () => { providerResponseCompleted = true; },
+                    onMeaningfulProgress: markMeaningfulProgress
+                        ? () => withLocalStreamCallback(markMeaningfulProgress)
+                        : undefined,
+                    onSafetyBuffering: handleSafetyBuffering
+                        ? (metadata: Record<string, unknown>) => withLocalStreamCallback(() => handleSafetyBuffering(metadata))
+                        : undefined,
+                    onImageGenerationActivity: () => withLocalStreamCallback(() => imageGenerationWatchdog?.reportImageGenerationActivity()),
+                    onRawChunk: (text: string) => withLocalStreamCallback(() => attemptRawStreamLog?.appendChunk(text)),
+                    onRawSseBlock: (block: string) => withLocalStreamCallback(() => attemptRawStreamLog?.appendSseBlock(block)),
                 };
 
                 if (plan.useOpenAIResponsesWs) {
                     logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM WebSocket request');
-                    const pending = await requestOpenAIResponsesWs({
-                        url: plan.url,
-                        headers: plan.headers,
-                        concreteIdentity: plan.modelKey,
-                        data: plan.data,
-                        placement: options.currentSessionEffects?.placement || 'local',
-                        signal: abortController.signal,
-                        hardTimeoutMs: options.timeoutMs,
-                        streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
-                        diagnostics: {
-                            sessionId: options.sessionId,
-                            purpose: options.purpose || 'low-level',
-                            llmRequestId: requestId,
-                            iteration,
-                            attempt,
-                        },
-                        onProgress: streamCollectOptions.onProgress,
-                        onOutputItemDone: streamCollectOptions.onOutputItemDone,
-                        onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
-                        onRawFrame: frame => {
-                            attemptRawStreamLog?.appendChunk(`${frame}\n`);
-                            attemptRawStreamLog?.appendSseBlock(frame);
-                        },
-                    });
+                    let pending: Awaited<ReturnType<typeof requestOpenAIResponsesWs>>;
+                    try {
+                        pending = await requestOpenAIResponsesWs({
+                            url: plan.url,
+                            headers: plan.headers,
+                            concreteIdentity: plan.modelKey,
+                            data: plan.data,
+                            placement: options.currentSessionEffects?.placement || 'local',
+                            signal: abortController.signal,
+                            hardTimeoutMs: options.timeoutMs,
+                            streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
+                            diagnostics: {
+                                sessionId: options.sessionId,
+                                purpose: options.purpose || 'low-level',
+                                llmRequestId: requestId,
+                                iteration,
+                                attempt,
+                            },
+                            onProgress: streamCollectOptions.onProgress,
+                            onOutputItemDone: streamCollectOptions.onOutputItemDone,
+                            onResponseCompleted: streamCollectOptions.onResponseCompleted,
+                            onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
+                            onRawFrame: frame => withLocalStreamCallback(() => {
+                                attemptRawStreamLog?.appendChunk(`${frame}\n`);
+                                attemptRawStreamLog?.appendSseBlock(frame);
+                            }),
+                        });
+                    } catch (error) {
+                        upstreamStreamInterrupted = !providerResponseCompleted;
+                        throw error;
+                    }
                     resp = pending.response;
                     responseStatus = '101 WebSocket';
                     responseHeaders = {};
@@ -3656,9 +3701,12 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 }
 
                 if (plan.useStreamingApi && response) {
-                    resp = plan.useOpenAIResponsesApi
-                        ? await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions)
-                        : await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                    if (plan.useOpenAIResponsesApi) {
+                        try { resp = await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions); }
+                        catch (error) { upstreamStreamInterrupted = !providerResponseCompleted; throw error; }
+                    } else {
+                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                    }
                 } else if (!plan.useOpenAIResponsesWs && response) {
                     resp = response.data;
                 }
@@ -3714,6 +3762,12 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 try { await prefixLane?.settle(); }
                 catch (commitError) { error = commitError; }
                 if (streamingTimeoutError && !prefixLane?.failure) error = streamingTimeoutError;
+                if (plan.modelEntry.keepReasoningOnError === true && upstreamStreamInterrupted
+                    && !providerResponseCompleted && !streamCallbackFailed && !abortController.signal.aborted
+                    && !isAbortError(error) && !prefixLane?.failure) {
+                    try { await prefixLane?.commitReasoningOnError(); }
+                    catch (commitError) { error = commitError; }
+                }
                 settleHistoryAppendFinalizer(
                     attemptHistoryAppendFinalizer,
                     { appended: false },
