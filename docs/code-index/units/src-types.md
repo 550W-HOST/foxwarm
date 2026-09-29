@@ -27,6 +27,8 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `ContextBlockMessageMeta` — Structured metadata attached to rendered CTX-BLOCK messages under `Message.__meta.contextBlock` for WebUI/API consumers.
 - `MaybePromise<T>`, `SessionReply`, `SessionBroadcast` — Utility types
 
+- `FunctionResponse.__meta.resolvedPaths` holds display-only `{ raw, resolved, nodeId }` targets per successful native file-tool call; see [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+
 ## Function Index
 
 | Function | Description |

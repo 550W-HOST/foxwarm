@@ -3555,6 +3555,35 @@ test('chat journals only historical concrete model provenance and strips all __m
   }
 });
 
+test('requestLlmOnce removes Code-only tool paths before provider send and canonical journal capture', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any;
+  const secretPath = '/display-only/agent-file.txt';
+  const contents: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'read-file', name: 'read', args: { filePath: 'file.txt' } } }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'read-file', name: 'read', response: { output: 'contents' },
+      __meta: { resolvedPaths: [{ raw: 'file.txt', resolved: secretPath, nodeId: 'master' }] } } }] },
+    { role: 'user', parts: [{ text: 'next request' }] },
+  ];
+  const original = structuredClone(contents);
+  (axios as any).post = async (_url: string, body: any) => {
+    capturedBody = body;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('ok') };
+  };
+  try {
+    const result = await requestLlmOnce({ contents, systemPrompt: '',
+      model: 'fixture/chat', modelEntryOverride: { providerKey: 'fixture', providerType: 'openai-completions',
+        baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {} } as any,
+      toolDefinitions: [], maxRetries: 1, notifySessionEvents: false, registerAbortController: false,
+    });
+    assert.equal(JSON.stringify(capturedBody).includes(secretPath), false);
+    const journal = await reconstructLlmRequest(result.llmRequestId!);
+    assert.equal(journal.completeness, 'complete');
+    assert.equal(JSON.stringify(journal).includes(secretPath), false);
+    assert.deepEqual(contents, original, 'request preparation must not rewrite the persisted/UI history');
+  } finally { (axios as any).post = originalPost; }
+});
+
 test('requestLlmOnce scrubs reserved provider image helper keys before journal and wire serialization', async () => {
   const originalPost = axios.post;
   let capturedBody: any = null;

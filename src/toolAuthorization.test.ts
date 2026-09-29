@@ -111,6 +111,30 @@ rules:
   assert.equal(remote.action, 'deny');
 });
 
+test('Agent path tokens use the same canonical master path in policy facts and copy legs', async () => {
+  const root = getAgentDir('main');
+  const dir = path.join(root, 'tmp', `policy-token-${Date.now()}`);
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'policy-token-outside-'));
+  await fs.ensureDir(dir);
+  await fs.symlink(outside, path.join(dir, 'outside'), 'dir');
+  const session = { id: 'main/path-token', agent: 'main', cwd: outside };
+  try {
+    const policy = parseToolAuthorizationPolicyBytes(`version: 1\ndefaultAction: deny\nrules:\n- id: allowed-agent-tmp\n  match: { tool: read, path: { arg: filePath, allWithin: "${root}/tmp" } }\n  action: allow\n`);
+    setToolAuthorizationPolicyForTests(policy);
+    const allowed = buildToolAuthorizationRequest({ session, tool: { source: 'node', name: 'read' }, targetNode: 'master', args: { filePath: `$fw_tmp/${path.basename(dir)}/inside.txt` } });
+    assert.equal(allowed.paths[0].resolved, path.join(dir, 'inside.txt'));
+    assert.equal((await evaluateToolAuthorization(allowed)).action, 'allow');
+    const denied = buildToolAuthorizationRequest({ session, tool: { source: 'node', name: 'read' }, targetNode: 'master', args: { filePath: `$fw_tmp/${path.basename(dir)}/outside/new.txt` } });
+    assert.equal((await evaluateToolAuthorization(denied)).action, 'deny');
+    assert.equal(denied.paths[0].resolved, path.join(outside, 'new.txt'));
+    const copy = buildToolAuthorizationRequest({ session, tool: { source: 'builtin', name: 'copy_between_nodes' },
+      args: { sourceNode: 'master', sourcePath: `$fw_tmp/${path.basename(dir)}/inside.txt`, targetNode: 'remote-a', targetPath: '$fw_tmp/remote.txt' } });
+    assert.equal(copy.paths[0].resolved, path.join(dir, 'inside.txt'));
+    assert.equal(copy.paths[1].resolved, undefined, 'Core cannot resolve another Node against Main root');
+    assert.throws(() => buildToolAuthorizationRequest({ session, tool: { source: 'node', name: 'read' }, args: { filePath: '$OTHER/file' } }), /Unknown Agent path variable/);
+  } finally { await fs.remove(dir); await fs.remove(outside); }
+});
+
 
 test('visibility preserves ordered definite decisions and keeps conditional possible allows discoverable', () => {
   const session: any = { id: 'plain/main', agent: 'plain', currentNode: 'master' };

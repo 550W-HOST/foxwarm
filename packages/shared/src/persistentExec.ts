@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import type { ExternalNodeOwner } from './nodeProtocol';
 import path from 'path';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
+import { expandAgentPathVariable } from './agentPathVariables';
 import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
 import { estimateTokenCount } from './tokenCount';
 import {
@@ -135,6 +136,8 @@ export type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecSta
 export interface PersistentExecManagerOptions {
   getDefaultCwd: (agentName: string) => string;
   getExecTempDir: (agentName: string) => string;
+  /** Actual Agent directory in this process's target namespace, if one exists. */
+  getAgentDir?: (agentName: string) => string;
   getExternalDefaultCwd?: (owner: ExternalNodeOwner) => string;
   getExternalExecTempDir?: (owner: ExternalNodeOwner) => string;
   registryPath?: string;
@@ -673,10 +676,13 @@ export class PersistentExecManager {
     const agentName = externalOwner ? undefined : (options.agentName || 'main');
     const nodeId = options.nodeId || this.options.nodeId || 'master';
     const sessionId = options.sessionId;
+    const agentDir = !externalOwner ? this.options.getAgentDir?.(agentName!) : undefined;
+    if (agentDir) await fs.ensureDir(path.join(agentDir, 'tmp'));
+    const expandCwd = (cwd: unknown): unknown => typeof cwd === 'string' ? expandAgentPathVariable(cwd.trim(), agentDir) : cwd;
     const defaultCwd = externalOwner ? this.options.getExternalDefaultCwd!(externalOwner) : this.getDefaultCwd(agentName!);
     const cwdResult = await resolveValidatedExecCwd({
-      cwd: options.cwd,
-      sessionCwd: options.sessionCwd,
+      cwd: expandCwd(options.cwd),
+      sessionCwd: expandCwd(options.sessionCwd),
       defaultCwd,
       nodeId,
     });
@@ -714,12 +720,18 @@ export class PersistentExecManager {
     let launched: { pid: number };
     try {
       options.onBeforeProcessLaunch?.();
+      // Reserved names belong to this launch, not to the host process or a prior Agent.
+      const hostEnv = { ...process.env };
+      for (const key of Object.keys(hostEnv)) {
+        if (key.toLowerCase() === 'fw_agentdir' || key.toLowerCase() === 'fw_tmp') delete hostEnv[key];
+      }
       launched = await processOperations.launch({
         command: launcher.command,
         args: launcher.args,
         cwd: initialCwd,
         env: {
-          ...process.env,
+          ...hostEnv,
+          ...(agentDir ? { fw_agentdir: agentDir, fw_tmp: path.join(agentDir, 'tmp') } : {}),
           TERM: 'xterm-256color',
           FOXWARM_EXEC_LOG_DIR: dateDir,
           FOXWARM_EXEC_TIME_TOKEN: timeToken,

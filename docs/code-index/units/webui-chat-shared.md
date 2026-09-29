@@ -70,6 +70,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`
 - `../../../shared/src/webuiToolRendering` — `parseSessionLinkText` shared with tests for session link text patterns
 
+- `FunctionResponse.__meta.resolvedPaths` is WebUI-only per-call data; Code icons use it without changing the displayed tool response or labels. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 ## Behavior
 
 - Markdown rendering uses `marked` with GFM/breaks, then sanitizes ordinary HTML via DOMPurify with a strict allowlist (no images, scripts, iframes). Links get `target="_blank"` injected.

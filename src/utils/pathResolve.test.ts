@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'path';
 import os from 'os';
 import { expandHomePath, resolveAgentPath } from './pathResolve';
+import { getAgentDir } from '../config';
 
 describe('expandHomePath', () => {
   it('expands ~ to home directory', () => {
@@ -31,6 +32,14 @@ describe('expandHomePath', () => {
 });
 
 describe('resolveAgentPath', () => {
+  it('expands only the current Agent root even with an unrelated cwd', () => {
+    const root = getAgentDir('path-token-agent');
+    assert.equal(resolveAgentPath('$fw_agentdir/file', 'path-token-agent', '/somewhere/else'), path.join(root, 'file'));
+    assert.equal(resolveAgentPath('$fw_tmp/file', 'path-token-agent', '/somewhere/else'), path.join(root, 'tmp/file'));
+    assert.equal(resolveAgentPath('./$fw_tmp/file', 'path-token-agent', '/somewhere/else'), '/somewhere/else/$fw_tmp/file');
+    assert.throws(() => resolveAgentPath('$unknown/file', 'path-token-agent'), /Unknown Agent path variable/);
+    assert.throws(() => resolveAgentPath('${fw_tmp}/file', 'path-token-agent'), /Unknown Agent path variable/);
+  });
   it('resolves absolute paths directly', () => {
     const result = resolveAgentPath('/absolute/path', 'main');
     assert.equal(result, '/absolute/path');

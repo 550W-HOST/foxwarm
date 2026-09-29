@@ -50,6 +50,8 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - `../packages/shared/dist/processOperations` — native and injectable process primitives passed to the shared manager
 - `./tools` (test only) — `definitions`, `exec`, `read`
 
+- Main and Session-worker runtimes supply their actual `getAgentDir` callback to persistent exec; the Docker-worktree runtime intentionally omits it. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+
 ## Behavior
 
 - The process-default runtime is itself created by `createExecRuntime`, configured with the unchanged project paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`) and `master` node default. Every existing exported wrapper delegates to that real factory-built default.

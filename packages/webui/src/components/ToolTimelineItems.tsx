@@ -165,12 +165,22 @@ const renderTextResult = (text: string, expanded: boolean): ReactNode => (
   <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? text : truncateToolResultPreview(text)}</div>
 )
 
-export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
+type ResolvedCodePath = { nodeId: string; resolvedPath: string }
+export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: ResolvedCodePath) => void
 
-const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, prefix, collapsed = false }: {
+type DisplayResolvedPaths = NonNullable<FunctionResponse['__meta']>['resolvedPaths']
+const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: string, index = 0): ResolvedCodePath | undefined => {
+  const match = paths?.[index]
+  if (!match || match.raw !== raw || typeof match.resolved !== 'string' || !match.resolved.startsWith('/')
+    || typeof match.nodeId !== 'string') return undefined
+  return { nodeId: match.nodeId, resolvedPath: match.resolved }
+}
+
+const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, target, prefix, collapsed = false }: {
   filePath: string
   lines?: { startLine?: number; endLine?: number }
   onOpenCodeFile?: OpenCodeFileHandler
+  target?: ResolvedCodePath
   prefix?: string
   collapsed?: boolean
 }) {
@@ -181,7 +191,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   const pathClass = collapsed
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
     : 'foxwarm-tool-code-path whitespace-normal break-words'
-  if (!onOpenCodeFile) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
+  if (!onOpenCodeFile || (!target && !filePath.startsWith('/'))) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
   return (
     <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-center gap-1' : ''}`}>
       {prefix}
@@ -192,7 +202,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
         aria-label={`Open ${filePath} in Code`}
         onClick={(event) => {
           event.stopPropagation()
-          onOpenCodeFile(filePath, lines)
+          onOpenCodeFile(filePath, lines, target)
         }}
       >
         <Code2 size={13} aria-hidden="true" />
@@ -212,7 +222,7 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
-const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
+const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
   if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
     const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
@@ -227,11 +237,11 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <span title={`${call.args.filePath}${extra}`} className="flex min-w-0 max-w-full flex-1 items-center gap-x-1 overflow-hidden whitespace-nowrap leading-[18px]"><ToolCodePath collapsed filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="foxwarm-tool-read-range shrink-0">{extra}</span>}</span>
+    return <span title={`${call.args.filePath}${extra}`} className="flex min-w-0 max-w-full flex-1 items-center gap-x-1 overflow-hidden whitespace-nowrap leading-[18px]"><ToolCodePath collapsed filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="foxwarm-tool-read-range shrink-0">{extra}</span>}</span>
   }
 
   if (call.name === 'write') {
-    return <ToolCodePath collapsed filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} />
+    return <ToolCodePath collapsed filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} />
   }
 
   if (isLegacyDiffToolName(call.name)) {
@@ -250,7 +260,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
         ) : (
           <span className="shrink-0 text-xs text-fw-text-muted">legacy payload unavailable</span>
         )}
-        {call.name === 'edit' ? <ToolCodePath collapsed filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /> : <span className="truncate">{call.args.filePath}</span>}
+        {call.name === 'edit' ? <ToolCodePath collapsed filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} /> : <span className="truncate">{call.args.filePath}</span>}
       </span>
     )
   }
@@ -264,7 +274,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
         <span className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 text-xs text-fw-text-muted">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
           {call.name === 'apply_patch' && operations.length === 1
-            ? <ToolCodePath collapsed filePath={operations[0].filePath} onOpenCodeFile={options.onOpenCodeFile} />
+            ? <ToolCodePath collapsed filePath={operations[0].filePath} target={resolvedCodePath(options.resolvedPaths, operations[0].filePath)} onOpenCodeFile={options.onOpenCodeFile} />
             : <span className="truncate">{fileSummary}</span>}
         </span>
       )
@@ -318,7 +328,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
   return <span className="truncate break-all">{preview}</span>
 }
 
-const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
+const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}) => {
   if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
     return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
   }
@@ -330,13 +340,13 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
       : ''
-    return <div className="flex items-center gap-2 whitespace-pre-wrap break-all"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="text-fw-text-muted">{extra}</span>}</div>
+    return <div className="flex items-center gap-2 whitespace-pre-wrap break-all"><ToolCodePath filePath={call.args.filePath} lines={{ startLine: call.args.startLine, endLine: call.args.endLine }} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} />{extra && <span className="text-fw-text-muted">{extra}</span>}</div>
   }
 
   if (call.name === 'write') {
     return (
       <div className="space-y-2">
-        <div className="whitespace-pre-wrap break-all"><ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /></div>
+        <div className="whitespace-pre-wrap break-all"><ToolCodePath filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} /></div>
         {typeof call.args.content === 'string' && (
           <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text"><SyntaxHighlightedText text={call.args.content} filePath={call.args.filePath} /></pre>
         )}
@@ -348,7 +358,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     const hasLegacyDiff = hasLegacyDiffPayload(call)
     return hasLegacyDiff ? (
       <div className="space-y-2">
-        <div className="text-xs text-fw-text">{call.name === 'edit' ? <ToolCodePath filePath={call.args.filePath} onOpenCodeFile={options.onOpenCodeFile} /> : call.args.filePath}</div>
+        <div className="text-xs text-fw-text">{call.name === 'edit' ? <ToolCodePath filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} /> : call.args.filePath}</div>
         <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
       </div>
     ) : (
@@ -365,7 +375,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
             if (operation.action === 'update') {
               return (
                 <div key={operationIdx} className="">
-                  <div className="text-xs font-semibold text-fw-text"><ToolCodePath prefix="Update " filePath={operation.filePath} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
+                  <div className="text-xs font-semibold text-fw-text"><ToolCodePath prefix="Update " filePath={operation.filePath} target={resolvedCodePath(options.resolvedPaths, operation.filePath, operationIdx)} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
                   <div>
                     {operation.hunks.map((hunk, hunkIdx) => {
                       const snippets = buildPatchHunkSnippets(hunk)
@@ -389,7 +399,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
             if (operation.action === 'add') {
               return (
                 <div key={operationIdx} className="space-y-1">
-                  <div className="text-xs font-semibold text-fw-diff-added-text"><ToolCodePath prefix="Add " filePath={operation.filePath} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
+                  <div className="text-xs font-semibold text-fw-diff-added-text"><ToolCodePath prefix="Add " filePath={operation.filePath} target={resolvedCodePath(options.resolvedPaths, operation.filePath, operationIdx)} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
                   <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                 </div>
               )
@@ -664,7 +674,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={diffViewMode === 'split'} title="Split">Split</MiniToggleButton>
         </div>
       )}
-      {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall, onOpenCodeFile })}
+      {renderToolCallExpandedContent(call, diffViewMode, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}
     </div>
   ) : null
 
@@ -679,7 +689,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         {invocationDurationMs !== null && <span data-tool-execution-time className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
-        {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+        {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
       </div>
       {includeExpandedCall && expandedCallContent && (
         <div className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>

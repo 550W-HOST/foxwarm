@@ -36,6 +36,8 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 
 `getOpenAIRequestApi()` returns null for other values; the current request branch then uses Anthropic-format handling. Custom provider types therefore need Anthropic-compatible behavior unless source routing is extended.
 
+- Successful native file calls store ordered path targets on each `FunctionResponse.__meta`, outside the tool response. Request-local history removes this display-only field before provider-neutral request journaling and serialization; ordinary model and ToolScript outputs remain unchanged. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+
 ## Tool-response formatting
 
 Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolResponseFormatting.ts` through the built shared package. Structured tool responses remain structured internally; the shared formatter owns provider-facing text. Image parts are promoted separately and accompanied by image guidance. Canonical decision: [D-llm-shared-response-format](../modules/llm.md#d-llm-shared-response-format).

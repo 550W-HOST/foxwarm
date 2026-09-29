@@ -23,6 +23,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - `makeVscodeWebUrl` emits new-tab folder or embedded persistent-workspace startup URLs.
 - Main WebUI and its persistent Code frame use exact source plus origin checks. For nested Foxwarm leaf views, the inner iframe sends to its parent with `'*'`; the outer extension validates exact source, channel, version, and random nonce but does not inspect `event.origin`. Outer-to-inner delivery targets the exact derived `frameOrigin`. No bridge accepts arbitrary Code command names or puts auth tokens in messages.
 
+- Tool-card Code actions prefer the successful response path and recorded execution Node, not the Session's later Node/cwd; only older absolute paths retain the legacy fallback. The Code bridge still validates the resolved absolute target and authorizes open operations separately. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 ## App behavior
 
 - `main.tsx` lazily mounts the normal app, a strict Code-embedded leaf, or a top-level popup leaf with ReactDOM 18 `createRoot` and `StrictMode`. A popup therefore does not initialize the normal workbench store. Vite resolves WebUI imports against one React 18 runtime rather than an aliased renderer; browser JSX fixtures use that same package-local runtime. The module-level contract is [D-webui-react18-runtime](../modules/webui.md#d-webui-react18-runtime).

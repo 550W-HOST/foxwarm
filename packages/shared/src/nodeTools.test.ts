@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+
 import {
   apply_patch,
   buildBrowserScreenshotResult,
@@ -14,7 +15,7 @@ import {
   setNodeToolSessionEventDispatcher,
   write,
 } from './nodeTools';
-import { getNodeAgentDir, resolveNodeAgentDir } from './nodeFileTransfer';
+import { getNodeAgentDir, resolveNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { formatWriteContentRefRetryHint } from './fileToolCore';
 import { resolveExecTimeoutSeconds } from './persistentExec';
@@ -101,6 +102,25 @@ test('node agent directories resolve relative configuration against an immutable
     resolveNodeAgentDir('alpha', { FOXWARM_AGENT_DIR: 'single-agent' }, runtimeRoot),
     path.join(runtimeRoot, 'single-agent'),
   );
+});
+
+test('CLI Node path tokens use its Agent root, not the session cwd or Main host root', async () => {
+  const agentName = uniqueAgent('cli_path_token');
+  const root = getNodeAgentDir(agentName);
+  const paths: Array<{ raw: string; resolved: string }> = [];
+  const ctx = { session: { agent: agentName, cwd: '/unrelated/cwd' }, onResolvedPaths: (items: typeof paths) => paths.push(...items) };
+  try {
+    assert.equal(resolveNodePath('$fw_tmp/a', agentName, '/unrelated/cwd'), path.join(root, 'tmp/a'));
+    assert.equal(resolveNodePath('./$fw_tmp/a', agentName, '/unrelated/cwd'), '/unrelated/cwd/$fw_tmp/a');
+    await write({ filePath: '$fw_tmp/nested.txt', content: 'before', createDirs: true }, ctx);
+    await edit({ filePath: '$fw_tmp/nested.txt', oldText: 'before', newText: 'after' }, ctx);
+    await read({ filePath: '$fw_tmp/nested.txt' }, ctx);
+    await apply_patch({ input: '*** Begin Patch\n*** Add File: $fw_tmp/another.txt\n+new\n*** End Patch' }, ctx);
+    assert.deepEqual(paths, ['nested.txt', 'nested.txt', 'nested.txt', 'another.txt'].map(name => ({
+      raw: `$fw_tmp/${name}`, resolved: path.join(root, 'tmp', name),
+    })));
+    await assert.rejects(() => read({ filePath: '${fw_tmp}/bad.txt' }, ctx), /Unknown Agent path variable/);
+  } finally { await cleanupAgent(agentName); }
 });
 
 test('node exec capture stays under the startup agent root after cwd changes', async t => {

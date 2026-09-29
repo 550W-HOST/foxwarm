@@ -49,6 +49,7 @@ Policy-unavailable execution still returns ordered paired function responses for
 
 Each process owns its cache. Main observes a successful setter immediately; other Session workers observe the replacement after their own cache expires, no later than their first authorization after ten seconds. No cross-process generation protocol is introduced.
 
+- For Main paths, authorization uses the same leading Agent-token expansion as native file tools and canonicalizes the resulting path before `allWithin`/`anyNotWithin` matching. Copy legs resolve only when their target is master; remote paths stay target-owned. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 ## Integration
 
 - `isolatedCheck.ts` evaluates generic policy first for every Session, including non-isolated Sessions, then retains exact isolated-Agent and structural checks.

@@ -1,6 +1,6 @@
 # Unit: src-tools
 
-Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
+Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
 Secondary files: src/tools/toolAuthorizationTools.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
@@ -154,6 +154,8 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./toolsSessionAgent` — Session, agent, timer, and channel management tools
 - `./mainManagementTools` — local versioned RPC caller for the first closed main-owned tool set
 - `./nodeExecution` — local versioned RPC caller used by direct/unified Node placement and dynamic Node calls; explicit master Node calls remain local and canonical-set-only
+
+- Native Main file tools and `resolveAgentPath` expand supported leading Agent tokens in their actual environment; successful read/write/edit/patch paths report ordered per-call display metadata. `resolvedTools` strips trusted CLI sidecars even for ToolScript nested calls and binds the Node identity to the resolved target. Memory-relative tools do not expand these tokens. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Behavior
 

@@ -63,6 +63,8 @@ export interface FunctionResponse {
   name: string;
   /** Measured duration of the tool invocation until its result returns. */
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
+  /** Display-only paths recorded by the successful native file tool on its execution Node. */
+  __meta?: { resolvedPaths: Array<{ raw: string; resolved: string; nodeId: string }> };
   /**
    * Internal timing for the model request which produced this tool batch.
    * It is persisted with the first tool response so serializers never need to

@@ -318,6 +318,17 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   assert.equal(observed.filter(request => request.operation === 'parent').length, 2);
   assert.ok(observed.filter(request => request.operation === 'mkdir').every(request => request.path === 'urn:provider-owned-parent'));
   assert.ok(observed.every(request => !Object.prototype.hasOwnProperty.call(request, 'toolName')));
+  const beforeTokens = observed.length;
+  for (const request of [
+    { toolName: 'read', args: { filePath: '$fw_tmp/a.txt' } },
+    { toolName: 'write', args: { filePath: '$fw_agentdir/a.txt', content: 'x' } },
+    { toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Add File: $fw_tmp/a.txt\n+one\n*** End Patch' } },
+  ]) {
+    await assert.rejects(() => registry.invokeTool({ ...base, ...request }), /unavailable in this execution environment/);
+  }
+  await assert.rejects(() => registry.invokeTool({ ...base, toolName: 'read', args: { filePath: '$OTHER/a.txt' } }), /Unknown Agent path variable/);
+  assert.equal(observed.length, beforeTokens, 'unsupported paths never reach provider primitives');
+  assert.equal(await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:new' } }).then(text => String(text).includes('new')), true);
   await assert.rejects(() => registry.invokeTool({ ...base, nodeId: 'primitive-ro', toolName: 'edit', args: { filePath: 'x', oldText: 'a', newText: 'b' } }),
     (error: any) => error?.code === 'NODE_EXECUTION_TOOL_UNAVAILABLE');
 });
@@ -335,6 +346,21 @@ test('primitive descriptors reject provider tool schemas and missing advertised 
     await assert.rejects(() => new NodeProviderRegistry([provider]).listNodes(),
       (error: any) => error?.code === 'NODE_PROVIDER_INVALID_DESCRIPTOR');
   }
+});
+
+test('primitive exec refuses Agent cwd tokens before invoking the provider', async () => {
+  let invoked = 0;
+  const descriptor: NodeProviderDescriptor = { id: 'primitive-exec', kind: 'sandbox', provider: 'primitive-exec',
+    type: 'memory', availability: 'ready', primitiveBackends: { exec: true } };
+  const registry = new NodeProviderRegistry([{ id: 'primitive-exec', listNodes: () => [descriptor],
+    getNode: nodeId => nodeId === descriptor.id ? descriptor : undefined,
+    invokeExec: async () => { invoked += 1; return { output: 'unchanged' }; } }]);
+  const base = { sourceSessionId: 'agent/main', nodeId: descriptor.id, toolName: 'exec', context: { agent: 'agent' } };
+  await assert.rejects(() => registry.invokeTool({ ...base, args: { command: 'pwd', cwd: '$fw_tmp' } }), /unavailable in this execution environment/);
+  await assert.rejects(() => registry.invokeTool({ ...base, args: { command: 'pwd', cwd: '${fw_tmp}' } }), /Unknown Agent path variable/);
+  assert.equal(invoked, 0);
+  assert.deepEqual(await registry.invokeTool({ ...base, args: { command: 'pwd', cwd: 'urn:provider-cwd' } }), { output: 'unchanged' });
+  assert.equal(invoked, 1);
 });
 
 test('primitive patch Add propagates invalid stat and performs no mutation', async () => {

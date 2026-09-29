@@ -122,6 +122,30 @@ test('run_script executes internal call_tool without surfacing nested tool histo
   }
 });
 
+test('ToolScript nested native read returns file text without resolved Code path metadata', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_native_path');
+  const fileName = `${makeId('private_read')}.txt`;
+  const filePath = path.join(getAgentDir('main'), fileName);
+  const session = await sessionManager.getSession(sessionId);
+  await fs.ensureDir(getAgentDir('main'));
+  await fs.writeFile(filePath, 'nested read text');
+  try {
+    const toolMessage = await executeTools([{ id: 'nested-file-read', name: 'run_script', args: {
+      code: asMain(`return call_tool("read", {"filePath": "$fw_agentdir/${fileName}"})`),
+    } }], { sessionId, session }, session);
+    const response = toolMessage.parts[0].functionResponse!;
+    assert.equal(response.__meta, undefined);
+    assert.equal(response.response?.status, 'completed');
+    assert.match(JSON.stringify(response.response?.result), /nested read text/);
+    assert.doesNotMatch(JSON.stringify(response.response), /resolvedPaths|__foxwarmResolvedToolPaths/);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(filePath);
+  }
+});
+
 test('canonical ToolScript automation example runs and resumes end to end', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_canonical_example');

@@ -1492,11 +1492,19 @@ function getHistoricalConcreteModelId(message: Message): string | undefined {
         : undefined;
 }
 
-/**
- * Build an attempt-local provider history. Internal message metadata is never
- * serialized, while model-specific reasoning artifacts are retained only when
- * their concrete source is absent/legacy or exactly matches this destination.
- */
+/** Keep UI-only response targets out of both canonical request journals and provider input. */
+function stripFunctionResponseDisplayMeta(contents: Message[]): Message[] {
+    return contents.map(message => ({
+        ...message,
+        parts: message.parts.map(part => {
+            if (!part.functionResponse?.__meta) return part;
+            const { __meta: _displayMeta, ...functionResponse } = part.functionResponse;
+            return { ...part, functionResponse };
+        }),
+    }));
+}
+
+/** Filter attempt-local provider history without modifying canonical persisted messages. */
 function prepareHistoryForConcreteModel(contents: Message[], destinationModelId: string): Message[] {
     const prepared: Message[] = [];
 
@@ -1743,6 +1751,7 @@ type PreparedToolCall = {
 type ExecutedToolCall = PreparedToolCall & {
     result: any;
     executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
+    resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>;
     imageParts: MessagePart[];
     stopCurrentTurn: boolean;
     waitForReply: boolean;
@@ -1912,6 +1921,7 @@ function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
 async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
     let result = prepared.result;
     let executionTiming: ExecutedToolCall['executionTiming'];
+    let resolvedPaths: ExecutedToolCall['resolvedPaths'];
     let imageParts: MessagePart[] = [];
     let stopCurrentTurn = false;
     let waitForReply = false;
@@ -1936,7 +1946,12 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             const startedAt = Date.now();
             const monotonicStart = performance.now();
             try {
-                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
+                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, {
+                    ...localToolContext,
+                    onResolvedPaths: (paths: Array<{ raw: string; resolved: string }>) => {
+                        resolvedPaths = paths.map(path => ({ ...path, nodeId: prepared.resolved!.executionNode }));
+                    },
+                }));
             } finally {
                 executionTiming = {
                     startedAt,
@@ -1989,12 +2004,14 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
             ...(error?.retryable === true ? { retryable: true } : {}) };
         imageParts = [];
+        resolvedPaths = undefined;
     }
 
     return {
         ...prepared,
         result: normalizeExecutedToolResult(result),
         ...(executionTiming ? { executionTiming } : {}),
+        ...(resolvedPaths?.length ? { resolvedPaths } : {}),
         imageParts,
         stopCurrentTurn,
         waitForReply,
@@ -2212,11 +2229,13 @@ export async function executeTools(
         } catch (error: any) {
             result = { error: error?.message || String(error) };
         }
+        const resolvedPaths = !result?.error && execution.resolvedPaths?.length ? execution.resolvedPaths : undefined;
         parts.push(...execution.imageParts, {
             functionResponse: {
                 tool_use_id: execution.toolId,
                 name: execution.call.name,
                 ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
+                ...(resolvedPaths ? { __meta: { resolvedPaths } } : {}),
                 ...(execution.index === 0 && toolContext.previousLlmRequest ? {
                     previousLlmRequest: {
                         time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),
@@ -3298,9 +3317,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    let canonicalContents = stripReservedProviderImageHelperFields(
+    let canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
-    );
+    ));
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
@@ -3402,9 +3421,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             if (attempt > 1) {
                 if (resumeFromCommittedHistory) {
                     modelStreamEmitter.close();
-                    canonicalContents = stripReservedProviderImageHelperFields(
+                    canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
                         fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
-                    );
+                    ));
                     requestId = randomUUID();
                     requestJournalStarted = false;
                     journalAttempt = 0;

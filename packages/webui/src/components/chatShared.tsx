@@ -131,6 +131,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
+  __meta?: { resolvedPaths: Array<{ raw: string; resolved: string; nodeId: string }> }
   name: string
   response: any
 }

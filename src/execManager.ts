@@ -27,6 +27,7 @@ export interface InitializeExecManagerOptions {
 export interface ExecRuntimeOptions {
   getDefaultCwd: (agentName: string) => string;
   getExecTempDir: (agentName: string) => string;
+  getAgentDir?: (agentName: string) => string;
   getExternalDefaultCwd?: (owner: ExternalNodeOwner) => string;
   getExternalExecTempDir?: (owner: ExternalNodeOwner) => string;
   registryPath?: string;
@@ -60,6 +61,7 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
   const manager = new PersistentExecManager({
     getDefaultCwd: options.getDefaultCwd,
     getExecTempDir: options.getExecTempDir,
+    getAgentDir: options.getAgentDir,
     getExternalDefaultCwd: options.getExternalDefaultCwd,
     getExternalExecTempDir: options.getExternalExecTempDir,
     registryPath: options.registryPath,
@@ -102,6 +104,7 @@ const defaultCompletionDispatcher: ExecCompletionDispatcher = async (entry, _sta
 const defaultRuntime = createExecRuntime({
   getDefaultCwd: (agentName: string) => getAgentDir(agentName),
   getExecTempDir: (agentName: string) => path.join(getAgentDir(agentName), '.temp', 'exec'),
+  getAgentDir,
   registryPath: RUNNING_EXEC_FILE,
   nodeId: 'master',
   completionDispatcher: defaultCompletionDispatcher,
