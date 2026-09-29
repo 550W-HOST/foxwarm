@@ -25,8 +25,8 @@ internal sealed class HostModels
     {
         if (string.IsNullOrEmpty(filePath))
         {
-            var key = fallback.RequestModel;
-            var entry = new ConcreteHostModel(key, key.Split('/')[0], fallback.ConcreteModelId,
+            var key = fallback.ConcreteModelId;
+            var entry = new ConcreteHostModel(key, key.Split('/')[0], fallback.RequestModel,
                 fallback.BaseUri, fallback.Token, 122880, [.. Efforts], "high");
             return new HostModels(key, new Dictionary<string, ConcreteHostModel>(StringComparer.Ordinal) { [key] = entry }, [key]);
         }

@@ -7,12 +7,13 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Web;
 
-internal sealed class HostSessions : IAsyncDisposable
+internal sealed partial class HostSessions : IAsyncDisposable
 {
     private readonly string root;
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
-    private readonly WorkspaceTools tools;
+    private readonly HostAgentCatalog agents;
+    private readonly HostAgentMemory memory;
     private readonly LocalExecManager executor;
     private readonly HttpClient http = new();
     private readonly ConcurrentDictionary<string, HostedSession> sessions = new();
@@ -27,8 +28,11 @@ internal sealed class HostSessions : IAsyncDisposable
             || this.root.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
         Directory.CreateDirectory(this.root);
-        tools = new WorkspaceTools(workspaceRoot);
-        executor = new LocalExecManager(this.root, workspaceRoot, async (sessionId, execId, message) =>
+        agents = new HostAgentCatalog(this.root, workspaceRoot);
+        memory = new HostAgentMemory(agents);
+        executor = new LocalExecManager(this.root,
+            sessionId => agents.AgentDirectory(Find(sessionId)?.Agent ?? throw new InvalidDataException("Exec Session owner is missing.")),
+            async (sessionId, execId, message) =>
         {
             if (!accepting || Find(sessionId) is not { } current)
                 throw new InvalidOperationException("Exec completion owner is unavailable; retry after recovery.");
@@ -41,6 +45,7 @@ internal sealed class HostSessions : IAsyncDisposable
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
+        foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(definition.DeepClone());
         definitions.Add(CompactPrompt.ToolDefinition());
         clientOptions = options with { Tools = definitions };
         this.models = models;
@@ -49,22 +54,26 @@ internal sealed class HostSessions : IAsyncDisposable
     public async Task LoadAsync()
     {
         var directory = Path.Combine(root, "state", "sessions");
-        var knownFiles = Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*.json").ToArray() : [];
+        var knownFiles = Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories).ToArray() : [];
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var path in knownFiles)
         {
-            var id = Path.GetFileNameWithoutExtension(path);
-            if (!IsOwnedId(id)) throw new InvalidDataException("Unknown authority filename in experiment root.");
-            ids.Add(id);
-            var store = new PersistentSessionAuthorityStore(root, id);
+            var id = Path.GetRelativePath(directory, path[..^".json".Length]).Replace(Path.DirectorySeparatorChar, '/');
+            if (!SessionIdentity.IsValid(id) || !ids.Add(id)) throw new InvalidDataException("Unknown or duplicate authority filename in experiment root.");
+            var agent = SessionIdentity.Agent(id);
+            if (!agents.Exists(agent)) throw new InvalidDataException("Session is bound to a missing Agent.");
+            var store = MakeStore(id, agent);
             var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("An indexed authority file is missing.");
+            if (snapshot.AuthorityEnvelope.ContainsKey("systemPromptFiles"))
+                throw new InvalidDataException("Custom Session prompt files are unsupported by this Agent host.");
             if (snapshot.Busy || snapshot.Stopping)
                 throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
-            var hosted = MakeSession(id, store);
+            var hosted = MakeSession(id, agent, store);
             hosted.Registry.Add(id, snapshot);
             hosted.EnableCommittedNotifications();
             if (!sessions.TryAdd(id, hosted)) throw new InvalidDataException("Duplicate Session ID in experiment root.");
         }
+        ValidateParentGraph();
         // Archive is never a history source. Its existing IDs only detect an authority
         // file that disappeared between clean runs, rather than silently dropping a Session.
         var archivePath = Path.Combine(root, "state", "archive-store.sqlite");
@@ -76,7 +85,7 @@ internal sealed class HostSessions : IAsyncDisposable
             }.ToString());
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT DISTINCT session_id FROM archive_messages";
+            command.CommandText = "SELECT session_id FROM archive_messages UNION SELECT session_id FROM archive_blocks";
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 if (!ids.Contains(reader.GetString(0)))
@@ -90,16 +99,17 @@ internal sealed class HostSessions : IAsyncDisposable
     public bool Accepting => accepting;
     public HostModels Models => models;
 
-    public HostedSession? Find(string id) => IsOwnedId(id) && sessions.TryGetValue(id, out var value) ? value : null;
+    public HostedSession? Find(string id) => SessionIdentity.IsValid(id) && sessions.TryGetValue(id, out var value) ? value : null;
 
     public async Task<HostedSession> CreateAsync()
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         var id = $"s_{Guid.NewGuid():N}";
-        var store = new PersistentSessionAuthorityStore(root, id);
+        var store = MakeStore(id, "main");
         if (await store.LoadAsync(id) is not null) throw new InvalidOperationException("Session ID collision.");
-        var hosted = MakeSession(id, store);
+        var hosted = MakeSession(id, "main", store);
         var entry = hosted.Registry.Add(id);
+        entry.WithState(state => state.AuthorityEnvelope["agent"] = "main");
         await entry.SaveLane.SaveStrictAsync(); // First authority JSON exists before publication/acknowledgement.
         lock (lifecycle)
         {
@@ -109,12 +119,12 @@ internal sealed class HostSessions : IAsyncDisposable
         return hosted;
     }
 
-    private HostedSession MakeSession(string id, PersistentSessionAuthorityStore store)
+    private HostedSession MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
     {
-        var hosted = new HostedSession(id, models);
+        var hosted = new HostedSession(id, agent, models);
         hosted.Archive = store.Archive;
         hosted.Executor = executor;
-        var chat = new HostModelChatService(http, clientOptions, hosted, models, (sessionId, update) =>
+        var chat = new HostModelChatService(http, clientOptions, hosted, models, memory, (sessionId, update) =>
         {
             hosted.PublishDraftProgress(update);
             hosted.Broadcast(new JsonObject
@@ -123,9 +133,10 @@ internal sealed class HostSessions : IAsyncDisposable
                 ["text"] = update.Text, ["reasoning"] = update.Reasoning
             });
         });
-        var registry = new SessionRegistry(store, new WebUiChatService(chat, hosted), new WebUiToolExecutor(tools, hosted));
+        var registry = new SessionRegistry(store, new WebUiChatService(chat, hosted),
+            new WebUiToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent)), hosted, this));
         hosted.Registry = registry;
-        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http);
+        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http, memory);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.TriggerOverride = _ => hosted.StartProcessing();
         return hosted;
@@ -164,8 +175,7 @@ internal sealed class HostSessions : IAsyncDisposable
         http.Dispose();
     }
 
-    internal static bool IsOwnedId(string id) => id.Length == 34 && id.StartsWith("s_", StringComparison.Ordinal)
-        && id.AsSpan(2).ToString().All(Uri.IsHexDigit);
+    internal static bool IsOwnedId(string id) => SessionIdentity.IsValid(id);
 }
 
 internal sealed partial class HostedSession
@@ -178,15 +188,17 @@ internal sealed partial class HostedSession
     private int lastReportedFailureCount;
     private readonly HostModels models;
     public string Id { get; }
+    public string Agent { get; }
     public SessionRegistry Registry { get; set; } = null!;
     public SessionCompactor Compactor { get; set; } = null!;
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public LocalExecManager Executor { get; set; } = null!;
     public SessionEntry Entry => Registry.GetRequired(Id);
 
-    public HostedSession(string id, HostModels models)
+    public HostedSession(string id, string agent, HostModels models)
     {
         Id = id;
+        Agent = agent;
         this.models = models;
     }
 
@@ -199,7 +211,10 @@ internal sealed partial class HostedSession
         var state = Entry.Snapshot();
         return new
         {
-            id = Id, busy = state.Busy, stopping = state.Stopping,
+            id = Id, agent = Agent,
+            parentSessionId = state.AuthorityEnvelope["parentSessionId"]?.GetValue<string>(),
+            displayName = state.AuthorityEnvelope["displayName"]?.GetValue<string>(),
+            busy = state.Busy, stopping = state.Stopping,
             queueCount = state.Queue.Count, messageCount = state.History.Count,
             nextMessageSeq = state.NextMessageSeq,
             failureCount = Entry.BackgroundProcessorFailureCount,

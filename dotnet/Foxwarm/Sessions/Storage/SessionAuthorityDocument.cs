@@ -148,6 +148,8 @@ public sealed class SessionAuthorityDocument
                 throw new InvalidDataException("Session authority agent must be a string.");
             if (storedAgent != agent) throw new UnsupportedSessionAuthorityException("Session authority agent does not match the bound agent.");
         }
+        else if (agent != "main")
+            throw new InvalidDataException("Named Agent Session authority requires an explicit agent binding.");
         foreach (var field in new[] { "effort", "childEffortDefault" })
         {
             if (!root.ContainsKey(field)) continue;
@@ -162,7 +164,7 @@ public sealed class SessionAuthorityDocument
         {
             if (root["parentSessionId"] is not JsonValue parentValue || !parentValue.TryGetValue<string>(out var parent))
                 throw new InvalidDataException("Session authority parentSessionId must be a string.");
-            if (parent.Length > 0) throw new UnsupportedSessionAuthorityException("Fork/parent lineage is unsupported.");
+            if (parent == sessionId) throw new InvalidDataException("A Session cannot be its own parent.");
         }
 
         for (var index = 0; index < history.Count; index++)

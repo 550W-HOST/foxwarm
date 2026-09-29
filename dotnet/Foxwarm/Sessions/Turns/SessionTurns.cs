@@ -238,6 +238,8 @@ public sealed class InMemorySessionAuthorityStore : ISessionAuthorityStore, ICan
 
 public sealed class SessionSaveLane
 {
+    private static readonly AsyncLocal<bool> SnapshotCommitScope = new();
+    internal static bool IsSnapshotCommit => SnapshotCommitScope.Value;
     private readonly SessionEntry entry;
     private readonly ISessionAuthorityStore store;
     private readonly object laneGate = new();
@@ -283,6 +285,53 @@ public sealed class SessionSaveLane
             entry.WithState(Publish);
             entry.InvokeCommitted(entry.Snapshot());
         });
+
+    /// <summary>Persist one owner snapshot before a model request; no request is sent on failure.</summary>
+    public Task CommitMemorySnapshotAsync(string snapshot) => EnqueueOperationAsync(async () =>
+    {
+        var staged = entry.WithState(state =>
+        {
+            var next = state.Snapshot();
+            var envelope = (JsonObject)next.AuthorityEnvelope.DeepClone();
+            envelope["persistentMemorySnapshot"] = snapshot;
+            return next with { AuthorityEnvelope = envelope };
+        });
+        void Publish(SessionState state) => state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshot;
+        var previousScope = SnapshotCommitScope.Value;
+        SnapshotCommitScope.Value = true;
+        try { await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false); }
+        catch (AuthorityCommittedException)
+        {
+            entry.WithState(Publish);
+            entry.InvokeCommitted(entry.Snapshot());
+            throw;
+        }
+        finally { SnapshotCommitScope.Value = previousScope; }
+        entry.WithState(Publish);
+        entry.InvokeCommitted(entry.Snapshot());
+    });
+
+    /// <summary>Strictly admit one source-bearing inter-Session item without replacing newer hot state.</summary>
+    public Task CommitInterSessionAsync(QueueItem item) => EnqueueOperationAsync(async () =>
+    {
+        if (item.Type != QueueItemType.Intersession || item.Parts is not { Count: > 0 })
+            throw new InvalidDataException("An inter-session delivery requires one ordinary message item.");
+        var staged = entry.WithState(state =>
+        {
+            var snapshot = state.Snapshot();
+            return snapshot with { Queue = snapshot.Queue.Append(item.CloneItem()).ToArray() };
+        });
+        void Publish(SessionState state) => state.Queue.Add(item.CloneItem());
+        try { await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false); }
+        catch (AuthorityCommittedException)
+        {
+            entry.WithState(Publish);
+            entry.InvokeQueuedCommitted(entry.Snapshot());
+            throw;
+        }
+        entry.WithState(Publish);
+        entry.InvokeQueuedCommitted(entry.Snapshot());
+    });
 
     /// <summary>Strict same-owner admission of one exec completion, not ordinary best-effort ingress.</summary>
     public async Task<bool> CommitBackgroundExecCompletionAsync(string execId, string message)
@@ -601,6 +650,13 @@ public interface ITurnToolExecutor
     Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);
 }
 
+/// <summary>A successful handoff ends only after its complete paired tool batch is committed.</summary>
+public interface ITurnToolControl
+{
+    void BeginTurn();
+    bool ConsumeFinishAfterBatch();
+}
+
 public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
 {
     public Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
@@ -692,6 +748,7 @@ public sealed class LocalSessionTurnHost
         {
             handle = entry.RegisterCancellation(requestCts);
             var registered = handle ?? throw new InvalidOperationException("Cancellation registration was not created.");
+            if (tools is ITurnToolControl control) control.BeginTurn();
             for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
                 var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
@@ -737,6 +794,7 @@ public sealed class LocalSessionTurnHost
                 var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
                 await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
                 if (entry.WithState(state => state.Stopping)) throw new OperationCanceledException(registered.Token);
+                if (tools is ITurnToolControl turnControl && turnControl.ConsumeFinishAfterBatch()) return result;
                 await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
                 if (iteration + 1 >= maxToolIterations) throw new ToolLoopLimitException(maxToolIterations);
             }

@@ -106,7 +106,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
 app.MapGet("/api/models", () => Results.Ok(models.ToWebUiPayload()));
 app.MapPost("/api/sessions/{id}/model", async (string id, HttpRequest request) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(request, id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
     if (!sessions.Accepting) return Results.StatusCode(503);
     try
@@ -124,22 +124,61 @@ app.MapGet("/api/commands", () => Results.Ok(new { commands = new[]
     new { name = "compact", description = "Compact history.", usage = "/compact", requiresSession = true }
 } }));
 app.MapGet("/api/asr/status", () => Results.Ok(new { configured = false, available = false }));
-app.MapGet("/api/sessions", () => Results.Ok(new { sessions = sessions.List() }));
-app.MapPost("/api/sessions", async () =>
+app.MapGet("/api/agents", () => Results.Ok(new { agents = sessions.Agents() }));
+app.MapPost("/api/agents", async (HttpRequest request) =>
 {
     try
     {
-        var hosted = await sessions.CreateAsync();
-        hosted.EnableCommittedNotifications();
+        var body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new InvalidDataException("Agent creation needs an object.");
+        if (body.Any(item => item.Key is not ("agentName" or "createMainSession" or "memory"))
+            || body["agentName"] is not JsonValue agent || !agent.TryGetValue<string>(out var name)
+            || body.ContainsKey("memory") && (body["memory"] is not JsonValue memory || !memory.TryGetValue<string>(out _))
+            || body.ContainsKey("createMainSession") && (body["createMainSession"] is not JsonValue flag || !flag.TryGetValue<bool>(out _)))
+            return Results.BadRequest(new { error = "Invalid Agent creation fields." });
+        var created = await sessions.CreateAgentAsync(name,
+            body["createMainSession"]?.GetValue<bool>() ?? true, body["memory"]?.GetValue<string>());
+        return Results.Ok(new { success = true, agentName = created.AgentName, mainSessionId = created.MainSessionId });
+    }
+    catch (CommittedSessionCreationException error)
+    { return Results.Json(new { error = error.Message, sessionId = error.SessionId, agentCreated = true }, statusCode: 409); }
+    catch (Exception error) when (error is InvalidDataException or IOException or JsonException or InvalidOperationException)
+    { return Results.BadRequest(new { error = error.Message }); }
+});
+app.MapGet("/api/sessions", () => Results.Ok(new { sessions = sessions.List() }));
+app.MapPost("/api/sessions", async (HttpRequest request) =>
+{
+    try
+    {
+        JsonObject? body = null;
+        if (request.ContentLength is > 0) body = await JsonNode.ParseAsync(request.Body) as JsonObject
+            ?? throw new InvalidDataException("Session creation must be an object.");
+        HostedSession hosted;
+        if (body is null || body.Count == 0) hosted = await sessions.CreateAsync();
+        else
+        {
+            if (body.Any(item => item.Key is not ("agentName" or "sessionName" or "displayName" or "forceModel"))
+                || body["agentName"] is not JsonValue agent || !agent.TryGetValue<string>(out var agentName)
+                || body["sessionName"] is not JsonValue sessionNameNode || !sessionNameNode.TryGetValue<string>(out var sessionName)
+                || body.ContainsKey("displayName") && (body["displayName"] is not JsonValue display || !display.TryGetValue<string>(out _))
+                || body.ContainsKey("forceModel") && body["forceModel"] is not JsonObject)
+                throw new InvalidDataException("Invalid Session creation fields.");
+            hosted = await sessions.CreateNamedAsync(agentName, sessionName, body["displayName"]?.GetValue<string>(),
+                body["forceModel"] as JsonObject);
+        }
         return Results.Ok(new { success = true, sessionId = hosted.Id });
     }
+    catch (CommittedSessionCreationException error)
+    { return Results.Json(new { error = error.Message, sessionId = error.SessionId, committed = true,
+        initialDeliveryCommitted = error.InitialDeliveryCommitted }, statusCode: 409); }
+    catch (Exception error) when (error is InvalidDataException or JsonException or InvalidOperationException)
+    { return Results.BadRequest(new { error = error.Message }); }
     catch (Exception error) { return Results.Problem(error.Message, statusCode: 500); }
 });
-app.MapGet("/api/sessions/{id}/state", (string id) =>
-    sessions.Find(id) is { } hosted ? Results.Ok(new { session = hosted.State() }) : Results.NotFound(new { error = "Session not found" }));
+app.MapGet("/api/sessions/{id}/state", (string id, HttpRequest request) =>
+    sessions.FindRoute(request, id) is { } hosted ? Results.Ok(new { session = hosted.State() }) : Results.NotFound(new { error = "Session not found" }));
 app.MapGet("/api/sessions/{id}/history", (string id, HttpRequest request) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(request, id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
     var query = request.Query;
     if (query.Keys.Any(key => key is not ("tail" or "prefixLength" or "afterSeq" or "historyVersion")))
@@ -157,9 +196,9 @@ app.MapGet("/api/sessions/{id}/history", (string id, HttpRequest request) =>
             retryable = true, historyVersion = snapshot.HistoryVersion });
     return Results.Ok(hosted.WebUiHistory(snapshot, tail, prefix, after));
 });
-app.MapGet("/api/sessions/{id}/archive/messages/{seq}", (string id, string seq) =>
+app.MapGet("/api/sessions/{id}/archive/messages/{seq}", (string id, string seq, HttpRequest request) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(request, id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
     if (!long.TryParse(seq, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
         || index is <= 0 or > 9007199254740991L)
@@ -170,7 +209,7 @@ app.MapGet("/api/sessions/{id}/archive/messages/{seq}", (string id, string seq) 
 });
 app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", (string id, string blockId, HttpRequest request) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(request, id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
     if (!long.TryParse(blockId, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
         || index is <= 0 or > 9007199254740991L)
@@ -180,13 +219,13 @@ app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", (string id, str
         && (!int.TryParse(rawPreview, NumberStyles.None, CultureInfo.InvariantCulture, out preview)
             || preview is < 1 or > 20000))
         return Results.BadRequest(new { error = "previewLength must be a positive integer at most 20000." });
-    var result = ContextBlockExpansion.Render(hosted.Archive, id, index, preview);
+    var result = ContextBlockExpansion.Render(hosted.Archive, hosted.Id, index, preview);
     return result is null ? Results.NotFound(new { error = $"CTX-BLOCK B#{index} not found.", code = "CTX_BLOCK_NOT_FOUND" })
         : Results.Ok(result);
 });
 app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(request, id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
     if (!sessions.Accepting) return Results.StatusCode(503);
     JsonObject? input;
@@ -221,14 +260,51 @@ app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request)
         if (text.Trim() != "/stop") return Results.UnprocessableEntity(new { error = "Unsupported experimental Session command." });
         if (hosted.Compactor.Active) return Results.Conflict(new { error = "Use /stop compact to cancel compaction only." });
         if (!hosted.Entry.Snapshot().Busy) return Results.Ok(new { success = true, stoppedCurrent = false });
-        var stopped = await hosted.Registry.Control.StopAsync(id);
+        var stopped = await hosted.Registry.Control.StopAsync(hosted.Id);
         await hosted.DrainAsync();
         return Results.Ok(new { success = true, stoppedCurrent = stopped.StoppedCurrent });
     }
     try
     {
-        await hosted.Registry.Ingress.EnqueueAsync(id, QueueItem.UserText(text, clientMessageId: clientId));
+        await hosted.Registry.Ingress.EnqueueAsync(hosted.Id, QueueItem.UserText(text, clientMessageId: clientId));
         return Results.Accepted(value: new { accepted = true, note = "Queue save attempted; model processing and durable completion are not guaranteed." });
+    }
+    catch (Exception error) { return Results.Problem(error.Message, statusCode: 500); }
+});
+app.MapPost("/api/sessions/{id}/children", async (string id, HttpRequest request) =>
+{
+    var parent = sessions.FindRoute(request, id);
+    if (parent is null) return Results.NotFound(new { error = "Parent Session not found" });
+    if (!sessions.Accepting) return Results.StatusCode(503);
+    try
+    {
+        var body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new InvalidDataException("Child creation must be an object.");
+        if (body.Any(item => item.Key is not ("suffix" or "agentName" or "displayName" or "message" or "forceModel"))
+            || body["suffix"] is not JsonValue suffixValue || !suffixValue.TryGetValue<string>(out var suffix)
+            || new[] { "agentName", "displayName", "message" }.Any(key => body.ContainsKey(key)
+                && (body[key] is not JsonValue item || !item.TryGetValue<string>(out _)))
+            || body.ContainsKey("forceModel") && body["forceModel"] is not JsonObject)
+            throw new InvalidDataException("Invalid child creation fields.");
+        var (child, delivered) = await sessions.CreateChildAsync(parent, suffix,
+            body["agentName"]?.GetValue<string>(), body["displayName"]?.GetValue<string>(),
+            body["message"]?.GetValue<string>(), body["forceModel"] as JsonObject);
+        return Results.Ok(new { success = true, sessionId = child.Id, parentSessionId = parent.Id, delivered });
+    }
+    catch (CommittedSessionCreationException error)
+    { return Results.Json(new { error = error.Message, sessionId = error.SessionId, committed = true,
+        initialDeliveryCommitted = error.InitialDeliveryCommitted }, statusCode: 409); }
+    catch (Exception error) when (error is InvalidDataException or JsonException or InvalidOperationException)
+    { return Results.BadRequest(new { error = error.Message }); }
+});
+app.MapPost("/api/sessions/{id}/refresh-memory", async (string id, HttpRequest request) =>
+{
+    var session = sessions.FindRoute(request, id);
+    if (session is null) return Results.NotFound(new { error = "Session not found" });
+    if (!sessions.Accepting) return Results.StatusCode(503);
+    try
+    {
+        var model = await sessions.RefreshSnapshotAsync(session);
+        return Results.Ok(new { success = true, sessionId = session.Id, concreteModelId = model });
     }
     catch (Exception error) { return Results.Problem(error.Message, statusCode: 500); }
 });
@@ -239,15 +315,15 @@ app.MapGet("/api/webui/stream", async (HttpContext context) =>
     using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
     await WebUiSocket.RunAsync(socket, sessions, lifetime.Token);
 });
-app.MapPost("/api/sessions/{id}/stop", async (string id) =>
+app.MapPost("/api/sessions/{id}/stop", async (string id, HttpRequest request) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(request, id);
     if (hosted is null) return Results.NotFound(new { error = "Session not found" });
     if (hosted.Compactor.Active) return Results.Conflict(new { error = "Use /stop compact to cancel compaction only." });
     if (!hosted.Entry.Snapshot().Busy) return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
     try
     {
-        var result = await hosted.Registry.Control.StopAsync(id);
+        var result = await hosted.Registry.Control.StopAsync(hosted.Id);
         await hosted.DrainAsync();
         return Results.Ok(new { stoppedCurrent = result.StoppedCurrent, abortedInFlight = result.AbortedInFlight });
     }
@@ -255,7 +331,7 @@ app.MapPost("/api/sessions/{id}/stop", async (string id) =>
 });
 app.MapGet("/api/sessions/{id}/stream", async (string id, HttpContext context) =>
 {
-    var hosted = sessions.Find(id);
+    var hosted = sessions.FindRoute(context.Request, id);
     if (hosted is null) { context.Response.StatusCode = 404; return; }
     context.Response.Headers.ContentType = "text/event-stream";
     context.Response.Headers.CacheControl = "no-cache";

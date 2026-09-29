@@ -51,9 +51,9 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       const chunks = []
       for await (const part of req) chunks.push(part)
       const body = JSON.parse(Buffer.concat(chunks).toString())
-      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'submit_compact_plan'])
+      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'submit_compact_plan'])
       assert.equal(body.tools[6].parameters.properties.target.pattern, '^msg#[1-9][0-9]*$')
-      assert.equal(body.tools[7].parameters.required[0], 'replaceAsBlocks')
+      assert.equal(body.tools[12].parameters.required[0], 'replaceAsBlocks')
       assert.equal(req.headers.authorization, `Bearer ${body.model === 'alpha-wire' ? alphaToken : betaToken}`)
       const input = JSON.stringify(body.input)
       const calls = body.input.filter(item => item.type === 'function_call')

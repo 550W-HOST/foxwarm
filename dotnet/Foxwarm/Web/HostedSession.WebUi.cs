@@ -208,26 +208,39 @@ internal sealed class WebUiChatService(IChatService inner, HostedSession hosted)
 }
 
 internal sealed class HostModelChatService(
-    HttpClient http, ResponsesClientOptions baseOptions, HostedSession hosted, HostModels models,
+    HttpClient http, ResponsesClientOptions baseOptions, HostedSession hosted, HostModels models, HostAgentMemory memory,
     Action<string, ResponsesStreamProgress> progress) : IChatService
 {
-    public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
+    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
     {
-        var selected = models.Select(hosted.Entry.Snapshot());
+        var selectedSnapshot = hosted.Entry.Snapshot();
+        var selected = models.Select(selectedSnapshot);
+        var prompt = selectedSnapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
+        if (ConditionalMemory.ReadCurrentModelSnapshotId(prompt) != selected.Model.Key)
+        {
+            prompt = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
+            await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(prompt);
+        }
         var options = baseOptions with
         {
             BaseUri = selected.Model.BaseUri,
             RequestModel = selected.Model.ModelId,
             ConcreteModelId = selected.Model.Key,
             Token = selected.Model.Token,
-            Effort = selected.EffectiveEffort
+            Effort = selected.EffectiveEffort,
+            Instructions = baseOptions.Instructions.Length == 0 ? prompt : baseOptions.Instructions + "\n\n" + prompt
         };
-        return new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
+        return await new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
     }
 }
 
-internal sealed class WebUiToolExecutor(ITurnToolExecutor inner, HostedSession hosted) : ITurnToolExecutor
+internal sealed class WebUiToolExecutor(ITurnToolExecutor inner, HostedSession hosted, HostSessions sessions)
+    : ITurnToolExecutor, ITurnToolControl
 {
+    private int finishPending;
+    public void BeginTurn() => Interlocked.Exchange(ref finishPending, 0);
+    public bool ConsumeFinishAfterBatch() => Interlocked.Exchange(ref finishPending, 0) == 1;
+
     public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
     {
         hosted.SetToolActive(true);
@@ -241,6 +254,12 @@ internal sealed class WebUiToolExecutor(ITurnToolExecutor inner, HostedSession h
                 return await hosted.Executor.ReadAsync(hosted.Id, functionCall["args"] as JsonObject);
             if (name == "recall")
                 return ArchiveRecallTool.Execute(hosted.Archive, functionCall["args"] as JsonObject);
+            if (name is "create_agent" or "create_session" or "create_child_session" or "send_to_session" or "refresh_session_snapshot")
+            {
+                var (response, shouldFinish) = await sessions.ExecuteAgentToolAsync(hosted, name, functionCall["args"] as JsonObject);
+                if (shouldFinish) Interlocked.Exchange(ref finishPending, 1);
+                return response;
+            }
             return await inner.ExecuteAsync(functionCall, cancellationToken);
         }
         finally { hosted.SetToolActive(false); }

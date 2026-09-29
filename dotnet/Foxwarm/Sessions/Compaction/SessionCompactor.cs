@@ -12,6 +12,7 @@ internal sealed partial class SessionCompactor
     private readonly HostModels models;
     private readonly ResponsesClientOptions baseOptions;
     private readonly HttpClient http;
+    private readonly HostAgentMemory memory;
     private readonly object gate = new();
     private CompactRun? active;
     private Task? manualTask;
@@ -24,9 +25,10 @@ internal sealed partial class SessionCompactor
     }
 
     public SessionCompactor(HostedSession hosted, PersistentSessionAuthorityStore store,
-        HostModels models, ResponsesClientOptions baseOptions, HttpClient http)
+        HostModels models, ResponsesClientOptions baseOptions, HttpClient http, HostAgentMemory memory)
     {
         this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions; this.http = http;
+        this.memory = memory;
     }
     public bool Active { get { lock (gate) return active is not null; } }
     public Task DrainAsync() { lock (gate) return manualTask ?? Task.CompletedTask; }

@@ -20,6 +20,9 @@ internal static class WebUiContract
         return new JsonObject
         {
             ["id"] = snapshot.Id,
+            ["agent"] = snapshot.AuthorityEnvelope["agent"]?.DeepClone() ?? JsonValue.Create("main"),
+            ["parentSessionId"] = snapshot.AuthorityEnvelope["parentSessionId"]?.DeepClone(),
+            ["displayName"] = snapshot.AuthorityEnvelope["displayName"]?.DeepClone(),
             ["busy"] = snapshot.Busy,
             ["busyStartedAt"] = snapshot.BusyStartedAt,
             ["queueLength"] = queueLength,

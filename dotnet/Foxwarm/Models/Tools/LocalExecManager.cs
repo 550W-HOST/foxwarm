@@ -15,7 +15,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     private const int PageBytes = 16 * 1024;
     private const int DisplayChars = 16 * 1024;
     private readonly string directory;
-    private readonly string workspace;
+    private readonly Func<string, string> workspaceForSession;
     private readonly ConcurrentDictionary<string, ExecRecord> pending = new(StringComparer.Ordinal);
     private readonly Func<string, string, string, Task> notify;
     private CancellationTokenSource? reconcileStop;
@@ -25,11 +25,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     private sealed record ExecRecord(string SessionId, string Id, string Command, string Cwd, int Pid, long StartedAt,
         string Directory, bool Notify, string? ProcessStartTicks = null);
 
-    internal LocalExecManager(string dataRoot, string workspaceRoot, Func<string, string, string, Task> notify)
+    internal LocalExecManager(string dataRoot, Func<string, string> workspaceForSession, Func<string, string, string, Task> notify)
     {
         if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Experimental persistent exec requires Linux.");
         directory = Path.Combine(Path.GetFullPath(dataRoot), "state", "exec");
-        workspace = Path.GetFullPath(workspaceRoot);
+        this.workspaceForSession = workspaceForSession;
         this.notify = notify;
         Directory.CreateDirectory(directory);
         SetPrivateMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -42,7 +42,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             var path = Path.GetDirectoryName(file)!;
             var record = await ReadRecordAsync(path);
             if (!hasSession(record.SessionId) || !string.Equals(record.Id, Path.GetFileName(path), StringComparison.Ordinal)
-                || !string.Equals(record.SessionId, Path.GetFileName(Path.GetDirectoryName(path)), StringComparison.Ordinal))
+                || !string.Equals(SessionIdentity.ExecDirectorySegment(record.SessionId),
+                    Path.GetFileName(Path.GetDirectoryName(path)), StringComparison.Ordinal))
                 throw new InvalidDataException("Exec tracking references a missing or foreign Session authority.");
             // A clean restart may resume a command that was in its foreground wait at shutdown.
             if (!record.Notify)
@@ -74,7 +75,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var warning = seconds > 60 ? $"WARNING: Requested timeout {seconds.ToString(CultureInfo.InvariantCulture)}s exceeds the 60s maximum; using 60s.\n" : "";
         var waitSeconds = Math.Min(seconds, 60);
         string cwd;
-        try { cwd = ResolveCwd(args["cwd"]?.GetValue<string>()); }
+        try { cwd = ResolveCwd(workspaceForSession(sessionId), args["cwd"]?.GetValue<string>()); }
         catch (ArgumentException error) { return Error("invalid_path", error.Message); }
         ct.ThrowIfCancellationRequested();
         var record = await StartAsync(sessionId, command, cwd, ct);
@@ -116,7 +117,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             if (args["offset"] is not JsonValue value || !value.TryGetValue<long>(out offset) || offset < 0)
                 return Error("invalid_tool_arguments", "offset must be a nonnegative integer.");
         }
-        var path = Path.Combine(directory, sessionId, id);
+        var path = Path.Combine(directory, SessionIdentity.ExecDirectorySegment(sessionId), id);
         if (!File.Exists(Path.Combine(path, "meta.json"))) return Error("exec_not_found", "Execution was not found in this Session.");
         try
         {
@@ -131,7 +132,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private async Task<ExecRecord> StartAsync(string sessionId, string command, string cwd, CancellationToken ct)
     {
-        var sessionDir = Path.Combine(directory, sessionId);
+        var sessionDir = Path.Combine(directory, SessionIdentity.ExecDirectorySegment(sessionId));
         Directory.CreateDirectory(sessionDir);
         SetPrivateMode(sessionDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         string id;
@@ -186,7 +187,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         return record;
     }
 
-    private string ResolveCwd(string? value)
+    private static string ResolveCwd(string workspace, string? value)
     {
         if (value is null) return workspace;
         if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value) || value.Contains('\\') || value.Contains(':') || value.Contains('\0'))

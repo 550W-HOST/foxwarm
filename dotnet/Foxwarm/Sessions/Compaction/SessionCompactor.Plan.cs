@@ -11,18 +11,23 @@ internal sealed partial class SessionCompactor
     {
         var detached = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToList();
         var prompt = CompactPrompt.Build(candidates, guidance);
+        var promptSnapshot = snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         for (var round = 0; round < 15; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             detached.Add(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }) });
             var selected = models.Select(hosted.Entry.Snapshot());
+            if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != selected.Model.Key)
+                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
             var options = baseOptions with
             {
                 BaseUri = selected.Model.BaseUri,
                 RequestModel = selected.Model.ModelId,
                 ConcreteModelId = selected.Model.Key,
                 Token = selected.Model.Token,
-                Effort = selected.EffectiveEffort
+                Effort = selected.EffectiveEffort,
+                Instructions = baseOptions.Instructions.Length == 0 ? promptSnapshot
+                    : baseOptions.Instructions + "\n\n" + promptSnapshot
             };
             var service = new ResponsesChatService(http, options);
             var result = await service.ChatAsync(hosted.Id, detached, cancellationToken);
