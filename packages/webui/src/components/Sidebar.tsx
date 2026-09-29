@@ -115,9 +115,6 @@ export default function Sidebar({
               onCreateSession={onCreateSession}
             />
           </div>
-          <button type="button" onClick={onSelectSearch} className="flex w-full items-center justify-center gap-2 rounded-lg bg-fw-neutral-surface px-3 py-2 text-sm font-medium text-fw-text hover:bg-fw-hover" title="Search history">
-            <Search className="h-4 w-4" /> Search history
-          </button>
           <CodeLaunchButton
             path={codePath}
             nodeId={codeNodeId}
@@ -156,7 +153,10 @@ export default function Sidebar({
           listContainerClassName="p-2 pt-1"
         />
       </div>
-      <div data-sidebar-footer className="flex shrink-0 justify-end border-t border-fw-border bg-fw-surface p-2">
+      <div data-sidebar-footer className="flex shrink-0 justify-end gap-1 border-t border-fw-border bg-fw-surface p-2">
+        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
+          <Search className="h-4 w-4" />
+        </button>
         <GlobalUiSettingsMenu
           menuAlign="end"
           menuSide="top"

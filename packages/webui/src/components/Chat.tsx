@@ -139,6 +139,7 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 
 interface ChatProps {
   sessionId: string
+  searchShortcutActive?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
   onBack?: () => void
@@ -199,7 +200,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -1609,7 +1610,25 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return () => window.clearTimeout(timer)
   }, [currentSearchIndex, navigateSearch, searchMatches, searchOpen, searchQuery])
 
-  useEffect(() => { if (searchOpen) searchInputRef.current?.focus() }, [searchOpen])
+  useEffect(() => { if (searchOpen) { searchInputRef.current?.focus(); searchInputRef.current?.select() } }, [searchOpen])
+
+  const activateSearch = useCallback(() => {
+    setSearchOpen(true)
+    searchInputRef.current?.focus()
+    searchInputRef.current?.select()
+  }, [])
+
+  useEffect(() => {
+    if (!searchShortcutActive) return
+    const onFindShortcut = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'f' || !(event.ctrlKey || event.metaKey)
+        || event.altKey || event.shiftKey || event.isComposing) return
+      event.preventDefault()
+      activateSearch()
+    }
+    window.addEventListener('keydown', onFindShortcut)
+    return () => window.removeEventListener('keydown', onFindShortcut)
+  }, [activateSearch, searchShortcutActive])
   useLayoutEffect(() => {
     setSearchOpen(false)
     setSearchQuery('')
@@ -2075,8 +2094,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 if (event.key === 'Enter') { event.preventDefault(); stepSearch(event.shiftKey ? -1 : 1) }
               }}
               type="search"
-              aria-label="Search loaded messages"
-              placeholder="Search loaded messages"
+              aria-label="Search messages"
+              placeholder="Search messages"
               className="min-w-0 flex-1 rounded-md border border-fw-border bg-fw-surface px-3 py-1.5 text-sm text-fw-text-strong focus:outline-fw-accent dark:border-fw-border-strong"
             />
             <span aria-live="polite" className="shrink-0 text-xs text-fw-text-muted tabular-nums">{searchQuery ? `${selectedSearchMatch ? Math.max(currentSearchIndex, 0) + 1 : 0}/${searchMatches.length}` : '0/0'}</span>
@@ -2088,7 +2107,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         ) : undefined}
         actions={(
           <>
-            <button type="button" onClick={() => setSearchOpen(true)} aria-label="Search messages" title="Search messages" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+            <button type="button" onClick={activateSearch} aria-label="Search messages" title="Search messages" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="hidden sm:inline">Search</span>
             </button>
             {(onOpenCode || onOpenCodeNewWindow) && (
@@ -2307,6 +2326,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   )
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
+  prev.searchShortcutActive === next.searchShortcutActive &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenTerminal === next.onOpenTerminal

@@ -29,7 +29,7 @@ async function buildFixtureBundle() {
         React.createElement(Sidebar, {
           sessions: Array.from({ length: 50 }, (_, i) => ({ id: 'demo/s' + i, displayName: 'Session ' + i, messageCount: 2, lastMessageTime: 100-i, parentSessionId: null })),
           agents: [], currentSession: 'demo/s0', currentView: view,
-          onSelectSession: noop, onSelectArchitecture: noop, onSelectSetup: () => setView('setup'),
+          onSelectSession: noop, onSelectArchitecture: noop, onSelectSearch: noop, onSelectSetup: () => setView('setup'),
           codePath: '/', codeNodeId: 'master', codeOpenInNewWindow: false, codeActive: false,
           nodeTargets: [], onRefreshNodeTargets: noop, onOpenCode: noop, onCodeNodeChange: noop,
           onCodePathChange: noop, onCodeOpenInNewWindowChange: noop, onCreateTerminalTab: noop,
@@ -250,6 +250,8 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     await page.goto(fixtureUrl + '?sidebar', { waitUntil: 'load' })
     const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
     await page.waitForSelector(trigger)
+    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
     assert.equal(await page.$$eval('button[aria-label="Open UI settings"]', els => els.length), 1)
     const topBefore = await page.$eval(trigger, e => e.getBoundingClientRect().top)
     await page.$eval('[data-session-list-scroll-container]', e => { e.scrollTop = e.scrollHeight })
@@ -260,7 +262,7 @@ test('sidebar Settings lives in a fixed footer and opens upward on desktop and t
     await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-global-ui-settings-menu]')).visibility === 'visible')
     const geometry = await page.evaluate(() => {
       const menu = document.querySelector('[data-global-ui-settings-menu]').getBoundingClientRect()
-      const trigger = document.querySelector('[data-sidebar-footer] button').getBoundingClientRect()
+      const trigger = document.querySelector('[data-sidebar-footer] button[aria-label="Open UI settings"]').getBoundingClientRect()
       return { top: menu.top, bottom: menu.bottom, left: menu.left, right: menu.right, triggerTop: trigger.top, triggerBottom: trigger.bottom, height: innerHeight, width: innerWidth }
     })
     assert.ok(geometry.top >= 7.5 && geometry.bottom < geometry.triggerTop)

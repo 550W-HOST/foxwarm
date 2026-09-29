@@ -41,19 +41,20 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false } = {}) {
   const page = await browser.newPage()
   await page.setViewport({ width: 1400, height: 900 })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat }) => {
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = splitPanes
       ? { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
-        { id: 'pane-main', kind: 'pane', tabIds: initialTabs.filter(tab => tab.id !== 'system:agents').map(tab => tab.id), activeTabId: activeId },
-        { id: 'pane-other', kind: 'pane', tabIds: ['system:agents'], activeTabId: 'system:agents' },
+        { id: 'pane-main', kind: 'pane', tabIds: splitSecondChat ? initialTabs.filter(tab => tab.id !== 'chat:e2e-b').map(tab => tab.id) : initialTabs.filter(tab => tab.id !== 'system:agents').map(tab => tab.id), activeTabId: activeId },
+        { id: 'pane-other', kind: 'pane', tabIds: [splitSecondChat ? 'chat:e2e-b' : 'system:agents'], activeTabId: splitSecondChat ? 'chat:e2e-b' : 'system:agents' },
       ] }
       : { id: 'pane-main', kind: 'pane', tabIds: initialTabs.map(tab => tab.id), activeTabId: activeId }
     localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById, root, focusedPaneId: 'pane-main' }, version: 1 }))
     localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
+    localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__sent = []
     window.fetch = (input, options = {}) => {
@@ -87,7 +88,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => !!window.foxwarmTest)
   return page
@@ -354,12 +355,70 @@ test('old preview records disappear without removing kept or system tabs; canoni
 test('global history entry opens a persistent workbench tab without a chat composer', async () => {
   const page = await openFixture()
   try {
-    await page.click('button[title="Search history"]')
+    const footer = '[data-sidebar-footer]'
+    assert.deepEqual(await page.$$eval(`${footer} button`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
+    assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.getBoundingClientRect().width), 36)
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$(footer))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/sidebar-footer-search.png` })
+    await page.click(`${footer} button[aria-label="Search history"]`)
     await page.waitForSelector('[data-tab-id="system:search"]')
     await page.waitForSelector('[data-history-search-view]')
     assert.equal(await page.$('[data-history-search-view] [aria-label="Message"]'), null)
     assert.equal((await state(page)).root.activeTabId, 'system:search')
     assert.equal((await state(page)).tabsById['system:search'].type, 'search')
     assert.equal((await state(page)).hash, '#tab/system:search')
+  } finally { await page.close() }
+})
+
+test('collapsed rail and mobile Session list place the Search icon in their footers', async () => {
+  const page = await openFixture()
+  try {
+    await page.click('button[title="Collapse sidebar"]')
+    await page.waitForSelector('.w-12 [data-sidebar-footer] button[aria-label="Search history"]')
+    assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Search history"]'), null)
+    assert.equal(await page.$('.w-12 button[aria-label="Open UI settings"]'), null)
+    await page.setViewport({ width: 390, height: 800 })
+    await page.waitForSelector('[data-sidebar-footer] button[aria-label="Open UI settings"]')
+    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
+    await page.waitForSelector('[data-history-search-view]')
+  } finally { await page.close() }
+})
+
+test('Ctrl/Cmd+F targets the focused Chat pane and not inactive Chat or non-Chat workbench tabs', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false), system], activeTabId: 'chat:e2e-a', split: true, splitSecondChat: true })
+  try {
+    await page.waitForSelector('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+    await page.waitForSelector('[data-pane-id="pane-other"] [role="textbox"][aria-label="Message"]')
+    await page.click('[data-pane-id="pane-main"] [role="textbox"][aria-label="Message"]')
+    await page.keyboard.down('Control'); await page.keyboard.press('f'); await page.keyboard.up('Control')
+    await page.waitForSelector('[data-pane-id="pane-main"] [data-chat-search] input')
+    assert.equal(await page.$('[data-pane-id="pane-other"] [data-chat-search]'), null)
+    await page.type('[data-pane-id="pane-main"] [data-chat-search] input', 'repeat query')
+    await page.click('[data-sidebar-footer] button[aria-label="Open UI settings"]')
+    await page.keyboard.down('Control'); await page.keyboard.press('f'); await page.keyboard.up('Control')
+    assert.deepEqual(await page.evaluate(() => ({
+      value: document.querySelector('[data-pane-id="pane-main"] [data-chat-search] input').value,
+      selected: document.activeElement === document.querySelector('[data-pane-id="pane-main"] [data-chat-search] input')
+        && document.activeElement.selectionStart === 0 && document.activeElement.selectionEnd === 'repeat query'.length,
+      count: document.querySelectorAll('[data-chat-search]').length,
+    })), { value: 'repeat query', selected: true, count: 1 })
+    await page.click('[data-pane-id="pane-main"] button[aria-label="Close search"]')
+    await page.click('[data-pane-id="pane-other"] [role="textbox"][aria-label="Message"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-other')
+    await page.keyboard.down('Meta'); await page.keyboard.press('f'); await page.keyboard.up('Meta')
+    await page.waitForSelector('[data-pane-id="pane-other"] [data-chat-search] input')
+    assert.equal(await page.$('[data-pane-id="pane-main"] [data-chat-search]'), null)
+    const ignored = await page.evaluate(() => {
+      const dispatch = init => { const event = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true, ...init }); window.dispatchEvent(event); return event.defaultPrevented }
+      return [dispatch({ shiftKey: true }), dispatch({ altKey: true }), dispatch({ isComposing: true })]
+    })
+    assert.deepEqual(ignored, [false, false, false])
+    await page.click('[data-pane-id="pane-other"] button[aria-label="Close search"]')
+    await page.click('[data-pane-id="pane-main"] [data-tab-id="system:agents"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-main')
+    const blocked = await page.evaluate(() => { const event = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented })
+    assert.equal(blocked, false)
+    assert.equal(await page.$$eval('[data-chat-search]', elements => elements.length), 0)
   } finally { await page.close() }
 })

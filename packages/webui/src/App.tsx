@@ -1422,6 +1422,7 @@ function App() {
         <Chat
           key={`chat:${tab.sessionId}`}
           sessionId={tab.sessionId}
+          searchShortcutActive={tab.id === focusedActiveTabId && (!isMobile || !showSessionList)}
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}

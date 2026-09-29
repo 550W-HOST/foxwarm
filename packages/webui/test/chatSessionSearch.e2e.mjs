@@ -68,8 +68,8 @@ before(async () => {
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve))})
 
 const query = async text => {
-  await page.$eval('[aria-label="Search loaded messages"]', (input,value) => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))}, text)
-  await page.waitForFunction(value => document.querySelector('[aria-label="Search loaded messages"]')?.value===value,{},text)
+  await page.$eval('[data-chat-search] input[aria-label="Search messages"]', (input,value) => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))}, text)
+  await page.waitForFunction(value => document.querySelector('[data-chat-search] input[aria-label="Search messages"]')?.value===value,{},text)
 }
 const snapshot = () => page.evaluate(() => {
   const container=document.querySelector('.foxwarm-chat-messages')
@@ -81,9 +81,10 @@ const snapshot = () => page.evaluate(() => {
 
 test('finds the complete tool tail through a folded group and inner card, and restores disclosure on close',async()=>{
   await page.click('[aria-label="Search messages"]')
-  await page.waitForSelector('[aria-label="Search loaded messages"]')
+  assert.equal(await page.$eval('[data-chat-search] input', input=>input.placeholder),'Search messages')
+  await page.waitForSelector('[aria-label="Search messages"]')
   assert.equal((await snapshot()).oldMounted,false)
-  await page.type('[aria-label="Search loaded messages"]','CJK目标尾部')
+  await page.type('[data-chat-search] input[aria-label="Search messages"]','CJK目标尾部')
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='CJK目标尾部'))
   const state=await snapshot()
   assert.equal(state.hits,'1/1');assert.equal(state.highlight,'CJK目标尾部');assert.equal(state.visible,true)
@@ -96,10 +97,26 @@ test('finds the complete tool tail through a folded group and inner card, and re
   assert.equal((await snapshot()).groups[0],'false')
 })
 
+test('standalone Chat captures Ctrl/Cmd+F but leaves extended find combinations alone',async()=>{
+  await page.click('[role="textbox"][aria-label="Message"]')
+  await page.keyboard.down('Control');await page.keyboard.press('f');await page.keyboard.up('Control')
+  await page.waitForSelector('[data-chat-search] input[aria-label="Search messages"]')
+  await page.type('[data-chat-search] input','retained')
+  await page.keyboard.down('Meta');await page.keyboard.press('f');await page.keyboard.up('Meta')
+  assert.equal(await page.$eval('[data-chat-search] input',input=>input===document.activeElement&&input.selectionStart===0&&input.selectionEnd===input.value.length),true)
+  await page.click('[aria-label="Close search"]')
+  const ignored=await page.evaluate(()=>{
+    const send=init=>{const event=new KeyboardEvent('keydown',{key:'f',ctrlKey:true,bubbles:true,cancelable:true,...init});window.dispatchEvent(event);return event.defaultPrevented}
+    return [send({shiftKey:true}),send({altKey:true}),send({isComposing:true})]
+  })
+  assert.deepEqual(ignored,[false,false,false])
+  assert.equal(await page.$('[data-chat-search]'),null)
+})
+
 test('finds already-loaded older unmounted rows, read results, reasoning, rendered Markdown and CTX summary without Archive',async()=>{
   await page.click('[aria-label="Search messages"]')
   for(const [needle, expected] of [['OLD_ONLY_MATCH','OLD_ONLY_MATCH'],['PASTED_DEEP_SEARCH','PASTED_DEEP_SEARCH'],['command-needle','command-needle'],['read-file-needle','read-file-needle'],['fallback-needle','fallback-needle'],['json-needle','json-needle'],['thought-needle','thought-needle'],['hello world','hello world'],['visible-needle','visible-needle'],['<safe>','<safe>'],['CTX摘要末尾','CTX摘要末尾'],['SYSTEM_BODY_HIDDEN_TARGET','SYSTEM_BODY_HIDDEN_TARGET']]){
-    await page.click('[aria-label="Search loaded messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(needle)
+    await page.click('[data-chat-search] input[aria-label="Search messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(needle)
     await page.waitForFunction(value=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()===value),{timeout:4000},expected)
     const state=await snapshot();assert.equal(state.visible,true,`${needle} ${JSON.stringify(state)}`);assert.equal(state.hits,'1/1',needle)
   }
@@ -110,7 +127,7 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
 
 test('literal matching and local keyboard navigation keep the match counter in sync',async()=>{
   await page.click('[aria-label="Search messages"]')
-  await page.type('[aria-label="Search loaded messages"]','earlier ordinary message')
+  await page.type('[data-chat-search] input[aria-label="Search messages"]','earlier ordinary message')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/105',{timeout:5000})
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString().toLowerCase()==='earlier ordinary message'),{timeout:5000})
   await page.keyboard.press('Enter')
@@ -118,7 +135,7 @@ test('literal matching and local keyboard navigation keep the match counter in s
   await page.keyboard.down('Shift');await page.keyboard.press('Enter');await page.keyboard.up('Shift')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/105',{timeout:5000})
   for(const excluded of ['iVBORw0KGgoAAAANSUhEUg','attachment1_attachment-marker-only','attachment-ref ref=','foxwarm-system kind="goal-reminder"','functionResponse.__meta','**world**','a.*']){
-    await page.click('[aria-label="Search loaded messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(excluded)
+    await page.click('[data-chat-search] input[aria-label="Search messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(excluded)
     await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='0/0',{timeout:2500})
   }
   await page.keyboard.press('Escape')
@@ -128,7 +145,7 @@ test('literal matching and local keyboard navigation keep the match counter in s
 
 test('manual scroll is retained through an unrelated stream update and search close',async()=>{
   await page.click('[aria-label="Search messages"]')
-  await page.type('[aria-label="Search loaded messages"]','OLD_ONLY_MATCH')
+  await page.type('[data-chat-search] input[aria-label="Search messages"]','OLD_ONLY_MATCH')
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='OLD_ONLY_MATCH'))
   await page.evaluate(()=>{const container=document.querySelector('.foxwarm-chat-messages');container.scrollTop=1800;container.dispatchEvent(new Event('scroll'));window.fixture.emitStream('UNCOMMITTED_STREAM_SEARCH_TOKEN')})
   await page.waitForFunction(()=>document.querySelector('.foxwarm-chat-timeline')?.textContent.includes('UNCOMMITTED_STREAM_SEARCH_TOKEN'))

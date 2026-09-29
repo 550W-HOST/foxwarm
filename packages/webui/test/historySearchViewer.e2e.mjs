@@ -1,11 +1,12 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { readFile, readdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 
 const entry = new URL('../src/components/HistorySearchView.tsx', import.meta.url).pathname
-let browser, server, fixture, baseUrl
+let browser, server, fixture, stylesheet, baseUrl
 
 const source = `
 import React from 'react'
@@ -18,7 +19,7 @@ const results = [
     msg('user', 10, [{ text: 'alpha question' }, { inlineDataRef: { blobId: 'sample.png', mimeType: 'image/png', apiPath: '/blobs/sample.png' } }]),
     msg('model', 11, [{ text: 'alpha answer' }, { functionCall: { id: 'call-1', name: 'read', args: { filePath: 'memo.txt' } } }]),
   ] },
-  { key: 'hit-b', kind: 'block', sessionId: 'beta', firstSeq: 20, lastSeq: 21, hasEarlier: false, hasLater: true, messages: [block] },
+  { key: 'hit-b', kind: 'block', sessionId: 'beta', firstSeq: 20, lastSeq: 21, hasEarlier: true, hasLater: true, messages: [block] },
 ]
 window.__requests = []
 window.fetch = async (input, options = {}) => {
@@ -28,6 +29,7 @@ window.fetch = async (input, options = {}) => {
   if (url.pathname.endsWith('/api/history/search')) {
     if (url.searchParams.get('query') === 'slow') return new Promise(resolve => { window.__resolveSlow = () => resolve(new Response(JSON.stringify({ results: [results[0]] }), { headers: { 'Content-Type': 'application/json' } })) })
     if (url.searchParams.get('query') === 'fresh') return response({ results: [results[1]] })
+    if (url.searchParams.get('query') === 'stale') return response({ results: [{ key: 'stale', sessionId: 'alpha', kind: 'unavailable', messages: [], hasEarlier: false, hasLater: false, fallbackExcerpt: 'Cached excerpt only' }] })
     return response({ results })
   }
   if (url.pathname.endsWith('/api/history/window')) {
@@ -39,6 +41,7 @@ window.fetch = async (input, options = {}) => {
     }
     if (url.searchParams.has('targetEndSeq')) return response({ messages: [msg('model', 11, [{ text: 'continuing selected range' }])], firstSeq: 11, lastSeq: 11,
       shownRange: { startSeq: 11, endSeq: 11 }, hasEarlier: true, hasLater: true, hasMoreInTarget: false })
+    if (url.searchParams.has('beforeSeq')) return response({ messages: [msg('user', 19, [{ text: 'earlier beta detail' }])], firstSeq: 19, lastSeq: 19, hasEarlier: false, hasLater: true })
     if (url.searchParams.has('afterSeq')) return response({ messages: [msg('tool', 12, [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'later alpha tool output' } } }])], firstSeq: 12, lastSeq: 12, hasEarlier: true, hasLater: false })
   }
   if (url.pathname.endsWith('/context-blocks/3/expand')) return response({ sessionId: 'beta', blockId: 3, expansionKind: 'messages', messages: [msg('user', 20, [{ text: 'nested beta detail' }])] })
@@ -49,10 +52,15 @@ createRoot(document.getElementById('app')).render(<HistorySearchView isMobile={f
 
 before(async () => {
   fixture = (await build({ stdin: { contents: source, resolveDir: new URL('../', import.meta.url).pathname, sourcefile: 'history-viewer-fixture.tsx', loader: 'tsx' }, bundle: true, format: 'iife', platform: 'browser', write: false, jsx: 'automatic' })).outputFiles[0].text
+  const assets = new URL('../dist/assets/', import.meta.url)
+  const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
+  assert.ok(cssName, 'build the WebUI before history viewer browser tests')
+  stylesheet = await readFile(new URL(cssName, assets), 'utf8')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
   server = createServer((request, response) => {
     const path = new URL(request.url, 'http://fixture').pathname
-    if (path === '/prefix/ui/' || path === '/prefix/ui/index.html') { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end('<!doctype html><div id="app"></div><script src="/prefix/ui/fixture.js"></script>'); return }
+    if (path === '/prefix/ui/' || path === '/prefix/ui/index.html') { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end('<!doctype html><link rel="stylesheet" href="/prefix/ui/fixture.css"><div id="app"></div><script src="/prefix/ui/fixture.js"></script>'); return }
+    if (path === '/prefix/ui/fixture.css') { response.writeHead(200, { 'Content-Type': 'text/css' }); response.end(stylesheet); return }
     if (path === '/prefix/ui/fixture.js') { response.writeHead(200, { 'Content-Type': 'application/javascript' }); response.end(fixture); return }
     if (path === '/prefix/ui/api/blobs/sample.png') { response.writeHead(200, { 'Content-Type': 'image/png' }); response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')); return }
     response.writeHead(404); response.end()
@@ -77,9 +85,16 @@ test('history results use independent timelines and pagination, CTX expansion, i
     assert.equal(await page.$eval('[data-history-result="hit-a"]', el => el.textContent.includes('alpha answer')), true)
     assert.equal(await page.$eval('[data-history-result="hit-b"]', el => el.textContent.includes('Block topic')), true)
     assert.equal(await page.$eval('[data-history-result="hit-a"] img', el => el.getAttribute('src')?.includes('/prefix/ui/api/blobs/sample.png')), true)
-    await page.click('[data-history-result="hit-a"] > button:last-of-type')
+    assert.deepEqual(await page.$eval('[data-history-result="hit-a"] [data-history-page="later"]', el => ({ wide: el.getBoundingClientRect().width > el.closest('[data-history-result]').getBoundingClientRect().width * 0.8, icon: !!el.querySelector('svg'), dashed: !!el.querySelector('.border-dashed'), range: el.textContent })), { wide: true, icon: true, dashed: true, range: 'Load latermsg#10–11' })
+    assert.equal(await page.$eval('[data-history-result="hit-a"] header', el => el.textContent.includes('msg#10–11')), false)
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-history-result="hit-a"]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-range-row.png` })
+    await page.click('[data-history-result="hit-a"] [data-history-page="later"]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="hit-a"]')?.textContent?.includes('later alpha tool output'))
     assert.equal(await page.$eval('[data-history-result="hit-b"]', el => el.textContent.includes('later alpha tool output')), false)
+    await page.click('[data-history-result="hit-b"] [data-history-page="earlier"]')
+    await page.waitForFunction(() => document.querySelector('[data-history-result="hit-b"]')?.textContent?.includes('earlier beta detail'))
+    assert.equal(await page.$eval('[data-history-result="hit-a"]', el => el.textContent.includes('earlier beta detail')), false)
+    assert.equal(await page.$eval('[data-history-result="hit-b"] [data-history-page="later"]', el => el.textContent.includes('msg#19–21')), true)
     assert.equal(await page.$eval('[data-history-result="hit-a"]', el => !!el.querySelector('[data-tool-group], .foxwarm-tool-response')), true)
     const contextButton = await page.$('[data-history-result="hit-b"] [aria-label*="Expand"]')
     assert.ok(contextButton)
@@ -90,7 +105,19 @@ test('history results use independent timelines and pagination, CTX expansion, i
     await page.keyboard.type('sessionId=alpha msg#10-11')
     await page.click('button[type=submit]')
     await page.waitForFunction(() => document.querySelector('[data-history-search-results]')?.textContent?.includes('exact archive message'))
+    assert.equal(await page.$eval('[data-history-result] [data-history-range]', el => el.textContent.includes('Selected msg#10–11')), true)
     assert.equal(await page.evaluate(() => window.__requests.some(url => url.includes('sessionId=alpha') && url.includes('target=msg%2310-11'))), true)
+  } finally { await page.close() }
+})
+
+test('a cached source without original messages never shows a fabricated message range', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.goto(baseUrl)
+    await page.type('#history-search-query', 'stale')
+    await page.click('button[type=submit]')
+    await page.waitForSelector('[data-history-result="stale"]')
+    assert.equal(await page.$eval('[data-history-result="stale"]', el => el.textContent.includes('Cached excerpt only') && !el.querySelector('[data-history-page], [data-history-range]')), true)
   } finally { await page.close() }
 })
 
@@ -118,11 +145,11 @@ test('a pasted range continues inside its bound before ordinary later browsing',
     await page.type('#history-search-query', 'sessionId=alpha msg#10-200')
     await page.click('button[type=submit]')
     await page.waitForSelector('[data-history-result]')
-    assert.equal(await page.$eval('[data-history-result]', el => el.textContent.includes('Selected msg#10-200 (shown 10–10)')), true)
-    await page.click('[data-history-result] > button:last-of-type')
+    assert.equal(await page.$eval('[data-history-result] [data-history-page="later"]', el => el.textContent.includes('Selected msg#10–200 · shown 10–10')), true)
+    await page.click('[data-history-result] [data-history-page="later"]')
     await page.waitForFunction(() => document.querySelector('[data-history-result]')?.textContent?.includes('continuing selected range'))
-    assert.equal(await page.$eval('[data-history-result] > button:last-of-type', el => el.textContent), 'Load later')
-    await page.click('[data-history-result] > button:last-of-type')
+    assert.equal(await page.$eval('[data-history-result] [data-history-page="later"]', el => el.textContent.includes('Load later') && el.textContent.includes('shown 10–11')), true)
+    await page.click('[data-history-result] [data-history-page="later"]')
     await page.waitForFunction(() => document.querySelector('[data-history-result]')?.textContent?.includes('later alpha tool output'))
     const requests = await page.evaluate(() => window.__requests.filter(url => url.includes('/history/window')))
     assert.equal(requests.some(url => url.includes('afterSeq=10') && url.includes('targetEndSeq=200')), true)

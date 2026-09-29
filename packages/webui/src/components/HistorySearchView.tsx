@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Search } from 'lucide-react'
+import { ChevronDown, ChevronUp, Search } from 'lucide-react'
 import ChatTimeline from './ChatTimeline'
 import type { Message } from './chatShared'
 import { API_BASE_PATH } from '../config'
@@ -41,6 +41,36 @@ function mergeMessages(previous: Message[], incoming: Message[], direction: 'ear
   const oldSeqs = new Set(previous.map(message => message.__meta?.seq).filter((seq): seq is number => typeof seq === 'number'))
   const unique = incoming.filter(message => !oldSeqs.has(message.__meta?.seq || -1))
   return direction === 'earlier' ? [...unique, ...previous] : [...previous, ...unique]
+}
+
+function HistoryRangeRow({ result, direction, onLoad }: {
+  result: HistoryResult
+  direction?: 'earlier' | 'later'
+  onLoad?: () => void
+}) {
+  const visible = result.firstSeq
+    ? `msg#${result.firstSeq}${result.lastSeq && result.lastSeq !== result.firstSeq ? `–${result.lastSeq}` : ''}`
+    : 'Messages'
+  const selected = result.requestedRange
+    ? `Selected msg#${result.requestedRange.startSeq}–${result.requestedRange.endSeq}${result.shownRange ? ` · shown ${result.shownRange.startSeq}–${result.shownRange.endSeq}` : ''}`
+    : ''
+  const range = selected ? `${visible} · ${selected}` : visible
+  const action = direction === 'earlier' ? 'Load earlier'
+    : result.hasMoreInTarget ? 'Continue selected range' : 'Load later'
+  const content = <>
+    <span aria-hidden="true" className="flex w-10 shrink-0 self-stretch items-center justify-center border-r border-dashed border-fw-border text-fw-text-muted">
+      {direction === 'earlier' ? <ChevronUp size={16} /> : direction === 'later' ? <ChevronDown size={16} /> : null}
+    </span>
+    {direction && <span className="shrink-0 px-3 font-medium">{result.loading === direction ? 'Loading…' : action}</span>}
+    <span className="min-w-0 flex-1 px-3 py-2 text-right text-fw-text-muted">{range}</span>
+  </>
+  const className = 'flex min-h-9 w-full items-stretch border-y border-fw-border bg-fw-neutral-surface text-left text-xs text-fw-text transition-colors dark:border-fw-border'
+  return direction ? (
+    <button type="button" data-history-page={direction} onClick={onLoad} disabled={!!result.loading}
+      aria-label={`${action}, ${range}`} className={`${className} hover:bg-fw-hover disabled:cursor-wait disabled:opacity-60`}>
+      {content}
+    </button>
+  ) : <div data-history-range className={className}>{content}</div>
 }
 
 export default function HistorySearchView({ isMobile, groupTools, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack }: {
@@ -189,13 +219,14 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
             <section key={`${result.key}:${index}`} data-history-result={result.key} className="min-w-0 rounded-lg border border-fw-border bg-fw-surface p-3 sm:p-4">
               <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2 border-b border-fw-border pb-2 text-xs text-fw-text-muted">
                 <span className="font-medium text-fw-text-strong">{result.sessionId}</span>
-                <span>{result.kind === 'block' ? 'Context summary' : result.kind === 'unavailable' ? 'Archived source unavailable' : result.firstSeq ? `Messages ${result.firstSeq}${result.lastSeq && result.lastSeq !== result.firstSeq ? `–${result.lastSeq}` : ''}` : 'Messages'}{result.requestedRange && ` · Selected msg#${result.requestedRange.startSeq}-${result.requestedRange.endSeq}${result.shownRange ? ` (shown ${result.shownRange.startSeq}–${result.shownRange.endSeq})` : ''}`}</span>
+                <span>{result.kind === 'block' ? 'Context summary' : result.kind === 'unavailable' ? 'Archived source unavailable' : 'Messages'}</span>
               </header>
               {result.kind === 'unavailable' ? <p className="text-sm">The original messages are unavailable. {result.fallbackExcerpt && <span>Cached excerpt: {result.fallbackExcerpt}</span>}</p> : (
                 <>
-                  {result.hasEarlier && <button type="button" onClick={() => void load(result.key, 'earlier')} disabled={!!result.loading} className="mb-3 rounded border border-fw-border px-3 py-1 text-xs hover:bg-fw-hover disabled:opacity-50">{result.loading === 'earlier' ? 'Loading…' : 'Load earlier'}</button>}
+                  {result.hasEarlier && <div className="mb-3"><HistoryRangeRow result={result} direction="earlier" onLoad={() => void load(result.key, 'earlier')} /></div>}
+                  {!result.hasEarlier && !result.hasLater && !!result.firstSeq && <div className="mb-3"><HistoryRangeRow result={result} /></div>}
                   <ChatTimeline sessionId={result.sessionId} messages={result.messages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} />
-                  {result.hasLater && <button type="button" onClick={() => void load(result.key, 'later')} disabled={!!result.loading} className="mt-3 rounded border border-fw-border px-3 py-1 text-xs hover:bg-fw-hover disabled:opacity-50">{result.loading === 'later' ? 'Loading…' : result.hasMoreInTarget ? 'Continue selected range' : 'Load later'}</button>}
+                  {result.hasLater && <div className="mt-3"><HistoryRangeRow result={result} direction="later" onLoad={() => void load(result.key, 'later')} /></div>}
                   {result.matchedFacts?.map((fact, factIndex) => <p key={factIndex} className="mt-2 text-xs text-fw-text-muted">Matched memory fact{fact.kind ? ` (${fact.kind})` : ''}: {fact.text}</p>)}
                   {result.error && <p role="alert" className="mt-2 text-sm text-fw-warning">{result.error}</p>}
                 </>

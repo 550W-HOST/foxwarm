@@ -37,10 +37,6 @@ export default function CollapsedSidebar({
       {/* Header */}
       <div className="flex flex-col items-center gap-2 py-3 border-b border-fw-border w-full">
         <button
-          type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history"
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover"
-        ><Search className="h-4 w-4" /></button>
-        <button
           type="button"
           onClick={onToggleCollapsed}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition"
@@ -93,6 +89,11 @@ export default function CollapsedSidebar({
             </button>
           )
         })}
+      </div>
+      <div data-sidebar-footer className="flex w-full shrink-0 justify-center border-t border-fw-border py-2">
+        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text-strong">
+          <Search className="h-4 w-4" />
+        </button>
       </div>
     </div>
   )
