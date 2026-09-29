@@ -15,7 +15,7 @@ async function until(check: () => unknown | Promise<unknown>, label: string, ms 
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped background completion', { timeout: 60_000 }, async () => {
+test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped background completion', { timeout: 150_000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-shell-e2e-'));
   process.env.FOXWARM_DATA_DIR = path.join(root, 'main');
   const { HttpServer } = await import('../httpServer');
@@ -28,7 +28,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
   const { executeNodeTool, validateNodeSelection, shutdownNodeExecution } = await import('../nodeExecution');
   const { tool_wait } = await import('../toolsSessionAgent/interSession');
   const { hasRemoteExecLivenessClaim } = await import('./remoteExecLiveness');
-  const { resolveSessionToolDefinitions } = await import('../llm');
+  const { resolveSessionToolDefinitions, executeTools } = await import('../llm');
   const { setNodeEventCapabilitySecretForTests } = await import('./sessionEventCapability');
   setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 47));
   const server = new HttpServer(0, 'fixture-api');
@@ -101,7 +101,7 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     client = spawn(busybox ? '/usr/bin/busybox' : '/bin/sh', [
       ...(busybox ? ['ash'] : []), downloaded, `--host=${host}`, '--node-id=shell-fixture',
     ], {
-      cwd: startup, env: { ...process.env, ...(busybox ? { PATH: bin } : {}), NODE_AUTH_TOKEN: approved.authToken, TMPDIR: clientTmp }, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: startup, env: { ...process.env, ...(busybox ? { PATH: bin } : {}), NODE_AUTH_TOKEN: approved.authToken, TMPDIR: clientTmp }, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
     });
     client.stdout!.on('data', chunk => { stdout += String(chunk); });
     client.stderr!.on('data', chunk => { stderr += String(chunk); });
@@ -164,6 +164,43 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     const binary = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: "printf '\\000\\377'" });
     assert.match(binary.output, /hexadecimal.*\n00ff/);
 
+    // Use the ordinary adjacent-exec batch path with the real 62s call deadline
+    // and 90s poll-liveness boundary; no production clocks/limits are changed.
+    const batchResponses = (message: any): any[] => message.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.response);
+    const backgroundStarted = Date.now();
+    const manyBackground = batchResponses(await executeTools(Array.from({ length: 4 }, (_, index) => ({
+      id: `long-background-${index}`, name: 'exec',
+      args: { command: `printf once >> background-effect-${index}; sleep 95; printf background-${index}`, timeout: 1 },
+    })), { sessionId: session.id, session }, session));
+    const backgroundIds: string[] = manyBackground.map((response: any) => response.execId);
+    assert.equal(backgroundIds.filter(Boolean).length, 4);
+    const busyTransport = nodesManager.getNode('shell-fixture')!.httpExec;
+    const foregroundStarted = Date.now();
+    const adjacent = executeTools([
+      { id: 'parallel-first', name: 'exec', args: { command: 'printf started > foreground-first; sleep 35; printf first', timeout: 60 } },
+      { id: 'parallel-second', name: 'exec', args: { command: 'printf started > foreground-second; sleep 35; printf second', timeout: 60 } },
+    ], { sessionId: session.id, session }, session);
+    await until(async () => await fs.pathExists(path.join(startup, 'foreground-first')) && await fs.pathExists(path.join(startup, 'foreground-second')), 'both adjacent foreground commands start while four jobs run', 5_000);
+    const adjacentResponses = batchResponses(await adjacent);
+    assert.equal(adjacentResponses.length, 2);
+    assert.equal(adjacentResponses[0].exitCode, 0);
+    assert.equal(adjacentResponses[1].exitCode, 0);
+    assert.match(adjacentResponses[0].output, /first/);
+    assert.match(adjacentResponses[1].output, /second/);
+    assert.ok(Date.now() - foregroundStarted < 55_000, 'both 35s foreground results arrive before either 62s call deadline');
+    await until(() => {
+      const node = nodesManager.getNode('shell-fixture');
+      assert.ok(node);
+      assert.equal(node?.httpExec, busyTransport, 'four long background jobs do not disconnect their polling transport');
+      assert.ok(Date.now() - node.lastActivity < 40_000, 'normal long polling continues while commands wait/report');
+      return backgroundIds.every(execId => session.queue.some(item => item.execId === execId));
+    }, 'all four long background completions', 75_000);
+    assert.ok(Date.now() - backgroundStarted >= 90_000, 'four background jobs were observed across the actual online expiry boundary');
+    for (let index = 0; index < 4; index++) {
+      assert.equal(await fs.readFile(path.join(startup, `background-effect-${index}`), 'utf8'), 'once');
+      assert.equal(session.queue.filter(item => item.execId === backgroundIds[index]).length, 1);
+    }
+
     dropFinishedReply = true;
     const beforeReports = finishedRequests;
     const background = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: 'printf once >> effect; sleep 4; printf completed', timeout: 1 });
@@ -202,6 +239,9 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     stopRoutes();
     await server.stop();
     if (client && client.exitCode === null) await until(() => client!.exitCode !== null || client!.signalCode !== null, 'client cleanup');
+    // The fixture owns its detached process group. On a failed assertion, clean
+    // test commands too; production disconnect deliberately does not kill them.
+    if (client?.pid) { try { process.kill(-client.pid, 'SIGKILL'); } catch {} }
     await shutdownNodeExecution();
     setNodeEventCapabilitySecretForTests();
     await fs.remove(root);

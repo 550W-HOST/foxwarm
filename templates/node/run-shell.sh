@@ -116,20 +116,25 @@ report() {
 }
 
 run_job() {
-  dir=$1
-  # A collector drains all bytes; sample truncation never closes the command's pipe.
-  collect "$dir" & collector=$!
-  sh "$dir/script" > "$dir/pipe" 2>&1
-  rc=$?
-  wait "$collector"
-  printf '%s\n' "$rc" > "$dir/exit"
-  : > "$dir/ready"
-  while [ ! -f "$dir/decision" ]; do sleep 1; done
-  if [ "$(cat "$dir/decision")" = foreground ]; then
-    report "$dir" finished || echo 'Foreground result unavailable; command will not be executed again.' >&2
-  else
-    report "$dir" finished || echo 'Background completion unavailable; command will not be executed again.' >&2
+  dir=$1; timeout=$2
+  # Each job owns its command, foreground budget and report retries independently.
+  # The collector drains all bytes; truncation never closes the command's pipe.
+  (
+    collect "$dir" & collector=$!
+    sh "$dir/script" > "$dir/pipe" 2>&1
+    rc=$?
+    wait "$collector"
+    printf '%s\n' "$rc" > "$dir/exit"
+    : > "$dir/ready"
+  ) & runner=$!
+  elapsed=0
+  while [ ! -f "$dir/ready" ] && [ "$elapsed" -lt "$timeout" ]; do sleep 1; elapsed=$((elapsed + 1)); done
+  if [ ! -f "$dir/ready" ]; then
+    # Only retry this notice, never the command that has already started.
+    report "$dir" background || echo 'Background result unavailable; command will not be executed again.' >&2
   fi
+  wait "$runner"
+  report "$dir" finished || echo 'Completion unavailable; command will not be executed again.' >&2
   rm -rf "$dir"
   if [ -f "$STATE/stopped" ]; then
     active=0
@@ -139,10 +144,7 @@ run_job() {
 }
 
 while [ "$STOP" -eq 0 ]; do
-  # Bound transient local jobs as well as each job's output files.
-  active=0
-  for dir in "$STATE"/task-*; do [ ! -d "$dir" ] || active=$((active + 1)); done
-  if [ "$active" -ge 4 ]; then sleep 1; continue; fi
+  # Main bounds unfinished dispatches. Waiting/reports must never block polling.
   code=$(http "$STATE/poll.headers" "$STATE/poll.body" poll -H "X-Foxwarm-Connection: $CONNECTION") || code=000
   protocol=$(header_value "$STATE/poll.headers" 'x-foxwarm-shell')
   if [ "$code" = 204 ] && [ "$protocol" = foxwarm-shell-1 ]; then continue; fi
@@ -166,16 +168,7 @@ while [ "$STOP" -eq 0 ]; do
   printf '%s\n' "$task" > "$dir/id"
   date +%s > "$dir/started"
   mkfifo "$dir/pipe" || { rm -rf "$dir"; continue; }
-  run_job "$dir" &
-  elapsed=0
-  while [ ! -f "$dir/ready" ] && [ "$elapsed" -lt "$timeout" ]; do sleep 1; elapsed=$((elapsed + 1)); done
-  if [ -f "$dir/ready" ]; then
-    printf 'foreground\n' > "$dir/decision"
-  else
-    # Only retry this notice, never the command that has already started.
-    report "$dir" background
-    printf 'background\n' > "$dir/decision"
-  fi
+  run_job "$dir" "$timeout" &
 done
 # A completed reporter removes its job state. Leave the private shared auth file
 # available to still-running wrappers; do not kill processes or unlink their FIFO.
