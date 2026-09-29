@@ -6,12 +6,16 @@ import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 
 const entry = new URL('../src/components/HistorySearchView.tsx', import.meta.url).pathname
+const themeRuntime = new URL('../src/theme/runtime.ts', import.meta.url).pathname
 let browser, server, fixture, stylesheet, baseUrl
 
 const source = `
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import HistorySearchView from ${JSON.stringify(entry)}
+import { initializeThemeRuntime, setThemeSelection } from ${JSON.stringify(themeRuntime)}
+initializeThemeRuntime()
+setThemeSelection({ themeId: 'foxwarm.default', colorMode: new URLSearchParams(location.search).get('mode') === 'dark' ? 'dark' : 'light' })
 const msg = (role, seq, parts) => ({ role, parts, __meta: { seq, timestamp: 1700000000000 + seq * 1000 } })
 const block = { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#3 raw#20-#21]\\nBlock topic' }], __meta: { contextBlock: { id: 3, level: 1, sourceKind: 'message', sourceStart: 20, sourceEnd: 21, rawStartSeq: 20, rawEndSeq: 21, createdAt: 1700000000000 } } }
 const results = [
@@ -87,7 +91,7 @@ test('history results use independent timelines and pagination, CTX expansion, i
     assert.equal(await page.$eval('[data-history-result="hit-a"] img', el => el.getAttribute('src')?.includes('/prefix/ui/api/blobs/sample.png')), true)
     assert.deepEqual(await page.$eval('[data-history-result="hit-a"] [data-history-page="later"]', el => ({ wide: el.getBoundingClientRect().width > el.closest('[data-history-result]').getBoundingClientRect().width * 0.8, icon: !!el.querySelector('svg'), dashed: !!el.querySelector('.border-dashed'), range: el.textContent })), { wide: true, icon: true, dashed: true, range: 'Load latermsg#10–11' })
     assert.equal(await page.$eval('[data-history-result="hit-a"] header', el => el.textContent.includes('msg#10–11')), false)
-    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-history-result="hit-a"]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-range-row.png` })
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-history-result="hit-a"]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-range-row-light.png` })
     await page.click('[data-history-result="hit-a"] [data-history-page="later"]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="hit-a"]')?.textContent?.includes('later alpha tool output'))
     assert.equal(await page.$eval('[data-history-result="hit-b"]', el => el.textContent.includes('later alpha tool output')), false)
@@ -107,6 +111,18 @@ test('history results use independent timelines and pagination, CTX expansion, i
     await page.waitForFunction(() => document.querySelector('[data-history-search-results]')?.textContent?.includes('exact archive message'))
     assert.equal(await page.$eval('[data-history-result] [data-history-range]', el => el.textContent.includes('Selected msg#10–11')), true)
     assert.equal(await page.evaluate(() => window.__requests.some(url => url.includes('sessionId=alpha') && url.includes('target=msg%2310-11'))), true)
+  } finally { await page.close() }
+})
+
+test('the same full-width range row follows the actual dark theme runtime', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.goto(`${baseUrl}?mode=dark`)
+    await page.type('#history-search-query', 'topic')
+    await page.click('button[type=submit]')
+    await page.waitForSelector('[data-history-result="hit-a"] [data-history-page="later"]')
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true)
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-history-result="hit-a"]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-range-row-dark.png` })
   } finally { await page.close() }
 })
 

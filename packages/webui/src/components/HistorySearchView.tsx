@@ -61,7 +61,7 @@ function HistoryRangeRow({ result, direction, onLoad }: {
     <span aria-hidden="true" className="flex w-10 shrink-0 self-stretch items-center justify-center border-r border-dashed border-fw-border text-fw-text-muted">
       {direction === 'earlier' ? <ChevronUp size={16} /> : direction === 'later' ? <ChevronDown size={16} /> : null}
     </span>
-    {direction && <span className="shrink-0 px-3 font-medium">{result.loading === direction ? 'Loading…' : action}</span>}
+    {direction && <span className="flex shrink-0 items-center px-3 font-medium">{result.loading === direction ? 'Loading…' : action}</span>}
     <span className="min-w-0 flex-1 px-3 py-2 text-right text-fw-text-muted">{range}</span>
   </>
   const className = 'flex min-h-9 w-full items-stretch border-y border-fw-border bg-fw-neutral-surface text-left text-xs text-fw-text transition-colors dark:border-fw-border'

@@ -147,7 +147,7 @@ export default function SessionList({
         <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
           <Search className="h-4 w-4" />
         </button>
-        <GlobalUiSettingsMenu onOpenSetup={onSelectSetup} setupActive={currentView === 'setup'} />
+        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} setupActive={currentView === 'setup'} />
       </div>
     </div>
   )
