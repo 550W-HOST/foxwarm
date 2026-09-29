@@ -1,7 +1,7 @@
 # Unit: src-channels-webui
 
 Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
-Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
+Secondary files: src/channels/webuiLogs.ts, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
 
@@ -23,6 +23,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 ## Route groups
 
 - Authentication and setup status.
+- Authenticated fixed-file `/api/webui/logs` history and approximate time lookup; the channel also owns the optional file-tail subscription dependency and disposes it on stop. Canonical contract: [WebUI Logs](./webui-logs.md).
 - Session list, history, create, update, fork, move, pin, model, cwd, and message routes.
 - Agent registry routes: enriched `GET`/existing `POST /api/agents`, memory manifest `GET /api/agents/:agentId/memory`, mutable metadata `PUT /api/agents/:agentId`, and typed-confirmation `DELETE /api/agents/:agentId`.
 - Fixed bounded `/api/session-list/sidebar`, `/children`, `/by-id`,

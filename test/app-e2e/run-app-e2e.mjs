@@ -314,6 +314,7 @@ try {
       'packages/webui/test/sessionListDrag.e2e.mjs',
       'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
       'packages/webui/test/systemTabs.e2e.mjs',
+      'test/app-e2e/logs.e2e.mjs',
       'test/app-e2e/imageGeneration.e2e.mjs',
       // Runs after a real application restart against the same data root.
       { file: 'test/app-e2e/imageGenerationRestart.e2e.mjs', restartBefore: true },

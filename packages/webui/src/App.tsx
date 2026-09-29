@@ -24,7 +24,7 @@ import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 
-type AppView = 'session' | 'agents' | 'setup'
+type AppView = 'session' | 'agents' | 'setup' | 'logs'
 
 type RouteState = { view: 'tab'; tabId: string | null }
 
@@ -63,6 +63,7 @@ const TAB_HASH_PREFIX = 'tab/'
 const AGENTS_TAB_ID = 'system:agents'
 const SETUP_TAB_ID = 'system:setup'
 const SEARCH_TAB_ID = 'system:search'
+const LOGS_TAB_ID = 'system:logs'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
@@ -81,6 +82,7 @@ type OriginalFaviconLink = {
 let originalFaviconLinks: OriginalFaviconLink[] | null = null
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const LogsView = lazy(() => import('./components/LogsView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 const TerminalView = lazy(() => import('./components/TerminalView'))
 
@@ -420,7 +422,7 @@ function makeSetupTab(): WorkbenchTab {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId === LOGS_TAB_ID
 }
 
 function App() {
@@ -529,7 +531,9 @@ function App() {
     ? 'agents'
     : focusedActiveTab?.type === 'setup'
       ? 'setup'
-      : 'session'
+      : focusedActiveTab?.type === 'logs'
+        ? 'logs'
+        : 'session'
   const busyCount = boundedSessions.globalSummary?.busy ?? sessions.filter((session) => isSessionRuntimeActive(session)).length
 
   const fetchWebUiSettings = async () => {
@@ -949,6 +953,11 @@ function App() {
     navigateToTab(tab.id, origin)
   }
 
+  const openLogsTab = () => {
+    upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
+    navigateToTab(LOGS_TAB_ID)
+  }
+
   const openSearchTab = () => {
     upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'Search history' }, { activate: true })
     navigateToTab(SEARCH_TAB_ID)
@@ -1103,6 +1112,8 @@ function App() {
         ? { kind: 'chat', sessionId: targetTab.sessionId, title: targetTab.title }
         : targetTab.type === 'terminal'
           ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
+          : targetTab.type === 'logs'
+            ? { kind: 'logs' }
           : targetTab.type === 'search'
             ? { kind: 'search' }
           : targetTab.type === 'agents'
@@ -1376,6 +1387,11 @@ function App() {
       return
     }
 
+    if (route.tabId === LOGS_TAB_ID) {
+      upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
+      return
+    }
+
     if (route.tabId === SETUP_TAB_ID) {
       upsertTab(makeSetupTab(), { activate: true })
       return
@@ -1455,6 +1471,8 @@ function App() {
         />
       )
     }
+
+    if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
     if (tab.type === 'search') return <HistorySearchView
       isMobile={isMobile}
@@ -1825,6 +1843,7 @@ function App() {
           onSelectArchitecture={openAgentsView}
           onSelectSearch={openSearchTab}
           onSelectSetup={openSetupView}
+          onSelectLogs={openLogsTab}
           codePath={codePath}
           codeNodeId={codeNodeId}
           codeOpenInNewWindow={codeOpenInNewWindow}
@@ -1873,6 +1892,7 @@ function App() {
             onSelectArchitecture={openAgentsView}
             onSelectSearch={openSearchTab}
             onSelectSetup={openSetupView}
+            onSelectLogs={openLogsTab}
             codePath={codePath}
             codeNodeId={codeNodeId}
             codeOpenInNewWindow={codeOpenInNewWindow}
@@ -1904,6 +1924,8 @@ function App() {
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
           onSelectSearch={openSearchTab}
+          onSelectSetup={openSetupView}
+          onSelectLogs={openLogsTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
           unreadSessionIds={unreadSessionIds}

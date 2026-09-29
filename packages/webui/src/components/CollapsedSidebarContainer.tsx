@@ -6,6 +6,8 @@ interface CollapsedSidebarContainerProps {
   onSelectSession: (sessionId: string) => void
   onCreateSession: () => void
   onSelectSearch: () => void
+  onSelectSetup: () => void
+  onSelectLogs: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>
 }

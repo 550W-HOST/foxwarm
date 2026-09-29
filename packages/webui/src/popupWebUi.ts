@@ -5,6 +5,7 @@ export type FoxwarmPopupTarget =
   | { kind: 'terminal'; terminalId: string; title?: string }
   | { kind: 'agents' }
   | { kind: 'search' }
+  | { kind: 'logs' }
   | { kind: 'setup' }
 
 const normalizeBoundedText = (value: string | null, maxLength: number): string | null => {
@@ -20,6 +21,7 @@ export function parseFoxwarmPopupTarget(search: string): FoxwarmPopupTarget | nu
 
   const kind = params.get('foxwarmPopup')
   if (kind === 'agents') return { kind: 'agents' }
+  if (kind === 'logs') return { kind: 'logs' }
   if (kind === 'search') return { kind: 'search' }
   if (kind === 'setup') return { kind: 'setup' }
 

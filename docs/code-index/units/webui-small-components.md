@@ -11,7 +11,7 @@ A collection of small, reusable React UI components and utility functions for th
 
 - `ContentHeader` — Page/section header with icon, title, optional back button and actions
 - `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal
-- `CollapsedSidebar` — Fixed-width collapsed sidebar rail with expand/new-session controls and root-session avatar buttons
+- `CollapsedSidebar` — Fixed-width collapsed sidebar rail with expand/new-session controls and root-session avatar buttons and the shared settings menu
 - `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
@@ -90,6 +90,8 @@ A collection of small, reusable React UI components and utility functions for th
 - Main `CreateTabButton` and `CodeLaunchButton` selectors show approved offline/incompatible nodes disabled, preserve a stale selected node as unavailable, and apply service-specific requirements through `NodeTargetSelect`. The Code-embedded leaf does not receive the selectable node list because its fixed host message has no target fields.
 - Selecting a different node in either main launcher dropdown updates the local draft node and resets its draft path to `/`; switching again resets again, while rerenders, node-list refreshes, same-node selections, and external default synchronization do not trigger this reset or persist the draft. Code also clears its local path error on an actual node change.
 - `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, and exposes controlled node/path/open-mode callbacks so `App` owns global persistence.
+
+Sidebar and collapsed-rail settings delegate Setup and Logs actions to App; mobile delegation belongs to SessionList. The Logs contract is documented in [WebUI Logs](./webui-logs.md).
 
 ## Integration
 
