@@ -20,7 +20,7 @@ The journal uses `state/llm-request-journal.sqlite` as its sole runtime authorit
 
 ## Request flow
 
-1. `requestLlmOnce` repairs canonical tool-call adjacency and strips unsupported legacy provider-image helper keys and display-only `FunctionResponse.__meta` Code targets from its structured-cloned input before journaling or provider hydration. Caller input remains unchanged.
+1. `requestLlmOnce` repairs canonical tool-call adjacency and strips unsupported legacy provider-image helper keys and display-only `FunctionResponse.__meta` Code targets from its structured-cloned input before journaling or provider hydration. A failed Responses stream after committed commentary may rebuild canonical input from current durable history for a new logical request; that rebuilt input undergoes the same display-only scrub before the second journal manifest and wire send. Caller/durable history retains the metadata for Code.
 2. It content-addresses the system prompt, exact tool schema, and canonical internal messages. Normal chat history includes only the narrow historical concrete `modelId` provenance needed to reconstruct attempt-specific reasoning compatibility decisions; unrelated `__meta` remains excluded.
 3. It durably appends the request manifest before any provider send.
 4. Each concrete retry/failover attempt appends its start record before `axios.post`.

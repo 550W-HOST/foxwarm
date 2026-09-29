@@ -1763,6 +1763,15 @@ test('partial Responses failure retries as a new journaled request from committe
   const session = createOpenAITestSession(makeId('responses_partial_retry'));
   session.model = 'responses-fixture/model';
   session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-fixture/model" />\n\nsystem prompt';
+  const resolvedPath = '/display-only/agent/tmp/seed.txt';
+  const previousToolMessage: Message = { role: 'tool', parts: [{ functionResponse: {
+    tool_use_id: 'seed-read', name: 'read', response: { output: 'Seed read output' },
+    __meta: { resolvedPaths: [{ raw: 'seed.txt', resolved: resolvedPath, nodeId: 'master' }] },
+  } }] };
+  session.history.push(
+    { role: 'model', parts: [{ functionCall: { id: 'seed-read', name: 'read', args: { filePath: 'seed.txt' } } }] },
+    previousToolMessage,
+  );
   const firstStream = new PassThrough();
   const requestBodies: any[] = [];
   const retryEvents: any[] = [];
@@ -1797,7 +1806,10 @@ test('partial Responses failure retries as a new journaled request from committe
     assert.equal(retryEvents[0].nextAttempt, 2);
     assert.equal(JSON.stringify(requestBodies[0].input).includes('First committed'), false);
     assert.equal(JSON.stringify(requestBodies[1].input).includes('First committed'), true);
-    const modelMessages = session.history.filter(message => message.role === 'model');
+    for (const body of requestBodies) assert.equal(JSON.stringify(body).includes(resolvedPath), false);
+    assert.deepEqual(previousToolMessage.parts[0].functionResponse?.__meta?.resolvedPaths,
+      [{ raw: 'seed.txt', resolved: resolvedPath, nodeId: 'master' }], 'durable UI history retains Code target');
+    const modelMessages = session.history.filter(message => message.role === 'model' && message.__meta?.llmRequestId);
     assert.equal(modelMessages.length, 2);
     const firstRequestId = modelMessages[0].__meta?.llmRequestId as string;
     const nextRequestId = modelMessages[1].__meta?.llmRequestId as string;
@@ -1811,6 +1823,10 @@ test('partial Responses failure retries as a new journaled request from committe
       assert.equal(firstJournal.attempts[0].result?.outcome, 'failure');
       assert.equal(nextJournal.attempts[0].result?.outcome, 'success');
       assert.equal(JSON.stringify(nextJournal.messages).includes('First committed'), true);
+      assert.equal(JSON.stringify(firstJournal.messages).includes(resolvedPath), false);
+      assert.equal(JSON.stringify(nextJournal.messages).includes(resolvedPath), false,
+        'retry request rebuilt from committed history must also remove display-only paths');
+      assert.equal(JSON.stringify(nextJournal.messages).includes('Seed read output'), true);
     }
   } finally {
     (axios as any).post = originalPost;

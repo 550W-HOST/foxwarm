@@ -723,7 +723,8 @@ export class PersistentExecManager {
       // Reserved names belong to this launch, not to the host process or a prior Agent.
       const hostEnv = { ...process.env };
       for (const key of Object.keys(hostEnv)) {
-        if (key.toLowerCase() === 'fw_agentdir' || key.toLowerCase() === 'fw_tmp') delete hostEnv[key];
+        const name = platform === 'win32' ? key.toLowerCase() : key;
+        if (name === 'fw_agentdir' || name === 'fw_tmp') delete hostEnv[key];
       }
       launched = await processOperations.launch({
         command: launcher.command,

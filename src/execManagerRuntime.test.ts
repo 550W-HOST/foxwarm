@@ -65,8 +65,12 @@ test('native exec creates Agent tmp before cwd validation and exports fresh vars
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-agent-env-'));
   const oldAgent = process.env.fw_agentdir;
   const oldTmp = process.env.fw_tmp;
+  const oldUpperAgent = process.env.FW_AGENTDIR;
+  const oldUpperTmp = process.env.FW_TMP;
   process.env.fw_agentdir = '/poisoned/agent';
   process.env.fw_tmp = '/poisoned/tmp';
+  process.env.FW_AGENTDIR = '/host-upper-agent';
+  process.env.FW_TMP = '/host-upper-tmp';
   const runtime = createExecRuntime({
     getDefaultCwd: () => root,
     getAgentDir: name => path.join(root, name),
@@ -74,7 +78,7 @@ test('native exec creates Agent tmp before cwd validation and exports fresh vars
     registryPath: path.join(root, 'running.json'),
   });
   try {
-    const command = `bash -c 'printf "%s|%s|%s" "$fw_agentdir" "$fw_tmp" "$PWD"'`;
+    const command = `bash -c 'printf "%s|%s|%s|%s|%s" "$fw_agentdir" "$fw_tmp" "$PWD" "$FW_AGENTDIR" "$FW_TMP"'`;
     const entries = await Promise.all(['alpha', 'beta'].map(agentName => runtime.startPersistentExec({
       command, agentName, cwd: '$fw_tmp', sessionCwd: '/totally/unrelated',
     })));
@@ -85,6 +89,7 @@ test('native exec creates Agent tmp before cwd validation and exports fresh vars
       await runtime.finalizeForegroundExec(entry.id);
       const agentName = i === 0 ? 'alpha' : 'beta';
       assert.match(output, new RegExp(`${path.join(root, agentName)}\\|${path.join(root, agentName, 'tmp')}\\|${path.join(root, agentName, 'tmp')}`));
+      assert.match(output, /\|\/host-upper-agent\|\/host-upper-tmp/);
       return output;
     }));
     assert.notEqual(results[0], results[1]);
@@ -94,6 +99,8 @@ test('native exec creates Agent tmp before cwd validation and exports fresh vars
     await runtime.shutdown();
     if (oldAgent === undefined) delete process.env.fw_agentdir; else process.env.fw_agentdir = oldAgent;
     if (oldTmp === undefined) delete process.env.fw_tmp; else process.env.fw_tmp = oldTmp;
+    if (oldUpperAgent === undefined) delete process.env.FW_AGENTDIR; else process.env.FW_AGENTDIR = oldUpperAgent;
+    if (oldUpperTmp === undefined) delete process.env.FW_TMP; else process.env.FW_TMP = oldUpperTmp;
     await fs.remove(root);
   }
 });
