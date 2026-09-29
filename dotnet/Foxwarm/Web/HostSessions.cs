@@ -110,13 +110,25 @@ internal sealed partial class HostSessions : IAsyncDisposable
         var hosted = MakeSession(id, "main", store);
         var entry = hosted.Registry.Add(id);
         entry.WithState(state => state.AuthorityEnvelope["agent"] = "main");
-        await entry.SaveLane.SaveStrictAsync(); // First authority JSON exists before publication/acknowledgement.
+        try { await entry.SaveLane.SaveStrictAsync(); } // First authority JSON exists before publication/acknowledgement.
+        catch (AuthorityCommittedException error)
+        {
+            PublishLegacy(hosted);
+            throw new CommittedSessionCreationException(id,
+                $"Session '{id}' was committed but a later durability step failed.", error);
+        }
+        PublishLegacy(hosted);
+        return hosted;
+    }
+
+    private void PublishLegacy(HostedSession hosted)
+    {
         lock (lifecycle)
         {
             if (!accepting) throw new InvalidOperationException("Host is shutting down.");
-            if (!sessions.TryAdd(id, hosted)) throw new InvalidOperationException("Session ID collision.");
+            if (!sessions.TryAdd(hosted.Id, hosted)) throw new InvalidOperationException("Session ID collision.");
         }
-        return hosted;
+        hosted.EnableCommittedNotifications();
     }
 
     private HostedSession MakeSession(string id, string agent, PersistentSessionAuthorityStore store)

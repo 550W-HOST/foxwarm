@@ -86,6 +86,7 @@ try {
         output = previousCalls.some(item => item.call_id === 'legacy-child-pwd') ? [text('LEGACY-CHILD-DONE')] :
           [call('legacy-child-pwd', 'exec', { command: 'pwd', timeout: 2 })]
       else if (latest.includes('LITERAL-PERCENT')) output = [text('LITERAL-DONE')]
+      else if (latest.includes('LEGACY-POSTRENAME')) output = [text('LEGACY-POSTRENAME-DONE')]
       else if (latest.includes('MODEL-CATALOG')) {
         if (!previousCalls.some(item => item.call_id === 'model-create-agent'))
           output = [call('model-create-agent', 'create_agent', { agentName: 'gamma', createMainSession: false })]
@@ -307,7 +308,29 @@ try {
   await send(secondId, 'SNAPSHOT-RECOVER'); await finished(secondId, 'SNAPSHOT-RECOVER-DONE')
   assert(requests.filter(item => item.id === secondId && item.latest.includes('SNAPSHOT-RECOVER')).at(-1)
     .instructions.includes('<foxwarm-current-model model-id="local-b/two" />'))
+  // Existing bare/{} legacy creation: a post-rename fault reports the committed ID
+  // and retains its live owner even though the final directory sync failed.
+  const archiveRowsFor = id => Number(execFileSync('python3', ['-c',
+    'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(db.execute("SELECT COUNT(*) FROM archive_messages WHERE session_id=?", (sys.argv[2],)).fetchone()[0])',
+    join(dataRoot, 'state', 'archive-store.sqlite'), id], { encoding: 'utf8' }).trim())
+  await writeFile(join(dataRoot, 'state', 'experiment-faults', 'legacy-create-after-rename'), 'one injected legacy create')
+  const partial = await request('POST', '/api/sessions', {})
+  assert.equal(partial.status, 409, JSON.stringify(partial.body))
+  const committedLegacyId = partial.body.sessionId
+  assert.match(committedLegacyId, /^s_[a-f0-9]{32}$/)
+  assert.equal(partial.body.committed, true)
+  assert.equal((await request('GET', `/api/sessions/${committedLegacyId}/state`)).status, 200)
+  assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', committedLegacyId + '.json'), 'utf8')).history.length, 0)
+  assert.equal(archiveRowsFor(committedLegacyId), 0)
+  await send(committedLegacyId, 'LEGACY-POSTRENAME'); await finished(committedLegacyId, 'LEGACY-POSTRENAME-DONE')
+  const committedHistory = await history(committedLegacyId)
+  const rowsBeforeRestart = archiveRowsFor(committedLegacyId)
+  assert.equal(rowsBeforeRestart, committedHistory.length)
+  const requestsBeforeRestart = requests.length
   await stopHost(); host = await startHost(); assert.notEqual(host.child.pid, firstPid)
+  assert.deepEqual(await history(committedLegacyId), committedHistory)
+  assert.equal(archiveRowsFor(committedLegacyId), rowsBeforeRestart)
+  assert.equal(requests.length, requestsBeforeRestart)
   assert((await request('GET', '/api/agents')).body.agents.includes('beta'))
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(childId)}/state`)).body.session.parentSessionId, parentId)
   assert((await readFile(join(dataRoot, 'state', 'sessions', 'beta', 'probe.json'), 'utf8')).includes('BETA-V3'))
@@ -320,7 +343,8 @@ try {
   await stopHost()
   console.log(JSON.stringify({ result: 'ok', firstPid, secondPid: host.child.pid, providerRequests: requests.length,
     parentRequests: counts.get(parentId), childRequests: counts.get(childId), agents: ['alpha', 'beta', 'gamma', 'main'],
-    legacyId, parentId, childId, sameAgentSession: secondId, strictSnapshotFailure: true, memoryRefresh: true }))
+    legacyId, committedLegacyId, parentId, childId, sameAgentSession: secondId,
+    strictSnapshotFailure: true, legacyPostRenameFailure: true, memoryRefresh: true }))
 } finally {
   try { releaseParent?.() } catch {}
   try { await browser?.close() } catch {}

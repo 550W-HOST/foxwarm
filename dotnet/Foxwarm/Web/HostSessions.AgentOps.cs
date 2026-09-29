@@ -277,8 +277,15 @@ internal sealed partial class HostSessions
     private PersistentSessionAuthorityStore MakeStore(string id, string agent)
     {
         var marker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".snapshot-before-rename");
+        var legacyCreateMarker = Path.Combine(root, "state", "experiment-faults", "legacy-create-after-rename");
         return new PersistentSessionAuthorityStore(root, id, agent, stage =>
         {
+            if (stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync && SessionIdentity.IsLegacyGenerated(id)
+                && Find(id) is null && File.Exists(legacyCreateMarker))
+            {
+                File.Delete(legacyCreateMarker);
+                throw new IOException("Injected experimental legacy Session post-rename failure.");
+            }
             if (stage != AtomicJsonWriteStage.BeforeRename || !SessionSaveLane.IsSnapshotCommit || !File.Exists(marker)) return;
             File.Delete(marker);
             throw new IOException("Injected experimental memory snapshot pre-rename failure.");
