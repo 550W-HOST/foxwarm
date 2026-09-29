@@ -332,6 +332,26 @@ curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
   -d
 ```
 
+## Exec-only Shell Node
+
+For a device that needs only command execution without Node.js, use the independent POSIX-shell client. It requires `sh`, `curl`, and `mktemp`, `mkfifo`, `dd`, `wc`, `head`, `tail`, `cat`, `mv`, `rm`, `mkdir`, `chmod`, `sleep`, `date`, `sed`, and `tr`. Its startup checks are authoritative: BusyBox builds can omit applets, and this workflow does not promise compatibility with every router or install packages.
+
+First run `/node create my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
+
+```sh
+BASE_URL=https://foxwarm.example.invalid/foxwarm
+curl -fsSL "$BASE_URL/node/run-shell.sh" -o run-shell.sh
+NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host="$BASE_URL" --node-id=my-shell
+```
+
+Always passing `--host` preserves any deployment prefix. Curl retains certificate verification. The token is kept in an owner-only temporary curl config and Authorization headers, not URLs. The script installs no runtime or service and creates no Agent directories.
+
+Use the normal Node selector or `/node my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
+
+The foreground wait defaults to 15 seconds, clamps above 60, and rounds fractions upward to a whole second. Timeout returns an exec ID without killing the command. Normal `wait` can use that ID; completion goes to the originating Session and includes bounded first/last 4096-byte samples, total output bytes and exit code. The initial background response contains the continuation notice, not a running-output snapshot. Full logs and a read-exec API do not exist. The FIFO collector continuously drains output without growing a full log or closing the command pipe during truncation.
+
+Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. Revoke credentials through `/node remove my-shell` when finished. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
+
 ## Manual docker-compose template flow
 
 If you want to inspect or customize before starting:

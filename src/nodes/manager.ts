@@ -1,6 +1,6 @@
 /**
  * Nodes Manager - Manages remote nodes for distributed tool execution
- * Each node is a WebSocket connection that can execute tools
+ * Remote nodes use WebSocket tool transport or exec-only HTTP polling.
  */
 
 import http from 'http';
@@ -47,11 +47,23 @@ interface NodeCapabilities {
 interface Node {
   id: string;
   type: string; // 'master', 'browser-extension', 'android', etc.
-  ws: WebSocket | null; // null for master node
+  ws: WebSocket | null; // null for master and HTTP exec Nodes
+  httpExec?: HttpExecTransport;
+  defaultCwd?: string;
   tools: Set<string>;
   capabilities?: NodeCapabilities; // Tool definitions for dynamic nodes
   lastActivity: number;
   protocolCompatibility: NodeProtocolCompatibility;
+}
+
+/** An authenticated HTTP Node's real execution transport, not a WebSocket adapter. */
+export interface HttpExecTransport {
+  dispatch(request: {
+    callId: string; tool: string; args: Record<string, any>; sessionId: string;
+    backgroundExecId?: string; completionCapability?: string; sessionCwd?: string;
+  }): void;
+  cancel(callId: string): void;
+  disconnect(reason: string): void;
 }
 
 export class NodeProtocolIncompatibleError extends Error {
@@ -188,6 +200,7 @@ export class NodesManager {
     
     // Check if node already exists (reconnection case)
     const existingNode = this.nodes.get(nodeId);
+    if (existingNode?.httpExec) this.disconnectNode(nodeId, 'Node transport replaced');
     if (existingNode && existingNode.ws && existingNode.ws !== ws) {
       logger.info({ nodeId }, 'Node reconnecting, closing old connection');
       existingNode.ws.close();
@@ -260,6 +273,7 @@ export class NodesManager {
     
     // Check if node already exists (reconnection case)
     const existingNode = this.nodes.get(nodeId);
+    if (existingNode?.httpExec) this.disconnectNode(nodeId, 'Node transport replaced');
     if (existingNode && existingNode.ws && existingNode.ws !== ws) {
       logger.info({ nodeId }, 'Node reconnecting, closing old connection');
       existingNode.ws.close();
@@ -312,13 +326,29 @@ export class NodesManager {
     return nodeId;
   }
 
+  registerHttpExecNode(nodeId: string, transport: HttpExecTransport, defaultCwd: string, capability: ToolDefinition): void {
+    if (isReservedNodeId(nodeId)) throw new Error(`Node id \`${nodeId}\` is reserved`);
+    const existing = this.nodes.get(nodeId);
+    if (existing && existing.httpExec !== transport) this.disconnectNode(nodeId, 'Node transport replaced');
+    this.nodes.set(nodeId, {
+      id: nodeId, type: 'shell-node', ws: null, httpExec: transport, defaultCwd,
+      tools: new Set(['exec']),
+      capabilities: { tools: [capability], features: { remoteExecBackgroundRegistration: true } },
+      lastActivity: Date.now(), protocolCompatibility: negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE),
+    });
+  }
+
+  disconnectHttpExecNode(nodeId: string, transport: HttpExecTransport, reason: string): void {
+    if (this.nodes.get(nodeId)?.httpExec === transport) this.disconnectNode(nodeId, reason);
+  }
+
   /**
    * Unregister a node
    */
   unregisterNode(nodeId: string, ws?: WebSocket | null): void {
     const node = this.nodes.get(nodeId);
     if (node) {
-      if (ws && node.ws && node.ws !== ws) {
+      if (ws && node.ws !== ws) {
         logger.info({ nodeId }, 'Skipping unregister for stale node connection');
         return;
       }
@@ -346,6 +376,8 @@ export class NodesManager {
     this.rejectPendingOperationsForNode(nodeId, reason);
     this.emitNodeServicesUnavailable(node, reason);
     this.nodes.delete(nodeId);
+
+    node.httpExec?.disconnect(reason);
 
     if (node.ws) {
       try {
@@ -721,7 +753,7 @@ export class NodesManager {
       const shouldSendCwd = routedCurrentNode === nodeId && typeof routedCwd === 'string';
       const timeoutMs = 62000;
       try {
-        node.ws!.send(JSON.stringify({
+        const request = {
           type: 'tool_call',
           callId: callId,
           tool: toolName,
@@ -731,7 +763,9 @@ export class NodesManager {
           timeoutMs,
           ...(remoteExec ? { backgroundExecId: remoteExec.execId, completionCapability: remoteExec.completionCapability } : {}),
           ...(shouldSendCwd ? { sessionCwd: routedCwd } : {}),
-        }));
+        };
+        if (node.httpExec) node.httpExec.dispatch(request);
+        else node.ws!.send(JSON.stringify(request));
       } catch (error) {
         this.toolCalls.delete(callId);
         if (remoteExec) {
@@ -750,6 +784,7 @@ export class NodesManager {
       const timeout = setTimeout(() => {
         if (this.toolCalls.has(callId)) {
           this.toolCalls.delete(callId);
+          node.httpExec?.cancel(callId);
           if (remoteExec) {
             markRemoteExecOutcomeUnknown({
               authenticatedNodeId: nodeId,

@@ -705,7 +705,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
 
   private descriptorForRuntimeNode(nodeId: string): NodeDescriptor | undefined {
     const node: any = nodesManager.getNode(nodeId);
-    if (!node || nodeId === 'master' || !node.ws) return undefined;
+    if (!node || nodeId === 'master' || (!node.ws && !node.httpExec)) return undefined;
     const compatibility = node.protocolCompatibility as NodeProtocolCompatibility | undefined;
     if (compatibility?.status === 'upgrade-required') {
       const message = `Node \`${nodeId}\` is connected but cannot execute tools. ${describeNodeProtocolCompatibility(compatibility)}`;
@@ -769,7 +769,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
 
   async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
     const node: any = nodesManager.getNode(request.nodeId);
-    if (!node || request.nodeId === 'master' || !node.ws) {
+    if (!node || request.nodeId === 'master' || (!node.ws && !node.httpExec)) {
       throw new NodeProviderError(
         'NODE_EXECUTION_NODE_UNAVAILABLE',
         `Remote node \`${request.nodeId}\` is not connected.`,
@@ -806,6 +806,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
 
   async getDefaultCwd(request: NodeDefaultCwdRequest): Promise<string | undefined> {
     const node: any = nodesManager.getNode(request.nodeId);
+    if (node?.httpExec) return node.defaultCwd;
     if (!node?.ws || !node.tools.has('get_default_cwd')) return undefined;
     try {
       const value = await nodesManager.executeTool(request.nodeId, 'get_default_cwd', {}, request.sourceSessionId);

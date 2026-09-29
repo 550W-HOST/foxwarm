@@ -10,6 +10,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 ## Key exports
 
 - `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the result; eligible normal Responses turns may append completed commentary prefixes before the final suffix. [Canonical streaming contract](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit).
+- `resolveSessionToolDefinitions(session, override?)` — preserves explicit schema overrides and substitutes a selected Shell Node's actual exec capability into normal direct-tool schemas; Main/CLI descriptions remain unchanged. See [Shell HTTP Node](./src-nodes-shell-http.md).
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
 - `deduplicateProviderRequestImages(contents, protocol)` — clones one concrete attempt's history, hashes only protocol-serializable current image bytes/MIME, removes repeated payloads, preserves descriptor/guidance context, and exposes duplicate status through a clone-local predicate rather than message fields.
 - `convertToAnthropicFormat(contents, config)` — serializes the prepared clone into Anthropic-compatible messages while preserving tool-result image association and dedup guidance.

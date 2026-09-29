@@ -63,6 +63,8 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 
 ## Units
 
+- [Shell HTTP Node](../units/src-nodes-shell-http.md)
+
 - [src-nodes-manager](../units/src-nodes-manager.md)
 - [src-node-providers](../units/src-node-providers.md)
 - [src-nodes-misc](../units/src-nodes-misc.md)
@@ -76,6 +78,12 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 - [terminal router](../units/src-terminal-router.md)
 
 ## Design decisions
+
+### D-node-thread-shell-http
+
+An exec-only Shell Node is an authenticated remote Node behind the same provider/selection boundary. It uses the existing pre-created per-node credential and a genuine HTTP long-poll transport, without client JSON parsing, WebSocket emulation, filesystem services, or external-owner capabilities. Main keeps the original dispatch Session, generated exec ID, and signed completion grant; the client reports only that task's result. Foreground timeout transitions to the same background command and its completion uses the existing durable Session-event admission/ACK boundary. No network failure requeues an already delivered command.
+
+The client drains output while retaining only fixed 4 KiB head/tail samples and total bytes; it does not save full logs. Its startup directory supplies default/relative cwd without creating Agent directories. HTTP runtime state, task contexts and bounded receipts are process-local, so restart/loss of context means an unknown outcome rather than crash continuation. Completion expiry does not kill a command or remove an active collector. Exact implementation and validation boundaries are owned by [src-nodes-shell-http](../units/src-nodes-shell-http.md).
 
 ### D-node-thread-onboarding-options
 

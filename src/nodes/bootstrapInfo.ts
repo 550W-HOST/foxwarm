@@ -23,6 +23,7 @@ export interface NodeBootstrapInfo {
     overrideHint: string;
   };
   endpoints: {
+    runShellShPath: string;
     runShPath: string;
     runDockerShPath: string;
     runInteractiveShPath: string;
@@ -35,8 +36,10 @@ export interface NodeBootstrapInfo {
     runPs1Url: string;
     composeUrl: string;
     sourceUrl: string;
+    runShellShUrl: string;
   };
   examples: {
+    shell: string;
     chooseBaseUrl: string;
     bareMetal: string;
     bareMetalBackground: string;
@@ -80,6 +83,7 @@ export function buildNodeManualComposeExample(pairingToken: string): string {
 }
 
 function buildEndpointUrls(baseUrlPlaceholder: string) {
+  const runShellShPath = '/node/run-shell.sh';
   const runShPath = '/node/run.sh';
   const runDockerShPath = '/node/run-docker.sh';
   const runInteractiveShPath = '/node/run-interactive.sh';
@@ -88,6 +92,8 @@ function buildEndpointUrls(baseUrlPlaceholder: string) {
   const sourcePath = '/node/source.tar.gz';
 
   return {
+    runShellShPath,
+    runShellShUrl: `${baseUrlPlaceholder}${runShellShPath}`,
     runShPath,
     runDockerShPath,
     runInteractiveShPath,
@@ -131,6 +137,7 @@ export function buildNodeBootstrapInfo(options: NodeBootstrapInfoOptions): NodeB
     },
     endpoints,
     examples: {
+      shell: 'curl -fsSL "$BASE_URL/node/run-shell.sh" -o run-shell.sh\n# First run /node create my-shell on the master; use its per-node token here.\nNODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host="$BASE_URL" --node-id=my-shell',
       chooseBaseUrl,
       bareMetal: shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-node']),
       bareMetalBackground: shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${options.pairingToken}`, '  --node-id=my-node', '  -d']),

@@ -4,7 +4,7 @@ Files: src/nodes/manager.ts, src/nodes/protocolCompatibility.test.ts, src/nodes/
 
 ## Purpose
 
-Maintains the in-memory authenticated remote-node transport/runtime and routes tool/file/session requests between Foxwarm sessions and remote WebSocket connections. The manager still registers the local `master` record for existing local/compound/service behavior, while generic Node discovery and non-master provider resolution live in `src/nodes/providerRegistry.ts`.
+Maintains the in-memory authenticated remote-node transport/runtime and routes tool/file/session requests between Foxwarm sessions and remote WebSocket connections, plus exec-only Shell HTTP connections. The manager still registers the local `master` record for existing local/compound/service behavior, while generic Node discovery and non-master provider resolution live in `src/nodes/providerRegistry.ts`.
 
 ## Key Exports
 
@@ -23,6 +23,7 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 | `registerMasterNode()` | Registers the built-in `master` node with local tools and no WebSocket. |
 | `registerNode(ws, req, customNodeId?)` | Registers a legacy remote node; closes an older connection with the same id. |
 | `registerNodeWithTools(ws, req, nodeType, capabilities, customNodeId?)` | Registers an authenticated/capability-advertising node and stores its dynamic tool names. |
+| `registerHttpExecNode(...)` / `disconnectHttpExecNode(...)` | Registers the real Shell HTTP execution transport/default cwd and fences stale expiry/disconnect callbacks by transport identity. |
 | `registerIncompatibleNodeWithTools(...)` | Retains an authenticated incompatible connection for status/heartbeat while exposing no executable tools or services. |
 | `unregisterNode(nodeId, ws?)` | Removes a node if the close/error event belongs to the active WebSocket for that id. |
 | `disconnectNode(nodeId, reason?)` | Forcibly removes a non-master runtime node, rejects pending operations for it, and closes its WebSocket. |
@@ -60,6 +61,7 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 
 - `master` is always present in the runtime node map and cannot be disconnected by `disconnectNode`. Its advertised model-tool set and discovery schemas are derived from canonical `NODE_ENVIRONMENT_BUILTIN_NAMES`, not a handwritten broad list.
 - Registering a remote node with an already-online id closes the previous WebSocket and replaces runtime capabilities.
+- HTTP and WebSocket registration replace each other's real runtimes without emulating a socket. HTTP dispatch uses its explicit transport; timeout cancels only an unclaimed HTTP task, and stale WebSocket close callbacks cannot remove an HTTP replacement. Shell-specific contracts are owned by [src-nodes-shell-http](./src-nodes-shell-http.md).
 - Every runtime record carries core protocol compatibility. Negotiated generations 1, 2 and 3 preserve executable internal Session tool/service/session-event paths; quarantined disjoint Nodes stay in `listNodes()` and service-summary status, while tool discovery omits them and selection, tools, file transfer, backend services, and application events fail before dispatch. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Remote tool calls, file transfers, and backend service requests are tracked by generated ids and time out if no response arrives. Service timers are cleared on reply/disconnect. Fixed commands avoid per-keystroke response state; authenticated service events are dispatched to registered listeners.
 - Node disconnect emits `node-unavailable` to each advertised service before removal, allowing terminal bridges to close clients while leaving detached node-owned PTYs eligible for rediscovery after a same-process reconnect.

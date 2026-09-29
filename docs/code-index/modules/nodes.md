@@ -6,6 +6,8 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
+- [Shell HTTP Node](../units/src-nodes-shell-http.md) — POSIX sh/curl exec-only transport, bounded output, and existing scoped background completion.
+
 - [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
 - [src-docker-worktree-provider](../units/src-docker-worktree-provider.md) — resident first-party Linux Docker provider for one existing worktree, read-only Git metadata, strict lifecycle state, and shared file capabilities.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.

@@ -11,6 +11,7 @@ import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session,
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
+import { listNodeTopology } from './nodeExecution';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
 import { checkGenericToolAuthorizationForSession, checkPathAccess } from './isolatedCheck';
@@ -50,6 +51,7 @@ import { isToolAuthorizationPolicyUnavailable, TOOL_AUTH_POLICY_UNAVAILABLE } fr
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import {
+    addToolCancellationSchema,
     getToolCancellationArgumentError,
     isSingleToolCancellationRequested,
     isWholeBatchCancellationRequested,
@@ -2286,13 +2288,23 @@ export async function executeTools(
     return toolMessage;
 }
 
-/**
- * Call LLM and handle tool calls
- */
-/**
- * Call LLM once (single API call, no recursion)
- * Returns response with tool calls if any
- */
+/** Keep the selected Shell Node's bounded-output capability in direct exec schemas. */
+export async function resolveSessionToolDefinitions(session: Session, override?: ToolDefinition[]): Promise<ToolDefinition[]> {
+    if (override) return override;
+    const definitions = tools.modelFacingDefinitions;
+    if (!session.currentNode || session.currentNode === 'master') return definitions;
+    let node;
+    try { [node] = await listNodeTopology(session.id, session.currentNode); }
+    catch { return definitions; }
+    if (node?.type !== 'shell-node') return definitions;
+    const capability = node.tools.find(tool => tool.name === 'exec');
+    if (!capability) return definitions.filter(tool => tool.name !== 'exec');
+    return definitions.map(tool => tool.name === 'exec'
+        ? addToolCancellationSchema(capability as ToolDefinition)
+        : tool);
+}
+
+/** Call LLM once and return response with tool calls if any. */
 export async function chat(
     parts: MessagePart[] | null, 
     session: Session,
@@ -2375,8 +2387,7 @@ export async function chat(
     const contentsForLlm = getCommittedHistoryForRetry();
     const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
         && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
-    const availableToolDefinitions = options?.toolDefinitions
-        ?? tools.modelFacingDefinitions;
+    const availableToolDefinitions = await resolveSessionToolDefinitions(session, options?.toolDefinitions);
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
     if (session.id && session.promptCacheKey !== previousPromptCacheKey) {

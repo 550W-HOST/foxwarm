@@ -3,6 +3,7 @@
 Foxwarm can expose helper endpoints for bootstrapping a generic node client from a running master:
 
 - `/node/run.sh`
+- `/node/run-shell.sh` (independent exec-only POSIX shell client)
 - `/node/run-docker.sh`
 - `/node/run-interactive.sh`
 - `/node/run.ps1`
@@ -66,6 +67,37 @@ curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
 For an origin-only URL omit `--host`; the downloaded script infers its default from the request. Docker and interactive launchers accept the same `--node-id` and `--auth-token` flags; on Windows use `-NodeId` and `-AuthToken`, plus `-HostUrl` for a deployment path. Initial authenticated registration writes an owner-only credentials file; later restarts can use that file without either command-line token. `/node remove my-node` revokes it.
 
 Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node create`.
+
+## Shell-only Node
+
+Use this client when you only need commands and do not want to install Node.js. It needs POSIX `sh`, `curl`, and these basic programs: `mktemp`, `mkfifo`, `dd`, `wc`, `head`, `tail`, `cat`, `mv`, `rm`, `mkdir`, `chmod`, `sleep`, `date`, `sed`, and `tr`. Startup checks each program and reports missing dependencies. BusyBox often supplies these utilities, but individual builds can omit them; this is not a guarantee for every router or OpenWrt image. The client does not install packages or create a service.
+
+On the master, first reserve the Node and save its per-node token privately:
+
+```text
+/node create my-shell
+```
+
+From the desired default working directory on the Linux device:
+
+```sh
+BASE_URL=https://foxwarm.example.invalid/foxwarm
+curl -fsSL "$BASE_URL/node/run-shell.sh" -o run-shell.sh
+NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh \
+  --host="$BASE_URL" --node-id=my-shell
+```
+
+The explicit host preserves a reverse-proxy deployment prefix. Normal curl certificate verification remains enabled. The shared pairing token cannot authenticate this client. Its per-node bearer is sent in headers through a private temporary curl configuration, not in URLs or ordinary client logs.
+
+Select `my-shell` using the normal Node selector or `/node my-shell`, then call ordinary `exec`. This Node advertises only `exec`, with command/cwd/timeout. It has no file tools, Code/Git/PTY services, Agent storage directories, or external-owner execution. Omitted cwd uses the startup directory, relative cwd resolves there, and a command's `cd` does not change the next command's default.
+
+The default foreground wait is 15 seconds, values above 60 are clamped, and fractional waits are rounded up to the next second. A command exceeding the wait keeps running; its initial response contains the existing exec ID, and completion is reported to the original Session even if its selected Node has changed. The retained output sample and total byte count arrive with completion. Use the returned exec ID with normal `wait`; there is no running-output/read-exec endpoint.
+
+Output is drained continuously into a FIFO collector. At most the first and last 4096 bytes are retained, with an exact total-byte count, exit code, and truncation notice. Short samples do not duplicate the overlapping middle. Binary samples are displayed as bounded hexadecimal. Full logs are not retained, and an infinite or no-newline stream does not grow an unbounded log file. Temporary sample files remain bounded while the process runs; four concurrent client jobs and a bounded server dispatch set limit transient job state.
+
+Only result reports are retried after a lost network response; commands already handed out are never redispatched. A missed response, lost Main process context, or client crash can leave the outcome unknown. There is no durable task queue, persisted completion outbox, or crash continuation. Stop/restart the client explicitly after a lost registration. Stopping or revoking a Node does not kill already-running commands; use an explicit command or the device's process controls when that is needed. Report authorization ends after 24 hours, but an active FIFO/collector is not removed until the command exits. Finished temporary state is then removed.
+
+`/node remove my-shell` revokes the credential and disconnects the polling runtime. Keep the token outside public scripts and shell history; the environment placeholder above is only an example.
 
 ## Bare-metal one-command bootstrap
 
