@@ -23,6 +23,7 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
   process.env.FOXWARM_DATA_DIR = temp;
   const store = await import('../session/archiveStore');
   const vector = await import('../vector');
+  const archiveRecall = await import('../toolsSessionAgent/archiveRecall');
   const { HttpServer, setHttpServer } = await import('../httpServer');
   const { WebUIChannel } = await import('./webuiChannel');
   const { resolveImageBlobPath } = await import('../imageBlobs');
@@ -43,6 +44,60 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
   await store.commitSessionIdRename('viewer-a/old-child', 'viewer-a/intermediate');
   await store.commitSessionIdRename('viewer-a/intermediate', child);
 
+  const generatedId = 'viewer-a/generated-short-messages';
+  const marker = 'TARGET-UNIQUE-ROW-180';
+  const generated = Array.from({ length: 440 }, (_, index) => {
+    const seq = index + 1;
+    const role = index % 2 ? 'model' as const : 'user' as const;
+    return { ...record(generatedId, 'viewer-a', seq, seq === 180 ? `yes ${marker}` : index % 3 ? 'yes' : 'okay'),
+      role, message: { role, parts: [{ text: seq === 180 ? `yes ${marker}` : index % 3 ? 'yes' : 'okay' }], __meta: { seq, timestamp: seq * 1000 } } };
+  });
+  await store.writeArchiveMessages(generated);
+  const segments = vector.buildArchiveSegments(generated);
+  const indexedSegment = segments.find(segment => segment.startSeq <= 180 && segment.endSeq >= 180)!;
+  assert.ok(indexedSegment.messageCount > 100);
+  const generatedHit = vector.createRowsFromSegment(indexedSegment).find(row => row.chunk_text.includes(marker))!;
+  const rankedGeneratedHit = { ...generatedHit, kind: 'raw', source_family: `${generatedId}:raw:${generatedHit.start_seq}-${generatedHit.end_seq}` };
+  const fullGeneratedRecords = await store.readEffectiveArchiveMessages(generatedId, generatedHit.start_seq, generatedHit.end_seq);
+  const originalWindow = archiveRecall.selectVectorRawMessageWindow(fullGeneratedRecords, marker, generatedHit.chunk_text);
+  const boundedWindow = await archiveRecall.selectBoundedVectorRawMessageWindow(generatedId,
+    { startSeq: generatedHit.start_seq, endSeq: generatedHit.end_seq }, marker, generatedHit.chunk_text);
+  assert.deepEqual(originalWindow.records.map(row => row.seq), [177, 178, 179, 180, 181, 182, 183]);
+  assert.deepEqual(boundedWindow.records.map(row => row.seq), originalWindow.records.map(row => row.seq));
+  const fallbackOriginal = archiveRecall.selectVectorRawMessageWindow(fullGeneratedRecords, 'no-match-token', '');
+  const fallbackBounded = await archiveRecall.selectBoundedVectorRawMessageWindow(generatedId,
+    { startSeq: generatedHit.start_seq, endSeq: generatedHit.end_seq }, 'no-match-token', '');
+  assert.deepEqual(fallbackBounded.records.map(row => row.seq), fallbackOriginal.records.map(row => row.seq));
+
+  const boundaryId = 'viewer-a/tool-boundary';
+  const boundaryRecords = Array.from({ length: 210 }, (_, index) => {
+    const seq = index + 1;
+    if (seq === 100) return { ...record(boundaryId, 'viewer-a', seq, 'boundary marker'),
+      role: 'model' as const, message: { role: 'model' as const,
+        parts: [{ text: 'boundary marker' }, { functionCall: { id: 'tool-id-100', name: 'read', args: {} } }], __meta: { seq } } };
+    if (seq === 101) return { ...record(boundaryId, 'viewer-a', seq, 'tool reply'),
+      role: 'tool' as const, message: { role: 'tool' as const,
+        parts: [{ functionResponse: { tool_use_id: 'tool-id-100', name: 'read', response: { output: 'tool reply' } } }], __meta: { seq } } };
+    if (seq === 129 || seq === 180) return record(boundaryId, 'viewer-a', seq, seq === 129 ? 'tie-foo' : 'tie-bar');
+    return record(boundaryId, 'viewer-a', seq, 'ordinary');
+  });
+  await store.writeArchiveMessages(boundaryRecords);
+  const boundaryRange = { startSeq: 1, endSeq: 210 };
+  const boundaryFull = archiveRecall.selectVectorRawMessageWindow(boundaryRecords, 'boundary marker', 'boundary marker');
+  const boundaryBounded = await archiveRecall.selectBoundedVectorRawMessageWindow(boundaryId, boundaryRange, 'boundary marker', 'boundary marker');
+  assert.deepEqual(boundaryBounded.records.map(row => row.seq), boundaryFull.records.map(row => row.seq));
+  assert.ok(boundaryBounded.records.some(row => row.seq === 101), 'complete call/response crosses the SQL page boundary');
+  const tieFull = archiveRecall.selectVectorRawMessageWindow(boundaryRecords, 'tie', '');
+  const tieBounded = await archiveRecall.selectBoundedVectorRawMessageWindow(boundaryId, boundaryRange, 'tie', '');
+  assert.deepEqual(tieBounded.records.map(row => row.seq), tieFull.records.map(row => row.seq));
+  assert.ok(tieBounded.records.some(row => row.seq === 129), 'equal score and length choose earlier archive position');
+  const effectiveChildRows = await store.readEffectiveArchiveMessages(child, 1, 70);
+  const effectiveChildFull = archiveRecall.selectVectorRawMessageWindow(effectiveChildRows, 'find child 70', 'find child 70');
+  const effectiveChildBounded = await archiveRecall.selectBoundedVectorRawMessageWindow('viewer-a/old-child',
+    { startSeq: 1, endSeq: 70 }, 'find child 70', 'find child 70');
+  assert.deepEqual(effectiveChildBounded.records.map(row => row.seq), effectiveChildFull.records.map(row => row.seq));
+  assert.equal(effectiveChildBounded.records.some(row => row.seq === 50), false, 'inherited parent rows stop at fork cap');
+
   const originalSearch = vector.searchDetailed;
   const seenOptions: unknown[] = [];
   const hits = [
@@ -57,7 +112,7 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
     source_family: `${parent}:legacy:stale`, text: 'Cached legacy excerpt.' };
   (vector as any).searchDetailed = async (_query: string, _limit: number, _format: boolean, options: any) => {
     seenOptions.push(options);
-    return { hits: (_query === 'memoryfact' ? [factHit] : _query === 'stale' ? [staleHit] : hits).filter(hit => !options.agent || hit.agent === options.agent)
+    return { hits: (_query === marker ? [rankedGeneratedHit] : _query === 'memoryfact' ? [factHit] : _query === 'stale' ? [staleHit] : hits).filter(hit => !options.agent || hit.agent === options.agent)
       .filter(hit => !options.lineageSessions || options.lineageSessions.some((item: any) => item.sessionId === hit.session_id
         && (item.maxMessageSeq === undefined || ('start_seq' in hit && Number(hit.start_seq) <= item.maxMessageSeq)))),
       lexical: { configured: true, ready: true, used: false, coverageComplete: true, backfilling: false } };
@@ -100,6 +155,10 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
     assert.equal(stale.results[0].kind, 'unavailable');
     assert.deepEqual(stale.results[0].messages, []);
     assert.equal(stale.results[0].fallbackExcerpt, 'Cached legacy excerpt.');
+    const generatedSearch = await (await request(`/api/history/search?query=${encodeURIComponent(marker)}&limit=20`)).json() as any;
+    const generatedSource = generatedSearch.results.find((source: any) => source.key === rankedGeneratedHit.source_family);
+    assert.ok(generatedSource, 'actual generated source-family candidate survives ranked source fusion');
+    assert.deepEqual(generatedSource.messages.map((message: any) => message.__meta.seq), [177, 178, 179, 180, 181, 182, 183]);
 
     const agent = await (await request('/api/history/search?query=find&agentName=viewer-a')).json() as any;
     assert.deepEqual(agent.results.map((item: any) => item.sessionId), [parent, child]);
@@ -125,7 +184,10 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
     const earlier = await (await request(`/api/history/window?sessionId=${encodeURIComponent(child)}&beforeSeq=20`)).json() as any;
     assert.deepEqual(earlier.messages.map((item: any) => item.__meta.seq), [1, 2, 3, 4, 8]);
     assert.equal(earlier.hasEarlier, false);
-    assert.equal((await request(`/api/history/window?sessionId=${encodeURIComponent(child)}&target=msg%231-1000000`)).status, 400);
+    const wideRange = await (await request(`/api/history/window?sessionId=${encodeURIComponent(child)}&target=msg%231-1000000`)).json() as any;
+    assert.deepEqual(wideRange.requestedRange, { startSeq: 1, endSeq: 1000000 });
+    assert.deepEqual(wideRange.shownRange, { startSeq: 1, endSeq: 70 });
+    assert.equal(wideRange.hasMoreInTarget, false);
     assert.equal((await request('/api/history/window?sessionId=missing&target=msg%231')).status, 404);
 
     const longId = 'viewer-a/sparse';
@@ -141,6 +203,17 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
     assert.deepEqual(finalPage.messages.map((item: any) => item.__meta.seq), [260, 270, 280, 290, 300, 310, 320, 330, 340, 350]);
     assert.equal(finalPage.hasLater, false);
     assert.equal(new Set([...firstPage.messages, ...following.messages, ...finalPage.messages].map((item: any) => item.__meta.seq)).size, 35);
+    const largeSelection = await (await request(`/api/history/window?sessionId=${encodeURIComponent(longId)}&target=msg%231-1000000`)).json() as any;
+    assert.equal(largeSelection.messages.length, 20);
+    assert.equal(largeSelection.hasMoreInTarget, true);
+    assert.deepEqual(largeSelection.shownRange, { startSeq: 10, endSeq: 200 });
+    const selectedContinuation = await (await request(`/api/history/window?sessionId=${encodeURIComponent(longId)}&afterSeq=200&targetEndSeq=1000000`)).json() as any;
+    assert.deepEqual(selectedContinuation.messages.map((item: any) => item.__meta.seq), Array.from({ length: 15 }, (_, index) => (index + 21) * 10));
+    assert.equal(selectedContinuation.hasMoreInTarget, false);
+    const selectedCutoff = await (await request(`/api/history/window?sessionId=${encodeURIComponent(longId)}&afterSeq=200&targetEndSeq=250`)).json() as any;
+    assert.deepEqual(selectedCutoff.messages.map((item: any) => item.__meta.seq), [210, 220, 230, 240, 250]);
+    assert.equal(selectedCutoff.hasMoreInTarget, false);
+    assert.equal(selectedCutoff.hasLater, true);
   } finally {
     (vector as any).searchDetailed = originalSearch;
     const disabled = await request('/api/history/search?query=find');

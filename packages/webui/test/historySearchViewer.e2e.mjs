@@ -31,7 +31,14 @@ window.fetch = async (input, options = {}) => {
     return response({ results })
   }
   if (url.pathname.endsWith('/api/history/window')) {
-    if (url.searchParams.get('target')) return response({ sessionId: url.searchParams.get('sessionId'), messages: [msg('user', 10, [{ text: 'exact archive message' }])], firstSeq: 10, lastSeq: 10, hasEarlier: false, hasLater: false })
+    if (url.searchParams.get('target')) {
+      const wide = url.searchParams.get('target') === 'msg#10-200'
+      return response({ sessionId: url.searchParams.get('sessionId'), messages: [msg('user', 10, [{ text: 'exact archive message' }])], firstSeq: 10, lastSeq: 10,
+        requestedRange: wide ? { startSeq: 10, endSeq: 200 } : { startSeq: 10, endSeq: 11 }, shownRange: { startSeq: 10, endSeq: 10 },
+        hasEarlier: false, hasLater: wide, hasMoreInTarget: wide })
+    }
+    if (url.searchParams.has('targetEndSeq')) return response({ messages: [msg('model', 11, [{ text: 'continuing selected range' }])], firstSeq: 11, lastSeq: 11,
+      shownRange: { startSeq: 11, endSeq: 11 }, hasEarlier: true, hasLater: true, hasMoreInTarget: false })
     if (url.searchParams.has('afterSeq')) return response({ messages: [msg('tool', 12, [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'later alpha tool output' } } }])], firstSeq: 12, lastSeq: 12, hasEarlier: true, hasLater: false })
   }
   if (url.pathname.endsWith('/context-blocks/3/expand')) return response({ sessionId: 'beta', blockId: 3, expansionKind: 'messages', messages: [msg('user', 20, [{ text: 'nested beta detail' }])] })
@@ -101,5 +108,24 @@ test('changing a query prevents a late earlier search from replacing its results
     await page.waitForSelector('[data-history-result="hit-b"]')
     await page.evaluate(() => window.__resolveSlow())
     assert.equal(await page.$$eval('[data-history-result]', items => items.map(item => item.getAttribute('data-history-result')).join(',')), 'hit-b')
+  } finally { await page.close() }
+})
+
+test('a pasted range continues inside its bound before ordinary later browsing', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.goto(baseUrl)
+    await page.type('#history-search-query', 'sessionId=alpha msg#10-200')
+    await page.click('button[type=submit]')
+    await page.waitForSelector('[data-history-result]')
+    assert.equal(await page.$eval('[data-history-result]', el => el.textContent.includes('Selected msg#10-200 (shown 10–10)')), true)
+    await page.click('[data-history-result] > button:last-of-type')
+    await page.waitForFunction(() => document.querySelector('[data-history-result]')?.textContent?.includes('continuing selected range'))
+    assert.equal(await page.$eval('[data-history-result] > button:last-of-type', el => el.textContent), 'Load later')
+    await page.click('[data-history-result] > button:last-of-type')
+    await page.waitForFunction(() => document.querySelector('[data-history-result]')?.textContent?.includes('later alpha tool output'))
+    const requests = await page.evaluate(() => window.__requests.filter(url => url.includes('/history/window')))
+    assert.equal(requests.some(url => url.includes('afterSeq=10') && url.includes('targetEndSeq=200')), true)
+    assert.equal(requests.some(url => url.includes('afterSeq=11') && !url.includes('targetEndSeq')), true)
   } finally { await page.close() }
 })

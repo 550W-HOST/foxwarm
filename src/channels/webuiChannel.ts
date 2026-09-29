@@ -2109,12 +2109,14 @@ export class WebUIChannel implements Channel {
         path: '/api/history/window', method: 'GET',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const q = historySearchQuery(req, ['sessionId', 'target', 'beforeSeq', 'afterSeq']);
+            const q = historySearchQuery(req, ['sessionId', 'target', 'beforeSeq', 'afterSeq', 'targetEndSeq']);
             if (!q.sessionId || q.sessionId.length > 300) throw Object.assign(new Error('Choose a session.'), { statusCode: 400 });
             const beforeSeq = historySearchSeq(q.beforeSeq, 'beforeSeq');
             const afterSeq = historySearchSeq(q.afterSeq, 'afterSeq');
+            const targetEndSeq = historySearchSeq(q.targetEndSeq, 'targetEndSeq');
             if (beforeSeq && afterSeq) throw Object.assign(new Error('Choose one paging direction.'), { statusCode: 400 });
             if (q.target && (beforeSeq || afterSeq)) throw Object.assign(new Error('Use a target or a paging direction.'), { statusCode: 400 });
+            if (targetEndSeq && (!afterSeq || q.target)) throw Object.assign(new Error('A selected range can continue only after a message.'), { statusCode: 400 });
             if (!q.target && !beforeSeq && !afterSeq) throw Object.assign(new Error('Enter a message reference.'), { statusCode: 400 });
             if (!sessionManager.getSessionCatalog(q.sessionId) && !await hasArchivedSessionId(q.sessionId)) {
               return res.status(404).json({ error: 'Session not found', code: 'SESSION_NOT_FOUND' });
@@ -2123,12 +2125,13 @@ export class WebUIChannel implements Channel {
             if (q.target && !match) throw Object.assign(new Error('Use msg#123 or msg#123-130.'), { statusCode: 400 });
             const start = match ? historySearchSeq(match[1], 'start message')! : undefined;
             const end = match ? historySearchSeq(match[2] || match[1], 'end message')! : undefined;
-            if (start !== undefined && end !== undefined && (end < start || end - start >= 50)) {
-              throw Object.assign(new Error('Select an ascending range of at most 50 message numbers.'), { statusCode: 400 });
+            if (start !== undefined && end !== undefined && end < start) {
+              throw Object.assign(new Error('Select an ascending message range.'), { statusCode: 400 });
             }
             const page = await readEffectiveArchiveMessagePage(q.sessionId, {
               ...(beforeSeq ? { beforeSeq } : {}), ...(afterSeq ? { afterSeq } : {}),
-              ...(start ? { startSeq: start, endSeq: end } : {}), limit: 20,
+              ...(start ? { startSeq: start, endSeq: end } : {}),
+              ...(targetEndSeq ? { endSeq: targetEndSeq } : {}), limit: 20,
             });
             const firstSeq = page.records[0]?.seq;
             const lastSeq = page.records.at(-1)?.seq;
@@ -2141,7 +2144,9 @@ export class WebUIChannel implements Channel {
               __meta: { ...record.message.__meta, seq: record.seq, timestamp: record.message.__meta?.timestamp || record.timestamp,
                 contextArchiveItem: { kind: 'message', seq: record.seq, inherited: record.inherited, sourceSessionId: record.sourceSessionId } },
             }))), firstSeq, lastSeq, hasEarlier: earlier.records.length > 0, hasLater: later.records.length > 0,
-              ...(start ? { hasMoreInTarget: page.hasMore } : {}),
+              ...(start ? { requestedRange: { startSeq: start, endSeq: end } } : {}),
+              ...(start || targetEndSeq ? { shownRange: firstSeq && lastSeq ? { startSeq: firstSeq, endSeq: lastSeq } : undefined,
+                hasMoreInTarget: page.hasMore } : {}),
             });
           } catch (error: any) {
             const status = error?.statusCode || 500;

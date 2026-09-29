@@ -1245,6 +1245,8 @@ type RawMessageWindowSelection = {
   filterNotices: string[];
 };
 
+type RawRecordScore = { index: number; score: number; substantive: boolean; textLength: number };
+
 function normalizedLexicalText(value: unknown): string {
   return String(value || '').normalize('NFKC').toLowerCase();
 }
@@ -1314,6 +1316,60 @@ function toolExchangeGroups(records: any[]): Map<number, { start: number; end: n
   return groups;
 }
 
+function createVectorRawRecordScorer(query: string, chunkText: string | undefined, positiveFilters: { contentFilter?: unknown; includeRegex?: unknown } = {}) {
+  const normalizedQuery = normalizedLexicalText(query);
+  const normalizedChunk = normalizedLexicalText(chunkText);
+  const tokens = queryLocatorTokens(query);
+  const contentFilter = typeof positiveFilters.contentFilter === 'string' && positiveFilters.contentFilter.trim()
+    ? normalizedLexicalText(positiveFilters.contentFilter.trim()) : undefined;
+  let includeRegex: RegExp | undefined;
+  if (typeof positiveFilters.includeRegex === 'string' && positiveFilters.includeRegex.trim()) {
+    try { includeRegex = new RegExp(positiveFilters.includeRegex, 'i'); }
+    catch { /* The shared renderer owns the user-facing invalid-regex error. */ }
+  }
+  return {
+    contentFilter, includeRegex,
+    score(record: any, index: number): RawRecordScore {
+      const text = rawRecordSearchText(record);
+      const normalized = normalizedLexicalText(text);
+      let score = 0;
+      if (normalized.length >= 8 && normalizedChunk) {
+        if (normalizedChunk.includes(normalized)) score += 1000;
+        else if (normalized.includes(normalizedChunk) && normalizedChunk.length >= 8) score += 700;
+      }
+      if (normalizedQuery.length >= 3 && normalized.includes(normalizedQuery)) score += 200;
+      if (contentFilter && normalized.includes(contentFilter)) score += 3000;
+      if (includeRegex) {
+        includeRegex.lastIndex = 0;
+        if (includeRegex.test(text)) score += 2500;
+      }
+      for (const token of tokens) {
+        if (normalized.includes(token)) score += token.length >= 8 ? 40 : 12;
+      }
+      const substantive = hasSubstantiveMessageText(record);
+      if (substantive) score += 3;
+      return { index, score, substantive, textLength: normalized.length };
+    },
+  };
+}
+
+function isMeaningfulRawScore(entry: RawRecordScore): boolean {
+  return entry.score > (entry.substantive ? 3 : 0);
+}
+
+function betterMeaningfulRawScore(a: RawRecordScore, b: RawRecordScore): boolean {
+  return a.score > b.score || (a.score === b.score && (
+    Number(a.substantive) > Number(b.substantive)
+    || (a.substantive === b.substantive && (a.textLength > b.textLength
+      || (a.textLength === b.textLength && a.index < b.index)))
+  ));
+}
+
+function betterFallbackRawScore(a: RawRecordScore, b: RawRecordScore): boolean {
+  return Number(a.substantive) > Number(b.substantive)
+    || (a.substantive === b.substantive && a.index > b.index);
+}
+
 export function selectVectorRawMessageWindow(
   records: any[],
   query: string,
@@ -1321,45 +1377,12 @@ export function selectVectorRawMessageWindow(
   positiveFilters: { contentFilter?: unknown; includeRegex?: unknown } = {},
 ): RawMessageWindowSelection {
   if (records.length === 0) return { records: [], selectedStartSeq: 0, selectedEndSeq: 0, omittedMessageCount: 0, filterNotices: [] };
-  const normalizedQuery = normalizedLexicalText(query);
-  const normalizedChunk = normalizedLexicalText(chunkText);
-  const tokens = queryLocatorTokens(query);
-  const contentFilter = typeof positiveFilters.contentFilter === 'string' && positiveFilters.contentFilter.trim()
-    ? normalizedLexicalText(positiveFilters.contentFilter.trim())
-    : undefined;
-  let includeRegex: RegExp | undefined;
-  if (typeof positiveFilters.includeRegex === 'string' && positiveFilters.includeRegex.trim()) {
-    try {
-      includeRegex = new RegExp(positiveFilters.includeRegex, 'i');
-    } catch {
-      // The shared renderer owns the user-facing invalid-regex error.
-    }
-  }
-  const scored = records.map((record, index) => {
-    const text = rawRecordSearchText(record);
-    const normalized = normalizedLexicalText(text);
-    let score = 0;
-    if (normalized.length >= 8 && normalizedChunk) {
-      if (normalizedChunk.includes(normalized)) score += 1000;
-      else if (normalized.includes(normalizedChunk) && normalizedChunk.length >= 8) score += 700;
-    }
-    if (normalizedQuery.length >= 3 && normalized.includes(normalizedQuery)) score += 200;
-    if (contentFilter && normalized.includes(contentFilter)) score += 3000;
-    if (includeRegex) {
-      includeRegex.lastIndex = 0;
-      if (includeRegex.test(text)) score += 2500;
-    }
-    for (const token of tokens) {
-      if (normalized.includes(token)) score += token.length >= 8 ? 40 : 12;
-    }
-    if (hasSubstantiveMessageText(record)) score += 3;
-    return { index, score, substantive: hasSubstantiveMessageText(record), textLength: normalized.length };
-  });
-  const meaningful = scored.some(entry => entry.score > (entry.substantive ? 3 : 0));
-  const anchor = meaningful
-    ? [...scored].sort((a, b) => b.score - a.score || Number(b.substantive) - Number(a.substantive)
-      || b.textLength - a.textLength || a.index - b.index)[0]
-    : [...scored].sort((a, b) => Number(b.substantive) - Number(a.substantive) || b.index - a.index)[0];
+  const scorer = createVectorRawRecordScorer(query, chunkText, positiveFilters);
+  const { contentFilter, includeRegex } = scorer;
+  const scored = records.map((record, index) => scorer.score(record, index));
+  const meaningful = scored.some(isMeaningfulRawScore);
+  const anchor = scored.reduce((best, item) => (meaningful
+    ? betterMeaningfulRawScore(item, best) : betterFallbackRawScore(item, best)) ? item : best);
 
   const groups = toolExchangeGroups(records);
   const anchorGroup = groups.get(anchor.index);
@@ -1434,8 +1457,45 @@ export type StructuredRecallSource = {
   messages: Message[];
   matchedFacts?: Array<{ kind?: string; text: string }>;
   fallbackExcerpt?: string;
-  partialSource?: boolean;
 };
+
+/** Scan only one source family; keep the same anchor scoring as model recall, but no source-sized message array. */
+export async function selectBoundedVectorRawMessageWindow(
+  sessionId: string, range: { startSeq: number; endSeq: number }, query: string, chunkText: string,
+): Promise<RawMessageWindowSelection> {
+  const scorer = createVectorRawRecordScorer(query, chunkText);
+  let bestMeaningful: (RawRecordScore & { seq: number }) | undefined;
+  let bestFallback: (RawRecordScore & { seq: number }) | undefined;
+  let afterSeq: number | undefined;
+  let index = 0;
+  while (true) {
+    const page = await readEffectiveArchiveMessagePage(sessionId, {
+      startSeq: range.startSeq, endSeq: range.endSeq, limit: 100,
+      ...(afterSeq !== undefined ? { afterSeq } : {}),
+    });
+    if (page.records.length === 0) break;
+    for (const record of page.records) {
+      const candidate = { ...scorer.score(record, index++), seq: record.seq };
+      if (isMeaningfulRawScore(candidate) && (!bestMeaningful || betterMeaningfulRawScore(candidate, bestMeaningful))) {
+        bestMeaningful = candidate;
+      }
+      if (!bestFallback || betterFallbackRawScore(candidate, bestFallback)) bestFallback = candidate;
+    }
+    const lastSeq = page.records.at(-1)!.seq;
+    if (!page.hasMore || lastSeq === afterSeq) break;
+    afterSeq = lastSeq;
+  }
+  const anchorSeq = (bestMeaningful || bestFallback)?.seq;
+  if (!anchorSeq) return { records: [], selectedStartSeq: 0, selectedEndSeq: 0, omittedMessageCount: 0, filterNotices: [] };
+  const [before, anchor, after] = await Promise.all([
+    readEffectiveArchiveMessagePage(sessionId, { ...range, beforeSeq: anchorSeq, limit: 16 }),
+    readEffectiveArchiveMessagePage(sessionId, { startSeq: anchorSeq, endSeq: anchorSeq, limit: 1 }),
+    readEffectiveArchiveMessagePage(sessionId, { ...range, afterSeq: anchorSeq, limit: 16 }),
+  ]);
+  const neighborhood = [...before.records, ...anchor.records, ...after.records];
+  const selected = selectVectorRawMessageWindow(neighborhood, query, chunkText);
+  return { ...selected, omittedMessageCount: Math.max(0, index - selected.records.length) };
+}
 
 async function vectorHitToPreviewItems(
   hit: any, renderOptions: ContextPreviewRenderOptions, vectorQuery: string,
@@ -1499,21 +1559,18 @@ async function vectorHitToPreviewItems(
   const range = vectorHitRawRange(hit);
   let missingMessageSource = false;
   if (range) {
-    const boundedPage = bounded ? await readEffectiveArchiveMessagePage(readSessionId, {
-      startSeq: range.startSeq, endSeq: range.endSeq, limit: 100,
-    }) : undefined;
-    const result = boundedPage
-      ? { records: boundedPage.records }
+    const source = bounded ? undefined
       : await sessionManager.getArchivedMessages(sourceSessionId, { startSeq: range.startSeq, endSeq: range.endSeq });
-    if (result.records.length > 0) {
-      const window = selectVectorRawMessageWindow(result.records, vectorQuery, String(hit.chunk_text || ''), renderOptions);
+    const window = bounded
+      ? await selectBoundedVectorRawMessageWindow(readSessionId, range, vectorQuery, String(hit.chunk_text || ''))
+      : selectVectorRawMessageWindow(source!.records, vectorQuery, String(hit.chunk_text || ''), renderOptions);
+    if (window.records.length > 0) {
       structured?.push({
         key: String(hit.source_family || `vector:raw:${sourceSessionId}:${range.startSeq}-${range.endSeq}`),
         sessionId: readSessionId, kind: 'messages', sourceRange: range,
         messages: window.records.map((record: any) => buildContextBlockExpansionMessageItem({
           ...record, timestamp: record.timestamp || record.message?.__meta?.timestamp,
         }).message),
-        ...(boundedPage?.hasMore ? { partialSource: true } : {}),
       });
       const messageItems = window.records.map((record: any) => createMessageContextPreviewItem({
         key: `vector:msg:${sourceSessionId}:${record.seq}`,
@@ -1530,7 +1587,7 @@ async function vectorHitToPreviewItems(
         key: String(hit.source_family || `vector:raw:${sourceSessionId}:${range.startSeq}-${range.endSeq}`),
         heading: `[vector source session:${sourceSessionId}; full hit ${formatMessageLogRange(range.startSeq, range.endSeq)}; selected ${formatMessageLogRange(window.selectedStartSeq, window.selectedEndSeq)}; omitted ${window.omittedMessageCount} message(s)]`,
         body: messageItems.map(item => `${item.heading}\n${item.body}`).join('\n\n'),
-        searchText: result.records.map((record: any) => rawRecordSearchText(record)).join('\n\n'),
+        searchText: source?.records.map((record: any) => rawRecordSearchText(record)).join('\n\n') || '',
         omittedToolText: messageItems.map(item => item.omittedToolText || '').filter(Boolean).join('\n\n') || undefined,
         priorityNotices: window.filterNotices,
       }];

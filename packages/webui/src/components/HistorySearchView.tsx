@@ -13,14 +13,16 @@ type HistoryResult = {
   lastSeq?: number
   hasEarlier: boolean
   hasLater: boolean
-  partialSource?: boolean
+  requestedRange?: { startSeq: number; endSeq: number }
+  shownRange?: { startSeq: number; endSeq: number }
+  hasMoreInTarget?: boolean
   fallbackExcerpt?: string
   matchedFacts?: Array<{ kind?: string; text: string }>
   loading?: 'earlier' | 'later'
   error?: string
 }
 
-type WindowResponse = Pick<HistoryResult, 'messages' | 'firstSeq' | 'lastSeq' | 'hasEarlier' | 'hasLater'>
+type WindowResponse = Pick<HistoryResult, 'messages' | 'firstSeq' | 'lastSeq' | 'hasEarlier' | 'hasLater' | 'hasMoreInTarget' | 'shownRange'>
 const LOCATOR = /^msg#([1-9]\d*)(?:-([1-9]\d*))?$/i
 const COPY_REFERENCE = /^sessionId=(\S+)\s+(msg#[1-9]\d*(?:-[1-9]\d*)?)$/i
 
@@ -106,7 +108,9 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
         if (!payload.messages?.length) throw new Error('No archived message found at that reference.')
         setResults([{ key: `${selectedSession}:${locator}`, sessionId: selectedSession, kind: 'messages',
           messages: payload.messages, firstSeq: payload.firstSeq, lastSeq: payload.lastSeq,
-          hasEarlier: payload.hasEarlier, hasLater: payload.hasLater }])
+          hasEarlier: payload.hasEarlier, hasLater: payload.hasLater,
+          requestedRange: payload.requestedRange, shownRange: payload.shownRange,
+          hasMoreInTarget: payload.hasMoreInTarget }])
       } else setResults(payload.results || [])
       setSearched(true)
     } catch (cause) {
@@ -127,6 +131,9 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
     requests.current.add(controller)
     setResults(previous => previous.map(item => item.key === key ? { ...item, loading: direction, error: undefined } : item))
     const params = new URLSearchParams({ sessionId: result.sessionId, [direction === 'earlier' ? 'beforeSeq' : 'afterSeq']: String(anchor) })
+    if (direction === 'later' && result.hasMoreInTarget && result.requestedRange) {
+      params.set('targetEndSeq', String(result.requestedRange.endSeq))
+    }
     try {
       const page = await readHistory(`/history/window?${params}`, controller.signal) as WindowResponse
       if (turn !== generation.current) return
@@ -137,6 +144,11 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
         lastSeq: direction === 'later' ? page.lastSeq || item.lastSeq : item.lastSeq,
         hasEarlier: direction === 'earlier' ? page.hasEarlier : item.hasEarlier,
         hasLater: direction === 'later' ? page.hasLater : item.hasLater,
+        hasMoreInTarget: direction === 'later' ? page.hasMoreInTarget || false : item.hasMoreInTarget,
+        shownRange: direction === 'later' && page.shownRange ? {
+          startSeq: item.shownRange?.startSeq || item.firstSeq || page.shownRange.startSeq,
+          endSeq: page.shownRange.endSeq,
+        } : item.shownRange,
         loading: undefined,
       }))
     } catch (cause) {
@@ -177,14 +189,13 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
             <section key={`${result.key}:${index}`} data-history-result={result.key} className="min-w-0 rounded-lg border border-fw-border bg-fw-surface p-3 sm:p-4">
               <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2 border-b border-fw-border pb-2 text-xs text-fw-text-muted">
                 <span className="font-medium text-fw-text-strong">{result.sessionId}</span>
-                <span>{result.kind === 'block' ? 'Context summary' : result.kind === 'unavailable' ? 'Archived source unavailable' : result.firstSeq ? `Messages ${result.firstSeq}${result.lastSeq && result.lastSeq !== result.firstSeq ? `–${result.lastSeq}` : ''}` : 'Messages'}</span>
+                <span>{result.kind === 'block' ? 'Context summary' : result.kind === 'unavailable' ? 'Archived source unavailable' : result.firstSeq ? `Messages ${result.firstSeq}${result.lastSeq && result.lastSeq !== result.firstSeq ? `–${result.lastSeq}` : ''}` : 'Messages'}{result.requestedRange && ` · Selected msg#${result.requestedRange.startSeq}-${result.requestedRange.endSeq}${result.shownRange ? ` (shown ${result.shownRange.startSeq}–${result.shownRange.endSeq})` : ''}`}</span>
               </header>
               {result.kind === 'unavailable' ? <p className="text-sm">The original messages are unavailable. {result.fallbackExcerpt && <span>Cached excerpt: {result.fallbackExcerpt}</span>}</p> : (
                 <>
                   {result.hasEarlier && <button type="button" onClick={() => void load(result.key, 'earlier')} disabled={!!result.loading} className="mb-3 rounded border border-fw-border px-3 py-1 text-xs hover:bg-fw-hover disabled:opacity-50">{result.loading === 'earlier' ? 'Loading…' : 'Load earlier'}</button>}
                   <ChatTimeline sessionId={result.sessionId} messages={result.messages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} />
-                  {result.hasLater && <button type="button" onClick={() => void load(result.key, 'later')} disabled={!!result.loading} className="mt-3 rounded border border-fw-border px-3 py-1 text-xs hover:bg-fw-hover disabled:opacity-50">{result.loading === 'later' ? 'Loading…' : 'Load later'}</button>}
-                  {result.partialSource && <p className="mt-2 text-xs text-fw-text-muted">This source spans more messages; load later to continue reading.</p>}
+                  {result.hasLater && <button type="button" onClick={() => void load(result.key, 'later')} disabled={!!result.loading} className="mt-3 rounded border border-fw-border px-3 py-1 text-xs hover:bg-fw-hover disabled:opacity-50">{result.loading === 'later' ? 'Loading…' : result.hasMoreInTarget ? 'Continue selected range' : 'Load later'}</button>}
                   {result.matchedFacts?.map((fact, factIndex) => <p key={factIndex} className="mt-2 text-xs text-fw-text-muted">Matched memory fact{fact.kind ? ` (${fact.kind})` : ''}: {fact.text}</p>)}
                   {result.error && <p role="alert" className="mt-2 text-sm text-fw-warning">{result.error}</p>}
                 </>

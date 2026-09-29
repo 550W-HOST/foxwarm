@@ -9,7 +9,7 @@ The independent workbench Search tab shows authenticated Archive search groups a
 
 ## Functions and behavior
 
-- `HistorySearchView` owns the query form and one result list; every result contains independent earlier/later loading state, errors, sequence anchors and one Timeline. Block/fact hits display an actual expandable CTX-BLOCK; a missing source shows a labeled cached excerpt rather than a fabricated message.
+- `HistorySearchView` owns the query form and one result list; every result contains independent earlier/later loading state, errors, sequence anchors and one Timeline. A copied range retains its requested and currently shown bounds while its first 20-row page continues within the requested range, then returns to ordinary later browsing. Block/fact hits display an actual expandable CTX-BLOCK; a missing source shows a labeled cached excerpt rather than a fabricated message.
 - `readHistory` calls deployment-relative authenticated GET routes. `mergeMessages` deduplicates sequence IDs when appending/prepending archive pages.
 - Query changes, scope changes, unmount and new submissions invalidate/abort old requests; late responses cannot replace current results. No browser-global search state is required.
 - `App` opens one restorable `system:search` tab from expanded/collapsed/mobile navigation. Popout uses the existing leaf route and renders the same viewer. The ChatTimeline/ToolTimelineItems rendering and Chat-local search mechanics remain unchanged.
