@@ -81,6 +81,9 @@ export type OpenAIStreamProgressSnapshot = {
 
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    /** Provider-complete output item; the caller owns any asynchronous canonical side effect. */
+    onOutputItemDone?: (entry: { outputIndex: number; item: any }) => void;
+    onResponseCompleted?: () => void;
     onMeaningfulProgress?: () => void;
     onSafetyBuffering?: (metadata: Record<string, unknown>) => void;
     /** Hosted image generation lifecycle; used for watchdog state only. */
@@ -985,6 +988,10 @@ export async function collectOpenAIResponsesStream(
                             options?.onImageGenerationActivity?.();
                         }
                         emitProgressUpdate();
+                        if (event.type === 'response.output_item.done') {
+                            const completed = buildOutputEntries().find(entry => entry.outputIndex === event.output_index);
+                            if (completed) options?.onOutputItemDone?.({ outputIndex: event.output_index, item: structuredClone(completed.item) });
+                        }
                     }
                     return;
                 case 'response.image_generation_call.in_progress':
@@ -1121,6 +1128,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.completed':
+                    options?.onResponseCompleted?.();
                     completedResponse = event.response;
                     if (completedResponse) {
                         completedResponse.output = mergeCompletedOutputItems(completedResponse.output);

@@ -270,6 +270,7 @@ export interface SessionStreamEvent {
   textDelta?: ModelStreamTextDelta
   toolCallDeltas?: ModelStreamToolCallDelta[]
   partDeltas?: ModelStreamPartDelta[]
+  trimBeforeOutputIndex?: number
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]
@@ -299,6 +300,7 @@ export interface Message {
       completedAt: number
       durationMs: number
     }
+    llmSegment?: { outputStart: number; outputEndExclusive: number; complete: boolean }
     contextBlock?: ContextBlockMessageMeta
     preservedFromBlockId?: number
     [key: string]: any

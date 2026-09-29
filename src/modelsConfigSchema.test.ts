@@ -127,6 +127,43 @@ test('disallowEmptyResponse is provider-scoped and propagates to concrete model 
   assert.equal(parsed.models['permissive/model-b']?.disallowEmptyResponse, undefined);
 });
 
+test('keepReasoningOnError defaults off, inherits by concrete model, and changes virtual leaf fingerprints', () => {
+  const input = {
+    default: 'route',
+    providers: {
+      leaf: {
+        providerType: 'openai-responses', baseUrl: 'https://example.test/v1',
+        keepReasoningOnError: true,
+        models: ['enabled', { id: 'disabled', keepReasoningOnError: false }],
+      },
+      unconfigured: { providerType: 'openai-ws', baseUrl: 'https://example.test/v1', models: ['default-off'] },
+      route: { providerType: 'session-hash', targets: ['leaf/disabled'] },
+    },
+  };
+  const parsed = loadModelsConfigFromObject(input);
+  assert.equal(parsed.models['leaf/enabled'].keepReasoningOnError, true);
+  assert.equal(parsed.models['leaf/disabled'].keepReasoningOnError, false);
+  assert.equal(parsed.models['unconfigured/default-off'].keepReasoningOnError, false);
+  assert.equal(parsed.models.route.keepReasoningOnError, undefined, 'virtual entry has no independent toggle');
+  const changed = structuredClone(input);
+  changed.providers.leaf.models[1] = { id: 'disabled', keepReasoningOnError: true };
+  assert.notEqual(loadModelsConfigFromObject(changed).models.route.virtualRouting!.fingerprint,
+    parsed.models.route.virtualRouting!.fingerprint);
+  assert.equal(JSON.stringify(parsed.models.route.virtualRouting).includes('keepReasoningOnError'), false);
+  for (const bad of ['true', 1, null, {}, []]) {
+    assert.throws(() => loadModelsConfigFromObject({ default: 'leaf', providers: {
+      leaf: { providerType: 'openai-responses', keepReasoningOnError: bad, models: ['model'] },
+    } }), /Provider.*keepReasoningOnError.*boolean/);
+    assert.throws(() => loadModelsConfigFromObject({ default: 'leaf', providers: {
+      leaf: { providerType: 'openai-responses', models: [{ id: 'model', keepReasoningOnError: bad }] },
+    } }), /Model.*keepReasoningOnError.*boolean/);
+  }
+  assert.throws(() => loadModelsConfigFromObject({ default: 'route', providers: {
+    leaf: { providerType: 'openai-responses', models: ['model'] },
+    route: { providerType: 'session-hash', targets: ['leaf/model'], keepReasoningOnError: true },
+  } }), /forbids field `keepReasoningOnError`/);
+});
+
 test('Chat Completions history reasoning field defaults, inherits, and overrides per model', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'chat/default-model',

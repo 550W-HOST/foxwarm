@@ -41,6 +41,11 @@ test('static config schemas are distinct, permissive, and omit the removed model
   const providerObject = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.oneOf.find((entry) => entry.type === 'object')
   assert.equal(providerObject.additionalProperties, true)
   assert.deepEqual(providerObject.properties.historyReasoningField.enum, ['reasoning_content', 'reasoning'])
+  assert.equal(providerObject.properties.keepReasoningOnError.type, 'boolean')
+  assert.equal(providerObject.properties.keepReasoningOnError.default, false)
+  assert.equal(providerObject.properties.models.items.anyOf[1].properties.keepReasoningOnError.type, 'boolean')
+  assert.equal(providerObject.properties.models.items.anyOf[1].properties.keepReasoningOnError.default, undefined,
+    'an omitted model override must inherit the provider default')
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
@@ -331,6 +336,7 @@ test('models schema suggests known provider types while accepting custom strings
   assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('webSearch')), true)
   assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('effort')), true)
   assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('imageGeneration')), true)
+  assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('keepReasoningOnError')), true)
 })
 
 test('dynamic models suggestions use the current document and exclude virtual targets', () => {

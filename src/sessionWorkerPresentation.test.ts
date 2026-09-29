@@ -160,6 +160,44 @@ test('final coalesced tool frame is forwarded before its canonical model message
   }
 });
 
+test('Worker forwards commentary append, structural trim, and final suffix in one ordered presentation tail', async () => {
+  const sessionId = `mc-pres-prefix-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-pres-prefix-'));
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_STREAM_COMMITTED_PREFIX: '1',
+    FOXWARM_TEST_STREAM_COMMITTED_PREFIX_AT: '2',
+  });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'unsubscribed warmup' }] });
+    await fixture.supervisor.setPresentationSubscription(sessionId, true);
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'show partial work' }] });
+    await waitFor(() => fixture.receivedMessages.some(message => message.__meta?.llmSegment?.complete === true));
+    await new Promise(resolve => setTimeout(resolve, 650));
+
+    const entries = fixture.receivedPresentation;
+    const prefixUpdate = entries.findIndex(item => item.kind === 'event' && item.value.sequence === 1
+      && item.value.streamId === 'committed-prefix-stream');
+    const prefixRow = entries.findIndex(item => item.kind === 'message' && item.value.__meta?.llmSegment?.complete === false);
+    const trim = entries.findIndex(item => item.kind === 'event' && item.value.trimBeforeOutputIndex === 1);
+    const suffixUpdate = entries.findIndex(item => item.kind === 'event' && item.value.sequence === 3
+      && item.value.streamId === 'committed-prefix-stream');
+    const finalRow = entries.findIndex(item => item.kind === 'message' && item.value.__meta?.llmSegment?.complete === true);
+    assert.ok(prefixUpdate >= 0 && prefixUpdate < prefixRow);
+    assert.ok(prefixRow < trim && trim < suffixUpdate && suffixUpdate < finalRow);
+    assert.equal(entries.slice(finalRow + 1).some(item => item.kind === 'event'
+      && item.value.streamId === 'committed-prefix-stream'), false);
+    assert.deepEqual(fixture.receivedMessages.filter(message => message.__meta?.llmSegment)
+      .map(message => message.parts.map((part: any) => part.text || part.thinking)), [['Drawing'], ['After', 'Final']]);
+  } finally {
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    await fs.remove(root);
+  }
+});
+
 test('unsubscribed workers forward nothing', async () => {
   const sessionId = `mc-pres-off-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-pres-off-'));

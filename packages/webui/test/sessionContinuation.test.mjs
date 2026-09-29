@@ -66,6 +66,13 @@ const toolMessage = (id, name, response = { output: 'ok' }) => ({
 
 const cases = [
   { name: 'final model text is complete', messages: [userText(), modelText()], incomplete: false },
+  { name: 'durable commentary text remains interrupted until the Responses request completes',
+    messages: [userText(), { ...modelText('Drawing'), __meta: { llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } }], incomplete: true },
+  { name: 'a real empty-suffix Responses completion is terminal without invented text',
+    messages: [userText(), { ...modelText('Drawing'), __meta: { llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } },
+      { role: 'model', parts: [], __meta: { llmSegment: { outputStart: 1, outputEndExclusive: 1, complete: true } } }], incomplete: false },
+  { name: 'completed Responses function calls still require their tool results',
+    messages: [userText(), { ...callMessage('read-response', 'read'), __meta: { llmSegment: { outputStart: 1, outputEndExclusive: 2, complete: true } } }], incomplete: true },
   { name: 'direct user message is incomplete', messages: [modelText(), userText()], incomplete: true },
   { name: 'non-compact system message is incomplete', messages: [modelText(), { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="trigger">wake</foxwarm-system>' }] }], incomplete: true },
   { name: 'compact marker over final model remains complete', messages: [userText(), modelText(), compactCompleted()], incomplete: false },

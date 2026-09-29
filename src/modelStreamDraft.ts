@@ -10,6 +10,7 @@ export type ModelStreamDraftSnapshot = {
   text: string;
   toolCalls: ModelStreamToolCall[];
   parts?: ModelStreamPart[];
+  committedThrough?: number;
 };
 
 const drafts = new Map<string, ModelStreamDraftSnapshot>();

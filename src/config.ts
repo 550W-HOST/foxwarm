@@ -1132,6 +1132,7 @@ export type ModelConfigOverride = {
   streamContentInactivityTimeoutMs?: number;
   effort?: ModelEffortConfig;
   historyReasoningField?: HistoryReasoningField;
+  keepReasoningOnError?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
@@ -1154,6 +1155,7 @@ export type ProviderConfigEntry = {
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   disallowEmptyResponse?: boolean;
+  keepReasoningOnError?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
@@ -1191,6 +1193,7 @@ export type ModelConfigEntry = {
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   disallowEmptyResponse?: boolean;
+  keepReasoningOnError?: boolean;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: NormalizedOpenAIWebSearchConfig;
@@ -1392,6 +1395,14 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
   const providerType = resolvedProviderEntry.providerType;
+  for (const [value, scope] of [
+    [resolvedProviderEntry.keepReasoningOnError, `Provider \`${providerKey}\``],
+    [modelOverride?.keepReasoningOnError, `Model \`${providerKey}/${modelId}\``],
+  ] as const) {
+    if (value !== undefined && typeof value !== 'boolean') {
+      throw new Error(`${scope} keepReasoningOnError must be a boolean.`);
+    }
+  }
   if (providerType === 'openai-ws' && resolvedProviderEntry.requestCompression) {
     throw new Error(`Provider \`${providerKey}\` requestCompression is not supported for openai-ws providers.`);
   }
@@ -1450,6 +1461,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     asyncCompact: resolvedProviderEntry.asyncCompact,
     requestCompression: resolvedProviderEntry.requestCompression,
     disallowEmptyResponse: resolvedProviderEntry.disallowEmptyResponse,
+    keepReasoningOnError: modelOverride?.keepReasoningOnError ?? resolvedProviderEntry.keepReasoningOnError ?? false,
     extraHeaders: {
       ...(resolvedProviderEntry.extraHeaders || {}),
       ...(modelOverride?.extraHeaders || {}),
@@ -1543,6 +1555,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'historyReasoningField',
     'asyncCompact',
     'disallowEmptyResponse',
+    'keepReasoningOnError',
     'webSearch',
     'imageGeneration',
   ];
@@ -1635,6 +1648,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           streamContentInactivityTimeoutMs: entry.streamContentInactivityTimeoutMs ?? DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
           asyncCompact: entry.asyncCompact !== false,
           disallowEmptyResponse: entry.disallowEmptyResponse === true,
+          keepReasoningOnError: entry.keepReasoningOnError === true,
           effort: getConcreteModelEffortConfig(entry),
           historyReasoningField: entry.historyReasoningField || null,
           apiKeyHash: hashConfigValue(entry.apiKey || ''),

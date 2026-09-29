@@ -149,6 +149,8 @@ export interface Message {
     usage?: TokenUsage;
     /** Persisted wall-clock boundaries and monotonic duration for the logical LLM request. */
     llmRequestTiming?: LlmRequestTiming;
+    /** Responses output range [start, end) of this immutable assistant segment. */
+    llmSegment?: { outputStart: number; outputEndExclusive: number; complete: boolean };
     /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
     contextBlock?: ContextBlockMessageMeta;
     /** Present when a raw message is intentionally preserved after a covering block. */
@@ -239,6 +241,8 @@ export interface SessionStreamEvent {
   toolCallDeltas?: ModelStreamToolCallDelta[];
   /** Responses-only ordered output slices; flat fields below remain a compatibility projection. */
   partDeltas?: ModelStreamPartDelta[];
+  /** Exclusive provider output index of the committed prefix; remaining draft only. */
+  trimBeforeOutputIndex?: number;
   /** Legacy cumulative fields retained for tolerant readers only. */
   reasoning?: string;
   text?: string;

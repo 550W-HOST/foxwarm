@@ -120,6 +120,7 @@ const modelOverrideProperties = {
     enum: ['reasoning_content', 'reasoning'],
     description: 'Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content.',
   },
+  keepReasoningOnError: { type: 'boolean', description: 'Override the provider default for retaining completed encrypted reasoning after a failed normal Responses stream. False disables retention; this does not resume provider execution.' },
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
   webSearch: openaiWebSearchConfig,
@@ -173,6 +174,7 @@ const providerObjectEntry = {
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     disallowEmptyResponse: { type: 'boolean', description: 'Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end.' },
+    keepReasoningOnError: { type: 'boolean', default: false, description: 'Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution.' },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
     webSearch: modelOverrideProperties.webSearch,
@@ -187,7 +189,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -195,7 +197,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'].map((field) => ({ required: [field] })) },
       },
     },
     {

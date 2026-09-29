@@ -171,6 +171,8 @@ export function isSessionTurnIncomplete(messages: readonly Message[]): boolean {
   if (lastMessage.role === 'model') {
     const hasOrdinaryText = lastMessage.parts.some(part => typeof part.text === 'string' && part.text.trim().length > 0);
     const hasFunctionCall = lastMessage.parts.some(part => !!part.functionCall);
+    if (lastMessage.__meta?.llmSegment?.complete === false) return true;
+    if (lastMessage.__meta?.llmSegment?.complete === true) return hasFunctionCall;
     return !hasOrdinaryText || hasFunctionCall;
   }
 
