@@ -9,6 +9,8 @@ namespace Foxwarm.Channels.WebUi;
 /// <summary>Revisioned list/session subscription union, installed before acknowledged snapshots and buffered events.</summary>
 internal sealed class WebUiRealtime(SessionRuntime runtime)
 {
+    // Optional scheduling seam for the focused transport test; normal hosts leave it unset.
+    internal Func<JsonObject, CancellationToken, Task>? BeforeQueuedSend { get; init; }
     private const int MaxSubscriptions = 5000; // webuiRealtime.ts union limit.
     private const int MaxMessageBytes = 32 * 1024 * 1024; // Two bounded UTF-8 ID arrays, including JSON escaping.
     public async Task RunAsync(WebSocket socket, CancellationToken stopped)
@@ -65,7 +67,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             await foreach (var item in output.Reader.ReadAllAsync(lifetime.Token))
             {
                 lock (gate) if (item.Revision != revision) continue;
-                await Send(item.Data);
+                if (BeforeQueuedSend is { } pause) await pause(item.Data, lifetime.Token);
+                await Send(item.Data, item.Revision);
             }
         }
         var pumping = Pump();
@@ -149,11 +152,16 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                 try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Subscription closed", CancellationToken.None); }
                 catch (WebSocketException) { }
         }
-        async Task Send(JsonObject data)
+        async Task Send(JsonObject data, long? expectedRevision = null)
         {
             var bytes = Encoding.UTF8.GetBytes(data.ToJsonString());
             await sendGate.WaitAsync(lifetime.Token);
-            try { if (socket.State == WebSocketState.Open) await socket.SendAsync(bytes, WebSocketMessageType.Text, true, lifetime.Token); }
+            try
+            {
+                // Recheck at the same barrier that orders snapshots and actual writes.
+                lock (gate) if (expectedRevision is long expected && expected != revision) return;
+                if (socket.State == WebSocketState.Open) await socket.SendAsync(bytes, WebSocketMessageType.Text, true, lifetime.Token);
+            }
             finally { sendGate.Release(); }
         }
         async Task ProtocolError(string message)
