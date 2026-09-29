@@ -19,7 +19,9 @@ export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupe
   let showedClock = false
   return messages.map(message => {
     if (message.__meta?.temporary || message.__meta?.synthetic) return null
-    const current = validTimestamp(message.__meta?.timestamp)
+    const current = validTimestamp(message.__meta?.contextBlock
+      ? message.__meta.contextBlock.rawStartTimestamp
+      : message.__meta?.timestamp)
     const eligible = message.role !== 'tool' && !isGroupedEvent(message)
     let marker: TimelineTimeMarker | null = null
     if (eligible && current !== null) {

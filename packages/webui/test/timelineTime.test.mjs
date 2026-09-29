@@ -20,6 +20,25 @@ test('adjacent persisted timestamps use the exact 59,999/60,000ms boundary, not 
   ])
 })
 
+test('CTX-BLOCK separators use the stored range start, never the block creation time', () => {
+  const start = t('2026-09-27T05:50:00-04:00')
+  const created = t('2026-09-27T07:51:00-04:00')
+  const block = (id, rawStartTimestamp) => msg('model', created + id, {
+    contextBlock: { id, level: 1, rawStartSeq: id, rawEndSeq: id, rawStartTimestamp },
+  })
+  assert.deepEqual(markers([msg('user', start - 60_000), block(858, start), block(864, start + 59_999), msg('user', start + 119_999)]), [
+    { timestamp: start - 60_000 }, { timestamp: start }, null, { timestamp: start + 119_999 },
+  ])
+  assert.deepEqual(markers([block(858, start), block(864, start + 60_000)]), [
+    { timestamp: start }, { timestamp: start + 60_000 },
+  ])
+  for (const invalidStart of [undefined, 'invalid', Number.NaN]) {
+    assert.deepEqual(markers([msg('user', start), block(851, invalidStart), msg('user', created + 60_000)]), [
+      { timestamp: start }, null, { timestamp: created + 60_000 },
+    ], 'an unknown CTX start breaks the comparison rather than falling back to its creation time')
+  }
+})
+
 test('tool/result and grouped event times are adjacent clock boundaries without orphan separator rows', () => {
   const first = t('2026-09-26T09:00:00-04:00')
   assert.deepEqual(markers([
