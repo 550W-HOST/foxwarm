@@ -7,6 +7,7 @@ import puppeteer from 'puppeteer-core'
 
 const entry = new URL('../src/components/HistorySearchView.tsx', import.meta.url).pathname
 const themeRuntime = new URL('../src/theme/runtime.ts', import.meta.url).pathname
+const timeFormatter = new URL('../src/components/timelineTime.ts', import.meta.url).pathname
 let browser, server, fixture, stylesheet, baseUrl
 
 const source = `
@@ -14,10 +15,12 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import HistorySearchView from ${JSON.stringify(entry)}
 import { initializeThemeRuntime, setThemeSelection } from ${JSON.stringify(themeRuntime)}
+import { formatTimelineTimeMarker } from ${JSON.stringify(timeFormatter)}
 initializeThemeRuntime()
 setThemeSelection({ themeId: 'foxwarm.default', colorMode: new URLSearchParams(location.search).get('mode') === 'dark' ? 'dark' : 'light' })
+window.fixtureFormatTime = timestamp => formatTimelineTimeMarker({ timestamp })
 const msg = (role, seq, parts) => ({ role, parts, __meta: { seq, timestamp: 1700000000000 + seq * 1000 } })
-const block = { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#3 raw#20-#21]\\nBlock topic' }], __meta: { contextBlock: { id: 3, level: 1, sourceKind: 'message', sourceStart: 20, sourceEnd: 21, rawStartSeq: 20, rawEndSeq: 21, createdAt: 1700000000000 } } }
+const block = { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#3 raw#20-#21]\\nBlock topic' }], __meta: { timestamp: 1700259200000, contextBlock: { id: 3, level: 1, sourceKind: 'message', sourceStart: 20, sourceEnd: 21, rawStartSeq: 20, rawEndSeq: 21, rawStartTimestamp: 1700000020000, createdAt: 1700259200000 } } }
 const results = [
   { key: 'hit-a', kind: 'messages', sessionId: 'alpha', firstSeq: 10, lastSeq: 11, hasEarlier: false, hasLater: true, messages: [
     msg('user', 10, [{ text: 'alpha question' }, { inlineDataRef: { blobId: 'sample.png', mimeType: 'image/png', apiPath: '/blobs/sample.png' } }]),
@@ -34,6 +37,12 @@ window.fetch = async (input, options = {}) => {
     if (url.searchParams.get('query') === 'slow') return new Promise(resolve => { window.__resolveSlow = () => resolve(new Response(JSON.stringify({ results: [results[0]] }), { headers: { 'Content-Type': 'application/json' } })) })
     if (url.searchParams.get('query') === 'fresh') return response({ results: [results[1]] })
     if (url.searchParams.get('query') === 'stale') return response({ results: [{ key: 'stale', sessionId: 'alpha', kind: 'unavailable', messages: [], hasEarlier: false, hasLater: false, fallbackExcerpt: 'Cached excerpt only' }] })
+    if (['missing-time', 'negative-time', 'invalid-date', 'ctx-no-start'].includes(url.searchParams.get('query'))) {
+      const query = url.searchParams.get('query')
+      const source = query === 'ctx-no-start' ? { ...block, __meta: { ...block.__meta, contextBlock: { ...block.__meta.contextBlock, rawStartTimestamp: undefined } } }
+        : { role: 'user', parts: [{ text: query }], __meta: { seq: 33, ...(query === 'negative-time' ? { timestamp: -1 } : query === 'invalid-date' ? { timestamp: Number.MAX_VALUE } : {}) } }
+      return response({ results: [{ key: query, sessionId: 'alpha', kind: query === 'ctx-no-start' ? 'block' : 'messages', messages: [source], firstSeq: 33, lastSeq: 33, hasEarlier: false, hasLater: false }] })
+    }
     return response({ results })
   }
   if (url.pathname.endsWith('/api/history/window')) {
@@ -77,6 +86,12 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
+async function assertHeaderTime(page, selector, timestamp) {
+  const expected = await page.evaluate(value => ({ ...window.fixtureFormatTime(value), dateTime: new Date(value).toISOString() }), timestamp)
+  const actual = await page.$eval(`${selector} header time`, element => ({ text: element.textContent, title: element.title, dateTime: element.dateTime }))
+  assert.deepEqual(actual, expected)
+}
+
 test('history results use independent timelines and pagination, CTX expansion, image URLs and copied locator on a subpath', async () => {
   const page = await browser.newPage()
   try {
@@ -88,6 +103,9 @@ test('history results use independent timelines and pagination, CTX expansion, i
     assert.equal(await page.$$eval('[data-history-result] .foxwarm-chat-timeline', items => items.length), 2)
     assert.equal(await page.$eval('[data-history-result="hit-a"]', el => el.textContent.includes('alpha answer')), true)
     assert.equal(await page.$eval('[data-history-result="hit-b"]', el => el.textContent.includes('Block topic')), true)
+    await assertHeaderTime(page, '[data-history-result="hit-a"]', 1700000010000)
+    await assertHeaderTime(page, '[data-history-result="hit-b"]', 1700000020000)
+    assert.equal(await page.$eval('[data-history-result="hit-b"] header', element => element.textContent.includes('Context summary') || element.textContent.includes('Messages')), false)
     assert.equal(await page.$eval('[data-history-result="hit-a"] img', el => el.getAttribute('src')?.includes('/prefix/ui/api/blobs/sample.png')), true)
     assert.deepEqual(await page.$eval('[data-history-result="hit-a"] [data-history-page="later"]', el => ({ wide: el.getBoundingClientRect().width > el.closest('[data-history-result]').getBoundingClientRect().width * 0.8, icon: !!el.querySelector('svg'), dashed: !!el.querySelector('.border-dashed'), range: el.textContent })), { wide: true, icon: true, dashed: true, range: 'Load latermsg#10–11' })
     assert.equal(await page.$eval('[data-history-result="hit-a"] header', el => el.textContent.includes('msg#10–11')), false)
@@ -97,6 +115,7 @@ test('history results use independent timelines and pagination, CTX expansion, i
     assert.equal(await page.$eval('[data-history-result="hit-b"]', el => el.textContent.includes('later alpha tool output')), false)
     await page.click('[data-history-result="hit-b"] [data-history-page="earlier"]')
     await page.waitForFunction(() => document.querySelector('[data-history-result="hit-b"]')?.textContent?.includes('earlier beta detail'))
+    await assertHeaderTime(page, '[data-history-result="hit-b"]', 1700000019000)
     assert.equal(await page.$eval('[data-history-result="hit-a"]', el => el.textContent.includes('earlier beta detail')), false)
     assert.equal(await page.$eval('[data-history-result="hit-b"] [data-history-page="later"]', el => el.textContent.includes('msg#19–21')), true)
     assert.equal(await page.$eval('[data-history-result="hit-a"]', el => !!el.querySelector('[data-tool-group], .foxwarm-tool-response')), true)
@@ -109,6 +128,7 @@ test('history results use independent timelines and pagination, CTX expansion, i
     await page.keyboard.type('sessionId=alpha msg#10-11')
     await page.click('button[type=submit]')
     await page.waitForFunction(() => document.querySelector('[data-history-search-results]')?.textContent?.includes('exact archive message'))
+    await assertHeaderTime(page, '[data-history-result]', 1700000010000)
     assert.equal(await page.$eval('[data-history-result] [data-history-range]', el => el.textContent.includes('Selected msg#10–11')), true)
     assert.equal(await page.evaluate(() => window.__requests.some(url => url.includes('sessionId=alpha') && url.includes('target=msg%2310-11'))), true)
   } finally { await page.close() }
@@ -134,6 +154,21 @@ test('a cached source without original messages never shows a fabricated message
     await page.click('button[type=submit]')
     await page.waitForSelector('[data-history-result="stale"]')
     assert.equal(await page.$eval('[data-history-result="stale"]', el => el.textContent.includes('Cached excerpt only') && !el.querySelector('[data-history-page], [data-history-range]')), true)
+    assert.equal(await page.$('[data-history-result="stale"] header time'), null)
+  } finally { await page.close() }
+})
+
+test('invalid or missing first timestamps never fall back to a block creation time', async () => {
+  const page = await browser.newPage()
+  try {
+    for (const query of ['missing-time', 'negative-time', 'invalid-date', 'ctx-no-start']) {
+      await page.goto(baseUrl)
+      await page.type('#history-search-query', query)
+      await page.click('button[type=submit]')
+      await page.waitForSelector(`[data-history-result="${query}"]`)
+      assert.equal(await page.$(`[data-history-result="${query}"] header time`), null, query)
+      assert.equal(await page.$eval(`[data-history-result="${query}"] header`, element => element.textContent.trim()), 'alpha', query)
+    }
   } finally { await page.close() }
 })
 

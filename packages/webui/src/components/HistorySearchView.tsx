@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ChevronDown, ChevronUp, Search } from 'lucide-react'
 import ChatTimeline from './ChatTimeline'
 import type { Message } from './chatShared'
+import { formatTimelineTimeMarker } from './timelineTime'
 import { API_BASE_PATH } from '../config'
 
 type HistoryResult = {
@@ -41,6 +42,17 @@ function mergeMessages(previous: Message[], incoming: Message[], direction: 'ear
   const oldSeqs = new Set(previous.map(message => message.__meta?.seq).filter((seq): seq is number => typeof seq === 'number'))
   const unique = incoming.filter(message => !oldSeqs.has(message.__meta?.seq || -1))
   return direction === 'earlier' ? [...unique, ...previous] : [...previous, ...unique]
+}
+
+function HistoryStartTime({ messages }: { messages: readonly Message[] }) {
+  const first = messages[0]
+  const timestamp = first?.__meta?.contextBlock
+    ? first.__meta.contextBlock.rawStartTimestamp
+    : first?.__meta?.timestamp
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp < 0
+    || !Number.isFinite(new Date(timestamp).getTime())) return null
+  const time = formatTimelineTimeMarker({ timestamp })
+  return <time dateTime={new Date(timestamp).toISOString()} title={time.title}>{time.text}</time>
 }
 
 function HistoryRangeRow({ result, direction, onLoad }: {
@@ -219,7 +231,7 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
             <section key={`${result.key}:${index}`} data-history-result={result.key} className="min-w-0 rounded-lg border border-fw-border bg-fw-surface p-3 sm:p-4">
               <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2 border-b border-fw-border pb-2 text-xs text-fw-text-muted">
                 <span className="font-medium text-fw-text-strong">{result.sessionId}</span>
-                <span>{result.kind === 'block' ? 'Context summary' : result.kind === 'unavailable' ? 'Archived source unavailable' : 'Messages'}</span>
+                <HistoryStartTime messages={result.messages} />
               </header>
               {result.kind === 'unavailable' ? <p className="text-sm">The original messages are unavailable. {result.fallbackExcerpt && <span>Cached excerpt: {result.fallbackExcerpt}</span>}</p> : (
                 <>
