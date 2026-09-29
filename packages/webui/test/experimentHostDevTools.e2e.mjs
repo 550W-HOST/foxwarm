@@ -131,9 +131,9 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage()
-  await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' }); await page.waitForSelector('#experiment-token')
-  await page.type('#experiment-token', apiToken); await page.click('button[type="submit"]')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(item => item.textContent === 'New session'))
+  await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' }); await page.waitForSelector('#dotnet-token')
+  await page.type('#dotnet-token', apiToken); await page.click('button[type="submit"]')
+  await page.waitForSelector('button[aria-label="New session"]')
   const flow = await create(); await send(flow, 'DEV-FLOW')
   try { await until(async () => (await history(flow)).some(item => item.parts?.some(part => part.text?.includes('DEV-FLOW completed'))), 'dev flow', 3500) }
   catch (error) { console.error('DEV-FLOW diagnostic', JSON.stringify({ rows: (await history(flow)).map(row => ({role:row.role,call:row.parts?.[0]?.functionCall?.name,response:row.parts?.[0]?.functionResponse?.name,output:String(row.parts?.[0]?.functionResponse?.response?.output||'').slice(0,100)})).slice(-6), state: (await request(hostPort, 'GET', `/api/sessions/${flow}/state`)).body, requests:requests.slice(-4), errors, host: host.output })); throw error }
@@ -162,7 +162,7 @@ try {
   const bigId = extractExecId(responseOf('big')?.output)
   foreignExecId = bigId
   assert((await stat(join(dataRoot, 'state/exec', flow, bigId, 'output.log'))).size > 1_000_000)
-  await page.goto(`http://127.0.0.1:${hostPort}/?sessionId=${flow}`, { waitUntil: 'load' })
+  await page.goto(`http://127.0.0.1:${hostPort}/#session/${flow}`, { waitUntil: 'load' })
   await page.waitForSelector('.foxwarm-chat-root')
   await page.waitForFunction(() => document.body.textContent.includes('DEV-FLOW completed'))
 

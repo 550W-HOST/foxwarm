@@ -45,19 +45,19 @@ npm run build
 npm run preview
 ```
 
-## Separate .NET Chat experiment
+## Local .NET host
 
-This experiment branch can build a small shell around the **same** Chat, composer, timeline, and realtime client used by the normal WebUI. It is not an alternative full App, agent sidebar, Setup, or Code/Terminal UI. From the repository root:
+Build the original App, Sidebar and Workbench for the separate .NET host from the repository root:
 
 ```sh
-VITE_FOXWARM_EXPERIMENT_CHAT=1 npm --prefix packages/webui run build
+VITE_FOXWARM_DOTNET=1 npm --prefix packages/webui run build
 ```
 
-Build `dotnet/Foxwarm.sln` in this repository and set `FOXWARM_EXPERIMENT_WEBUI_DIST` to the resulting `packages/webui/dist` path. Start the host on its configured loopback port, open `/` in a browser, enter the local host API token on the login form, then create or select a Session. The token is exchanged for an HTTP-only SameSite-Strict cookie; it does not appear in the URL, frontend bundle, localStorage, or provider request. This is local HTTP-only experimental authentication, not a public deployment recommendation.
+Build `dotnet/Foxwarm.sln`, set `FOXWARM_EXPERIMENT_WEBUI_DIST` to this checkout's `packages/webui/dist`, and start the host on its configured loopback port. The small login gate exchanges the local API token for an HTTP-only SameSite-Strict cookie before rendering the ordinary frontend. It does not put credentials into localStorage, URLs, provider requests or the bundle.
 
-The experiment-only build flag changes only the top-level entry. Ordinary builds retain the production App and all ordinary Chat capabilities by default. The experimental shell exposes text Chat, current concrete model and effort selection, actual session history and queued previews, live assistant/tool cards, and Stop. It hides attachment/ASR, Debug, child defaults, Setup/Agents/Code/Terminal, Run queued and Continue; unsupported slash commands receive an explicit error from the host rather than reaching the model. Pure browser-local display/input preferences remain.
+The frontend keeps the original Agent/session creation menu, bounded Sidebar/list search/realtime, Chat, composer, timeline, preview/Keep tabs, splits and stored routing. The flag adds login and reuses the existing text-only Chat option. It does not introduce a second App, dynamic capability detection or a feature-hiding layer. Unsupported Setup/Code/Terminal/Agent-management operations may report normal HTTP errors. Ordinary builds retain their original authentication and entry paths.
 
-For a single real-browser, local-scripted-Responses end-to-end run, set `DOTNET_ROOT` to a .NET 10 SDK, build `dotnet/Foxwarm.sln`, then run `node packages/webui/test/experimentHostModelCompact.e2e.mjs` inside a bounded process-tree test runner. The driver defaults to `dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll` from this checkout. The driver owns a temporary authority/tool root, provider listener, two serial host processes and Chromium; no live provider endpoint is used. The `dotnet/README.md` documents its exact environment/route subset. Do not point the host at an existing Foxwarm data directory.
+`experimentHostAgents.e2e.mjs` is the concentrated original-App browser workflow. Existing Chat/dev-tool/model-compaction drivers use the same entry. Run these manual .NET experiments with a configured .NET 10 SDK and a hard process-tree test limit; they own disposable data/workspaces, localhost scripted Responses listeners, hosts and Chromium. See [the host README](../../dotnet/README.md) for exact boundaries and the [source-port map](../../docs/code-index/units/dotnet.md#source-port-map) for module ownership. Do not use an existing Foxwarm data directory.
 
 ## Architecture
 

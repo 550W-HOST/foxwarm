@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Foxwarm.Models;
+namespace Foxwarm.Tools;
 
 internal sealed partial class LocalExecManager
 {

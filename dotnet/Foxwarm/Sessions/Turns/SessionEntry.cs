@@ -1,0 +1,176 @@
+using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Foxwarm.Sessions;
+
+namespace Foxwarm.Sessions;
+
+public sealed class SessionEntry
+{
+    private int processorClaim;
+    private int processorClaimCount;
+    private readonly object stateGate = new();
+    private CancellationHandle? activeCancellation;
+    private long busyClaimVersion;
+    private int bestEffortFailures;
+    private int postCommitNotificationFailures;
+    private int backgroundProcessorFailures;
+    private Exception? lastPostCommitNotificationFailure;
+    private Exception? lastBackgroundProcessorFailure;
+    private readonly TaskCompletionSource<Exception> backgroundProcessorFailureSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public SessionState State { get; }
+    public SessionSaveLane SaveLane { get; }
+    public object StateGate => stateGate;
+    public int BestEffortFailureCount => Volatile.Read(ref bestEffortFailures);
+    public int ProcessorClaimCount => Volatile.Read(ref processorClaimCount);
+    public int PostCommitNotificationFailureCount => Volatile.Read(ref postCommitNotificationFailures);
+    public Exception? LastPostCommitNotificationFailure => Volatile.Read(ref lastPostCommitNotificationFailure);
+    public int BackgroundProcessorFailureCount => Volatile.Read(ref backgroundProcessorFailures);
+    public Exception? LastBackgroundProcessorFailure => Volatile.Read(ref lastBackgroundProcessorFailure);
+    public Action<SessionSnapshot>? Committed { get; set; }
+
+    public SessionEntry(SessionState state, ISessionAuthorityStore store)
+    {
+        State = state;
+        SaveLane = new SessionSaveLane(this, store);
+    }
+
+    public SessionSnapshot Snapshot() { lock (stateGate) return State.Snapshot(); }
+    internal SessionSnapshot SnapshotForPersistence() => Snapshot();
+    internal void RecordBestEffortFailure(Exception error) => Interlocked.Increment(ref bestEffortFailures);
+    internal void RecordPostCommitNotificationFailure(Exception error)
+    {
+        Volatile.Write(ref lastPostCommitNotificationFailure, error);
+        Interlocked.Increment(ref postCommitNotificationFailures);
+    }
+    public void RecordBackgroundProcessorFailure(Exception error)
+    {
+        Volatile.Write(ref lastBackgroundProcessorFailure, error);
+        Interlocked.Increment(ref backgroundProcessorFailures);
+        backgroundProcessorFailureSignal.TrySetResult(error);
+    }
+    public Task<Exception> WaitForBackgroundProcessorFailureAsync() => backgroundProcessorFailureSignal.Task;
+
+    public bool TryClaimProcessor()
+    {
+        if (Interlocked.CompareExchange(ref processorClaim, 1, 0) != 0) return false;
+        Interlocked.Increment(ref processorClaimCount);
+        return true;
+    }
+    public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
+
+    internal T WithState<T>(Func<SessionState, T> action)
+    {
+        lock (stateGate) return action(State);
+    }
+
+    internal void WithState(Action<SessionState> action)
+    {
+        lock (stateGate) action(State);
+    }
+
+    internal long MarkBusy()
+    {
+        lock (stateGate)
+        {
+            if (State.Busy || State.Stopping) return 0;
+            State.Busy = true;
+            State.BusyStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return ++busyClaimVersion;
+        }
+    }
+
+    internal bool RollbackBusy(long version)
+    {
+        lock (stateGate)
+        {
+            if (version == 0 || version != busyClaimVersion || !State.Busy) return false;
+            State.Busy = false;
+            State.BusyStartedAt = null;
+            return true;
+        }
+    }
+
+    internal bool ReleaseBusy()
+    {
+        lock (stateGate)
+        {
+            if (!State.Busy && State.BusyStartedAt is null) return false;
+            State.Busy = false;
+            State.BusyStartedAt = null;
+            return true;
+        }
+    }
+
+    public CancellationHandle RegisterCancellationForTest(CancellationTokenSource source) => RegisterCancellation(source) ?? throw new InvalidOperationException("Cancellation registration was not created.");
+    public void ClearCancellationForTest(CancellationHandle handle) => ClearCancellation(handle);
+    public void SetStoppingForTest(bool value) => WithState(state => state.Stopping = value);
+
+    internal CancellationHandle? RegisterCancellation(CancellationTokenSource source)
+    {
+        lock (stateGate)
+        {
+            if (State.Stopping) throw new OperationCanceledException("Session is stopping.");
+            if (activeCancellation is not null) throw new InvalidOperationException("An active cancellation handle is already registered.");
+            var handle = new CancellationHandle(source);
+            activeCancellation = handle;
+            return handle;
+        }
+    }
+
+    internal void ClearCancellation(CancellationHandle handle)
+    {
+        bool dispose;
+        lock (stateGate)
+        {
+            if (ReferenceEquals(activeCancellation, handle))
+            {
+                activeCancellation = null;
+                dispose = !handle.TakenByStop;
+            }
+            else
+            {
+                dispose = false;
+            }
+        }
+        if (dispose) handle.Dispose();
+    }
+
+    internal CancellationHandle? BeginStop()
+    {
+        lock (stateGate)
+        {
+            State.Stopping = true;
+            State.Meta.Remove("runQueuedAfterStop");
+            var handle = activeCancellation;
+            if (handle is not null)
+            {
+                activeCancellation = null;
+                handle.TakenByStop = true;
+            }
+            return handle;
+        }
+    }
+
+    public CancellationHandle? TakeCancellationForTest() => BeginStop();
+
+    internal IReadOnlyList<QueueItem> TakeAllQueueForStop()
+    {
+        lock (stateGate)
+        {
+            var items = State.Queue.Select(item => item.CloneItem()).ToArray();
+            State.Queue.Clear();
+            return items;
+        }
+    }
+
+    internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
+
+    internal void InvokeQueuedCommitted(SessionSnapshot snapshot)
+    {
+        try { Committed?.Invoke(snapshot); }
+        catch (Exception error) { RecordPostCommitNotificationFailure(error); }
+    }
+}

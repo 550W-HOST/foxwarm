@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Foxwarm.Models;
+namespace Foxwarm.Tools;
 
 public sealed partial class WorkspaceTools
 {

@@ -2,7 +2,7 @@ using Foxwarm.Models;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
-namespace Foxwarm.Web;
+namespace Foxwarm.Channels.WebUi;
 
 internal static class WebUiContract
 {
@@ -13,7 +13,8 @@ internal static class WebUiContract
         var runtime = new JsonObject
         {
             ["state"] = snapshot.Busy ? toolActive ? "running-tool" : "requesting-model" : "idle",
-            ["busy"] = snapshot.Busy, ["queueLength"] = queueLength
+            ["busy"] = snapshot.Busy,
+            ["queueLength"] = queueLength
         };
         if (snapshot.BusyStartedAt is long since) runtime["since"] = since;
         if (compacting) runtime["active"] = new JsonObject { ["phase"] = "compaction" };
@@ -71,9 +72,16 @@ internal static class WebUiContract
             if (parts.Count == 0) continue;
             preview.Add(new JsonObject
             {
-                ["role"] = "user", ["parts"] = parts,
-                ["__meta"] = new JsonObject { ["synthetic"] = $"queued-{i}-user", ["temporary"] = true,
-                    ["queuedPreview"] = true, ["queueIndex"] = i, ["queueType"] = "user" }
+                ["role"] = "user",
+                ["parts"] = parts,
+                ["__meta"] = new JsonObject
+                {
+                    ["synthetic"] = $"queued-{i}-user",
+                    ["temporary"] = true,
+                    ["queuedPreview"] = true,
+                    ["queueIndex"] = i,
+                    ["queueType"] = "user"
+                }
             });
         }
         var result = new JsonObject
@@ -93,4 +101,59 @@ internal static class WebUiContract
         };
         return result;
     }
+    public static JsonObject Event(SessionRuntimeEvent entry, SessionRuntime runtime) => entry.Kind switch
+    {
+        SessionEventKind.MessageCommitted => new JsonObject { ["type"] = "message", ["sessionId"] = entry.SessionId, ["message"] = entry.Data?.DeepClone() },
+        SessionEventKind.StateChanged => new JsonObject { ["type"] = "session-state", ["sessionId"] = entry.SessionId, ["session"] = runtime.GetSession(entry.SessionId) },
+        SessionEventKind.ModelStream => new JsonObject { ["type"] = "session-event", ["sessionId"] = entry.SessionId, ["event"] = entry.Data?.DeepClone() },
+        SessionEventKind.DraftChanged => Draft(runtime.Owner(entry.SessionId)!),
+        _ => new JsonObject { ["type"] = "processing-error", ["sessionId"] = entry.SessionId, ["message"] = entry.Data?.DeepClone() }
+    };
+    public static JsonObject Draft(SessionOwner owner)
+    {
+        var data = owner.DraftSnapshot();
+        return new JsonObject { ["type"] = "model-stream-snapshot", ["sessionId"] = owner.Id, ["draft"] = data.Count == 0 ? null : data };
+    }
+    public static JsonObject CliEvent(SessionRuntimeEvent entry, SessionRuntime runtime)
+    {
+        if (entry.Kind == SessionEventKind.MessageCommitted)
+            return new JsonObject { ["type"] = "message-committed", ["message"] = entry.Data?.DeepClone() };
+        if (entry.Kind == SessionEventKind.StateChanged)
+            return new JsonObject { ["type"] = "session-state", ["session"] = System.Text.Json.JsonSerializer.SerializeToNode(runtime.Owner(entry.SessionId)!.State()) };
+        if (entry.Kind == SessionEventKind.RequestProgress)
+        {
+            var draft = entry.Data as JsonObject ?? new JsonObject();
+            return new JsonObject
+            {
+                ["type"] = "model-progress",
+                ["sessionId"] = entry.SessionId,
+                ["text"] = draft["text"]?.DeepClone() ?? JsonValue.Create(""),
+                ["reasoning"] = draft["reasoning"]?.DeepClone() ?? JsonValue.Create("")
+            };
+        }
+        return Event(entry, runtime);
+    }
+    public static JsonObject Models(HostModels config) => new()
+    {
+        ["defaultKey"] = config.DefaultKey,
+        ["currentKey"] = config.DefaultKey,
+        ["models"] = new JsonArray(config.Options.Select(model =>
+        {
+            return (JsonNode?)new JsonObject
+            {
+                ["key"] = model.Key,
+                ["label"] = model.Key,
+                ["isDefault"] = model.Key == config.DefaultKey,
+                ["contextLimit"] = model.ContextLimit,
+                ["providerKey"] = model.ProviderKey,
+                ["modelId"] = model.ModelId,
+                ["providerType"] = "openai-responses",
+                ["isVirtual"] = false,
+                ["targets"] = new JsonArray(),
+                ["allowedEfforts"] = new JsonArray(model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
+                ["defaultEffort"] = model.DefaultEffort
+            };
+        }).ToArray())
+    };
+
 }

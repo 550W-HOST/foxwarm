@@ -92,7 +92,7 @@ async function create(hostPort) {
   return result.body.sessionId
 }
 async function visit(page, hostPort, id) {
-  await page.goto(`http://127.0.0.1:${hostPort}/?sessionId=${id}`, { waitUntil: 'load' })
+  await page.goto(`http://127.0.0.1:${hostPort}/#session/${id}`, { waitUntil: 'load' })
   await page.waitForSelector('.foxwarm-chat-root', { timeout: 15000 })
 }
 
@@ -119,13 +119,16 @@ try {
   const page = await browser.newPage()
   page.on('pageerror', error => errors.push('browser ' + String(error)))
   await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' })
-  await page.waitForSelector('#experiment-token')
-  await page.type('#experiment-token', token)
+  await page.waitForSelector('#dotnet-token')
+  await page.type('#dotnet-token', token)
   await page.click('button[type="submit"]')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(item => item.textContent === 'New session'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent === 'New session')?.click())
+  await page.waitForSelector('button[aria-label="New session"]')
+  await page.click('button[aria-label="New session"]')
+  await page.waitForSelector('form[role="dialog"]')
+  await page.click('form[role="dialog"] button[type="submit"]')
+  await page.waitForSelector('form[role="dialog"]', { hidden: true })
   await page.waitForSelector('.foxwarm-chat-root')
-  const switchId = new URL(page.url()).searchParams.get('sessionId')
+  const switchId = decodeURIComponent(new URL(page.url()).hash).slice('#tab/chat:'.length)
   assert.match(switchId, /^s_[a-f0-9]{32}$/)
   await send(hostPort, switchId, 'hold-switch')
   await until(() => provider.heldSwitch, 'held alpha request')

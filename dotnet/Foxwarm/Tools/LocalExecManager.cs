@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
-namespace Foxwarm.Models;
+namespace Foxwarm.Tools;
 
 /// <summary>Trusted single-host Linux exec with owned on-disk artifacts. Cwd is not an OS sandbox.</summary>
 internal sealed partial class LocalExecManager : IAsyncDisposable

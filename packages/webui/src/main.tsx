@@ -7,7 +7,7 @@ import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
 
 const App = lazy(() => import('./App'))
-const ExperimentChatApp = lazy(() => import('./ExperimentChatApp'))
+const DotnetLoginGate = lazy(() => import('./DotnetLoginGate'))
 const PopupWebUiApp = lazy(() => import('./PopupWebUiApp'))
 const EmbeddedSidebarApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSidebarApp })))
 const EmbeddedChatApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedChatApp })))
@@ -34,9 +34,7 @@ window.addEventListener('pageshow', syncViewportHeight)
 
 const embeddedTarget = parseFoxwarmEmbeddedTarget(window.location.search)
 const popupTarget = parseFoxwarmPopupTarget(window.location.search)
-const content = import.meta.env.VITE_FOXWARM_EXPERIMENT_CHAT === '1'
-  ? <ExperimentChatApp />
-  : popupTarget
+const content = popupTarget
   ? <PopupWebUiApp target={popupTarget} />
   : embeddedTarget?.kind === 'sidebar'
   ? <EmbeddedSidebarApp target={embeddedTarget} />
@@ -51,7 +49,7 @@ const content = import.meta.env.VITE_FOXWARM_EXPERIMENT_CHAT === '1'
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Suspense fallback={<div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />}>
-      {content}
+      {import.meta.env.VITE_FOXWARM_DOTNET === '1' ? <DotnetLoginGate>{content}</DotnetLoginGate> : content}
     </Suspense>
   </StrictMode>,
 )

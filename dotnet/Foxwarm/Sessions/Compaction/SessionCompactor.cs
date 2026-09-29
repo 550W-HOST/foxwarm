@@ -1,18 +1,17 @@
-using Foxwarm.Web;
+using Foxwarm.Sessions;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
-using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionCompactor
 {
-    private readonly HostedSession hosted;
+    private readonly SessionOwner hosted;
     private readonly PersistentSessionAuthorityStore store;
     private readonly HostModels models;
     private readonly ResponsesClientOptions baseOptions;
     private readonly HttpClient http;
-    private readonly HostAgentMemory memory;
+    private readonly AgentMemory memory;
     private readonly object gate = new();
     private CompactRun? active;
     private Task? manualTask;
@@ -24,8 +23,8 @@ internal sealed partial class SessionCompactor
         public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    public SessionCompactor(HostedSession hosted, PersistentSessionAuthorityStore store,
-        HostModels models, ResponsesClientOptions baseOptions, HttpClient http, HostAgentMemory memory)
+    public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
+        HostModels models, ResponsesClientOptions baseOptions, HttpClient http, AgentMemory memory)
     {
         this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions; this.http = http;
         this.memory = memory;
@@ -107,7 +106,7 @@ internal sealed partial class SessionCompactor
             try { await turn.ReleaseBusyAsync(); }
             catch (Exception error) { hosted.Entry.RecordBackgroundProcessorFailure(error); hosted.PublishCompactError(error); }
             hosted.Entry.ReleaseProcessor();
-            hosted.BroadcastState();
+            hosted.PublishStateChanged();
             if (hosted.Entry.Snapshot().Queue.Count > 0) _ = hosted.StartProcessing();
         }
     }
@@ -156,13 +155,13 @@ internal sealed partial class SessionCompactor
         {
             await hosted.Entry.SaveLane.CommitCompactionAsync(state => PrepareCompact(state, snapshot, candidates, plan), token);
             lock (gate) run.Committed = true;
-            hosted.BroadcastState();
+            hosted.PublishStateChanged();
             return true;
         }
         catch (AuthorityCommittedException)
         {
             lock (gate) run.Committed = true;
-            hosted.BroadcastState();
+            hosted.PublishStateChanged();
             throw;
         }
     }

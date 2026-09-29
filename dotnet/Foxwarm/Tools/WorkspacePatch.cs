@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Foxwarm.Models;
+namespace Foxwarm.Tools;
 
 internal sealed record PatchOperation(string Action, string Path, string[] Lines);
 

@@ -17,7 +17,7 @@ const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const errors = []; const requests = []; const counts = new Map()
 const sleep = ms => new Promise(done => setTimeout(done, ms))
-let provider, host, browser, heldParent, releaseParent, firstPid, parentId, betaId, childId, secondId, legacyId
+let provider, host, browser, heldParent, releaseParent, heldChild, releaseChild, firstPid, parentId, betaId, childId, secondId, legacyId
 async function until(fn, label, ms = 20000) {
   const end = Date.now() + ms
   while (Date.now() < end) { const result = await fn(); if (result) return result; await sleep(40) }
@@ -86,6 +86,7 @@ try {
         output = previousCalls.some(item => item.call_id === 'legacy-child-pwd') ? [text('LEGACY-CHILD-DONE')] :
           [call('legacy-child-pwd', 'exec', { command: 'pwd', timeout: 2 })]
       else if (latest.includes('LITERAL-PERCENT')) output = [text('LITERAL-DONE')]
+      else if (latest.includes('UI-CHAT')) output = [text('UI-CHAT-DONE')]
       else if (latest.includes('LEGACY-POSTRENAME')) output = [text('LEGACY-POSTRENAME-DONE')]
       else if (latest.includes('MODEL-CATALOG')) {
         if (!previousCalls.some(item => item.call_id === 'model-create-agent'))
@@ -111,11 +112,12 @@ try {
         }
       } else if (latest.includes('CHILD-REPORT')) output = [text('PARENT-GOT-REPORT')]
       else if (latest.includes('CHILD-TASK')) {
-        if (!previousCalls.some(item => item.call_id === 'child-read'))
+        if (!previousCalls.some(item => item.call_id === 'child-read')) {
+          heldChild = true; await new Promise(done => { releaseChild = done })
           output = [call('child-read', 'read', { filePath: 'memory/MEMORY.md' }),
             call('child-write', 'write', { filePath: 'child-work.txt', content: 'BETA-WORK' }),
             call('child-exec', 'exec', { command: 'pwd', timeout: 2 })]
-        else output = [call('report', 'send_to_session', {
+        } else output = [call('report', 'send_to_session', {
           sessionId: '<parent>', message: 'CHILD-REPORT: BETA-WORK', afterSend: 'finish',
         }), call('child-error', 'nonexistent_tool', {})]
       } else if (latest.includes('ALPHA-SECOND'))
@@ -181,15 +183,29 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage()
+  const incoming = []; const outgoing = []
+  const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
+  cdp.on('Network.webSocketFrameReceived', data => { try { incoming.push(JSON.parse(data.response.payloadData)) } catch {} })
+  cdp.on('Network.webSocketFrameSent', data => { try { outgoing.push(JSON.parse(data.response.payloadData)) } catch {} })
+  await page.evaluateOnNewDocument(() => {
+    const Native = window.WebSocket; window.__testSockets = []
+    window.WebSocket = class extends Native { constructor(...args) { super(...args); window.__testSockets.push(this) } }
+  })
   await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' })
-  await page.waitForSelector('#experiment-token'); await page.type('#experiment-token', apiToken)
-  await page.click('button[type="submit"]'); await page.waitForSelector('input[aria-label="New agent name"]')
+  await page.waitForSelector('#dotnet-token'); await page.type('#dotnet-token', apiToken)
+  await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
   async function browserCreateAgent(name, memoryText) {
-    await page.type('input[aria-label="New agent name"]', name)
-    await page.type('input[aria-label="Agent memory"]', memoryText)
-    await page.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent === 'Create agent')?.click())
-    await page.waitForFunction(value => [...document.querySelectorAll('select[aria-label="Agent"] option')]
-      .some(item => item.value === value), {}, name)
+    await page.click('button[aria-label="New session"]')
+    await page.waitForSelector('button[aria-label="New agent"]')
+    await page.click('button[aria-label="New agent"]')
+    await page.waitForSelector('input[placeholder="my-agent"]')
+    await page.type('input[placeholder="my-agent"]', name)
+    await page.click('form[role="dialog"] button[type="submit"]')
+    await until(async () => (await request('GET', '/api/agents')).body.agents.some(item => item.id === name), 'original Agent creation DTO')
+    await until(async () => (await request('GET', `/api/sessions/${encodeURIComponent(name + '/main')}/state`)).status === 200, 'Agent main ready')
+    await page.waitForSelector('form[role="dialog"]', { hidden: true })
+    await writeFile(join(workRoot, 'agents', name, 'memory', 'MEMORY.md'), memoryText)
+    assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(name + '/main')}/refresh-memory`)).status, 200)
     return `${name}/main`
   }
   parentId = await browserCreateAgent('alpha', 'ALPHA-V1')
@@ -198,7 +214,7 @@ try {
     '---\ninclude-session: beta/probe\n---\nBETA-CHILD-ONLY\n')
   await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'unknown.md'),
     '---\nunknown-header: preserved-as-ordinary-frontmatter\n---\nUNKNOWN-HEADER-VISIBLE\n')
-  assert.deepEqual((await request('GET', '/api/agents')).body.agents, ['alpha', 'beta', 'main'])
+  assert.deepEqual((await request('GET', '/api/agents')).body.agents.map(item => item.id), ['alpha', 'beta', 'main'])
   assert.equal((await request('GET', '/api/sessions/main/state')).status, 404, 'No fabricated main Session')
   legacyId = (await request('POST', '/api/sessions')).body.sessionId
   assert(legacyId.startsWith('s_')); await send(legacyId, 'LEGACY-ROOT'); await finished(legacyId, 'LEGACY-DONE')
@@ -211,18 +227,27 @@ try {
     new RegExp(workRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(legacyChild)}/state`)).body.session.parentSessionId, legacyId)
   await send(legacyId, 'MODEL-CATALOG'); await finished(legacyId, 'MODEL-CATALOG-DONE')
-  assert.deepEqual((await request('GET', '/api/agents')).body.agents, ['alpha', 'beta', 'gamma', 'main'])
+  assert.deepEqual((await request('GET', '/api/agents')).body.agents.map(item => item.id), ['alpha', 'beta', 'gamma', 'main'])
   assert.equal((await request('GET', '/api/sessions/gamma%2Fmain/state')).body.session.agent, 'gamma')
   assert.equal((await request('GET', '/api/sessions/gamma%2Fmain/state')).body.session.parentSessionId, null)
   await send('gamma/main', 'GAMMA-WORK'); await finished('gamma/main', 'GAMMA-WORK-DONE')
   assert.equal(await readFile(join(workRoot, 'agents', 'gamma', 'result.txt'), 'utf8'), 'GAMMA-OWNED')
   assert.match(valueOf(await history('gamma/main'), 'gamma-exec').output, /agents\/gamma/)
   const literalId = 'literal%2Fname'
-  assert.equal((await request('POST', '/api/sessions', { agentName: 'main', sessionName: literalId })).body.sessionId, literalId)
+  assert.equal((await request('POST', '/api/sessions', { agentId: 'main', sessionId: literalId })).body.sessionId, literalId)
   await send(literalId, 'LITERAL-PERCENT'); await finished(literalId, 'LITERAL-DONE')
   await send(parentId, 'ALPHA-DELEGATE')
   await until(() => heldParent && releaseParent && (counts.get(parentId) || 0) === 2, 'held parent provider')
-  childId = 'beta/probe'; await until(async () => (await history(childId)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'report')),
+  childId = 'beta/probe'
+  await until(() => heldChild && releaseChild, 'child provider held for live list state')
+  await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"] [data-session-status="requesting-model"]`), parentId), 'parent sidebar busy')
+  await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"] [data-descendant-activity]`), parentId), 'active child badge in original sidebar')
+  const focusedChild = await request('GET', `/api/session-list/sidebar?limit=1&childLimit=1&focusSessionId=${encodeURIComponent(childId)}`)
+  assert(focusedChild.body.forcedChildren[parentId].includes(childId))
+  assert(focusedChild.body.pathContext.some(item => item.session?.id === parentId))
+  assert(focusedChild.body.focus.some(item => item.session?.id === childId && item.session.busy))
+  releaseChild()
+  await until(async () => (await history(childId)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'report')),
     'child report and error batch')
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.busy, true)
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.queueCount, 1)
@@ -240,8 +265,10 @@ try {
   assert.equal(childAuthority.model, 'local-b/two'); assert.equal(childAuthority.effort, 'low')
   assert.equal(childAuthority.childModelDefault, undefined)
   assert.equal(childAuthority.childEffortDefault, undefined)
-  await page.select('select[aria-label="Agent"]', 'alpha')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent === 'New session')?.click())
+  await page.click('button[aria-label="New session"]')
+  await page.waitForSelector('form[role="dialog"]')
+  await page.click('form[role="dialog"] button[title="alpha"]')
+  await page.click('form[role="dialog"] button[type="submit"]')
   await until(async () => (await request('GET', '/api/sessions')).body.sessions.find(item => item.agent === 'alpha' && item.id !== parentId)?.id,
     'second alpha Session')
   secondId = (await request('GET', '/api/sessions')).body.sessions.find(item => item.agent === 'alpha' && item.id !== parentId).id
@@ -250,26 +277,24 @@ try {
   assert.equal(counts.get(parentId), 2)
   releaseParent(); await finished(parentId, 'PARENT-GOT-REPORT')
   assert.equal(counts.get(parentId), 3)
-  await page.goto(`http://127.0.0.1:${hostPort}/?sessionId=${encodeURIComponent(parentId)}`, { waitUntil: 'load' })
-  await page.waitForFunction(value => document.querySelector('select[aria-label="Session"]')?.value === value, {}, parentId)
-  await page.type('input[aria-label="Child suffix"]', 'browser')
-  await page.select('select[aria-label="Child agent"]', 'beta')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent === 'Create child')?.click())
-  await until(async () => (await request('GET', `/api/sessions/${encodeURIComponent('beta/browser')}/state`)).status === 200,
-    'browser-created cross-Agent child')
-  assert.equal((await request('GET', `/api/sessions/${encodeURIComponent('beta/browser')}/state`)).body.session.parentSessionId, parentId)
-  await page.waitForFunction(() => document.querySelector('select[aria-label="Session"]')?.value === 'beta/browser')
-  await page.goto(`http://127.0.0.1:${hostPort}/?sessionId=${encodeURIComponent(childId)}`, { waitUntil: 'load' })
+  await until(async () => page.evaluate(id => !document.querySelector(`[data-session-id="${id}"] [data-descendant-activity]`)
+    && !!document.querySelector(`[data-session-id="${id}"]`), parentId), 'child finish removes busy badge')
+  assert(outgoing.some(frame => frame.type === 'set-subscriptions' && frame.sessionListActive === true && frame.sessionIds.length > 0))
+  assert(incoming.some(frame => frame.type === 'session-list-delta' && frame.sessions.some(row => row.id === parentId)))
+  const beforeReconnect = incoming.filter(frame => frame.type === 'subscriptions-applied').length
+  await page.evaluate(() => window.__testSockets.filter(socket => socket.readyState === 1).forEach(socket => socket.close()))
+  await until(() => incoming.filter(frame => frame.type === 'subscriptions-applied').length > beforeReconnect, 'real WebSocket reconnect union reapplied')
+  assert(incoming.some(frame => frame.type === 'session-list-invalidated'))
+  await page.goto(`http://127.0.0.1:${hostPort}/#session/${encodeURIComponent(childId)}`, { waitUntil: 'load' })
   await page.waitForSelector('.foxwarm-chat-root')
-  await page.waitForFunction(value => document.querySelector('select[aria-label="Session"]')?.value === value, {}, childId)
-  assert(await page.evaluate(() => [...document.querySelectorAll('button')]
-    .some(item => item.textContent?.includes('Parent: alpha/main'))))
+  await page.waitForFunction(value => decodeURIComponent(location.hash).includes('chat:' + value), {}, childId)
+  assert(await page.evaluate(value => !!document.querySelector(`[data-session-id="${value}"]`), parentId))
   // No automatic refresh at the same concrete identity, then explicit strict owner refresh.
   await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'MEMORY.md'), 'BETA-V2')
   await send(childId, 'BETA-SAME'); await finished(childId, 'BETA-SAME-DONE')
   const same = requests.filter(item => item.id === childId && item.latest.includes('BETA-SAME')).at(-1)
   assert(same.instructions.includes('BETA-V1') && !same.instructions.includes('BETA-V2'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent === 'Refresh memory')?.click())
+  assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(childId)}/refresh-memory`)).status, 200)
   await until(async () => JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'beta', 'probe.json'), 'utf8'))
     .persistentMemorySnapshot.includes('BETA-V2'), 'strict beta snapshot refresh')
   await send(childId, 'BETA-REFRESH'); await finished(childId, 'BETA-REFRESH-DONE')
@@ -326,12 +351,73 @@ try {
   const committedHistory = await history(committedLegacyId)
   const rowsBeforeRestart = archiveRowsFor(committedLegacyId)
   assert.equal(rowsBeforeRestart, committedHistory.length)
+  // Main path uses the actual original inline Composer, not the test helper's message fetch.
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), committedLegacyId)
+  await page.waitForFunction(id => decodeURIComponent(location.hash).includes('chat:' + id), {}, committedLegacyId)
+  await page.waitForSelector('.foxwarm-chat-root [contenteditable="true"]')
+  await page.click('.foxwarm-chat-root [contenteditable="true"]')
+  await page.keyboard.type('UI-CHAT')
+  await page.keyboard.down('Control'); await page.keyboard.press('Enter'); await page.keyboard.up('Control')
+  await finished(committedLegacyId, 'UI-CHAT-DONE')
+  await until(async () => page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('UI-CHAT-DONE')), 'original live Chat assistant render')
+  const restartHistory = await history(committedLegacyId)
+  const restartArchiveRows = archiveRowsFor(committedLegacyId)
+  // Keep a real sidebar preview, then open a second Chat and split the original Workbench.
+  const rowSelector = `[data-session-id="${committedLegacyId}"]`
+  await page.waitForSelector(rowSelector)
+  await page.click(rowSelector, { clickCount: 2 })
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), betaId)
+  await page.waitForSelector('[data-tab-id]')
+  assert((await page.$$('[data-tab-id]')).length >= 2)
+  await page.waitForSelector('button[title="Split right with active tab"]')
+  await page.click('button[title="Split right with active tab"]')
+  await page.waitForFunction(() => document.querySelectorAll('[data-pane-id]').length === 2)
+  // Real metadata name, small keyset windows, multi-child continuation, exact misses and invalid cursors.
+  assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(parentId)}/name`, { name: 'Alpha named parent' })).status, 200)
+  for (let index = 0; index < 53; index++) assert.equal((await request('POST', '/api/sessions', {
+    agentId: 'alpha', sessionId: `page_${String(index).padStart(2, '0')}` })).status, 200)
+  for (let index = 0; index < 7; index++) assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(parentId)}/children`, {
+    suffix: `listkid${index}` })).status, 200)
+  const page1 = (await request('GET', '/api/session-list/sidebar?limit=2&childLimit=1')).body
+  assert.equal(page1.sessions.length, 2); assert(page1.nextCursor)
+  const page2 = (await request('GET', `/api/session-list/sidebar?limit=2&childLimit=1&cursor=${encodeURIComponent(page1.nextCursor)}`)).body
+  assert.equal(page2.sessions.length, 2); assert(!page2.reset)
+  assert(page2.sessions.every(row => !page1.sessions.some(first => first.id === row.id)))
+  assert.equal((await request('GET', '/api/session-list/sidebar?cursor=not-valid')).status, 400)
+  const architecture = (await request('GET', '/api/session-list/architecture?limit=1&childLimit=1')).body
+  assert(Array.isArray(architecture.agentCounts)); assert(architecture.agentCounts.some(item => item.agent === 'alpha' && item.count > 50))
+  assert.equal(architecture.summary.managed, 0)
+  const exact = (await request('POST', '/api/session-list/by-id' , { ids: [parentId, 'no-such-session'], includePaths: true })).body
+  assert.equal(exact.results[0].session.displayName, 'Alpha named parent'); assert.equal(exact.results[1].session, null)
+  const childPage = (await request('POST', '/api/session-list/children', { mode: 'default', limit: 2, parents: [{ parentSessionId: parentId }] })).body
+  assert.equal(childPage.children[0].sessions.length, 2); assert.equal(childPage.children[0].total, 8)
+  const childMore = (await request('POST', '/api/session-list/children', { mode: 'default', limit: 2,
+    parents: [{ parentSessionId: parentId, cursor: childPage.children[0].nextCursor }] })).body
+  assert(!childMore.reset); assert(childMore.children[0].sessions.every(row => !childPage.children[0].sessions.some(first => first.id === row.id)))
+  const beforeListChange = page1.nextCursor
+  assert.equal((await request('POST', '/api/sessions', { agentId: 'alpha', sessionId: 'page_epoch_changed' })).status, 200)
+  assert.equal((await request('GET', `/api/session-list/sidebar?limit=2&cursor=${encodeURIComponent(beforeListChange)}`)).body.reset, true)
+  const metadataSearch = (await request('GET', '/api/session-list/search?q=Alpha%20named&limit=10')).body
+  assert(metadataSearch.sessions.some(row => row.id === parentId))
+  await until(async () => page.evaluate(() => document.querySelector('button') && [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more root cursor')
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
+  await until(async () => page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50), 'original Sidebar bounded next page')
+  await page.type('input[aria-label="Search sessions"]', 'Alpha named')
+  await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"]`)
+    && document.querySelectorAll('[data-session-id]').length === 1, parentId), 'original metadata search sidebar')
+  await page.click('button[aria-label="Clear session search"]')
+  const branding = await request('POST', '/api/webui/settings', { instanceName: '  Original\n App  ', tabIcon: ' 🦊 ' })
+  assert.equal(branding.status, 200); assert.deepEqual(branding.body.settings, { instanceName: 'Original App', tabIcon: '🦊' })
+  assert.deepEqual((await request('GET', '/api/webui/settings')).body.settings, branding.body.settings)
   const requestsBeforeRestart = requests.length
+
   await stopHost(); host = await startHost(); assert.notEqual(host.child.pid, firstPid)
-  assert.deepEqual(await history(committedLegacyId), committedHistory)
-  assert.equal(archiveRowsFor(committedLegacyId), rowsBeforeRestart)
+  assert.deepEqual(await history(committedLegacyId), restartHistory)
+  assert.equal(archiveRowsFor(committedLegacyId), restartArchiveRows)
   assert.equal(requests.length, requestsBeforeRestart)
-  assert((await request('GET', '/api/agents')).body.agents.includes('beta'))
+  assert.equal((await request('POST', '/api/session-list/by-id', { ids: [parentId] })).body.results[0].session.displayName, 'Alpha named parent')
+  assert.deepEqual((await request('GET', '/api/webui/settings')).body.settings, branding.body.settings)
+  assert((await request('GET', '/api/agents')).body.agents.some(item => item.id === 'beta'))
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(childId)}/state`)).body.session.parentSessionId, parentId)
   assert((await readFile(join(dataRoot, 'state', 'sessions', 'beta', 'probe.json'), 'utf8')).includes('BETA-V3'))
   assert((await readFile(join(workRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')).includes('BETA-WORK'))
@@ -344,9 +430,9 @@ try {
   console.log(JSON.stringify({ result: 'ok', firstPid, secondPid: host.child.pid, providerRequests: requests.length,
     parentRequests: counts.get(parentId), childRequests: counts.get(childId), agents: ['alpha', 'beta', 'gamma', 'main'],
     legacyId, committedLegacyId, parentId, childId, sameAgentSession: secondId,
-    strictSnapshotFailure: true, legacyPostRenameFailure: true, memoryRefresh: true }))
+    strictSnapshotFailure: true, legacyPostRenameFailure: true, memoryRefresh: true, originalApp: true, boundedSidebar: true, websocketReconnect: true, workbenchSplit: true }))
 } finally {
-  try { releaseParent?.() } catch {}
+  try { releaseParent?.(); releaseChild?.() } catch {}
   try { await browser?.close() } catch {}
   if (host?.child?.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(6000)]) }
   if (provider) { provider.closeAllConnections(); await new Promise(done => provider.close(done)) }

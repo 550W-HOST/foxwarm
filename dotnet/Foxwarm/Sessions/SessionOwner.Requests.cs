@@ -2,19 +2,21 @@ using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
-namespace Foxwarm.Web;
+namespace Foxwarm.Sessions;
 
-internal sealed partial class HostedSession
+internal sealed partial class SessionOwner
 {
     private readonly object draftGate = new();
     private JsonObject? draft;
     private volatile bool toolActive;
+    public bool ToolActive => toolActive;
     private volatile bool compacting;
+    public bool Compacting => compacting;
 
     public void SetCompacting(bool value)
     {
         compacting = value;
-        BroadcastState();
+        PublishStateChanged();
     }
 
     public async Task<JsonObject> UpdateModelAsync(JsonObject patch)
@@ -41,7 +43,7 @@ internal sealed partial class HostedSession
         if (effort is not null && !selected.AllowedEfforts.Contains(effort, StringComparer.Ordinal))
             throw new InvalidDataException("Effort is not allowed by the selected model.");
         await Entry.SaveLane.CommitAuthoritySettingsAsync(model, setModel, effort, setEffort);
-        var status = WebUiState();
+        var status = BuildDto();
         status["success"] = true;
         status["sessionId"] = Id;
         return status;
@@ -50,8 +52,7 @@ internal sealed partial class HostedSession
     public JsonObject DraftSnapshot()
     {
         lock (draftGate)
-            return new JsonObject { ["type"] = "model-stream-snapshot", ["sessionId"] = Id,
-                ["draft"] = draft?.DeepClone() };
+            return draft is null ? new JsonObject() : (JsonObject)draft.DeepClone();
     }
 
     public string BeginDraft()
@@ -63,22 +64,23 @@ internal sealed partial class HostedSession
         {
             draft = new JsonObject
             {
-                ["streamId"] = requestId, ["iteration"] = 1, ["sequence"] = 0,
-                ["startedAt"] = startedAt, ["llmRequestId"] = requestId,
-                ["text"] = "", ["reasoning"] = "", ["toolCalls"] = new JsonArray()
+                ["streamId"] = requestId,
+                ["iteration"] = 1,
+                ["sequence"] = 0,
+                ["startedAt"] = startedAt,
+                ["llmRequestId"] = requestId,
+                ["text"] = "",
+                ["reasoning"] = "",
+                ["toolCalls"] = new JsonArray()
             };
             payload = new JsonObject
             {
-                ["type"] = "session-event", ["sessionId"] = Id,
-                ["event"] = new JsonObject
-                {
-                    ["type"] = "model-stream-reset", ["streamVersion"] = 2,
-                    ["streamId"] = requestId, ["iteration"] = 1, ["sequenceStart"] = 0, ["sequence"] = 0,
-                    ["startedAt"] = startedAt, ["llmRequestId"] = requestId
-                }
+                ["type"] = "model-stream-reset", ["streamVersion"] = 2,
+                ["streamId"] = requestId, ["iteration"] = 1, ["sequenceStart"] = 0, ["sequence"] = 0,
+                ["startedAt"] = startedAt, ["llmRequestId"] = requestId
             };
         }
-        Broadcast(payload);
+        Emit(SessionEventKind.ModelStream, payload);
         return requestId;
     }
 
@@ -130,19 +132,21 @@ internal sealed partial class HostedSession
             draft["toolCalls"] = newCalls;
             var update = new JsonObject
             {
-                ["type"] = "model-stream-update", ["streamVersion"] = 2,
+                ["type"] = "model-stream-update",
+                ["streamVersion"] = 2,
                 ["streamId"] = draft["streamId"]!.GetValue<string>(),
                 ["iteration"] = 1,
-                ["sequenceStart"] = nextSequence, ["sequence"] = nextSequence,
+                ["sequenceStart"] = nextSequence,
+                ["sequence"] = nextSequence,
                 ["startedAt"] = draft["startedAt"]!.GetValue<long>(),
                 ["llmRequestId"] = draft["llmRequestId"]!.GetValue<string>()
             };
             if (textDelta is not null) update["textDelta"] = textDelta;
             if (reasoningDelta is not null) update["reasoningDelta"] = reasoningDelta;
             if (deltas.Count > 0) update["toolCallDeltas"] = deltas;
-            envelope = new JsonObject { ["type"] = "session-event", ["sessionId"] = Id, ["event"] = update };
+            envelope = update;
         }
-        Broadcast(envelope);
+        Emit(SessionEventKind.ModelStream, envelope);
     }
 
     private static JsonObject Delta(string oldText, string newText) => new()
@@ -160,7 +164,7 @@ internal sealed partial class HostedSession
             if (draft?["llmRequestId"]?.GetValue<string>() != requestId) return;
             draft = null;
         }
-        Broadcast(DraftSnapshot());
+        Emit(SessionEventKind.DraftChanged);
     }
 
     public void ClearDraft()
@@ -170,18 +174,17 @@ internal sealed partial class HostedSession
             if (draft is null) return;
             draft = null;
         }
-        Broadcast(DraftSnapshot());
+        Emit(SessionEventKind.DraftChanged);
     }
 
     public void SetToolActive(bool active)
     {
         toolActive = active;
-        Broadcast(new JsonObject { ["type"] = "webui-session-state", ["sessionId"] = Id,
-            ["session"] = WebUiState() });
+        Emit(SessionEventKind.StateChanged);
     }
 }
 
-internal sealed class WebUiChatService(IChatService inner, HostedSession hosted) : IChatService
+internal sealed class RequestChatService(IChatService inner, SessionOwner hosted) : IChatService
 {
     public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history,
         CancellationToken cancellationToken)
@@ -204,64 +207,5 @@ internal sealed class WebUiChatService(IChatService inner, HostedSession hosted)
             hosted.ClearDraft();
             throw;
         }
-    }
-}
-
-internal sealed class HostModelChatService(
-    HttpClient http, ResponsesClientOptions baseOptions, HostedSession hosted, HostModels models, HostAgentMemory memory,
-    Action<string, ResponsesStreamProgress> progress) : IChatService
-{
-    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
-    {
-        var selectedSnapshot = hosted.Entry.Snapshot();
-        var selected = models.Select(selectedSnapshot);
-        var prompt = selectedSnapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
-        if (ConditionalMemory.ReadCurrentModelSnapshotId(prompt) != selected.Model.Key)
-        {
-            prompt = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
-            await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(prompt);
-        }
-        var options = baseOptions with
-        {
-            BaseUri = selected.Model.BaseUri,
-            RequestModel = selected.Model.ModelId,
-            ConcreteModelId = selected.Model.Key,
-            Token = selected.Model.Token,
-            Effort = selected.EffectiveEffort,
-            Instructions = baseOptions.Instructions.Length == 0 ? prompt : baseOptions.Instructions + "\n\n" + prompt
-        };
-        return await new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
-    }
-}
-
-internal sealed class WebUiToolExecutor(ITurnToolExecutor inner, HostedSession hosted, HostSessions sessions)
-    : ITurnToolExecutor, ITurnToolControl
-{
-    private int finishPending;
-    public void BeginTurn() => Interlocked.Exchange(ref finishPending, 0);
-    public bool ConsumeFinishAfterBatch() => Interlocked.Exchange(ref finishPending, 0) == 1;
-
-    public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
-    {
-        hosted.SetToolActive(true);
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var name = functionCall["name"]?.GetValue<string>();
-            if (name == "exec")
-                return await hosted.Executor.ExecuteAsync(hosted.Id, functionCall["args"] as JsonObject, cancellationToken);
-            if (name == "read_exec")
-                return await hosted.Executor.ReadAsync(hosted.Id, functionCall["args"] as JsonObject);
-            if (name == "recall")
-                return ArchiveRecallTool.Execute(hosted.Archive, functionCall["args"] as JsonObject);
-            if (name is "create_agent" or "create_session" or "create_child_session" or "send_to_session" or "refresh_session_snapshot")
-            {
-                var (response, shouldFinish) = await sessions.ExecuteAgentToolAsync(hosted, name, functionCall["args"] as JsonObject);
-                if (shouldFinish) Interlocked.Exchange(ref finishPending, 1);
-                return response;
-            }
-            return await inner.ExecuteAsync(functionCall, cancellationToken);
-        }
-        finally { hosted.SetToolActive(false); }
     }
 }

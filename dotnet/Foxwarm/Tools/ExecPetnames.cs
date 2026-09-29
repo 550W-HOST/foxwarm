@@ -1,4 +1,4 @@
-namespace Foxwarm.Models;
+namespace Foxwarm.Tools;
 
 internal static class ExecPetnames
 {

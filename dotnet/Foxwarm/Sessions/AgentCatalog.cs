@@ -3,10 +3,10 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 
-namespace Foxwarm.Web;
+namespace Foxwarm.Sessions;
 
 /// <summary>One-host Agent directory and metadata owner. main keeps the pre-Agent workspace root.</summary>
-internal sealed partial class HostAgentCatalog
+internal sealed partial class AgentCatalog
 {
     private readonly string workspaceRoot;
     private readonly string agentRoot;
@@ -15,7 +15,7 @@ internal sealed partial class HostAgentCatalog
     private readonly object stateGate = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
 
-    public HostAgentCatalog(string dataRoot, string workspaceRoot)
+    public AgentCatalog(string dataRoot, string workspaceRoot)
     {
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
         agentRoot = Path.Combine(this.workspaceRoot, "agents");

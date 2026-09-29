@@ -1412,6 +1412,7 @@ function App() {
       return (
         <Chat
           key={`chat:${tab.sessionId}`}
+          experimentalTextOnly={import.meta.env.VITE_FOXWARM_DOTNET === '1'}
           sessionId={tab.sessionId}
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}

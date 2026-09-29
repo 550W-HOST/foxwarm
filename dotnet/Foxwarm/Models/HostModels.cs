@@ -99,24 +99,7 @@ internal sealed class HostModels
         return (model, rawModel, rawEffort, effective);
     }
 
-    public JsonObject ToWebUiPayload() => new()
-    {
-        ["defaultKey"] = DefaultKey,
-        ["currentKey"] = DefaultKey,
-        ["models"] = new JsonArray(displayKeys.Select(key =>
-        {
-            var model = entries[key];
-            return (JsonNode?)new JsonObject
-            {
-                ["key"] = key, ["label"] = key, ["isDefault"] = key == DefaultKey,
-                ["contextLimit"] = model.ContextLimit, ["providerKey"] = model.ProviderKey,
-                ["modelId"] = model.ModelId, ["providerType"] = "openai-responses",
-                ["isVirtual"] = false, ["targets"] = new JsonArray(),
-                ["allowedEfforts"] = new JsonArray(model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
-                ["defaultEffort"] = model.DefaultEffort
-            };
-        }).ToArray())
-    };
+    public IReadOnlyList<ConcreteHostModel> Options => displayKeys.Select(key => entries[key]).ToArray();
 
     private static void Allow(JsonObject obj, string label, params string[] names)
     {

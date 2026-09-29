@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
-namespace Foxwarm.Models;
+namespace Foxwarm.Tools;
 
 /// <summary>Only a path-level boundary within a dedicated experiment workspace, not an OS sandbox.</summary>
 public sealed partial class WorkspaceTools : ITurnToolExecutor

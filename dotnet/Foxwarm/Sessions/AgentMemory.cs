@@ -4,9 +4,9 @@ using System.Text.RegularExpressions;
 using Foxwarm;
 using YamlDotNet.Serialization;
 
-namespace Foxwarm.Web;
+namespace Foxwarm.Sessions;
 
-internal sealed partial class HostAgentMemory(HostAgentCatalog agents)
+internal sealed partial class AgentMemory(AgentCatalog agents)
 {
     public async Task<string> BuildAsync(string agentName, string sessionId, string concreteModelId)
     {

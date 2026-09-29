@@ -148,7 +148,7 @@ internal sealed partial class SessionCompactor
             }
             return new CompactionPreparation(staged, [], [], Publish);
         }, token);
-        hosted.BroadcastState();
+        hosted.PublishStateChanged();
         return true;
     }
 }

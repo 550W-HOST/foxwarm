@@ -3,9 +3,8 @@ using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Microsoft.Data.Sqlite;
-using Microsoft.AspNetCore.Http.Features;
 
-namespace Foxwarm.Web;
+namespace Foxwarm.Sessions;
 
 internal sealed class CommittedSessionCreationException(string? sessionId, string message, Exception inner,
     bool? initialDeliveryCommitted = null)
@@ -15,24 +14,12 @@ internal sealed class CommittedSessionCreationException(string? sessionId, strin
     public bool? InitialDeliveryCommitted { get; } = initialDeliveryCommitted;
 }
 
-internal sealed partial class HostSessions
+internal sealed partial class SessionManager
 {
     private readonly SemaphoreSlim identityGate = new(1, 1);
 
     public string[] Agents() => agents.List();
     public string AgentDirectory(string name) => agents.AgentDirectory(name);
-
-    public HostedSession? FindRoute(HttpRequest request, string routeId)
-    {
-        // Request.Path/route binding may leave an encoded slash intact. Decode exactly
-        // one transport layer from RawTarget so a literal "%2F" name stays distinct.
-        var rawPath = request.HttpContext.Features.Get<IHttpRequestFeature>()?.RawTarget?.Split('?', 2)[0];
-        var parts = rawPath?.Split('/');
-        if (parts is null || parts.Length < 5 || parts[1] != "api" || parts[2] != "sessions"
-            || parts[3].Length == 0) return null;
-        try { return Find(Uri.UnescapeDataString(parts[3])); }
-        catch (UriFormatException) { return null; }
-    }
 
     public async Task<(string AgentName, string? MainSessionId)> CreateAgentAsync(string agentName,
         bool createMainSession = true, string? initialMemory = null)
@@ -62,7 +49,7 @@ internal sealed partial class HostSessions
         finally { identityGate.Release(); }
     }
 
-    public async Task<HostedSession> CreateNamedAsync(string agentName, string sessionName, string? displayName,
+    public async Task<SessionOwner> CreateNamedAsync(string agentName, string sessionName, string? displayName,
         JsonObject? forceModel)
     {
         await identityGate.WaitAsync();
@@ -70,16 +57,16 @@ internal sealed partial class HostSessions
         finally { identityGate.Release(); }
     }
 
-    public async Task<(HostedSession Child, bool Delivered)> CreateChildAsync(HostedSession parent, string suffix,
+    public async Task<(SessionOwner Child, bool Delivered)> CreateChildAsync(SessionOwner parent, string suffix,
         string? targetAgent, string? displayName, string? initialMessage, JsonObject? forceModel)
     {
         if (string.IsNullOrEmpty(suffix) || !System.Text.RegularExpressions.Regex.IsMatch(suffix, "^[a-zA-Z0-9_-]+$"))
             throw new InvalidDataException("Child suffix must use only letters, numbers, hyphens and underscores.");
         targetAgent ??= parent.Agent;
-        HostAgentCatalog.ValidateName(targetAgent);
+        AgentCatalog.ValidateName(targetAgent);
         if (!agents.Exists(targetAgent)) throw new InvalidDataException("Target Agent does not exist.");
         await identityGate.WaitAsync();
-        HostedSession child;
+        SessionOwner child;
         try
         {
             var parentId = parent.Id;
@@ -117,7 +104,8 @@ internal sealed partial class HostSessions
                     meta["messageCount"] = snapshot.History.Count + 1;
                     return new CanonicalAppendPreparation(snapshot with
                     {
-                        History = snapshot.History.Append(message).ToArray(), NextMessageSeq = snapshot.NextMessageSeq + 1,
+                        History = snapshot.History.Append(message).ToArray(),
+                        NextMessageSeq = snapshot.NextMessageSeq + 1,
                         Meta = meta
                     }, [message], live =>
                     {
@@ -149,7 +137,7 @@ internal sealed partial class HostSessions
         return (child, true);
     }
 
-    public async Task<string> SendAsync(HostedSession source, string requestedTarget, string message)
+    public async Task<string> SendAsync(SessionOwner source, string requestedTarget, string message)
     {
         var targetId = requestedTarget switch
         {
@@ -183,7 +171,7 @@ internal sealed partial class HostSessions
         return target.Id;
     }
 
-    public async Task<string> RefreshSnapshotAsync(HostedSession session)
+    public async Task<string> RefreshSnapshotAsync(SessionOwner session)
     {
         var snapshot = session.Entry.Snapshot();
         var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(
@@ -194,7 +182,7 @@ internal sealed partial class HostSessions
         return modelId;
     }
 
-    private async Task<HostedSession> CreateNamedLockedAsync(string agentName, string sessionName, string? parentId,
+    private async Task<SessionOwner> CreateNamedLockedAsync(string agentName, string sessionName, string? parentId,
         string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null)
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
@@ -232,10 +220,11 @@ internal sealed partial class HostSessions
         return hosted;
     }
 
-    private void PublishCreated(HostedSession session)
+    private void PublishCreated(SessionOwner session)
     {
         if (!sessions.TryAdd(session.Id, session)) throw new InvalidOperationException("Session identity collision after persistence.");
         session.EnableCommittedNotifications();
+        NotifyCreated(session);
     }
 
     private (string? Model, string? Effort) ValidateModelSettings((string? Model, string? Effort)? inherited,
@@ -266,7 +255,7 @@ internal sealed partial class HostSessions
         var archive = Path.Combine(root, "state", "archive-store.sqlite");
         if (!File.Exists(archive)) return false;
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = archive, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        { DataSource = archive, Mode = SqliteOpenMode.ReadOnly }.ToString());
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM archive_messages WHERE session_id=$id UNION SELECT 1 FROM archive_blocks WHERE session_id=$id LIMIT 1";

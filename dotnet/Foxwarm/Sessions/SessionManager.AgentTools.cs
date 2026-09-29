@@ -1,12 +1,12 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
-namespace Foxwarm.Web;
+namespace Foxwarm.Sessions;
 
-internal sealed partial class HostSessions
+internal sealed partial class SessionManager
 {
     internal async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolAsync(
-        HostedSession source, string name, JsonObject? args)
+        SessionOwner source, string name, JsonObject? args)
     {
         try
         {
@@ -14,48 +14,48 @@ internal sealed partial class HostSessions
             switch (name)
             {
                 case "create_agent":
-                {
-                    Keys(args, ["agentName", "createMainSession"], ["agentName"]);
-                    var nameValue = RequiredString(args, "agentName");
-                    var createMain = OptionalBool(args, "createMainSession") ?? true;
-                    var created = await CreateAgentAsync(nameValue, createMain);
-                    return (Output(created.MainSessionId is null
-                        ? $"Created Agent {created.AgentName} without a main Session."
-                        : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."), false);
-                }
+                    {
+                        Keys(args, ["agentName", "createMainSession"], ["agentName"]);
+                        var nameValue = RequiredString(args, "agentName");
+                        var createMain = OptionalBool(args, "createMainSession") ?? true;
+                        var created = await CreateAgentAsync(nameValue, createMain);
+                        return (Output(created.MainSessionId is null
+                            ? $"Created Agent {created.AgentName} without a main Session."
+                            : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."), false);
+                    }
                 case "create_session":
-                {
-                    Keys(args, ["agentName", "sessionName", "displayName", "forceModel"], ["agentName", "sessionName"]);
-                    var forceModel = OptionalForceModel(args);
-                    var created = await CreateNamedAsync(RequiredString(args, "agentName"),
-                        RequiredString(args, "sessionName"), OptionalString(args, "displayName"), forceModel);
-                    return (Output($"Created Session {created.Id} under Agent {created.Agent}."), false);
-                }
+                    {
+                        Keys(args, ["agentName", "sessionName", "displayName", "forceModel"], ["agentName", "sessionName"]);
+                        var forceModel = OptionalForceModel(args);
+                        var created = await CreateNamedAsync(RequiredString(args, "agentName"),
+                            RequiredString(args, "sessionName"), OptionalString(args, "displayName"), forceModel);
+                        return (Output($"Created Session {created.Id} under Agent {created.Agent}."), false);
+                    }
                 case "create_child_session":
-                {
-                    Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel"], ["suffix"]);
-                    var forceModel = OptionalForceModel(args);
-                    var after = AfterSend(args);
-                    var (child, delivered) = await CreateChildAsync(source, RequiredString(args, "suffix"),
-                        OptionalString(args, "agentName"), OptionalString(args, "displayName"),
-                        OptionalString(args, "message"), forceModel);
-                    return (Output($"Created fresh child Session {child.Id} under Agent {child.Agent}; "
-                        + (delivered ? "initial message delivered to its queue." : "no initial message was supplied.")), after == "finish");
-                }
+                    {
+                        Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel"], ["suffix"]);
+                        var forceModel = OptionalForceModel(args);
+                        var after = AfterSend(args);
+                        var (child, delivered) = await CreateChildAsync(source, RequiredString(args, "suffix"),
+                            OptionalString(args, "agentName"), OptionalString(args, "displayName"),
+                            OptionalString(args, "message"), forceModel);
+                        return (Output($"Created fresh child Session {child.Id} under Agent {child.Agent}; "
+                            + (delivered ? "initial message delivered to its queue." : "no initial message was supplied.")), after == "finish");
+                    }
                 case "send_to_session":
-                {
-                    Keys(args, ["sessionId", "message", "afterSend"], ["sessionId", "message"]);
-                    var after = AfterSend(args);
-                    var requested = RequiredString(args, "sessionId");
-                    var target = await SendAsync(source, requested, RequiredString(args, "message"));
-                    return (Output($"Delivered a message from {source.Id} to Session {target} (requested {requested})."), after == "finish");
-                }
+                    {
+                        Keys(args, ["sessionId", "message", "afterSend"], ["sessionId", "message"]);
+                        var after = AfterSend(args);
+                        var requested = RequiredString(args, "sessionId");
+                        var target = await SendAsync(source, requested, RequiredString(args, "message"));
+                        return (Output($"Delivered a message from {source.Id} to Session {target} (requested {requested})."), after == "finish");
+                    }
                 case "refresh_session_snapshot":
-                {
-                    Keys(args, [], []);
-                    var model = await RefreshSnapshotAsync(source);
-                    return (Output($"Refreshed Session {source.Id} prompt snapshot for concrete model {model}."), false);
-                }
+                    {
+                        Keys(args, [], []);
+                        var model = await RefreshSnapshotAsync(source);
+                        return (Output($"Refreshed Session {source.Id} prompt snapshot for concrete model {model}."), false);
+                    }
                 default: throw new InvalidDataException("Unsupported Agent tool.");
             }
         }
