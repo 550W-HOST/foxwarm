@@ -271,6 +271,15 @@ internal sealed partial class SessionManager
         var legacyCreateMarker = Path.Combine(root, "state", "experiment-faults", "legacy-create-after-rename");
         return new PersistentSessionAuthorityStore(root, id, agent, stage =>
         {
+            if (SessionSaveLane.IsSettingsCommit)
+            {
+                var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".settings-before-rename" : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".settings-after-rename" : null;
+                if (suffix is not null)
+                {
+                    var settingsMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + suffix);
+                    if (File.Exists(settingsMarker)) { File.Delete(settingsMarker); throw new IOException("Injected experimental settings commit failure."); }
+                }
+            }
             if (SessionSaveLane.IsGoalCommit)
             {
                 var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".goal-before-rename"

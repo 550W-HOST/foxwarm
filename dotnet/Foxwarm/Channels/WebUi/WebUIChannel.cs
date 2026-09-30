@@ -29,6 +29,19 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
             catch (Exception error) when (error is JsonException or InvalidDataException or InvalidOperationException)
             { return Results.BadRequest(new { error = error.Message }); }
         });
+        app.MapPost("/api/sessions/{id}/child-model", async (string id, HttpRequest request) =>
+        {
+            var hosted = FindRoute(request, id);
+            if (hosted is null) return Results.NotFound(new { error = "Session not found" });
+            if (!sessions.Accepting) return Results.StatusCode(503);
+            try
+            {
+                var body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new InvalidDataException("Child settings must be an object.");
+                return Results.Ok(await hosted.UpdateSettingsAsync(body, child: true));
+            }
+            catch (Exception error) when (error is JsonException or InvalidDataException or InvalidOperationException)
+            { return Results.BadRequest(new { error = error.Message }); }
+        });
         app.MapGet("/api/commands", () => Results.Ok(new
         {
             commands = new[]

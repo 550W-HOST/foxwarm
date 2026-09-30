@@ -42,6 +42,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
   let layerPlanCount = 0
   let heldSwitch = null
   let heldSwitchHandled = false
+  let heldSettings = null
   let heldStop = null
   let heldSwitchClosed = false
   let heldStopClosed = false
@@ -51,7 +52,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       const chunks = []
       for await (const part of req) chunks.push(part)
       const body = JSON.parse(Buffer.concat(chunks).toString())
-      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'submit_compact_plan'])
+      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan'])
       assert(body.tools[6].parameters.properties.sessionId); assert.equal(body.tools[6].parameters.properties.offset, undefined)
       assert.equal(body.tools.at(-1).parameters.required[0], 'replaceAsBlocks')
       assert.equal(req.headers.authorization, `Bearer ${body.model === 'alpha-wire' ? alphaToken : betaToken}`)
@@ -63,6 +64,12 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       requests.push({ model: body.model, authorization: req.headers.authorization,
         reasoning: body.reasoning, include: body.include, input, planner: Boolean(planPrompt), tools: body.tools })
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close', 'Cache-Control': 'no-cache' })
+      if (latestUser.includes('SETTINGS-TASK ')) {
+        const task = JSON.parse(latestUser.slice(latestUser.indexOf('SETTINGS-TASK ') + 'SETTINGS-TASK '.length))
+        if (!calls.some(item => item.call_id === task.id)) call(res, task.id, task.name, task.args)
+        else completed(res, [text('SETTINGS-DONE-' + task.id)])
+        return
+      }
       if (latestUser.includes('EXACT-RECALL ')) {
         const args = JSON.parse(latestUser.slice(latestUser.indexOf('EXACT-RECALL ') + 'EXACT-RECALL '.length));
         const callId = 'exact-' + args.testId; delete args.testId
@@ -122,6 +129,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
         else completed(res, [text('synthetic response')])
         return
       }
+      if (latestUser.includes('hold-settings') && !calls.length) { heldSettings = res; res.on('close', () => { heldSettings = null }); return }
       if (latestUser.includes('hold-switch') && !heldSwitchHandled) {
         heldSwitchHandled = true
         heldSwitch = res
@@ -145,10 +153,11 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
     get layerPlanCount() { return layerPlanCount },
     get invalidSent() { return invalidSent },
     get heldSwitch() { return Boolean(heldSwitch) },
+    get heldSettings() { return Boolean(heldSettings) },
     get heldStop() { return Boolean(heldStop) },
     get heldStopClosed() { return heldStopClosed },
     get heldSwitchClosed() { return heldSwitchClosed },
     releaseSwitch() { if (heldSwitch) completed(heldSwitch, [text('held alpha request completed')]) },
-    async close() { heldSwitch?.end(); heldStop?.end(); server.closeAllConnections(); await new Promise(done => server.close(done)) },
+    async close() { heldSettings?.end(); heldSwitch?.end(); heldStop?.end(); server.closeAllConnections(); await new Promise(done => server.close(done)) },
   }
 }

@@ -56,10 +56,10 @@ async function hostStart(hostPort, dataRoot, toolRoot, modelsFile) {
   let output = ''
   child.stdout.on('data', chunk => { output = (output + chunk).slice(-12000) })
   child.stderr.on('data', chunk => { output = (output + chunk).slice(-12000) })
-  await until(async () => {
+  try { await until(async () => {
     if (child.exitCode !== null) throw new Error(`Host exited: ${output}`)
     try { return (await json(hostPort, 'GET', '/health')).status === 200 } catch { return false }
-  }, 'host ready')
+  }, 'host ready') } catch (error) { console.error('HOST-START', output); try { process.kill(-child.pid, 'SIGKILL') } catch {} throw error }
   return { child, get output() { return output } }
 }
 async function hostStop(hostPort, current) {
@@ -107,6 +107,7 @@ try {
   await writeFile(modelsFile, JSON.stringify({ default: 'alpha', providers: {
     alpha: { providerType: 'openai', baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_ALPHA_PROVIDER_KEY',
       contextLimit: 18000, effort: { allowed: ['none', 'low', 'high'], default: 'low' }, models: [{ id: 'alpha-wire' }] },
+    gamma: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_BETA_PROVIDER_KEY', contextLimit: 20000, effort: { allowed: ['medium'], default: 'medium' }, models: [{ id: 'gamma-wire' }] },
     beta: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_BETA_PROVIDER_KEY',
       contextLimit: 18000, effort: { allowed: ['none', 'low', 'high'], default: 'none' }, models: [{ id: 'beta-wire' }] },
   } }))
@@ -134,7 +135,7 @@ try {
   await until(() => provider.heldSwitch, 'held alpha request')
   await page.click('.foxwarm-model-selector-trigger')
   await page.waitForSelector('[data-model-selector-popup="true"]')
-  assert.equal(await page.$('[data-model-column="child"]'), null, 'Experimental selector has no child controls')
+  assert(await page.$('[data-model-child-mode="specific"]'), 'Original child settings entry is available')
   assert.equal(await page.$('[aria-label="Configure models"]'), null, 'No unsupported Setup action')
   await page.click('[data-model-column="current"] [data-model-option-key="beta/beta-wire"]')
   await until(async () => (await history(hostPort, switchId)).session.modelKey === 'beta/beta-wire', 'browser model switch')
@@ -152,6 +153,22 @@ try {
       return { value: slider?.value, disabled: slider?.disabled,
         error: document.querySelector('[data-model-selector-popup="true"]')?.textContent?.slice(-180) }
     }))}`)
+  await page.click('[data-model-child-mode="specific"]')
+  await page.waitForSelector('[data-model-column="child"]')
+  await page.click('[data-model-column="child"] [data-model-option-key="gamma/gamma-wire"]')
+  await until(async () => (await history(hostPort, switchId)).session.effectiveChildModelKey === 'gamma/gamma-wire', 'original child model UI')
+  assert.equal((await history(hostPort, switchId)).session.effectiveChildEffort, 'medium')
+  if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
+  await page.click('[data-model-column="child"] [data-model-option-key="beta/beta-wire"]')
+  await until(async () => (await history(hostPort, switchId)).session.effectiveChildModelKey === 'beta/beta-wire', 'original child effort target')
+  if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
+  await page.waitForSelector('input[aria-label="Child effort"]')
+  await page.waitForFunction(() => !document.querySelector('input[aria-label="Child effort"]')?.disabled)
+  await page.focus('input[aria-label="Child effort"]'); await page.keyboard.press('End')
+  await until(async () => (await history(hostPort, switchId)).session.childEffortDefault === 'high', 'original child effort UI')
+  await page.click('[data-model-child-mode="follow"]')
+  await until(async () => (await history(hostPort, switchId)).session.childModelDefault === null, 'original follow clears model only')
+  assert.equal((await history(hostPort, switchId)).session.childEffortDefault, 'high')
   provider.releaseSwitch()
   await until(async () => (await history(hostPort, switchId)).messages.length === 2, 'alpha frozen request finish')
   const heldRequest = provider.requests.find(item => item.input.includes('hold-switch'))
@@ -165,7 +182,82 @@ try {
   assert.deepEqual(betaRequest.reasoning, { effort: 'high', summary: 'auto' })
   assert.deepEqual(betaRequest.include, ['reasoning.encrypted_content'])
 
+  // Real fixed settings tools and strict owner lane, including targeted settings and child creation.
+  const settingsAgent = await json(hostPort, 'POST', '/api/agents', { agentId: 'settings' }); assert.equal(settingsAgent.status, 201)
+  const parentId = settingsAgent.body.sessionId
+  const parentUrl = encodeURIComponent(parentId)
+  async function setting(taskId, name, args, caller = parentId) {
+    await send(hostPort, encodeURIComponent(caller), 'SETTINGS-TASK ' + JSON.stringify({ id: taskId, name, args }))
+    await until(async () => (await history(hostPort, encodeURIComponent(caller))).messages.some(row => row.parts?.some(part => part.text === 'SETTINGS-DONE-' + taskId)), taskId)
+    await until(async () => !(await state(hostPort, encodeURIComponent(caller))).busy, taskId + ' idle')
+    return (await history(hostPort, encodeURIComponent(caller))).messages.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === taskId)?.functionResponse.response
+  }
+  const view = async id => (await history(hostPort, encodeURIComponent(id))).session
+  assert(!(await setting('child-pair', 'set_session_child_model', { model: 'beta/beta-wire', effort: 'high' })).error)
+  assert.equal((await view(parentId)).childEffortDefault, 'high')
+  assert((await setting('invalid-pair', 'set_session_child_model', { model: 'gamma/gamma-wire', effort: 'high' })).error)
+  assert.equal((await view(parentId)).childModelDefault, 'beta/beta-wire')
+  assert(!(await setting('stale-normalize', 'set_session_child_model', { model: 'gamma/gamma-wire' })).error)
+  assert.equal((await view(parentId)).childEffortDefault, null); assert.equal((await view(parentId)).effectiveChildEffort, 'medium')
+  assert((await setting('bad-clear', 'set_session_child_model', { model: 'beta/beta-wire', clear: true })).error)
+  assert(!(await setting('make-child', 'create_child_session', { suffix: 'one' })).error)
+  const childId = 'settings/one'; assert.equal((await view(childId)).model, 'gamma/gamma-wire'); assert.equal((await view(childId)).childModelDefault, null)
+  assert(!(await setting('grandchild', 'create_child_session', { suffix: 'two' }, childId)).error)
+  assert.equal((await view('settings/one_two')).model, 'gamma/gamma-wire'); assert.equal((await view('settings/one_two')).childModelDefault, null)
+  assert(!(await setting('targeted', 'set_session_child_model', { sessionId: parentId, model: 'beta/beta-wire', effort: 'low' }, childId)).error)
+  assert.equal((await view(childId)).model, 'gamma/gamma-wire')
+  assert(!(await setting('clear-only', 'set_session_child_model', { clear: true })).error)
+  assert.equal((await view(parentId)).childModelDefault, null); assert.equal((await view(parentId)).childEffortDefault, 'low')
+  assert(!(await setting('effort-unset', 'set_session_child_model', { effort: 'unset' })).error)
+  assert.equal((await view(parentId)).childEffortDefault, null)
+  const threshold = await setting('fraction', 'set_session_compact_threshold', { thresholdTokens: .9 })
+  assert(threshold.output.includes('override: 0 tokens') && threshold.output.includes('15300'))
+  assert.equal((await view(parentId)).compactThresholdTokens, 0)
+  await setting('inspect-negative', 'set_session_compact_threshold', { thresholdTokens: -1 }); assert.equal((await view(parentId)).compactThresholdTokens, 0)
+  await setting('threshold-clear', 'set_session_compact_threshold', { clear: true }); assert.equal((await view(parentId)).compactThresholdTokens, null)
+  await setting('threshold-target', 'set_session_compact_threshold', { sessionId: parentId, thresholdTokens: 12345.9 }, childId)
+  assert.equal((await view(parentId)).compactThresholdTokens, 12345)
+  const authorityFile = join(dataRoot, 'state', 'sessions', parentId + '.json')
+  const noOpBefore = await readFile(authorityFile, 'utf8')
+  assert.equal((await json(hostPort, 'POST', `/api/sessions/${parentUrl}/child-model`, { clear: true })).status, 200)
+  assert.equal(await readFile(authorityFile, 'utf8'), noOpBefore)
+  const faults = join(dataRoot, 'state', 'experiment-faults'); await mkdir(faults, { recursive: true })
+  const faultKey = 'id_' + Buffer.from(parentId).toString('base64url')
+  // Use the same encoded Session segment as the existing scoped fault fixtures.
+  await writeFile(join(faults, faultKey + '.settings-before-rename'), '')
+  const beforeFault = await setting('before-fault', 'set_session_child_model', { model: 'beta/beta-wire' })
+  assert(beforeFault.error); assert.equal((await view(parentId)).childModelDefault, null)
+  await writeFile(join(faults, faultKey + '.settings-after-rename'), '')
+  const afterFault = await setting('after-fault', 'set_session_child_model', { model: 'beta/beta-wire', effort: 'high' })
+  assert(afterFault.error); assert.equal((await view(parentId)).childModelDefault, 'beta/beta-wire')
+
+  // A real held target accepts strict setting faults, later ingress and immediate Stop without full-envelope rollback.
+  const heldId = await create(hostPort)
+  await send(hostPort, heldId, 'hold-settings')
+  await until(() => provider.heldSettings, 'held settings target')
+  const heldAuthority = join(dataRoot, 'state', 'sessions', heldId + '.json')
+  const heldSnapshot = JSON.parse(await readFile(heldAuthority, 'utf8')).persistentMemorySnapshot
+  await writeFile(join(faults, heldId + '.settings-before-rename'), '')
+  assert((await setting('held-before', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })).error)
+  assert.equal((await view(heldId)).childModelDefault, null)
+  await writeFile(join(faults, heldId + '.settings-after-rename'), '')
+  assert((await setting('held-after', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })).error)
+  assert.equal((await view(heldId)).childModelDefault, 'gamma/gamma-wire')
+  await send(hostPort, heldId, 'later-ingress-preserved')
+  assert((await state(hostPort, heldId)).queueCount >= 1)
+  await command(hostPort, heldId, '/stop')
+  await until(async () => !(await state(hostPort, heldId)).busy, 'held setting Stop')
+  assert.equal((await view(heldId)).childModelDefault, 'gamma/gamma-wire')
+  assert.equal(JSON.parse(await readFile(heldAuthority, 'utf8')).persistentMemorySnapshot, heldSnapshot)
+  assert((await state(hostPort, heldId)).queueCount >= 1 || JSON.stringify((await history(hostPort, heldId)).messages).includes('later-ingress-preserved'))
+  // Clear primary effort when a model-only update changes its allowed set, and validate prospective child fallback.
+  const primaryId = await create(hostPort)
+  assert.equal((await json(hostPort, 'POST', `/api/sessions/${primaryId}/model`, { model: 'beta/beta-wire', effort: 'high' })).status, 200)
+  assert.equal((await json(hostPort, 'POST', `/api/sessions/${primaryId}/model`, { model: 'gamma/gamma-wire' })).status, 200)
+  assert.equal((await view(primaryId)).effort, null); assert.equal((await view(primaryId)).effectiveEffort, 'medium')
+
   const layeredId = await create(hostPort)
+  assert(!(await setting('auto-threshold', 'set_session_compact_threshold', { sessionId: layeredId, thresholdTokens: 15000 }, parentId)).error)
   for (let index = 0; index < 26; index++) {
     await send(hostPort, layeredId, index === 8 ? 'seed-l1-tool read' :
       `seed-l1-${index} ` + `unique-${index}-`.repeat(125))
@@ -347,6 +439,7 @@ try {
   host = second
   assert.notEqual(second.child.pid, firstPid)
   assert.equal((await history(hostPort, switchId)).session.modelKey, 'beta/beta-wire')
+  assert.equal((await view(parentId)).childModelDefault, 'beta/beta-wire'); assert.equal((await view(parentId)).childEffortDefault, 'high'); assert.equal((await view(parentId)).compactThresholdTokens, 12345)
   assert.equal((await history(hostPort, switchId)).session.effectiveEffort, 'high')
   assert.equal((await history(hostPort, layeredId)).messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock?.id, l2.id)
   await send(hostPort, legacyId, 'OLD-RECALL-RESTORE')
@@ -380,7 +473,7 @@ try {
     stopId, requestCount: provider.requests.length, planCount: provider.layerPlanCount,
     firstPlanInvalidThenCorrected: provider.invalidSent, l2Id: l2.id, childIds: l2.sourceBlockIds,
     archivedOriginalBytes: Buffer.byteLength(original.body.messageJson), browserNestedExpansion: true,
-    pruneOnlyRecallFiltered: true, exactLayeredRecall: true, selectedSessionReadPure: true, boundedSqlPlans: true, oldResultRestart: true, orderedSourceFixture: true, heldPlannerStopped: provider.heldStopClosed, frozenModelAndPersistedEffort: true }))
+    pruneOnlyRecallFiltered: true, exactLayeredRecall: true, selectedSessionReadPure: true, boundedSqlPlans: true, oldResultRestart: true, orderedSourceFixture: true, sessionSettings: true, originalChildSelector: true, childGrandchildDefaults: true, settingsFaultRestore: true, heldSettingsIngressStopSnapshot: true, heldPlannerStopped: provider.heldStopClosed, frozenModelAndPersistedEffort: true }))
 } finally {
   if (browser) await browser.close().catch(() => {})
   if (host?.child.exitCode === null) {

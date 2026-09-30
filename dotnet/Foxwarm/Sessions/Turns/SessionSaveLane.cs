@@ -56,33 +56,6 @@ public sealed partial class SessionSaveLane
         catch (Exception error) { entry.RecordBestEffortFailure(error); }
     }
 
-    public Task CommitAuthoritySettingsAsync(string? model, bool setModel, string? effort, bool setEffort) =>
-        EnqueueOperationAsync(async () =>
-        {
-            var staged = entry.WithState(state =>
-            {
-                var snapshot = state.Snapshot();
-                var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-                Set(envelope, "model", setModel, model);
-                Set(envelope, "effort", setEffort, effort);
-                return snapshot with { AuthorityEnvelope = envelope };
-            });
-            void Publish(SessionState state)
-            {
-                Set(state.AuthorityEnvelope, "model", setModel, model);
-                Set(state.AuthorityEnvelope, "effort", setEffort, effort);
-            }
-            try { await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false); }
-            catch (AuthorityCommittedException)
-            {
-                entry.WithState(Publish);
-                entry.InvokeCommitted(entry.Snapshot());
-                throw;
-            }
-            entry.WithState(Publish);
-            entry.InvokeCommitted(entry.Snapshot());
-        });
-
     /// <summary>Persist one owner snapshot before a model request; no request is sent on failure.</summary>
     public Task CommitMemorySnapshotAsync(string snapshot) => EnqueueOperationAsync(async () =>
     {

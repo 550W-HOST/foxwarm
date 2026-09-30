@@ -57,7 +57,7 @@ try {
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses'); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
       assert.deepEqual(body.tools.map(tool => tool.name),
-        ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'submit_compact_plan'])
+        ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan'])
       const payload = JSON.stringify(body.input)
       const latest = body.input.filter(item => item.type === 'message' && item.role === 'user')
         .at(-1)?.content?.map(item => item.text).join(' ') || ''

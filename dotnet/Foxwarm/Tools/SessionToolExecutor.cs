@@ -54,7 +54,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor inner, SessionOwner 
             if (name == "exec") return await hosted.Executor.ExecuteAsync(hosted.Id, functionCall["args"] as JsonObject, cancellationToken);
             if (name == "read_exec") return await hosted.Executor.ReadAsync(hosted.Id, functionCall["args"] as JsonObject);
             if (name == "recall") return ArchiveRecallTool.Execute(sessions, hosted, functionCall["args"] as JsonObject);
-            if (name is "create_agent" or "create_session" or "create_child_session" or "send_to_session" or "refresh_session_snapshot" or "skill" or "set_agent_inherit" or "session" or "get_session_messages" or "set_goal")
+            if (name is "create_agent" or "create_session" or "create_child_session" or "send_to_session" or "refresh_session_snapshot" or "skill" or "set_agent_inherit" or "session" or "get_session_messages" or "set_goal" or "set_session_child_model" or "set_session_compact_threshold")
             {
                 var (response, shouldFinish) = await sessions.ExecuteAgentToolAsync(hosted, name, functionCall["args"] as JsonObject);
                 if (response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id) handoffTargets.Add(id);

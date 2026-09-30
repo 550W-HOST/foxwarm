@@ -37,7 +37,9 @@ internal sealed partial class WebUIChannel
                     retryable = true,
                     historyVersion = snapshot.HistoryVersion
                 });
-            return Results.Ok(WebUiContract.History(snapshot, models, hosted.ToolActive, hosted.Compacting, tail, prefix, after));
+            var result = WebUiContract.History(snapshot, models, hosted.ToolActive, hosted.Compacting, tail, prefix, after);
+            result["session"]!["childPolicyChain"] = hosted.BuildDto()["childPolicyChain"]?.DeepClone();
+            return Results.Ok(result);
         });
         app.MapGet("/api/sessions/{id}/archive/messages/{seq}", (string id, string seq, HttpRequest request) =>
         {

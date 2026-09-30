@@ -60,6 +60,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);
+        foreach (var definition in SessionSettingsDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(CompactPrompt.ToolDefinition());
         clientOptions = options with { Tools = definitions };
         this.models = models;
@@ -169,7 +170,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
     {
-        var hosted = new SessionOwner(id, agent, models);
+        var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = target => Find(target)?.Metadata() };
         hosted.Archive = store.Archive;
         hosted.Executor = executor;
         var chat = new SessionChatService(http, clientOptions, hosted, models, memory, (sessionId, update) =>

@@ -19,34 +19,20 @@ internal sealed partial class SessionOwner
         PublishStateChanged();
     }
 
-    public async Task<JsonObject> UpdateModelAsync(JsonObject patch)
+    public Task<JsonObject> UpdateModelAsync(JsonObject patch) => UpdateSettingsAsync(patch, child: false);
+    public async Task<JsonObject> UpdateSettingsAsync(JsonObject patch, bool child)
     {
-        if (patch.Count == 0 || patch.Any(pair => pair.Key is not ("model" or "effort" or "clear")))
-            throw new InvalidDataException("model and/or effort is required.");
-        var setModel = patch.ContainsKey("model") || patch["clear"]?.GetValue<bool>() == true;
-        string? model = null;
-        if (patch.ContainsKey("model") && patch["model"] is not null)
-        {
-            if (patch["model"] is not JsonValue raw || !raw.TryGetValue<string>(out model) || !models.Contains(model))
-                throw new InvalidDataException("Unknown or unsupported model key.");
-        }
-        var setEffort = patch.ContainsKey("effort");
-        string? effort = null;
-        if (setEffort && patch["effort"] is not null)
-        {
-            if (patch["effort"] is not JsonValue raw || !raw.TryGetValue<string>(out effort)
-                || effort is not ("none" or "low" or "medium" or "high" or "xhigh" or "max"))
-                throw new InvalidDataException("Invalid model effort.");
-        }
-        if (!setModel && !setEffort) throw new InvalidDataException("model and/or effort is required.");
-        var selected = models.Resolve(setModel ? model : models.Select(Entry.Snapshot()).RawModel);
-        if (effort is not null && !selected.AllowedEfforts.Contains(effort, StringComparer.Ordinal))
-            throw new InvalidDataException("Effort is not allowed by the selected model.");
-        await Entry.SaveLane.CommitAuthoritySettingsAsync(model, setModel, effort, setEffort);
-        var status = BuildDto();
-        status["success"] = true;
-        status["sessionId"] = Id;
-        return status;
+        var allowed = child ? new[] { "model", "clear", "childEffortDefault" } : ["model", "clear", "effort"];
+        if (patch.Count == 0 || patch.Any(pair => !allowed.Contains(pair.Key))) throw new InvalidDataException("Unsupported model settings.");
+        var clear = patch["clear"]?.GetValue<bool>() == true;
+        if (clear && patch.ContainsKey("model")) throw new InvalidDataException("clear=true cannot be combined with model.");
+        var normalized = new JsonObject();
+        if (clear || patch.ContainsKey("model")) normalized[child ? "childModelDefault" : "model"] = clear ? null : patch["model"]?.DeepClone();
+        var effortKey = child ? "childEffortDefault" : "effort";
+        if (patch.ContainsKey(effortKey)) normalized[effortKey] = patch[effortKey]?.DeepClone();
+        if (normalized.Count == 0) throw new InvalidDataException("model and/or effort is required.");
+        await Entry.SaveLane.CommitSettingsAsync(normalized, models);
+        var status = BuildDto(); status["success"] = true; status["sessionId"] = Id; return status;
     }
 
     public JsonObject DraftSnapshot()
@@ -75,9 +61,14 @@ internal sealed partial class SessionOwner
             };
             payload = new JsonObject
             {
-                ["type"] = "model-stream-reset", ["streamVersion"] = 2,
-                ["streamId"] = requestId, ["iteration"] = 1, ["sequenceStart"] = 0, ["sequence"] = 0,
-                ["startedAt"] = startedAt, ["llmRequestId"] = requestId
+                ["type"] = "model-stream-reset",
+                ["streamVersion"] = 2,
+                ["streamId"] = requestId,
+                ["iteration"] = 1,
+                ["sequenceStart"] = 0,
+                ["sequence"] = 0,
+                ["startedAt"] = startedAt,
+                ["llmRequestId"] = requestId
             };
         }
         Emit(SessionEventKind.ModelStream, payload);

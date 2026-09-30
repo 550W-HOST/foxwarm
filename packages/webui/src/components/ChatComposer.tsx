@@ -292,7 +292,7 @@ function ModelSelector({
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
-  const childFollows = experimentalCurrentOnly || !childModelDefault
+  const childFollows = !childModelDefault
   const filteredOptions = useMemo(
     () => filterModelOptions(options, filterQuery, defaultModelKey),
     [defaultModelKey, filterQuery, options],
@@ -580,7 +580,7 @@ function ModelSelector({
                   <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-fw-border bg-fw-surface-sunken px-3">
                     <span className="text-xs font-semibold text-fw-text-strong">{isCurrent ? 'Current session' : 'Children'}</span>
                     {isCurrent ? (
-                      childFollows && !experimentalCurrentOnly && <button type="button" disabled={busy} data-model-child-mode="specific" onClick={() => {
+                      childFollows && <button type="button" disabled={busy} data-model-child-mode="specific" onClick={() => {
                         setActiveScope('child')
                         applyChildModel(effectiveChildModelKey || currentModelKey || defaultModelKey || options[0]?.key || null)
                       }} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover disabled:opacity-50">

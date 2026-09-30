@@ -18,6 +18,7 @@ internal sealed partial class SessionOwner
     private long lastNotifiedSeq;
     private int lastReportedFailureCount;
     private readonly HostModels models;
+    internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
     internal string? SnapshotRefreshWarning { get; set; }
     public string Id { get; }
     public string Agent { get; }

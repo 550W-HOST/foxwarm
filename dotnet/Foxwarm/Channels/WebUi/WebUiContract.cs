@@ -18,7 +18,7 @@ internal static class WebUiContract
         };
         if (snapshot.BusyStartedAt is long since) runtime["since"] = since;
         if (compacting) runtime["active"] = new JsonObject { ["phase"] = "compaction" };
-        return new JsonObject
+        var result = new JsonObject
         {
             ["id"] = snapshot.Id,
             ["agent"] = snapshot.AuthorityEnvelope["agent"]?.DeepClone() ?? JsonValue.Create("main"),
@@ -38,6 +38,8 @@ internal static class WebUiContract
             ["effortAllowed"] = new JsonArray(selected.Model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
             ["effortDefault"] = selected.Model.DefaultEffort
         };
+        foreach (var (key, value) in SessionModelSettings.Presentation(snapshot.AuthorityEnvelope, models, snapshot.Id)) result[key] = value?.DeepClone();
+        return result;
     }
 
     public static JsonObject History(SessionSnapshot snapshot, HostModels models, bool toolActive, bool compacting,

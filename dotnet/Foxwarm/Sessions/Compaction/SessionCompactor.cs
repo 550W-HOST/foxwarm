@@ -121,9 +121,7 @@ internal sealed partial class SessionCompactor
         var total = cached + input + output;
         if (total <= 0) return;
         var snapshot = hosted.Entry.Snapshot();
-        var model = models.Select(snapshot).Model;
-        var overrideTokens = CompactCandidateBuilder.Number(snapshot.AuthorityEnvelope["compactThresholdTokens"]);
-        var threshold = overrideTokens is > 0 ? overrideTokens.Value : Math.Max(1, (long)Math.Floor(model.ContextLimit * .85));
+        var threshold = SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, models);
         if (total <= threshold) return;
         var run = Begin();
         if (run is null) return;

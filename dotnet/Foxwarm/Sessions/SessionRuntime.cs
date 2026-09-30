@@ -8,7 +8,7 @@ internal sealed record SessionRuntimeEvent(string SessionId, SessionEventKind Ki
 internal sealed record SessionMetadata(string Id, string Agent, string? ParentSessionId, string? DisplayName,
     bool Busy, bool Stopping, long? BusyStartedAt, int QueueLength, int MessageCount, long NextMessageSeq,
     long HistoryVersion, long LastMessageTime, bool Archived, bool Pinned, double? SidebarOrder,
-    string? Model, string? Effort, long CachedTokens, long InputTokens, long OutputTokens, JsonObject? Wait = null);
+    string? Model, string? Effort, long CachedTokens, long InputTokens, long OutputTokens, JsonObject? Wait = null, string? ChildModel = null, string? ChildEffort = null, double? CompactThreshold = null);
 
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
 internal sealed class SessionRuntime(SessionManager manager)
@@ -48,7 +48,7 @@ internal sealed partial class SessionOwner
             Flag(envelope["archived"]), Flag(envelope["pinned"]),
             envelope["sidebarOrder"] is JsonValue order && order.TryGetValue<double>(out var rawOrder) ? rawOrder : null,
             Text(envelope["model"]), Text(envelope["effort"]), Number(envelope["stats"]?["totalCachedTokens"]),
-            Number(envelope["stats"]?["totalInputTokens"]), Number(envelope["stats"]?["totalOutputTokens"]), SessionRuntimeState.WaitProjection(state.Meta));
+            Number(envelope["stats"]?["totalInputTokens"]), Number(envelope["stats"]?["totalOutputTokens"]), SessionRuntimeState.WaitProjection(state.Meta), Text(envelope["childModelDefault"]), Text(envelope["childEffortDefault"]), SessionWait.Number(envelope["compactThresholdTokens"]));
     });
 
     public JsonObject BuildDto() => BuildDto(Metadata());
@@ -58,7 +58,7 @@ internal sealed partial class SessionOwner
         var effort = meta.Effort is not null && model.AllowedEfforts.Contains(meta.Effort, StringComparer.Ordinal)
             ? meta.Effort : model.DefaultEffort;
         var runtime = SessionRuntimeState.Build(meta, toolActive, compacting);
-        return new JsonObject
+        var result = new JsonObject
         {
             ["id"] = Id,
             ["agent"] = Agent,
@@ -89,5 +89,25 @@ internal sealed partial class SessionOwner
                 ["outputTokens"] = meta.OutputTokens
             }
         };
+        var settings = new JsonObject { ["model"] = meta.Model, ["effort"] = meta.Effort, ["childModelDefault"] = meta.ChildModel, ["childEffortDefault"] = meta.ChildEffort, ["compactThresholdTokens"] = meta.CompactThreshold };
+        foreach (var (key, value) in SessionModelSettings.Presentation(settings, models, Id)) result[key] = value?.DeepClone();
+        var hops = new List<SessionMetadata> { meta }; var seen = new HashSet<string>(StringComparer.Ordinal) { meta.Id };
+        var parentId = meta.ParentSessionId;
+        while (parentId is not null && seen.Add(parentId) && ResolveAncestry?.Invoke(parentId) is SessionMetadata parent)
+        { hops.Add(parent); parentId = parent.ParentSessionId; }
+        var effectiveRaw = meta.ChildModel ?? meta.Model; var supplier = 0;
+        if (effectiveRaw is not null) for (var index = 0; index < hops.Count; index++) if (hops[index].ChildModel == effectiveRaw) supplier = index;
+        result["childPolicyChain"] = new JsonArray(hops.Select((hop, index) => (JsonNode?)new JsonObject
+        {
+            ["level"] = index == 0 ? "session" : "inherited",
+            ["sessionId"] = hop.Id,
+            ["modelKey"] = hop.Model,
+            ["effort"] = hop.Effort,
+            ["childModelDefault"] = hop.ChildModel,
+            ["childEffortDefault"] = hop.ChildEffort,
+            ["source"] = hop.ChildModel is null ? "follow-parent" : index + 1 < hops.Count && hops[index + 1].ChildModel == hop.ChildModel ? "inherited" : "explicit",
+            ["supplies"] = index == supplier
+        }).ToArray());
+        return result;
     }
 }

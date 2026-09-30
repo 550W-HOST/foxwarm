@@ -23,6 +23,8 @@ internal sealed partial class SessionManager
                             ? $"Created Agent {created.AgentName} without a main Session."
                             : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."), false);
                     }
+                case "set_session_child_model":
+                case "set_session_compact_threshold": return (await SessionSettingsAsync(source, name, args), false);
                 case "session":
                 case "get_session_messages":
                 case "set_goal": return (await ObserveAsync(source, name, args), false);
