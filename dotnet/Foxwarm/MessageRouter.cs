@@ -16,6 +16,12 @@ internal sealed class MessageRouter(SessionRuntime runtime)
         var command = message.Text.Trim();
         if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
         {
+            if (command == "/continue")
+            {
+                try { await runtime.ContinueAsync(context.SessionId); return new(200, new { success = true }); }
+                catch (SessionContinuationUnavailableException error) { return new(409, new { error = error.Message, code = error.Code }); }
+                catch (InvalidOperationException error) { return new(409, new { error = error.Message }); }
+            }
             if (command == "/compact")
                 return await owner.Compactor.StartManualAsync()
                     ? new(202, new { accepted = true, compacting = true })

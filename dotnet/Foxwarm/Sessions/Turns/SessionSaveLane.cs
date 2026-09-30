@@ -6,7 +6,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
 
-public sealed class SessionSaveLane
+public sealed partial class SessionSaveLane
 {
     private static readonly AsyncLocal<bool> SnapshotCommitScope = new();
     internal static bool IsSnapshotCommit => SnapshotCommitScope.Value;
@@ -98,71 +98,13 @@ public sealed class SessionSaveLane
         entry.InvokeCommitted(entry.Snapshot());
     });
 
-    /// <summary>Strictly admit one source-bearing inter-Session item without replacing newer hot state.</summary>
-    public Task CommitInterSessionAsync(QueueItem item) => EnqueueOperationAsync(async () =>
-    {
-        if (item.Type != QueueItemType.Intersession || item.Parts is not { Count: > 0 })
-            throw new InvalidDataException("An inter-session delivery requires one ordinary message item.");
-        var staged = entry.WithState(state =>
-        {
-            var snapshot = state.Snapshot();
-            return snapshot with { Queue = snapshot.Queue.Append(item.CloneItem()).ToArray() };
-        });
-        void Publish(SessionState state) => state.Queue.Add(item.CloneItem());
-        try { await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false); }
-        catch (AuthorityCommittedException)
-        {
-            entry.WithState(Publish);
-            entry.InvokeQueuedCommitted(entry.Snapshot());
-            throw;
-        }
-        entry.WithState(Publish);
-        entry.InvokeQueuedCommitted(entry.Snapshot());
-    });
+    /// <summary>Strictly admit one source-bearing inter-Session item.</summary>
+    public Task CommitInterSessionAsync(QueueItem item) => AdmitAsync(item, SaveKind.Strict);
 
-    /// <summary>Strict same-owner admission of one exec completion, not ordinary best-effort ingress.</summary>
-    public async Task<bool> CommitBackgroundExecCompletionAsync(string execId, string message)
-    {
-        var admitted = false;
-        await EnqueueOperationAsync(async () =>
-        {
-            var eventId = "exec-completion:" + execId;
-            var prepared = entry.WithState(state =>
-            {
-                var prior = state.Meta["acceptedExternalEventIds"] as JsonArray;
-                var receipts = prior?.Select(value => value is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : null)
-                    .Where(value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).ToList() ?? [];
-                if (receipts.Contains(eventId, StringComparer.Ordinal)) return (Snapshot: (SessionSnapshot?)null, Item: (QueueItem?)null, Receipts: (JsonArray?)null);
-                receipts.Add(eventId);
-                var accepted = new JsonArray(receipts.TakeLast(32).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
-                var item = new QueueItem(QueueItemType.Background,
-                    [new JsonObject { ["system"] = message }],
-                    OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = eventId });
-                var snapshot = state.Snapshot();
-                var meta = (JsonObject)snapshot.Meta.DeepClone();
-                meta["acceptedExternalEventIds"] = accepted.DeepClone();
-                return (Snapshot: (SessionSnapshot?)(snapshot with { Queue = snapshot.Queue.Append(item).ToArray(), Meta = meta }),
-                    Item: (QueueItem?)item, Receipts: (JsonArray?)accepted);
-            });
-            if (prepared.Snapshot is null || prepared.Item is null || prepared.Receipts is null) return;
-            void Publish(SessionState state)
-            {
-                state.Meta["acceptedExternalEventIds"] = prepared.Receipts.DeepClone();
-                state.Queue.Add(prepared.Item.CloneItem());
-                admitted = true;
-            }
-            try { await store.CommitAsync(prepared.Snapshot, SaveKind.Strict).ConfigureAwait(false); }
-            catch (AuthorityCommittedException)
-            {
-                entry.WithState(Publish);
-                entry.InvokeQueuedCommitted(entry.Snapshot());
-                throw;
-            }
-            entry.WithState(Publish);
-            entry.InvokeQueuedCommitted(entry.Snapshot());
-        }).ConfigureAwait(false);
-        return admitted;
-    }
+    public Task<bool> CommitBackgroundExecCompletionAsync(string execId, string message) => AdmitWithReceiptAsync(
+        new QueueItem(QueueItemType.Background, [new JsonObject { ["system"] = message }],
+            OpenFields: new JsonObject { ["execId"] = execId, ["externalEventId"] = "exec-completion:" + execId }),
+        "exec-completion:" + execId);
 
     private static void Set(JsonObject root, string key, bool supplied, string? value)
     {

@@ -184,7 +184,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             (JsonObject)root.DeepClone());
     }
 
-    private static JsonObject ToQueueJson(QueueItem item)
+    internal static JsonObject ToQueueJson(QueueItem item)
     {
         var result = item.OpenFields is null ? new JsonObject() : (JsonObject)item.OpenFields.DeepClone();
         result["type"] = item.Type switch
@@ -219,7 +219,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         return result;
     }
 
-    private static QueueItem FromQueueJson(JsonObject value)
+    internal static QueueItem FromQueueJson(JsonObject value)
     {
         var type = value["type"]!.GetValue<string>() switch
         {

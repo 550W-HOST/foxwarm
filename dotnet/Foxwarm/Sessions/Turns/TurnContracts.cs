@@ -36,6 +36,7 @@ public interface ITurnToolControl
 {
     void BeginTurn();
     bool ConsumeFinishAfterBatch();
+    Task<bool> CompleteBatchAsync(JsonObject toolMessage, bool stopping) => Task.FromResult(ConsumeFinishAfterBatch());
 }
 
 public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor

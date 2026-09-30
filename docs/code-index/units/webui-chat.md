@@ -12,7 +12,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 ## Export
 
 - default memoized `Chat` component.
-- An optional `experimentalTextOnly` prop narrows only the dedicated experiment build: shared Chat history, realtime, timeline, composer and Stop stay live; unsupported UI actions are hidden. Omission preserves the normal production Chat behavior.
+- An optional `experimentalTextOnly` prop narrows only the dedicated experiment build: shared Chat history, realtime, timeline, composer, Stop and the original history-derived Continue action stay live; remaining text-only restrictions are unchanged. The bounded .NET implementation and wait-state path are documented in [dotnet](./dotnet.md#continue-and-collaboration-waits). Omission preserves the normal production Chat behavior.
 - `SessionDebugModal` owns the explicitly mounted diagnostic snapshot lifecycle, including fetch invalidation, serialization, copy state, and release on close.
 - `chatHistoryState.ts`, `chatViewportState.ts`, and `sessionHeader.ts` export pure tested reconciliation, viewport, and state/format helpers; `modelOptionsLoader.ts` owns latest-consumer publication gates plus the generic page-lifetime parsed-result Promise cache used by the three stable bootstrap endpoints.
 - `contextScrollbarModel.ts` exports pure committed-segment, estimate, context-usage, and row-boundary interpolation helpers used by the desktop overview and focused tests.

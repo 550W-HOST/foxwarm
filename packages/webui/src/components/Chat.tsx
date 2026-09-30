@@ -2078,12 +2078,12 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canon
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
-              turnIncomplete={!experimentalTextOnly && sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
+              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
               onStop={handleStop}
               onRunQueued={experimentalTextOnly ? undefined : handleRunQueued}
-              onContinue={experimentalTextOnly ? undefined : handleContinue}
+              onContinue={handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">

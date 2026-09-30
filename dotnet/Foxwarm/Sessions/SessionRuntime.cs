@@ -8,7 +8,7 @@ internal sealed record SessionRuntimeEvent(string SessionId, SessionEventKind Ki
 internal sealed record SessionMetadata(string Id, string Agent, string? ParentSessionId, string? DisplayName,
     bool Busy, bool Stopping, long? BusyStartedAt, int QueueLength, int MessageCount, long NextMessageSeq,
     long HistoryVersion, long LastMessageTime, bool Archived, bool Pinned, double? SidebarOrder,
-    string? Model, string? Effort, long CachedTokens, long InputTokens, long OutputTokens);
+    string? Model, string? Effort, long CachedTokens, long InputTokens, long OutputTokens, JsonObject? Wait = null);
 
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
 internal sealed class SessionRuntime(SessionManager manager)
@@ -19,6 +19,7 @@ internal sealed class SessionRuntime(SessionManager manager)
     public JsonObject[] ListSessions() => manager.Owners().Select(owner => owner.BuildDto()).ToArray();
     public event Action<SessionRuntimeEvent> Changed { add => manager.Changed += value; remove => manager.Changed -= value; }
     public event Action TopologyChanged { add => manager.TopologyChanged += value; remove => manager.TopologyChanged -= value; }
+    public Task ContinueAsync(string id) => Required(id).StartProcessing(retry: true);
     public Task SubmitAndRunAsync(string id, QueueItem item) => Required(id).Registry.Ingress.EnqueueAsync(id, item);
     public Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => Required(id).UpdateModelAsync(settings);
     public Task UpdateDisplayNameAsync(string id, string? name) => Required(id).Entry.SaveLane.CommitDisplayNameAsync(name);
@@ -47,7 +48,7 @@ internal sealed partial class SessionOwner
             Flag(envelope["archived"]), Flag(envelope["pinned"]),
             envelope["sidebarOrder"] is JsonValue order && order.TryGetValue<double>(out var rawOrder) ? rawOrder : null,
             Text(envelope["model"]), Text(envelope["effort"]), Number(envelope["stats"]?["totalCachedTokens"]),
-            Number(envelope["stats"]?["totalInputTokens"]), Number(envelope["stats"]?["totalOutputTokens"]));
+            Number(envelope["stats"]?["totalInputTokens"]), Number(envelope["stats"]?["totalOutputTokens"]), SessionRuntimeState.WaitProjection(state.Meta));
     });
 
     public JsonObject BuildDto() => BuildDto(Metadata());
@@ -56,14 +57,7 @@ internal sealed partial class SessionOwner
         var model = models.Resolve(meta.Model);
         var effort = meta.Effort is not null && model.AllowedEfforts.Contains(meta.Effort, StringComparer.Ordinal)
             ? meta.Effort : model.DefaultEffort;
-        var runtime = new JsonObject
-        {
-            ["state"] = meta.Busy ? toolActive ? "running-tool" : "requesting-model" : "idle",
-            ["busy"] = meta.Busy,
-            ["queueLength"] = meta.QueueLength
-        };
-        if (meta.BusyStartedAt is long since) runtime["since"] = since;
-        if (compacting) runtime["active"] = new JsonObject { ["phase"] = "compaction" };
+        var runtime = SessionRuntimeState.Build(meta, toolActive, compacting);
         return new JsonObject
         {
             ["id"] = Id,

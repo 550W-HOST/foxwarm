@@ -36,11 +36,13 @@ internal sealed partial class SessionManager
                         Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel"], ["suffix"]);
                         var forceModel = OptionalForceModel(args);
                         var after = AfterSend(args);
+                        if (after == "wait" && string.IsNullOrWhiteSpace(OptionalString(args, "message")))
+                            throw new InvalidDataException("create_child_session with afterSend=wait requires a nonempty initial message.");
                         var (child, delivered) = await CreateChildAsync(source, RequiredString(args, "suffix"),
                             OptionalString(args, "agentName"), OptionalString(args, "displayName"),
                             OptionalString(args, "message"), forceModel);
                         return (Output($"Created fresh child Session {child.Id} under Agent {child.Agent}; "
-                            + (delivered ? "initial message delivered to its queue." : "no initial message was supplied.")), after == "finish");
+                            + (delivered ? "initial message delivered to its queue." : "no initial message was supplied."), after == "wait" ? child.Id : null), after == "finish");
                     }
                 case "send_to_session":
                     {
@@ -48,7 +50,7 @@ internal sealed partial class SessionManager
                         var after = AfterSend(args);
                         var requested = RequiredString(args, "sessionId");
                         var target = await SendAsync(source, requested, RequiredString(args, "message"));
-                        return (Output($"Delivered a message from {source.Id} to Session {target} (requested {requested})."), after == "finish");
+                        return (Output($"Delivered a message from {source.Id} to Session {target} (requested {requested}).", after == "wait" ? target : null), after == "finish");
                     }
                 case "refresh_session_snapshot":
                     {
@@ -74,7 +76,12 @@ internal sealed partial class SessionManager
         }
     }
 
-    private static JsonObject Output(string value) => new() { ["output"] = value };
+    private static JsonObject Output(string value, string? waitTarget = null)
+    {
+        var output = new JsonObject { ["output"] = value };
+        if (waitTarget is not null) output["__waitTarget"] = waitTarget;
+        return output;
+    }
 
     private static void Keys(JsonObject args, string[] allowed, string[] required)
     {
@@ -94,7 +101,7 @@ internal sealed partial class SessionManager
     private static string AfterSend(JsonObject args)
     {
         var value = OptionalString(args, "afterSend") ?? "continue";
-        if (value is not ("continue" or "finish")) throw new InvalidDataException("afterSend must be continue or finish.");
+        if (value is not ("continue" or "finish" or "wait")) throw new InvalidDataException("afterSend must be continue, finish, or wait.");
         return value;
     }
 

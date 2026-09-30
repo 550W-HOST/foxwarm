@@ -21,6 +21,7 @@ public sealed class SessionControl
             handle.Cancel();
             handle.Dispose();
         }
+        await entry.SaveLane.ClearWaitAsync();
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
         return new StopResult(aborted, true);
     }

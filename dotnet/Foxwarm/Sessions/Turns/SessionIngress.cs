@@ -15,9 +15,8 @@ public sealed class SessionIngress
     {
         EnsureSupported(item);
         var entry = registry.GetRequired(sessionId);
-        entry.WithState(state => state.Queue.Add(item.CloneItem()));
-        await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
-        if (!entry.WithState(state => state.Busy || state.Stopping)) registry.Trigger(sessionId);
+        var admitted = await entry.SaveLane.AdmitAsync(item, SaveKind.BestEffort).ConfigureAwait(false);
+        if (admitted && entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Count > 0)) registry.Trigger(sessionId);
     }
 
     internal static void EnsureSupportedForRunner(QueueItem item) => EnsureSupported(item);

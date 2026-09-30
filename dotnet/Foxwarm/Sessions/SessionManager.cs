@@ -17,6 +17,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly AgentMemory memory;
     private readonly LocalExecManager executor;
     private readonly HttpClient http = new();
+    private readonly SessionWaitTimeouts waitTimeouts;
+    private readonly WaitLiveness waitLiveness;
     private readonly ConcurrentDictionary<string, SessionOwner> sessions = new();
     private volatile bool accepting = true;
     private readonly object lifecycle = new();
@@ -40,16 +42,24 @@ internal sealed partial class SessionManager : IAsyncDisposable
             var detail = message.StartsWith("Background Process Finished\n", StringComparison.Ordinal)
                 ? message["Background Process Finished\n".Length..] : message;
             var eventPart = $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{detail}\n</foxwarm-system>";
-            await current.Entry.SaveLane.CommitBackgroundExecCompletionAsync(execId, eventPart);
-            if (!current.Entry.WithState(state => state.Busy || state.Stopping)) current.Registry.Trigger(sessionId);
+            try { if (!await current.Entry.SaveLane.CommitBackgroundExecCompletionAsync(execId, eventPart)) return; }
+            catch (AuthorityCommittedException)
+            {
+                if (Accepting && current.Entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Count > 0)) current.Registry.Trigger(sessionId);
+                throw;
+            }
+            if (Accepting && current.Entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Count > 0)) current.Registry.Trigger(sessionId);
         });
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(definition.DeepClone());
+        definitions.Add(WaitToolDefinitions.Definition());
         definitions.Add(CompactPrompt.ToolDefinition());
         clientOptions = options with { Tools = definitions };
         this.models = models;
+        waitTimeouts = new SessionWaitTimeouts(this);
+        waitLiveness = new WaitLiveness(this);
     }
 
     public async Task LoadAsync()
@@ -94,14 +104,26 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 if (!ids.Contains(reader.GetString(0)))
                     throw new InvalidDataException("Active Session authority is missing while Archive rows exist; Archive cannot rebuild history.");
         }
+        foreach (var owner in sessions.Values) WaitTransition(owner.Id);
         await executor.InitializeAsync(id => sessions.ContainsKey(id));
+        foreach (var owner in sessions.Values)
+            if (owner.Entry.WithState(state => state.Queue.Count > 0)) _ = owner.StartProcessing();
     }
 
     public IEnumerable<SessionOwner> Owners() => sessions.Values;
     public IEnumerable<object> List() => sessions.OrderBy(pair => pair.Key).Select(pair => pair.Value.State());
     internal event Action<SessionRuntimeEvent>? Changed;
     internal event Action? TopologyChanged;
-    internal void NotifyCreated(SessionOwner owner) { owner.Changed += value => Changed?.Invoke(value); TopologyChanged?.Invoke(); }
+    internal void NotifyCreated(SessionOwner owner)
+    {
+        owner.Changed += value =>
+        {
+            if (value.Kind == SessionEventKind.StateChanged) WaitTransition(owner.Id);
+            Changed?.Invoke(value);
+        };
+        TopologyChanged?.Invoke();
+    }
+    private void WaitTransition(string id) { waitTimeouts.Transition(id); waitLiveness.Transition(id); }
 
     public string DataRoot => root;
     public bool Accepting => accepting;
@@ -155,7 +177,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http, memory);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
-        registry.TriggerOverride = _ => hosted.StartProcessing();
+        registry.TriggerOverride = _ => Accepting ? hosted.StartProcessing() : Task.CompletedTask;
         return hosted;
     }
 
@@ -163,6 +185,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         SessionOwner[] current;
         lock (lifecycle) { accepting = false; current = sessions.Values.ToArray(); }
+        waitTimeouts.Stop(); waitLiveness.Stop();
+        await waitTimeouts.DrainAsync(); await waitLiveness.DrainAsync();
         // Each Stop takes and cancels its own active handle synchronously before
         // the host waits on any Session's best-effort persistence lane.
         var compactStops = current.Where(session => session.Compactor.Active)
@@ -178,16 +202,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public void BeginShutdown()
     {
+        lock (lifecycle) accepting = false;
         executor.BeginShutdown();
-        lock (lifecycle)
-        {
-            accepting = false;
-            foreach (var session in sessions.Values) session.CloseSubscribers();
-        }
+        waitTimeouts.Stop(); waitLiveness.Stop();
+        foreach (var session in sessions.Values) session.CloseSubscribers();
     }
 
     public async ValueTask DisposeAsync()
     {
+        await waitTimeouts.DisposeAsync();
+        await waitLiveness.DisposeAsync();
         await executor.DisposeAsync();
         http.Dispose();
     }

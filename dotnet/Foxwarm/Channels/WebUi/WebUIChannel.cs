@@ -34,6 +34,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
             commands = new[]
             {
                 new { name = "stop", description = "Stop current run, or use `/stop compact` to cancel compaction only", usage = "/stop [compact]", requiresSession = true },
+                new { name = "continue", description = "Continue an interrupted turn without adding a new message", usage = "/continue", requiresSession = true },
                 new { name = "compact", description = "Compact history.", usage = "/compact", requiresSession = true }
             }
         }));

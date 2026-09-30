@@ -73,17 +73,19 @@ internal sealed partial class SessionOwner
 
     private static JsonNode JsonSerializerNode(object value) => System.Text.Json.JsonSerializer.SerializeToNode(value)!;
 
-    public Task StartProcessing()
+    public Task StartProcessing(bool retry = false)
     {
         var index = Interlocked.Increment(ref nextRun);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task ExecuteAsync()
         {
             await ready.Task;
-            try { await Registry.Runner.ProcessQueueAsync(Id); }
+            try { await Registry.Runner.ProcessQueueAsync(Id, retry); }
             catch (Exception error)
             {
-                Entry.RecordBackgroundProcessorFailure(error);
+                if (error is not SessionContinuationUnavailableException && !(retry && error is InvalidOperationException && error.Message == "Session is already running."))
+                    Entry.RecordBackgroundProcessorFailure(error);
+                if (retry) throw;
             }
             finally
             {

@@ -128,9 +128,10 @@ public sealed class SessionAuthorityDocument
         if (messageCount != history.Count) throw new InvalidDataException("Session authority meta.messageCount must equal history length.");
         if (meta.ContainsKey("lastChannel"))
             throw new UnsupportedSessionAuthorityException("Catalog-only meta.lastChannel is not supported in Session authority.");
-        foreach (var unsupported in new[] { "wait", "waitLivenessFingerprints", "managedSession" })
+        foreach (var unsupported in new[] { "managedSession" })
             if (meta.ContainsKey(unsupported))
                 throw new UnsupportedSessionAuthorityException($"Session authority meta.{unsupported} is unsupported.");
+        SessionWait.Validate(meta);
         if (root["busy"] is not JsonValue busy || !busy.TryGetValue<bool>(out _))
             throw new InvalidDataException("Session authority busy must be boolean.");
         if (root["stopping"] is JsonNode stoppingNode

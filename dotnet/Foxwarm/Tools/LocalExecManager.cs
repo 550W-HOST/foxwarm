@@ -57,6 +57,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         reconcileTask = ReconcileAsync(reconcileStop.Token);
     }
 
+    internal bool IsOwnedActive(string sessionId, string execId) => pending.TryGetValue(Key(sessionId, execId), out _);
+
     internal void BeginShutdown() => closing = true;
 
     internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct)

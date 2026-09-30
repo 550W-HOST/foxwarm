@@ -1,0 +1,178 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
+
+namespace Foxwarm.Sessions;
+
+// Main-local port of waitLiveness.ts: an observed progress diagnostic, never task-completion detection.
+internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
+{
+    private const int MaxConcurrentWakes = 4;
+    private readonly object gate = new();
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly Dictionary<string, CancellationTokenSource> scheduled = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string[]> dependencies = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<string>> reverse = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string WaitId, string Fingerprint, QueueItem Item)> pending = new(StringComparer.Ordinal);
+    private readonly Queue<string> order = new();
+    private readonly Dictionary<string, TaskCompletionSource> active = new(StringComparer.Ordinal);
+    private readonly HashSet<Task> tasks = [];
+
+    private static string[] Sources(JsonObject wait)
+    {
+        var all = SessionWait.Strings(wait["waitAll"]?["sessions"]);
+        var satisfied = SessionWait.Strings(wait["waitAll"]?["satisfiedSessions"]);
+        return all.Except(satisfied, StringComparer.Ordinal).Concat(SessionWait.Strings(wait["waitAnySessions"]))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+    private static bool Candidate(JsonObject? wait) => wait is not null && SessionWait.Number(wait["declarationVersion"]) == 1
+        && wait["waitForInput"]?.GetValue<bool>() != true && !(SessionWait.Number(wait["timeoutSeconds"]) > 0)
+        && SessionWait.Strings(wait["waitExecIds"]).Length == 0 && Sources(wait).Length > 0;
+    internal void Transition(string sessionId)
+    {
+        var owner = manager.Find(sessionId);
+        var wait = owner?.WaitSnapshot();
+        var meta = owner?.Metadata();
+        lock (gate)
+        {
+            if (lifetime.IsCancellationRequested) return;
+            if ((meta is null || !meta.Busy && meta.QueueLength == 0) && active.Remove(sessionId, out var released)) released.TrySetResult();
+            if (dependencies.Remove(sessionId, out var old))
+                foreach (var dependency in old)
+                    if (reverse.TryGetValue(dependency, out var waiters)) { waiters.Remove(sessionId); if (waiters.Count == 0) reverse.Remove(dependency); }
+            if (Candidate(wait))
+            {
+                var next = Sources(wait!); dependencies[sessionId] = next;
+                foreach (var dependency in next)
+                {
+                    if (!reverse.TryGetValue(dependency, out var waiters)) reverse[dependency] = waiters = new(StringComparer.Ordinal);
+                    waiters.Add(sessionId);
+                }
+            }
+            Schedule(sessionId);
+            if (reverse.TryGetValue(sessionId, out var affected)) foreach (var waiter in affected.ToArray()) Schedule(waiter);
+            Pump();
+        }
+    }
+    private void Schedule(string id)
+    {
+        if (scheduled.Remove(id, out var prior)) prior.Cancel();
+        var wait = manager.Find(id)?.WaitSnapshot();
+        if (!Candidate(wait)) return;
+        var expected = SessionWait.Text(wait!["id"])!;
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        scheduled[id] = stop;
+        Track(async () =>
+        {
+            try
+            {
+                await Task.Delay(300, stop.Token);
+                lock (gate) if (scheduled.TryGetValue(id, out var current) && ReferenceEquals(current, stop)) scheduled.Remove(id);
+                Diagnose(id, expected);
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            finally { stop.Dispose(); }
+        });
+    }
+    private void Diagnose(string id, string expected)
+    {
+        var owner = manager.Find(id); var wait = owner?.WaitSnapshot();
+        if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != expected) return;
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+        var memo = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var observed = new List<string>();
+        bool Visit(string currentId, bool root = false)
+        {
+            if (memo.TryGetValue(currentId, out var known)) return known;
+            if (!visiting.Add(currentId)) return false;
+            var current = manager.Find(currentId); var metadata = current?.Metadata(); var state = current?.WaitSnapshot();
+            var sources = state is null ? [] : Sources(state);
+            observed.Add(new JsonObject
+            {
+                ["sessionId"] = currentId,
+                ["exists"] = current is not null,
+                ["state"] = metadata?.Busy == true ? "active" : state is not null ? "waiting" : "idle",
+                ["queueLength"] = metadata?.QueueLength ?? 0,
+                ["timeoutSeconds"] = state?["timeoutSeconds"]?.DeepClone(),
+                ["waitForInput"] = state?["waitForInput"]?.GetValue<bool>() == true,
+                ["waitExecIds"] = state?["waitExecIds"]?.DeepClone() ?? new JsonArray(),
+                ["dependencies"] = new JsonArray(sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray())
+            }.ToJsonString());
+            var progress = !root && (metadata?.Busy == true || metadata?.QueueLength > 0)
+                || SessionWait.Number(state?["timeoutSeconds"]) > 0 || state?["waitForInput"]?.GetValue<bool>() == true
+                || SessionWait.Strings(state?["waitExecIds"]).Length > 0;
+            if (!progress) progress = sources.Any(source => Visit(source));
+            visiting.Remove(currentId); memo[currentId] = progress; return progress;
+        }
+        if (Visit(id, root: true)) return;
+        observed.Sort(StringComparer.Ordinal);
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', observed))))[..24].ToLowerInvariant();
+        if (owner!.Entry.WithState(state => SessionWait.Strings(state.Meta["waitLivenessFingerprints"]).Contains(fingerprint, StringComparer.Ordinal))) return;
+        var item = SessionWait.Event("wait-sources-quiescent",
+            "The declared wait dependency Sessions currently show no queued, active, timed, exec-backed, input-backed, or transitively declared progress path after a short recheck. This is an observed potentially quiescent state, not proof of deadlock; explicit user or inter-session input may be needed.",
+            new JsonObject { ["fingerprint"] = fingerprint }, new JsonObject { ["waitLivenessFingerprint"] = fingerprint, ["waitLivenessWaitId"] = expected });
+        lock (gate)
+        {
+            if (lifetime.IsCancellationRequested || active.ContainsKey(id)) return;
+            if (!pending.ContainsKey(id)) order.Enqueue(id);
+            pending[id] = (expected, fingerprint, item); Pump();
+        }
+    }
+    private void Pump()
+    {
+        if (lifetime.IsCancellationRequested) return;
+        while (active.Count < MaxConcurrentWakes && order.TryDequeue(out var id))
+        {
+            if (!pending.Remove(id, out var wake)) continue;
+            var wait = manager.Find(id)?.WaitSnapshot();
+            if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != wake.WaitId) continue;
+            var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            active.Add(id, settled);
+            Track(async () =>
+            {
+                try
+                {
+                    await manager.AdmitWaitEventAsync(id, wake.Item);
+                    while (!lifetime.IsCancellationRequested)
+                    {
+                        var metadata = manager.Find(id)?.Metadata();
+                        if (metadata is null || !metadata.Busy && metadata.QueueLength == 0) break;
+                        using var recheck = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        await Task.WhenAny(settled.Task, Task.Delay(TimeSpan.FromMinutes(5), recheck.Token));
+                        recheck.Cancel();
+                        if (settled.Task.IsCompleted) break;
+                    }
+                }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+                catch (Exception error) { manager.Find(id)?.Entry.RecordBackgroundProcessorFailure(error); }
+                finally
+                {
+                    lock (gate)
+                    {
+                        if (active.TryGetValue(id, out var current) && ReferenceEquals(current, settled)) active.Remove(id);
+                        Pump();
+                    }
+                }
+            });
+        }
+    }
+    // Schedule asynchronous work without inheriting the coordination lock; record it for shutdown drain.
+    private void Track(Func<Task> work)
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = Task.Run(async () => { await ready.Task; await work(); });
+        tasks.Add(task);
+        _ = task.ContinueWith(completed => { lock (gate) tasks.Remove(completed); }, TaskScheduler.Default);
+        ready.TrySetResult();
+    }
+    internal void Stop() { lock (gate) lifetime.Cancel(); }
+    internal async Task DrainAsync()
+    {
+        Task[] remaining; lock (gate) remaining = tasks.ToArray();
+        await Task.WhenAll(remaining);
+    }
+    public async ValueTask DisposeAsync()
+    {
+        Stop(); await DrainAsync(); lifetime.Dispose();
+    }
+}

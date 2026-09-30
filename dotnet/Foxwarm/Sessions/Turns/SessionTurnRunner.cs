@@ -18,17 +18,28 @@ public sealed class SessionTurnRunner
         this.hosts = hosts;
     }
 
-    public async Task ProcessQueueAsync(string sessionId)
+    public async Task ProcessQueueAsync(string sessionId, bool retry = false)
     {
         var entry = registry.GetRequired(sessionId);
-        if (!entry.TryClaimProcessor()) return;
+        if (!entry.TryClaimProcessor())
+        {
+            if (retry) throw new InvalidOperationException("Session is already running.");
+            return;
+        }
         var claimed = false;
         var failed = false;
         try
         {
+            if (retry) entry.WithState(state =>
+            {
+                if (state.Busy || state.Stopping) throw new InvalidOperationException("Session is already running.");
+                if (SessionRuntimeState.WaitProjection(state.Meta) is not null) throw new SessionContinuationUnavailableException("Session is waiting and cannot be continued manually.");
+                if (!SessionContinuation.IsIncomplete(state.History)) throw new SessionContinuationUnavailableException();
+            });
             var host = hosts.For(entry);
             claimed = await host.TryClaimBusyAsync().ConfigureAwait(false);
             if (!claimed) return;
+            var retryPending = retry;
             while (true)
             {
                 if (entry.WithState(state => state.Stopping))
@@ -37,16 +48,24 @@ public sealed class SessionTurnRunner
                     claimed = false;
                     break;
                 }
-                if (!entry.WithState(state => state.Queue.Count > 0)) break;
-                await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
-                var batch = DrainLeading(entry);
-                if (batch.Count == 0)
+                if (retryPending)
                 {
-                    var remainingHead = entry.WithState(state => state.Queue.FirstOrDefault()?.CloneItem());
-                    if (remainingHead is not null) SessionIngress.EnsureSupportedForRunner(remainingHead);
-                    break;
+                    retryPending = false;
+                    await entry.SaveLane.ClearWaitAsync().ConfigureAwait(false);
                 }
-                await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
+                else
+                {
+                    if (!entry.WithState(state => state.Queue.Count > 0)) break;
+                    await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+                    var batch = DrainLeading(entry);
+                    if (batch.Count == 0)
+                    {
+                        var remainingHead = entry.WithState(state => state.Queue.FirstOrDefault()?.CloneItem());
+                        if (remainingHead is not null) SessionIngress.EnsureSupportedForRunner(remainingHead);
+                        break;
+                    }
+                    await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
+                }
                 try
                 {
                     var result = await host.ChatAsync($"turn-{Interlocked.Increment(ref turnSequence)}").ConfigureAwait(false);

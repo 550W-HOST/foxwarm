@@ -109,8 +109,10 @@ public sealed class LocalSessionTurnHost
 
                 var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
                 await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
-                if (entry.WithState(state => state.Stopping)) throw new OperationCanceledException(registered.Token);
-                if (tools is ITurnToolControl turnControl && turnControl.ConsumeFinishAfterBatch()) return result;
+                var stopping = entry.WithState(state => state.Stopping);
+                var terminal = tools is ITurnToolControl turnControl && await turnControl.CompleteBatchAsync(toolMessage, stopping).ConfigureAwait(false);
+                if (stopping) throw new OperationCanceledException(registered.Token);
+                if (terminal) return result;
                 await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
                 if (iteration + 1 >= maxToolIterations) throw new ToolLoopLimitException(maxToolIterations);
             }

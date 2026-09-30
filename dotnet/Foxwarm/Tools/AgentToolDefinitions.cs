@@ -60,15 +60,15 @@ internal static class AgentToolDefinitions
                 ["suffix"] = String("Name used to form the child's Session ID. A numeric suffix is added when needed to avoid an existing ID."),
                 ["displayName"] = String("Display name for the new child session. This does not change its session ID."),
                 ["message"] = String("Initial task or message to send immediately after creation. Omit to create the child without starting a turn."),
-                ["afterSend"] = Choice("What this session does after creation and any initial delivery: continue (default), or finish the turn without waiting.", "continue", "finish"),
+                ["afterSend"] = Choice("What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session.", "continue", "finish", "wait"),
                 ["forceModel"] = ForceModel()
             }, "suffix")),
-        Tool("send_to_session", "Send a message to another session. Use this to assign work or report results across sessions. For a completed child report, use afterSend=finish.",
+        Tool("send_to_session", "Send a message to another session. Use this to assign work or report results across sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
             Parameters(new JsonObject
             {
                 ["sessionId"] = String("Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist."),
                 ["message"] = String("Message to deliver."),
-                ["afterSend"] = Choice("What this session does after successful delivery: continue (default), or finish the turn without waiting.", "continue", "finish")
+                ["afterSend"] = Choice("What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session.", "continue", "finish", "wait")
             }, "sessionId", "message")),
         Tool("refresh_session_snapshot",
             "Refresh this session's prompt snapshot from its memory files. Later model requests use the refreshed snapshot; an in-flight request keeps the snapshot it already selected.",
