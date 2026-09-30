@@ -250,7 +250,7 @@ def main():
         assert [row['role'] for row in ah] == ['user', 'model', 'user', 'model']
         assert [row['role'] for row in bh] == ['user', 'model', 'tool', 'model', 'tool', 'model']
         assert [row['__meta']['seq'] for row in bh] == list(range(1, 7))
-        assert bh[4]['parts'][0]['functionResponse']['response']['output'] == 'héllo'
+        assert bh[4]['parts'][0]['functionResponse']['response']['output'] == 'héllo\n---\nFile has 1 line.\nFile size: 6 bytes.\nFile has no trailing newline.'
         assert (tools / 'note.txt').read_bytes() == 'héllo'.encode()
         assert any(event['type'] == 'model-progress' and event['text'] == 'alp' for event in progress)
         assert any(event['type'] == 'message-committed' for event in progress)
