@@ -11,7 +11,7 @@ internal sealed partial class WebUIChannel
 {
     private void RegisterAgentRoutes(WebApplication app)
     {
-        app.MapGet("/api/agents", () => Results.Ok(new { agents = sessions.Agents().Select(id => new { id, inherit = (string?)null }) }));
+        app.MapGet("/api/agents", () => Results.Ok(new { agents = sessions.AgentRegistry() }));
         app.MapPost("/api/agents", async (HttpRequest request) =>
         {
             try
@@ -20,12 +20,38 @@ internal sealed partial class WebUIChannel
                 if (body.Any(item => item.Key is not ("agentId" or "inheritAgent"))
                     || body["agentId"] is not JsonValue agent || !agent.TryGetValue<string>(out var name))
                     return Results.BadRequest(new { error = "agentId is required." });
-                if (body["inheritAgent"] is not null) return Results.Json(new { error = "Agent inheritance has not been implemented." }, statusCode: 501);
-                var created = await sessions.CreateAgentAsync(name.Trim());
+                var inherit = body["inheritAgent"] is null ? null : body["inheritAgent"]!.GetValue<string>()?.Trim();
+                var created = await sessions.CreateAgentAsync(name.Trim(), inherit: string.IsNullOrEmpty(inherit) ? null : inherit);
                 return Results.Json(new { success = true, agentId = created.AgentName, sessionId = created.MainSessionId }, statusCode: 201);
             }
             catch (CommittedSessionCreationException error)
             { return Results.Json(new { error = error.Message, sessionId = error.SessionId, agentCreated = true }, statusCode: 409); }
+            catch (Exception error) when (error is InvalidDataException or IOException or JsonException or InvalidOperationException)
+            { return Results.BadRequest(new { error = error.Message }); }
+        });
+        app.MapGet("/api/agents/{agentId}/memory", (string agentId) =>
+        {
+            try
+            {
+                var manifest = sessions.AgentManifest(agentId);
+                return Results.Ok(new { memoryRoot = manifest.MemoryRoot, files = manifest.Files.Select(file => new { path = file.Path, absolutePath = file.AbsolutePath, size = file.Size, modifiedAt = file.ModifiedAt }) });
+            }
+            catch (Exception error) when (error is IOException or InvalidDataException or ArgumentException)
+            { return Results.Json(new { error = error.Message }, statusCode: sessions.Agents().Contains(agentId) ? 400 : 404); }
+        });
+        app.MapPut("/api/agents/{agentId}", async (string agentId, HttpRequest request) =>
+        {
+            try
+            {
+                var body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new InvalidDataException("Agent update needs an object.");
+                if (body.Any(item => item.Key is not ("inheritAgent" or "isolatedNode")) || !body.ContainsKey("inheritAgent") && !body.ContainsKey("isolatedNode"))
+                    throw new InvalidDataException("Provide inheritAgent and/or isolatedNode.");
+                if (body["isolatedNode"] is not null && !string.IsNullOrWhiteSpace(body["isolatedNode"]!.GetValue<string>()))
+                    return Results.Json(new { error = "Agent isolation has not been implemented." }, statusCode: 501);
+                if (!sessions.Agents().Contains(agentId)) return Results.NotFound(new { error = "Agent not found." });
+                if (body.ContainsKey("inheritAgent")) await sessions.SetAgentInheritAsync(agentId, body["inheritAgent"]?.GetValue<string>());
+                return Results.Ok(new { success = true, agent = new { id = agentId, inherit = sessions.AgentInherit(agentId), inheritanceChain = sessions.AgentChain(agentId), isolated = false, isolatedNode = (string?)null } });
+            }
             catch (Exception error) when (error is InvalidDataException or IOException or JsonException or InvalidOperationException)
             { return Results.BadRequest(new { error = error.Message }); }
         });

@@ -18,6 +18,7 @@ internal sealed partial class SessionOwner
     private long lastNotifiedSeq;
     private int lastReportedFailureCount;
     private readonly HostModels models;
+    internal string? SnapshotRefreshWarning { get; set; }
     public string Id { get; }
     public string Agent { get; }
     public SessionRegistry Registry { get; set; } = null!;
@@ -48,6 +49,8 @@ internal sealed partial class SessionOwner
             messageCount = state.MessageCount,
             nextMessageSeq = state.NextMessageSeq,
             failureCount = Entry.BackgroundProcessorFailureCount,
+            bestEffortFailureCount = Entry.BestEffortFailureCount,
+            snapshotRefreshWarning = SnapshotRefreshWarning,
             lastError = Entry.LastBackgroundProcessorFailure?.Message
         };
     }

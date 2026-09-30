@@ -22,13 +22,14 @@ internal sealed partial class SessionManager
     public string AgentDirectory(string name) => agents.AgentDirectory(name);
 
     public async Task<(string AgentName, string? MainSessionId)> CreateAgentAsync(string agentName,
-        bool createMainSession = true, string? initialMemory = null)
+        bool createMainSession = true, string? initialMemory = null, string? inherit = null)
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
+        inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         await identityGate.WaitAsync();
         try
         {
-            try { await agents.CreateAsync(agentName, initialMemory); }
+            try { await agents.CreateAsync(agentName, initialMemory, inherit); }
             catch (AuthorityCommittedException error)
             {
                 throw new CommittedSessionCreationException(null,
@@ -201,6 +202,7 @@ internal sealed partial class SessionManager
         var entry = hosted.Registry.Add(id);
         entry.WithState(state =>
         {
+            state.Meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             state.AuthorityEnvelope["agent"] = agentName;
             if (parentId is not null) state.AuthorityEnvelope["parentSessionId"] = parentId;
             if (displayName is not null) state.AuthorityEnvelope["displayName"] = displayName;

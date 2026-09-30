@@ -15,13 +15,21 @@ internal sealed partial class SessionManager
             {
                 case "create_agent":
                     {
-                        Keys(args, ["agentName", "createMainSession"], ["agentName"]);
+                        Keys(args, ["agentName", "createMainSession", "inherit"], ["agentName"]);
                         var nameValue = RequiredString(args, "agentName");
                         var createMain = OptionalBool(args, "createMainSession") ?? true;
-                        var created = await CreateAgentAsync(nameValue, createMain);
+                        var created = await CreateAgentAsync(nameValue, createMain, inherit: OptionalString(args, "inherit"));
                         return (Output(created.MainSessionId is null
                             ? $"Created Agent {created.AgentName} without a main Session."
                             : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."), false);
+                    }
+                case "skill": return (await SkillAsync(source, args), false);
+                case "set_agent_inherit":
+                    {
+                        Keys(args, ["agentName", "inheritAgentName", "refreshSnapshots"], ["agentName"]);
+                        var agent = RequiredString(args, "agentName");
+                        var result = await SetAgentInheritAsync(agent, OptionalString(args, "inheritAgentName"), OptionalBool(args, "refreshSnapshots") ?? false);
+                        return (Output(System.Text.Json.JsonSerializer.Serialize(result)), false);
                     }
                 case "create_session":
                     {
@@ -70,7 +78,7 @@ internal sealed partial class SessionManager
             return (response, false);
         }
         catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException
-                                     or System.Text.Json.JsonException or ArgumentException)
+                                     or System.Text.Json.JsonException or ArgumentException or UnauthorizedAccessException or YamlDotNet.Core.YamlException)
         {
             return (UnsupportedTurnToolExecutor.ToolError("agent_tool_error", error.Message), false);
         }

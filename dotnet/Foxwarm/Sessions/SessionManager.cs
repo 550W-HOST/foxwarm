@@ -15,6 +15,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly HostModels models;
     private readonly AgentCatalog agents;
     private readonly AgentMemory memory;
+    private readonly Skills skills;
     private readonly LocalExecManager executor;
     private readonly HttpClient http = new();
     private readonly SessionWaitTimeouts waitTimeouts;
@@ -23,7 +24,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private volatile bool accepting = true;
     private readonly object lifecycle = new();
 
-    public SessionManager(string root, string workspace, ResponsesClientOptions options, HostModels models)
+    public SessionManager(string root, string workspace, ResponsesClientOptions options, HostModels models, string? skillsRoot = null)
     {
         this.root = Path.GetFullPath(root);
         var workspaceRoot = Path.GetFullPath(workspace);
@@ -32,7 +33,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
         Directory.CreateDirectory(this.root);
         agents = new AgentCatalog(this.root, workspaceRoot);
-        memory = new AgentMemory(agents);
+        skills = new Skills(agents, Path.GetFullPath(skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills")));
+        memory = new AgentMemory(agents, skills);
         executor = new LocalExecManager(this.root,
             sessionId => agents.AgentDirectory(Find(sessionId)?.Agent ?? throw new InvalidDataException("Exec Session owner is missing.")),
             async (sessionId, execId, message) =>
@@ -55,6 +57,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         definitions.Add(ArchiveRecallTool.Definition());
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(definition.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
+        foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
         definitions.Add(CompactPrompt.ToolDefinition());
         clientOptions = options with { Tools = definitions };
         this.models = models;
@@ -139,7 +142,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (await store.LoadAsync(id) is not null) throw new InvalidOperationException("Session ID collision.");
         var hosted = MakeSession(id, "main", store);
         var entry = hosted.Registry.Add(id);
-        entry.WithState(state => state.AuthorityEnvelope["agent"] = "main");
+        entry.WithState(state => { state.AuthorityEnvelope["agent"] = "main"; state.Meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); });
         try { await entry.SaveLane.SaveStrictAsync(); } // First authority JSON exists before publication/acknowledgement.
         catch (AuthorityCommittedException error)
         {
@@ -176,6 +179,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent)), hosted, this));
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http, memory);
+        registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.TriggerOverride = _ => Accepting ? hosted.StartProcessing() : Task.CompletedTask;
         return hosted;

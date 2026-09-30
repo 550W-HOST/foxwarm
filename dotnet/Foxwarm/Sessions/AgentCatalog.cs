@@ -13,6 +13,7 @@ internal sealed partial class AgentCatalog
     private readonly string indexPath;
     private readonly SemaphoreSlim createGate = new(1, 1);
     private readonly object stateGate = new();
+    private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
 
     public AgentCatalog(string dataRoot, string workspaceRoot)
@@ -27,8 +28,11 @@ internal sealed partial class AgentCatalog
         {
             var index = JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject
                 ?? throw new InvalidDataException("Agent catalog must be an object.");
-            if (index.Count != 2 || index["version"]?.GetValue<int>() != 1 || index["agents"] is not JsonArray list)
+            var version = index["version"]?.GetValue<int>();
+            if (version is not (1 or 2) || index.Count != (version == 1 ? 2 : 3) || index["agents"] is not JsonArray list
+                || version == 2 && index["metadata"] is not JsonObject)
                 throw new InvalidDataException("Unsupported Agent catalog format.");
+            if (version == 2) metadata = (JsonObject)index["metadata"]!.DeepClone();
             foreach (var item in list)
             {
                 var name = item?.GetValue<string>() ?? throw new InvalidDataException("Invalid Agent catalog entry.");
@@ -66,7 +70,7 @@ internal sealed partial class AgentCatalog
     public string FrameworkSystemPath => Path.Combine(agentRoot, "00_SYSTEM.md");
     public string MainFallbackSystemPath => Path.Combine(workspaceRoot, "memory", "00_SYSTEM.md");
 
-    public async Task CreateAsync(string name, string? initialMemory = null)
+    public async Task CreateAsync(string name, string? initialMemory = null, string? inherit = null)
     {
         ValidateName(name);
         if (name == "main") throw new InvalidDataException("The main Agent already exists.");
@@ -78,20 +82,19 @@ internal sealed partial class AgentCatalog
         {
             if (Exists(name) || Directory.Exists(directory) || File.Exists(directory))
                 throw new InvalidDataException($"Agent '{name}' already exists or its directory is reserved.");
+            ValidateInheritance(name, inherit);
             Directory.CreateDirectory(directory);
             createdDirectory = true;
             Directory.CreateDirectory(Path.Combine(directory, "memory"));
             if (initialMemory is not null)
                 await File.WriteAllTextAsync(Path.Combine(directory, "memory", "MEMORY.md"), initialMemory);
             var next = List().Where(existing => existing != "main").Append(name).Order(StringComparer.Ordinal).ToArray();
-            var payload = new JsonObject
-            {
-                ["version"] = 1,
-                ["agents"] = new JsonArray(next.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray())
-            };
+            var nextMetadata = MetadataSnapshot();
+            if (inherit is not null) nextMetadata[name] = new JsonObject { ["inherit"] = inherit };
+            var payload = Payload(next, nextMetadata);
             AtomicIndexWrite(indexPath, payload.ToJsonString());
             committed = true;
-            lock (stateGate) known.Add(name);
+            lock (stateGate) { known.Add(name); if (inherit is not null) metadata[name] = new JsonObject { ["inherit"] = inherit }; }
         }
         catch
         {
@@ -111,7 +114,7 @@ internal sealed partial class AgentCatalog
                 }
                 if (!committed) Directory.Delete(directory, recursive: true);
             }
-            if (committed) lock (stateGate) known.Add(name);
+            if (committed) lock (stateGate) { known.Add(name); if (inherit is not null) metadata[name] = new JsonObject { ["inherit"] = inherit }; }
             throw;
         }
         finally { createGate.Release(); }

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
@@ -17,14 +18,16 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         var definitions = new JsonArray(
         new JsonObject
         {
-            ["type"] = "function", ["name"] = "read",
-            ["description"] = "Read a UTF-8 text file from the configured tool workspace. The path must be relative to that workspace. Reads files up to 1 MiB; directories and symbolic links are not supported.",
+            ["type"] = "function",
+            ["name"] = "read",
+            ["description"] = "Read a UTF-8 text file. Relative paths use this agent's workspace; absolute paths read an accessible local file. Files are limited to 1 MiB. Directories and symbolic links are not supported.",
             ["parameters"] = new JsonObject
             {
-                ["type"] = "object", ["additionalProperties"] = false,
+                ["type"] = "object",
+                ["additionalProperties"] = false,
                 ["properties"] = new JsonObject
                 {
-                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Path to an existing file, relative to the tool workspace." }
+                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Path to an existing file, relative to this agent's workspace or absolute on the local host." }
                 },
                 ["required"] = new JsonArray("filePath")
             },
@@ -32,11 +35,13 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         },
         new JsonObject
         {
-            ["type"] = "function", ["name"] = "write",
+            ["type"] = "function",
+            ["name"] = "write",
             ["description"] = "Write UTF-8 text to a file in the configured tool workspace. The parent directory must already exist. Existing files are protected unless overwrite is true. Content is limited to 1 MiB; symbolic links are not supported.",
             ["parameters"] = new JsonObject
             {
-                ["type"] = "object", ["additionalProperties"] = false,
+                ["type"] = "object",
+                ["additionalProperties"] = false,
                 ["properties"] = new JsonObject
                 {
                     ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Destination path, relative to the tool workspace." },
@@ -78,18 +83,26 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     || !overwriteValue.TryGetValue<bool>(out _))))))
             return Error("invalid_tool_arguments", "Invalid workspace tool arguments.");
         string path;
-        try { path = Resolve(pathText, name == "write"); }
-        catch (ArgumentException) { return Error("invalid_path", "Path must stay within the workspace and contain no symbolic links."); }
+        try { path = name == "read" && Path.IsPathRooted(pathText) ? ResolveAbsoluteRead(pathText) : Resolve(pathText, name == "write"); }
+        catch (ArgumentException) { return Error("invalid_path", "Invalid path or symbolic link."); }
+        catch (IOException) { return Error("tool_io_error", "Workspace I/O failed."); }
+        catch (UnauthorizedAccessException) { return Error("tool_io_error", "Workspace access denied."); }
         try
         {
             if (name == "read")
             {
-                if (!File.Exists(path)) return Error("not_file", "Regular file not found.");
+                if (!RegularFile(path)) return Error("not_file", "Regular file not found.");
                 await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, FileOptions.Asynchronous);
                 if (stream.Length > MaxBytes) return Error("too_large", "File exceeds 1 MiB.");
                 using var buffer = new MemoryStream();
-                await stream.CopyToAsync(buffer, cancellationToken);
-                if (buffer.Length > MaxBytes) return Error("too_large", "File exceeds 1 MiB.");
+                var chunk = new byte[8192];
+                while (true)
+                {
+                    var count = await stream.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, MaxBytes + 1 - buffer.Length)), cancellationToken);
+                    if (count == 0) break;
+                    buffer.Write(chunk, 0, count);
+                    if (buffer.Length > MaxBytes) return Error("too_large", "File exceeds 1 MiB.");
+                }
                 try { return new JsonObject { ["output"] = StrictUtf8.GetString(buffer.ToArray()) }; }
                 catch (DecoderFallbackException) { return Error("invalid_utf8", "File is not valid UTF-8."); }
             }
@@ -120,9 +133,35 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             finally { if (File.Exists(temp)) File.Delete(temp); }
         }
         catch (OperationCanceledException) { throw; }
-        catch (ArgumentException) { return Error("invalid_path", "Path must stay within the workspace and contain no symbolic links."); }
+        catch (ArgumentException) { return Error("invalid_path", "Invalid path or symbolic link."); }
         catch (IOException) { return Error("tool_io_error", "Workspace I/O failed."); }
         catch (UnauthorizedAccessException) { return Error("tool_io_error", "Workspace access denied."); }
+    }
+
+    private static bool RegularFile(string path)
+    {
+        if (!File.Exists(path)) return false;
+        if (!OperatingSystem.IsLinux()) return (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) == 0;
+        // Linux statx has a fixed 256-byte ABI; only the mode/type field is needed.
+        return Statx(-100, path, 0x100, 1, out var info) == 0 && (info.Mode & 0xf000) == 0x8000;
+    }
+    [StructLayout(LayoutKind.Explicit, Size = 256)]
+    private struct FileTypeInfo { [FieldOffset(28)] internal ushort Mode; }
+    [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
+    private static extern int Statx(int directory, string path, int flags, uint mask, out FileTypeInfo info);
+
+    private static string ResolveAbsoluteRead(string path)
+    {
+        if (path.Contains('\0')) throw new ArgumentException("Invalid path.");
+        var absolute = Path.GetFullPath(path);
+        var current = Path.GetPathRoot(absolute)!;
+        foreach (var segment in absolute[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
+                || new FileInfo(current).LinkTarget is not null) throw new ArgumentException("Symbolic link.");
+        }
+        return absolute;
     }
 
     private string Resolve(string path, bool allowMissingLast)

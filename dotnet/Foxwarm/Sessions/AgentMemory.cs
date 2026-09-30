@@ -6,7 +6,7 @@ using YamlDotNet.Serialization;
 
 namespace Foxwarm.Sessions;
 
-internal sealed partial class AgentMemory(AgentCatalog agents)
+internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
 {
     public async Task<string> BuildAsync(string agentName, string sessionId, string concreteModelId)
     {
@@ -14,27 +14,42 @@ internal sealed partial class AgentMemory(AgentCatalog agents)
         var frameworkPath = File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
             : agents.MainFallbackSystemPath;
         if (File.Exists(frameworkPath))
-            AppendBlock(blocks, "framework", "inherited", frameworkPath,
+            AppendBlock(blocks, frameworkPath == agents.FrameworkSystemPath ? "framework" : "main",
+                frameworkPath == agents.FrameworkSystemPath || agentName != "main" ? "inherited" : "self", frameworkPath,
                 ConditionalMemory.FilterConditionalMemorySource(await File.ReadAllTextAsync(frameworkPath), concreteModelId));
 
-        var memoryDir = agents.MemoryDirectory(agentName);
-        if (Directory.Exists(memoryDir))
-            foreach (var path in Directory.EnumerateFiles(memoryDir, "*.md", SearchOption.TopDirectoryOnly)
-                         .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal))
-            {
-                var fileName = Path.GetFileName(path);
-                if (fileName == "00_SYSTEM.md" || fileName.Equals("ONBOOT.md", StringComparison.OrdinalIgnoreCase)) continue;
-                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                    throw new InvalidDataException("Agent memory file cannot be a symbolic link.");
-                var (visible, body) = FilterFrontMatter(await File.ReadAllTextAsync(path), sessionId);
-                if (visible) AppendBlock(blocks, agentName, "self", path,
-                    ConditionalMemory.FilterConditionalMemorySource(body, concreteModelId));
-            }
+        foreach (var sourceAgent in agents.InheritanceChain(agentName))
+        {
+            var memoryDir = Path.Combine(agents.SourceDirectory(sourceAgent), "memory");
+            if (Directory.Exists(memoryDir))
+                foreach (var path in Directory.EnumerateFiles(memoryDir, "*.md", SearchOption.TopDirectoryOnly)
+                             .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal))
+                {
+                    var fileName = Path.GetFileName(path);
+                    if (fileName == "00_SYSTEM.md" || fileName.Equals("ONBOOT.md", StringComparison.OrdinalIgnoreCase)) continue;
+                    if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidDataException("Agent memory file cannot be a symbolic link.");
+                    var (visible, body) = FilterFrontMatter(await File.ReadAllTextAsync(path), sessionId);
+                    if (visible) AppendBlock(blocks, sourceAgent, sourceAgent == agentName ? "self" : "inherited", path,
+                        ConditionalMemory.FilterConditionalMemorySource(body, concreteModelId));
+                }
+        }
+        var catalog = await skills.ListAsync(agentName);
+        if (catalog.Count > 0)
+        {
+            blocks.Append("\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, call skill with action=\"load\"\nand the skill's name to load its full instructions and resource list.\nRead listed resources only when the loaded skill or current task needs them:\n<available_skills>\n");
+            foreach (var skill in catalog)
+                blocks.Append("  <skill><name>").Append(Xml(skill.Name)).Append("</name><description>")
+                    .Append(Xml(skill.Description ?? "")).Append("</description><source>").Append(skill.SourceType).Append("</source></skill>\n");
+            blocks.Append("</available_skills>\n");
+        }
         var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
         var bodyText = blocks.ToString().Trim();
         return ConditionalMemory.BuildCurrentModelSnapshot(concreteModelId,
             bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory);
     }
+
+    private static string Xml(string value) => value.Replace("&", "&amp;", StringComparison.Ordinal).Replace("<", "&lt;", StringComparison.Ordinal).Replace(">", "&gt;", StringComparison.Ordinal);
 
     private static void AppendBlock(StringBuilder output, string agent, string ownership, string path, string body) =>
         output.Append("\n<memory_file agent=").Append(agent).Append("; ownership=").Append(ownership)

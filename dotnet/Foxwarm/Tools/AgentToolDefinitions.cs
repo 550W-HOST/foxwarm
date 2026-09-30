@@ -42,7 +42,8 @@ internal static class AgentToolDefinitions
             Parameters(new JsonObject
             {
                 ["agentName"] = String("New agent name, using letters, numbers, hyphens, or underscores."),
-                ["createMainSession"] = Boolean("Also create the agent's main session. Defaults to true.")
+                ["createMainSession"] = Boolean("Also create the agent's main session. Defaults to true."),
+                ["inherit"] = String("Agent whose memory should be inherited by the new agent.")
             }, "agentName")),
         Tool("create_session", "Create a conversation under an existing agent, reusing that agent's memory and workspace.",
             Parameters(new JsonObject

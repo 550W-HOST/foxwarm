@@ -29,7 +29,7 @@ var options = new ResponsesClientOptions(providerUri, modelsFile is null ? Requi
     Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_INSTRUCTIONS") ?? "",
     int.TryParse(Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_MAX_OUTPUT_TOKENS"), out var limit) ? limit : 1024);
 var models = HostModels.Load(modelsFile, options);
-await using var sessions = new SessionManager(dataRoot, workspaceRoot, options, models);
+await using var sessions = new SessionManager(dataRoot, workspaceRoot, options, models, Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"));
 await sessions.LoadAsync();
 var runtime = new SessionRuntime(sessions);
 var router = new MessageRouter(runtime);

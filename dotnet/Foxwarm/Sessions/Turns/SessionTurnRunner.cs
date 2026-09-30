@@ -52,6 +52,7 @@ public sealed class SessionTurnRunner
                 {
                     retryPending = false;
                     await entry.SaveLane.ClearWaitAsync().ConfigureAwait(false);
+                    if (registry.OnTurnStarting is not null) await registry.OnTurnStarting(entry).ConfigureAwait(false);
                 }
                 else
                 {
@@ -64,6 +65,7 @@ public sealed class SessionTurnRunner
                         if (remainingHead is not null) SessionIngress.EnsureSupportedForRunner(remainingHead);
                         break;
                     }
+                    if (registry.OnTurnStarting is not null) await registry.OnTurnStarting(entry).ConfigureAwait(false);
                     await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
                 }
                 try

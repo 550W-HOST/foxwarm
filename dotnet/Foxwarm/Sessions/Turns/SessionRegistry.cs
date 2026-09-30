@@ -56,6 +56,7 @@ public sealed class SessionRegistry
     public SessionTurnRunner Runner => runner;
     public LocalSessionTurnHost HostFor(string sessionId) => hosts.For(GetRequired(sessionId));
     public Func<string, Task>? TriggerOverride { get; set; }
+    public Func<SessionEntry, Task>? OnTurnStarting { get; set; }
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
     internal ISessionAuthorityStore Store { get; }
 
