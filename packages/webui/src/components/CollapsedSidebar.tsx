@@ -1,5 +1,5 @@
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
-import { PanelLeftOpen, Plus, Search } from 'lucide-react'
+import { PanelLeftOpen, Plus, History } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
@@ -97,7 +97,7 @@ export default function CollapsedSidebar({
       </div>
       <div data-sidebar-footer className="flex w-full shrink-0 flex-col items-center gap-1 border-t border-fw-border py-2">
         <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text-strong">
-          <Search className="h-4 w-4" />
+          <History className="h-4 w-4" />
         </button>
         <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} />
       </div>

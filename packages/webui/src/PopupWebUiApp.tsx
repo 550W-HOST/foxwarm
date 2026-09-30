@@ -37,7 +37,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   }, [])
 
   useEffect(() => {
-    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'Search history' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
+    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'History' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
   }, [target])
 
   useEffect(() => {

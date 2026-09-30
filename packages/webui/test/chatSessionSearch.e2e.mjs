@@ -63,7 +63,7 @@ before(async () => {
   server = createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body,#root{margin:0;height:100%;overflow:hidden}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`)})
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
   browser = await puppeteer.launch({browser:firefox?'firefox':'chrome',executablePath:firefox?(process.env.FOXWARM_E2E_FIREFOX||'/usr/bin/firefox'):(process.env.FOXWARM_E2E_CHROMIUM||'/usr/bin/chromium'),headless:true,args:firefox?[]:['--no-sandbox','--disable-setuid-sandbox']})
-  page=await browser.newPage();if(!firefox) await page.setViewport({width:1100,height:760});await page.goto(`http://127.0.0.1:${server.address().port}`,{waitUntil:'load'});await page.waitForSelector('[aria-label="Search messages"]')
+  page=await browser.newPage();if(!firefox) await page.setViewport({width:1100,height:760});await page.goto(`http://127.0.0.1:${server.address().port}`,{waitUntil:'load'});await page.waitForSelector('button[aria-label="Find in chat"]')
 })
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve))})
 
@@ -80,9 +80,11 @@ const snapshot = () => page.evaluate(() => {
 })
 
 test('finds the complete tool tail through a folded group and inner card, and restores disclosure on close',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  assert.equal(await page.$eval('button[aria-label="Find in chat"]',button=>button.textContent.trim()),'Find')
+  assert.ok(await page.$('button[aria-label="Find in chat"] svg.lucide-search'))
+  await page.click('button[aria-label="Find in chat"]')
   assert.equal(await page.$eval('[data-chat-search] input', input=>input.placeholder),'Search messages')
-  await page.waitForSelector('[aria-label="Search messages"]')
+  await page.waitForSelector('[data-chat-search] input[aria-label="Search messages"]')
   assert.equal((await snapshot()).oldMounted,false)
   await page.type('[data-chat-search] input[aria-label="Search messages"]','CJK目标尾部')
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='CJK目标尾部'))
@@ -114,7 +116,7 @@ test('standalone Chat captures Ctrl/Cmd+F but leaves extended find combinations 
 })
 
 test('finds already-loaded older unmounted rows, read results, reasoning, rendered Markdown and CTX summary without Archive',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   for(const [needle, expected] of [['OLD_ONLY_MATCH','OLD_ONLY_MATCH'],['PASTED_DEEP_SEARCH','PASTED_DEEP_SEARCH'],['command-needle','command-needle'],['read-file-needle','read-file-needle'],['fallback-needle','fallback-needle'],['json-needle','json-needle'],['thought-needle','thought-needle'],['hello world','hello world'],['visible-needle','visible-needle'],['<safe>','<safe>'],['CTX摘要末尾','CTX摘要末尾'],['SYSTEM_BODY_HIDDEN_TARGET','SYSTEM_BODY_HIDDEN_TARGET']]){
     await page.click('[data-chat-search] input[aria-label="Search messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(needle)
     await page.waitForFunction(value=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()===value),{timeout:4000},expected)
@@ -126,7 +128,7 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
 })
 
 test('literal matching and local keyboard navigation keep the match counter in sync',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   await page.type('[data-chat-search] input[aria-label="Search messages"]','earlier ordinary message')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/105',{timeout:5000})
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString().toLowerCase()==='earlier ordinary message'),{timeout:5000})
@@ -144,7 +146,7 @@ test('literal matching and local keyboard navigation keep the match counter in s
 })
 
 test('manual scroll is retained through an unrelated stream update and search close',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   await page.type('[data-chat-search] input[aria-label="Search messages"]','OLD_ONLY_MATCH')
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='OLD_ONLY_MATCH'))
   await page.evaluate(()=>{const container=document.querySelector('.foxwarm-chat-messages');container.scrollTop=1800;container.dispatchEvent(new Event('scroll'));window.fixture.emitStream('UNCOMMITTED_STREAM_SEARCH_TOKEN')})
@@ -161,7 +163,7 @@ test('manual scroll is retained through an unrelated stream update and search cl
 test('disabling Group tools leaves call and result matches searchable in their own cards',async()=>{
   await page.evaluate(()=>window.fixture.setGroupTools(false))
   await page.waitForFunction(()=>document.querySelectorAll('[data-tool-group]').length===0)
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   await query('json-needle')
   await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='json-needle'))
   const state=await snapshot();assert.equal(state.visible,true);assert.equal(state.hits,'1/1')
@@ -171,7 +173,7 @@ test('disabling Group tools leaves call and result matches searchable in their o
 test('historical grouped Event and Goal reminder bodies remain searchable without opening unrelated groups',async()=>{
   await page.evaluate(()=>window.fixture.setGroupTools(true))
   await page.waitForFunction(()=>document.querySelectorAll('[data-tool-group]').length===2)
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   try {
     for (const term of ['GROUP_EVENT_TARGET','GROUP_GOAL_TARGET']) {
       await query(term)
@@ -187,7 +189,7 @@ test('historical grouped Event and Goal reminder bodies remain searchable withou
 })
 
 test('user and pasted surfaces retain separate ordinals for the same visible word',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   try {
     await query('dupeWORD')
     await page.waitForFunction(()=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()==='dupeWORD'),{timeout:2500})
@@ -203,7 +205,7 @@ test('user and pasted surfaces retain separate ordinals for the same visible wor
 })
 
 test('quoted metadata-shaped text inside a pasted segment remains searchable',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   try {
     await query('OPAQUE_TAG_TARGET')
     await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000})
@@ -216,7 +218,7 @@ test('quoted metadata-shaped text inside a pasted segment remains searchable',as
 })
 
 test('unified edit diff indexes a shared context line only once',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   try {
     await query('DIFF_SHARED_ONLY')
     await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent?.endsWith('/2')||document.querySelector('[role="search"] [aria-live]')?.textContent?.endsWith('/1'),{timeout:2000})
@@ -229,7 +231,7 @@ test('unified edit diff indexes a shared context line only once',async()=>{
 })
 
 test('case-insensitive matching locates the original offset after a multi-unit lowercase character',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   try {
     await query('UNIQUEOFFSET')
     await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000})
@@ -241,7 +243,7 @@ test('case-insensitive matching locates the original offset after a multi-unit l
 })
 
 test('excluded display-math controls do not take the ordinary Markdown hit',async()=>{
-  await page.click('[aria-label="Search messages"]')
+  await page.click('button[aria-label="Find in chat"]')
   try {
     await query('Z')
     await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/1',{timeout:2000})

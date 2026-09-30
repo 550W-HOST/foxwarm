@@ -20,6 +20,7 @@ const tabs = {
   'vscode-web': { id: 'vscode-web', type: 'vscode', title: 'Code' },
   'system:agents': { id: 'system:agents', type: 'agents', title: 'Agents' },
   'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
+  'system:search': { id: 'system:search', type: 'search', title: 'Search history' },
 }
 
 async function serve(request, response) {
@@ -154,6 +155,7 @@ test('moves each supported tab to the expected URL and terminal move never delet
     ['terminal:term-1', 'terminal'],
     ['system:setup', 'setup'],
     ['system:agents', 'agents'],
+    ['system:search', 'search'],
     ['vscode-web', 'code'],
   ]
   for (const [tabId, kind] of cases) {
@@ -190,6 +192,18 @@ test('popup Chat restores the existing draft and never rewrites normal workbench
     await page.waitForFunction(() => document.querySelector('.foxwarm-inline-composer-editor')?.textContent?.includes('saved popup draft'))
     const persisted = JSON.parse(await page.evaluate(() => localStorage.getItem('foxwarm_workbench_state_v4')))
     assert.deepEqual(Object.keys(persisted.state.tabsById).sort(), Object.keys(tabs).sort())
+  } finally { await page.close() }
+})
+
+test('History popup uses its short window title and keeps the Search history page heading', async () => {
+  const page = await browser.newPage()
+  try {
+    await installFixture(page)
+    await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=search&foxwarmPopupVersion=1`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-history-search-view]')
+    assert.equal(await page.title(), 'History · Foxwarm')
+    assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
+    assert.equal(await page.$('[data-pane-id]'), null)
   } finally { await page.close() }
 })
 

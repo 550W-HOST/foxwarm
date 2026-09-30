@@ -294,6 +294,9 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
     if (sanitizedTab.type === 'vscode') {
       return [[tabId, { ...sanitizedTab, title: 'Code' } as WorkbenchTab]]
     }
+    if (sanitizedTab.type === 'search') {
+      return [[tabId, { ...sanitizedTab, title: 'History' } as WorkbenchTab]]
+    }
     return [[tabId, sanitizedTab as WorkbenchTab]]
   }))
 }

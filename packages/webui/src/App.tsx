@@ -959,7 +959,7 @@ function App() {
   }
 
   const openSearchTab = () => {
-    upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'Search history' }, { activate: true })
+    upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'History' }, { activate: true })
     navigateToTab(SEARCH_TAB_ID)
   }
   notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')

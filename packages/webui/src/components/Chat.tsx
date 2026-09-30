@@ -2106,8 +2106,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         ) : undefined}
         actions={(
           <>
-            <button type="button" onClick={activateSearch} aria-label="Search messages" title="Search messages" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
-              <Search className="h-4 w-4" /><span className="hidden sm:inline">Search</span>
+            <button type="button" onClick={activateSearch} aria-label="Find in chat" title="Find in chat" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
+              <Search className="h-4 w-4" /><span className="hidden sm:inline">Find</span>
             </button>
             {onOpenCode && (
               <button

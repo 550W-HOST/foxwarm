@@ -403,13 +403,20 @@ test('global history entry opens a persistent workbench tab without a chat compo
     assert.deepEqual(await page.$$eval(`${footer} button`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
     assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
     assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.getBoundingClientRect().width), 36)
+    assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.textContent.trim()), '')
+    assert.ok(await page.$(`${footer} button[aria-label="Search history"] svg.lucide-history`))
     if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$(footer))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/sidebar-footer-search.png` })
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-root .sticky'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/chat-find-header.png` })
     await page.click(`${footer} button[aria-label="Search history"]`)
     await page.waitForSelector('[data-tab-id="system:search"]')
     await page.waitForSelector('[data-history-search-view]')
     assert.equal(await page.$('[data-history-search-view] [aria-label="Message"]'), null)
     assert.equal((await state(page)).root.activeTabId, 'system:search')
     assert.equal((await state(page)).tabsById['system:search'].type, 'search')
+    assert.equal((await state(page)).tabsById['system:search'].title, 'History')
+    assert.equal(await page.$eval('[data-tab-id="system:search"]', tab => tab.title), 'History')
+    assert.ok(await page.$('[data-tab-id="system:search"] svg.lucide-history'))
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-tab-id="system:search"]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-workbench-tab.png` })
     assert.equal((await state(page)).hash, '#tab/system:search')
   } finally { await page.close() }
 })
@@ -419,14 +426,33 @@ test('collapsed rail and mobile Session list place the Search icon in their foot
   try {
     await page.click('button[title="Collapse sidebar"]')
     await page.waitForSelector('.w-12 [data-sidebar-footer] button[aria-label="Search history"]')
+    assert.equal(await page.$eval('.w-12 [data-sidebar-footer] button[aria-label="Search history"]', button => button.textContent.trim()), '')
+    assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Search history"] svg.lucide-history'))
     assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Search history"]'), null)
     assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Open UI settings"]'), null)
     assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Open UI settings"]'))
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Open UI settings"]')
     assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
+    assert.equal(await page.$eval('[data-sidebar-footer] button[aria-label="Search history"]', button => button.textContent.trim()), '')
+    assert.ok(await page.$('[data-sidebar-footer] button[aria-label="Search history"] svg.lucide-history'))
     await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
     await page.waitForSelector('[data-history-search-view]')
+  } finally { await page.close() }
+})
+
+test('persisted search tabs keep their identity while showing the current History label after refresh', async () => {
+  const tab = { id: 'system:search', type: 'search', title: 'Search history' }
+  const page = await openFixture({ tabs: [chat('e2e-a', false), tab], activeTabId: tab.id })
+  try {
+    await page.waitForSelector('[data-history-search-view]')
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      assert.equal(await page.$eval('[data-tab-id="system:search"]', element => element.title), 'History')
+      assert.equal((await state(page)).tabsById['system:search'].type, 'search')
+      assert.equal((await state(page)).root.activeTabId, 'system:search')
+      if (!refresh) await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('[data-history-search-view]')
+    }
   } finally { await page.close() }
 })
 
