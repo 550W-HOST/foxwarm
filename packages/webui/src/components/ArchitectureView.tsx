@@ -1015,7 +1015,6 @@ export default function ArchitectureView({
                 <button type="button" data-active={surface === 'agents'} aria-pressed={surface === 'agents'} onClick={() => setSurface('agents')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'agents' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Agents</button>
                 <button type="button" data-active={surface === 'nodes'} aria-pressed={surface === 'nodes'} onClick={() => setSurface('nodes')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'nodes' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Nodes</button>
               </div>
-              {surface !== 'nodes' ? <span>{sessions.length} loaded of {summary.sessionCount} sessions</span> : null}
               {surface !== 'nodes' && summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
               {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
             </div>

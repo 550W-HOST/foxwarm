@@ -93,6 +93,22 @@ after(async () => {
 
 test('Nodes is a real independent surface; pending approval, inline copy and explicit Shell creation use authenticated APIs', { timeout: 45_000 }, async () => {
   assert.equal(commandReads, 0, 'ordinary Architecture loading never requests credentials')
+  await page.waitForFunction(() => [...document.querySelectorAll('header button')].some(button => /[1-9]\d* in loaded window/.test(button.textContent)))
+  const sessionCard = () => page.evaluate(() => {
+    const card = [...document.querySelectorAll('header button')].find(button => button.textContent.includes('in loaded window'))
+    return card ? { value: card.querySelector('.tabular-nums')?.textContent, detail: card.lastElementChild?.textContent } : null
+  })
+  const counts = await sessionCard()
+  const positions = []
+  for (const surface of ['Topology', 'Agents', 'Nodes']) {
+    await click(surface)
+    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].some(button => button.textContent === name && button.getAttribute('aria-pressed') === 'true'), {}, surface)
+    positions.push(await page.$eval('.foxwarm-architecture-surface-tab', button => button.parentElement.getBoundingClientRect().left))
+    assert.ok(!(await page.$eval('header', header => header.innerText)).includes('loaded of'))
+    if (surface !== 'Nodes') assert.deepEqual(await sessionCard(), counts, 'summary-card values and loaded counts are retained')
+  }
+  assert.ok(Math.max(...positions) - Math.min(...positions) < 1, 'the surface switch retains its horizontal position')
+  await click('Topology')
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
   await page.waitForSelector('[data-node-surface]')
   await page.waitForFunction(() => document.body.innerText.includes('1 pending approvals'))

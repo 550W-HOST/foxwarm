@@ -21,7 +21,7 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 
 - Architecture owns `/session-list/architecture`, `/session-list/children`, and exact `/session-list/by-id` requests; it never accepts an all-session array prop or performs the legacy global Session fetch.
 - It retains atomic root/branch replay, shared presentation-revision fencing, per-row HTTP/SSE epochs, forced bounded focus paths, agent-owned forests, row pruning, and exact loaded-row realtime subscriptions.
-- Global cards use backend-maintained catalog summaries even though the browser holds only a bounded window. The UI states the loaded/global counts explicitly.
+- Global cards use backend-maintained catalog summaries even though the browser holds only a bounded window. Loaded/global counts stay in the summary cards rather than repeating beside the surface switch.
 - Loading more roots extends the bounded window by 50. Selecting a session can materialize its child relationship window through the fixed children API; the inspector can continue that relationship window.
 
 ### Operational topology
