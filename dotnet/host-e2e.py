@@ -61,10 +61,10 @@ class Provider(BaseHTTPRequestHandler):
         assert self.path == '/responses'
         assert self.headers.get('Authorization') == 'Bearer ' + PROVIDER_TOKEN
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'submit_compact_plan']
-        assert payload['tools'][1]['parameters']['required'] == ['filePath', 'content']
-        assert payload['tools'][6]['parameters']['properties']['target']['pattern'] == '^msg#[1-9][0-9]*$'
-        assert payload['tools'][12]['parameters']['required'] == ['replaceAsBlocks']
+        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan']
+        assert payload['tools'][1]['parameters']['required'] == ['filePath']
+        assert 'sessionId' in payload['tools'][6]['parameters']['properties'] and 'offset' not in payload['tools'][6]['parameters']['properties']
+        assert payload['tools'][-1]['parameters']['required'] == ['replaceAsBlocks']
         input_text = json.dumps(payload['input'], ensure_ascii=False)
         with REQUEST_LOCK:
             REQUESTS.append(payload)
