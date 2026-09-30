@@ -61,7 +61,7 @@ public sealed class TypeScriptFixtureTests
         Assert.Equal(4, archive.WriteMessages(records).Count);
         new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json").Write(document);
 
-        Assert.Equal(["archive_messages"], UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite")));
+        Assert.Equal(["archive_blocks", "archive_messages"], UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite")));
         var replayPath = Path.Combine(temp.Path, "ts-replay-result.json");
         TypeScriptOracle.Run("replay-ts", temp.Path, replayPath);
         Assert.Equal(0, JsonNode.Parse(File.ReadAllText(replayPath))!["insertedCount"]!.GetValue<int>());
@@ -220,7 +220,7 @@ internal static class TypeScriptOracle
     {
         var repositoryRoot = FindRepositoryRoot();
         var oracleRoot = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT") ?? repositoryRoot;
-        var helper = Path.Combine(repositoryRoot, "experiments", "dotnet", "session-persistence-fixture-ts.mjs");
+        var helper = Path.Combine(repositoryRoot, "dotnet", "session-persistence-fixture-ts.mjs");
         var info = new ProcessStartInfo("node")
         {
             WorkingDirectory = repositoryRoot,
@@ -255,7 +255,7 @@ internal static class TypeScriptOracle
         var current = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "experiments", "dotnet", "session-persistence-fixture-ts.mjs"))
+            if (File.Exists(Path.Combine(current.FullName, "dotnet", "session-persistence-fixture-ts.mjs"))
                 && File.Exists(Path.Combine(current.FullName, "lib", "session", "archive.js")))
                 return current.FullName;
             current = current.Parent;

@@ -451,8 +451,8 @@ public sealed class SessionTurnTests
         var ingress = registry.Ingress.EnqueueAsync("s", QueueItem.UserText("B", clientMessageId: "b"));
         Assert.False(ingress.IsCompleted);
         var hotBeforeRelease = entry.Snapshot();
-        Assert.Contains(hotBeforeRelease.Queue, item => item.Parts?.FirstOrDefault()?[
-            "text"]?.GetValue<string>() == "B");
+        // Wait-aware ordinary admissions publish when their ordered operation starts, not before a held preceding save.
+        Assert.DoesNotContain(hotBeforeRelease.Queue, item => item.Parts?.FirstOrDefault()?["text"]?.GetValue<string>() == "B");
         Assert.DoesNotContain(hotBeforeRelease.History, message => message.ToJsonString().Contains("B", StringComparison.Ordinal));
         Assert.False(hotBeforeRelease.Meta.ContainsKey("lastMessageTime"));
         const long timestamp = 9876;

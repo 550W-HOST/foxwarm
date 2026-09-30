@@ -28,7 +28,8 @@ public sealed class PersistentSessionTurnTests
         Assert.False(ingressB.IsCompleted);
         Assert.False(ingressC.IsCompleted);
         Assert.Empty(entry.Snapshot().History);
-        Assert.Equal(new[] { "A", "B", "C" }, entry.Snapshot().Queue.Select(QueueText));
+        // B/C are not acknowledged until their ordered wait-aware admissions start after the held append.
+        Assert.Equal(new[] { "A" }, entry.Snapshot().Queue.Select(QueueText));
 
         hook.Release();
         if (failPrecommit)

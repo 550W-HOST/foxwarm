@@ -36,7 +36,8 @@ public sealed class PersistencePrimitiveTests
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(block, Fixture.SessionId));
         var preserved = (JsonObject)root.DeepClone();
         ((JsonObject)((JsonObject)((JsonArray)preserved["history"]!)[0]!)["__meta"]!)["preservedFromBlockId"] = 1;
-        Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(preserved, Fixture.SessionId));
+        var preservedRoundTrip = SessionAuthorityDocument.FromOwned(preserved, Fixture.SessionId).CloneRoot();
+        Assert.True(JsonNode.DeepEquals(preserved, preservedRoundTrip));
         var version = (JsonObject)root.DeepClone();
         version["sessionStateVersion"] = 2;
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(version, Fixture.SessionId));
