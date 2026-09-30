@@ -16,6 +16,11 @@ const system = { id: 'system:agents', type: 'agents', title: 'Agents' }
 
 async function serve(request, response) {
   const pathname = new URL(request.url, 'http://fixture').pathname
+  if (pathname === '/prefix/ui/vscode-web/') {
+    response.writeHead(200, { 'Content-Type': 'text/html' })
+    response.end('<!doctype html><html><body>Code fixture</body></html>')
+    return
+  }
   const relative = pathname.startsWith('/prefix/ui/') ? pathname.slice('/prefix/ui/'.length) : ''
   const file = relative && !relative.endsWith('/') ? new URL(relative, dist) : new URL('index.html', dist)
   try {
@@ -41,10 +46,11 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, themeId, codeNewWindow } = {}) {
   const page = await browser.newPage()
   await page.setViewport({ width: 1400, height: 900 })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, themeId, codeNewWindow }) => {
+    if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = splitPanes
       ? { id: 'split-main', kind: 'split', direction: 'row', sizes: [50, 50], children: [
@@ -55,12 +61,14 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById, root, focusedPaneId: 'pane-main' }, version: 1 }))
     localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
     localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
+    if (themeId) localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId, colorMode: 'light' }))
+    if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__sent = []
     window.fetch = (input, options = {}) => {
       const url = new URL(typeof input === 'string' ? input : input.url, location.href)
       const pathname = url.pathname
-      if (pathname.endsWith('/api/setup/status')) return json({ oobe: false })
+      if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/api/terminals')) return json({ terminals: [] })
       if (pathname.endsWith('/api/nodes')) return json({ nodes: [] })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
@@ -88,7 +96,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, themeId, codeNewWindow })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => !!window.foxwarmTest)
   return page
@@ -412,7 +420,8 @@ test('collapsed rail and mobile Session list place the Search icon in their foot
     await page.click('button[title="Collapse sidebar"]')
     await page.waitForSelector('.w-12 [data-sidebar-footer] button[aria-label="Search history"]')
     assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Search history"]'), null)
-    assert.equal(await page.$('.w-12 button[aria-label="Open UI settings"]'), null)
+    assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Open UI settings"]'), null)
+    assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Open UI settings"]'))
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('[data-sidebar-footer] button[aria-label="Open UI settings"]')
     assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
@@ -456,5 +465,113 @@ test('Ctrl/Cmd+F targets the focused Chat pane and not inactive Chat or non-Chat
     const blocked = await page.evaluate(() => { const event = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented })
     assert.equal(blocked, false)
     assert.equal(await page.$$eval('[data-chat-search]', elements => elements.length), 0)
+  } finally { await page.close() }
+})
+
+test('550A Chat has one Code action, honors the new-tab preference, and dispatches the Terminal target', async () => {
+  const page = await openFixture({ themeId: 'foxwarm.550a', codeNewWindow: true })
+  try {
+    const header = '.foxwarm-chat-root .sticky'
+    await page.waitForSelector(`${header} button[title="Code"]`)
+    assert.equal(await page.$$eval(`${header} button[title="Code"]`, buttons => buttons.length), 1)
+    assert.equal(await page.$eval(`${header} button[title="Code"]`, button => button.textContent), 'Code')
+    assert.equal(await page.$eval(`${header} button[title="Terminal"]`, button => button.textContent), 'Terminal')
+    assert.equal(await page.$(`${header} .lucide-external-link`), null)
+    assert.equal(await page.$(`${header} button[title="Open code in a new browser tab"]`), null)
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
+    if (process.env.FOXWARM_HEADER_SCREENSHOT_PATH) {
+      await (await page.$(header)).screenshot({ path: process.env.FOXWARM_HEADER_SCREENSHOT_PATH })
+    }
+    await page.evaluate(() => {
+      window.__openedCode = []
+      window.open = (...args) => { window.__openedCode.push(args); return null }
+    })
+    await page.click(`${header} button[title="Code"]`)
+    const opened = await page.evaluate(() => window.__openedCode)
+    assert.equal(opened.length, 1)
+    const codeUrl = new URL(opened[0][0])
+    assert.equal(codeUrl.pathname, '/prefix/ui/vscode-web/')
+    assert.equal(codeUrl.searchParams.get('folderUri'), 'foxwarm://node+master/')
+    assert.deepEqual(opened[0].slice(1), ['_blank', 'noopener,noreferrer'])
+    assert.equal((await state(page)).tabsById['vscode-web'], undefined)
+
+    await page.click(`${header} button[title="Terminal"]`)
+    await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal'))
+    const terminal = Object.values((await state(page)).tabsById).find(tab => tab.type === 'terminal')
+    assert.equal(terminal.nodeId, 'master')
+    assert.equal(terminal.cwd, '/')
+  } finally { await page.close() }
+})
+
+test('Chat Code still opens the embedded workbench when the new-tab preference is off', async () => {
+  const page = await openFixture({ codeNewWindow: false })
+  try {
+    await page.waitForSelector('.foxwarm-chat-root button[title="Code"]')
+    await page.evaluate(() => {
+      window.__openedCode = []
+      window.open = (...args) => { window.__openedCode.push(args); return null }
+    })
+    await page.click('.foxwarm-chat-root button[title="Code"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'vscode-web')
+    assert.equal((await state(page)).tabsById['vscode-web'].type, 'vscode')
+    assert.deepEqual(await page.evaluate(() => window.__openedCode), [])
+  } finally { await page.close() }
+})
+
+test('Application menu icons precede their labels and retain Setup, Logs, and reload actions', async () => {
+  const page = await openFixture({ themeId: 'foxwarm.550a' })
+  try {
+    const menu = '[data-global-ui-settings-menu]'
+    const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
+    const openMenu = async () => {
+      await page.waitForSelector(trigger)
+      await page.click(trigger)
+      await page.waitForSelector(menu, { visible: true })
+    }
+    await openMenu()
+    const rows = await page.$$eval(`${menu} button`, buttons => buttons.filter(button => /Open setup|Reload WebUI|Open logs/.test(button.textContent)).map(button => {
+      const label = button.firstElementChild
+      const icon = label.firstElementChild
+      const text = label.lastChild
+      const range = document.createRange()
+      range.selectNodeContents(text)
+      return {
+        text: label.textContent,
+        icon: [...icon.classList].find(name => /^lucide-(settings|refresh-cw|file-text)$/.test(name)),
+        svgCount: button.querySelectorAll('svg').length,
+        width: icon.getBoundingClientRect().width,
+        beforeText: icon.getBoundingClientRect().right < range.getBoundingClientRect().left,
+      }
+    }))
+    assert.deepEqual(rows, [
+      { text: 'Open setup', icon: 'lucide-settings', svgCount: 1, width: 14, beforeText: true },
+      { text: 'Reload WebUI', icon: 'lucide-refresh-cw', svgCount: 1, width: 14, beforeText: true },
+      { text: 'Open logs', icon: 'lucide-file-text', svgCount: 1, width: 14, beforeText: true },
+    ])
+    if (process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH) {
+      await page.screenshot({ path: process.env.FOXWARM_APPLICATION_MENU_SCREENSHOT_PATH })
+    }
+    await page.click(`${menu} .lucide-settings`)
+    await page.waitForSelector('[data-setup-tab="appearance"]')
+    assert.equal(await page.$(menu), null)
+    await openMenu()
+    assert.equal(await page.$eval(`${menu} .lucide-settings`, icon => icon.closest('button').textContent), 'Open setupactive')
+    await page.click(`${menu} .lucide-file-text`)
+    await page.waitForSelector('[data-logs-view]')
+    assert.equal((await state(page)).root.activeTabId, 'system:logs')
+    assert.equal(await page.$(menu), null)
+    await openMenu()
+    await page.waitForFunction(() => {
+      const button = document.querySelector('[data-global-ui-settings-menu] button[aria-label="Reload app"]')
+      const rect = button?.getBoundingClientRect()
+      return rect && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+    })
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+      page.click(`${menu} button[aria-label="Reload app"]`),
+    ])
+    await page.waitForFunction(() => !!window.foxwarmTest)
+    assert.equal(await page.$(menu), null)
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
   } finally { await page.close() }
 })

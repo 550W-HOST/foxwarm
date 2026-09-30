@@ -65,6 +65,7 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 - Embedded launch creates one singleton Code tab. Restoring that tab without displaying it as active in a visible workbench pane leaves the top-level iframe uncreated, including while the mobile list replaces the workbench surface; its first actual display starts it. Later tab/surface changes hide/reposition the persistent iframe rather than remounting it, while explicit tab close destroys the frame and clears pending bridge state. In the console component treatment, the full-screen scanline overlay remains above normal WebUI content but below the iframe so the Code workbench stays visually unobscured and interactive.
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
+- Chat supplies a single ordinary Code launch callback, retaining the browser-local opening preference. Header action presentation is owned by [D-chat-header-launch-actions](./webui-chat.md#d-chat-header-launch-actions).
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
 - Changing a main Code launcher node adds that node/path resource to the same persistent multi-root workspace; it never creates a per-node Code tab or iframe.
 

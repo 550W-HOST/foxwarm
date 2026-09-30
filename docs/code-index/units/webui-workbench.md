@@ -86,6 +86,10 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 
 Logs tab identity, bounded display and popout semantics are documented in [WebUI Logs](./webui-logs.md).
 
+## Tests
+
+- `workbenchPreview.e2e.mjs` covers preview identity, route/close behavior, drag promotion, focused Chat search, and actual App header launches. The header probes verify the 550A console's single Code control, preference-selected new-tab versus embedded opening, and Terminal target dispatch. Application-menu probes cover leading icon geometry, Setup active state, Logs activation, and real reload navigation.
+
 ## Integration
 
 - `WorkbenchLayout` is the top-level layout renderer, receiving a `renderPane` callback that connects pane IDs to actual content components elsewhere in the app.

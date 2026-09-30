@@ -60,6 +60,7 @@ Queue-origin history deltas update committed and queued timelines through one re
 ## Other behavior
 
 - Header state and cwd come from the per-session history/stream snapshot, including in Code leaf Chat.
+- Header launch actions are standalone `Code` and `Terminal` buttons. Code delegates to the ordinary App launch callback, including the browser-local opening preference; the header has no separate new-tab action.
 - The header menu owns the existing browser-local Input and Chat preferences plus `Show user message metadata` (default off) and Debug. The move from the global menu does not make these settings server-backed or Session-semantic. Canonical placement: [D-webui-settings-placement](../modules/webui.md#d-webui-settings-placement).
 - The sticky Chat header establishes the pane-local layer above the context minimap/content layer, so its open session menu remains clickable where the menu geometrically overlaps the right-side minimap. It remains below modal/global overlay layers.
 - Chat itself owns only whether Debug is open and passes current source data to the separately mounted `SessionDebugModal`. Open and Refresh each capture one immutable diagnostic snapshot; ordinary Chat updates do not rebuild it, and close/session replacement/unmount aborts pending work and releases modal-owned payload/text. See [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap).
@@ -75,6 +76,11 @@ ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolS
 The browser history fixture verifies that the React root installed its renderer before exercising history and stream races; initial document loading alone does not establish fixture readiness.
 
 ## Design decisions
+
+### D-chat-header-launch-actions
+
+[2026-09-30] Chat's header shows one `Code` button and one `Terminal` button where launch callbacks are available. The separate Code new-tab button is removed; the ordinary Code action retains the global opening preference. Other Code launchers, menus, and opening preferences remain available.
+
 
 ### D-chat-queued-preview
 

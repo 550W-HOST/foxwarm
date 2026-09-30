@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Code2, ExternalLink, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, Code2, MessageSquareText, Search, SquareTerminal, X } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -145,7 +145,6 @@ interface ChatProps {
   onBack?: () => void
   onOpenTerminal?: () => void
   onOpenCode?: () => void
-  onOpenCodeNewWindow?: () => void
   onOpenCodeFile?: (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: { nodeId: string; resolvedPath: string }) => void
   onOpenCodeCommit?: (target: CodeCommitTarget) => void | Promise<void>
   onOpenModelSettings?: () => void
@@ -200,7 +199,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -2110,38 +2109,24 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <button type="button" onClick={activateSearch} aria-label="Search messages" title="Search messages" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
               <Search className="h-4 w-4" /><span className="hidden sm:inline">Search</span>
             </button>
-            {(onOpenCode || onOpenCodeNewWindow) && (
-              <div className="flex items-stretch">
-                {onOpenCode && (
-                  <button
-                    onClick={onOpenCode}
-                    className={`inline-flex items-center gap-1 border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover sm:px-3 dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
-                    title="Open code"
-                  >
-                    <Code2 className="h-4 w-4" />
-                    <span className="hidden sm:inline">Open code</span>
-                  </button>
-                )}
-                {onOpenCodeNewWindow && (
-                  <button
-                    onClick={onOpenCodeNewWindow}
-                    className={`inline-flex items-center justify-center rounded-r-lg border border-fw-border px-2 text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text dark:hover:bg-fw-hover ${onOpenCode ? 'border-l-0' : ''}`}
-                    title="Open code in a new browser tab"
-                    aria-label="Open code in a new browser tab"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
+            {onOpenCode && (
+              <button
+                onClick={onOpenCode}
+                className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover sm:px-3 dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
+                title="Code"
+              >
+                <Code2 className="h-4 w-4" />
+                <span className="hidden sm:inline">Code</span>
+              </button>
             )}
             {onOpenTerminal && (
               <button
                 onClick={onOpenTerminal}
                 className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
-                title="Open terminal"
+                title="Terminal"
               >
                 <SquareTerminal className="h-4 w-4" />
-                <span className="hidden md:inline">Open terminal</span>
+                <span className="hidden md:inline">Terminal</span>
               </button>
             )}
             <SessionUiSettingsMenu
@@ -2331,7 +2316,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenTerminal === next.onOpenTerminal
   && prev.onOpenCode === next.onOpenCode
-  && prev.onOpenCodeNewWindow === next.onOpenCodeNewWindow
   && prev.onOpenCodeFile === next.onOpenCodeFile
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings

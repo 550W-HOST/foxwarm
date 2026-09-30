@@ -1444,7 +1444,6 @@ function App() {
           onBack={onBack}
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
-          onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
           onOpenCodeFile={(filePath, lines, target) => {
             const request = target
               ? resolveToolCodeFileTarget(target.resolvedPath, target.nodeId, undefined, lines)
