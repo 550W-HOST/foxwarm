@@ -10,6 +10,9 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
 {
     private const int MaxBytes = 1024 * 1024;
     private readonly string root;
+    private readonly PendingWriteRefs pending = new();
+    private readonly string sessionId = "standalone";
+    private readonly string agent = "main";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     // The caller-approved model-facing definitions are intentionally kept verbatim.
@@ -20,14 +23,16 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         {
             ["type"] = "function",
             ["name"] = "read",
-            ["description"] = "Read a UTF-8 text file. Relative paths use this agent's workspace; absolute paths read an accessible local file. Files are limited to 1 MiB. Directories and symbolic links are not supported.",
+            ["description"] = "Read a text file or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
                 ["additionalProperties"] = false,
                 ["properties"] = new JsonObject
                 {
-                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Path to an existing file, relative to this agent's workspace or absolute on the local host." }
+                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "File or directory path. Relative paths use this agent's workspace; absolute paths read an accessible local path. Symbolic links are not supported." },
+                    ["startLine"] = new JsonObject { ["type"] = "number", ["description"] = "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning." },
+                    ["endLine"] = new JsonObject { ["type"] = "number", ["description"] = "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range." }
                 },
                 ["required"] = new JsonArray("filePath")
             },
@@ -37,7 +42,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         {
             ["type"] = "function",
             ["name"] = "write",
-            ["description"] = "Write UTF-8 text to a file in the configured tool workspace. The parent directory must already exist. Existing files are protected unless overwrite is true. Content is limited to 1 MiB; symbolic links are not supported.",
+            ["description"] = "Write text to a file. Existing files are protected unless overwrite is true; missing parent directories are created only when createDirs is true. Supply content for a new write, or contentRef to retry previously cached content.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -45,10 +50,12 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 ["properties"] = new JsonObject
                 {
                     ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Destination path, relative to the tool workspace." },
-                    ["content"] = new JsonObject { ["type"] = "string", ["description"] = "Complete UTF-8 text to write to the file." },
-                    ["overwrite"] = new JsonObject { ["type"] = "boolean", ["description"] = "Allow replacement of an existing regular file. Defaults to false." }
+                    ["content"] = new JsonObject { ["type"] = "string", ["description"] = "Complete file contents. Use either content or contentRef, not both." },
+                    ["overwrite"] = new JsonObject { ["type"] = "boolean", ["description"] = "Allow replacement of an existing file. Defaults to false." },
+                    ["contentRef"] = new JsonObject { ["type"] = "string", ["description"] = "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same session and agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived." },
+                    ["createDirs"] = new JsonObject { ["type"] = "boolean", ["description"] = "Create missing parent directories. Defaults to false." }
                 },
-                ["required"] = new JsonArray("filePath", "content")
+                ["required"] = new JsonArray("filePath")
             },
             ["strict"] = false
         });
@@ -66,6 +73,9 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             throw new InvalidOperationException("Workspace root cannot be a symbolic link.");
     }
 
+    internal WorkspaceTools(string root, PendingWriteRefs pending, string sessionId, string agent) : this(root)
+    { this.pending = pending; this.sessionId = sessionId; this.agent = agent; }
+
     public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -76,66 +86,81 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         if (name is not ("read" or "write")) return Error("unknown_tool", "Unsupported workspace tool.");
         if (args is null || args["filePath"] is not JsonValue pathValue || !pathValue.TryGetValue<string>(out var pathText))
             return Error("invalid_tool_arguments", "Invalid workspace tool arguments.");
-        if ((name == "read" && args.Count != 1)
-            || (name == "write" && (args.Count is < 2 or > 3
-                || args["content"] is not JsonValue contentValue || !contentValue.TryGetValue<string>(out _)
-                || (args.ContainsKey("overwrite") && (args["overwrite"] is not JsonValue overwriteValue
-                    || !overwriteValue.TryGetValue<bool>(out _))))))
-            return Error("invalid_tool_arguments", "Invalid workspace tool arguments.");
-        string path;
-        try { path = name == "read" && Path.IsPathRooted(pathText) ? ResolveAbsoluteRead(pathText) : Resolve(pathText, name == "write"); }
-        catch (ArgumentException) { return Error("invalid_path", "Invalid path or symbolic link."); }
-        catch (IOException) { return Error("tool_io_error", "Workspace I/O failed."); }
-        catch (UnauthorizedAccessException) { return Error("tool_io_error", "Workspace access denied."); }
         try
         {
+            var allowed = name == "read" ? new[] { "filePath", "startLine", "endLine" } : ["filePath", "content", "contentRef", "overwrite", "createDirs"];
+            if (args.Any(item => !allowed.Contains(item.Key))) return Error("invalid_tool_arguments", "Unsupported file tool argument.");
             if (name == "read")
             {
-                if (!RegularFile(path)) return Error("not_file", "Regular file not found.");
-                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, FileOptions.Asynchronous);
-                if (stream.Length > MaxBytes) return Error("too_large", "File exceeds 1 MiB.");
-                using var buffer = new MemoryStream();
-                var chunk = new byte[8192];
-                while (true)
+                double? Bound(string key)
                 {
-                    var count = await stream.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, MaxBytes + 1 - buffer.Length)), cancellationToken);
-                    if (count == 0) break;
-                    buffer.Write(chunk, 0, count);
-                    if (buffer.Length > MaxBytes) return Error("too_large", "File exceeds 1 MiB.");
+                    if (args[key] is null) return null;
+                    return SessionWait.Number(args[key]) ?? throw new InvalidDataException(key + " must be a number.");
                 }
-                try { return new JsonObject { ["output"] = StrictUtf8.GetString(buffer.ToArray()) }; }
-                catch (DecoderFallbackException) { return Error("invalid_utf8", "File is not valid UTF-8."); }
+                var first = Bound("startLine"); var last = Bound("endLine");
+                var path = ResolveReadWrite(pathText, read: true);
+                if (!Directory.Exists(path) && !RegularFile(path)) return Error("not_file", "Regular file or directory not found.");
+                return new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken) };
             }
-            var content = args!["content"]!.GetValue<string>();
-            byte[] bytes;
-            try { bytes = StrictUtf8.GetBytes(content); }
-            catch (EncoderFallbackException) { return Error("invalid_utf8", "Content is not valid UTF-8."); }
-            if (bytes.Length > MaxBytes) return Error("too_large", "Content exceeds 1 MiB.");
-            var overwrite = args["overwrite"]?.GetValue<bool>() ?? false;
-            if (!Directory.Exists(Path.GetDirectoryName(path))) return Error("missing_parent", "Parent directory does not exist.");
-            if (Directory.Exists(path) || (File.Exists(path) && !overwrite)) return Error("file_exists", "File already exists.");
-            if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                return Error("invalid_path", "Symbolic links are not supported.");
-            var temp = Path.Combine(Path.GetDirectoryName(path)!, $".foxwarm-write-{Guid.NewGuid():N}");
-            try
+            foreach (var key in new[] { "overwrite", "createDirs" })
+                if (args.ContainsKey(key) && (args[key] is not JsonValue flag || !flag.TryGetValue<bool>(out _))) throw new InvalidDataException(key + " must be boolean.");
+            var destination = ResolveReadWrite(pathText, read: false);
+            var reference = SessionGoal.Trim(SessionWait.Text(args["contentRef"]) ?? "");
+            var overwrite = args["overwrite"]?.GetValue<bool>() == true; var createDirs = args["createDirs"]?.GetValue<bool>() == true;
+            string content;
+            if (reference.Length > 0)
             {
-                await using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 8192, FileOptions.Asynchronous))
-                {
-                    await stream.WriteAsync(bytes, cancellationToken);
-                    await stream.FlushAsync(cancellationToken);
-                }
-                // Re-check before replacement; this remains a path boundary, not race-proof OS confinement.
-                _ = Resolve(pathText, true);
-                if (Directory.Exists(path) || (File.Exists(path) && !overwrite)) return Error("file_exists", "File already exists.");
-                File.Move(temp, path, overwrite);
-                return new JsonObject { ["output"] = "written" };
+                if (args.ContainsKey("content")) throw new InvalidDataException("write accepts either content or contentRef, not both.");
+                if (!overwrite) throw new InvalidDataException("write with contentRef requires overwrite=true.");
+                content = pending.Peek(reference, sessionId, agent);
             }
-            finally { if (File.Exists(temp)) File.Delete(temp); }
+            else content = SessionWait.Text(args["content"]) ?? throw new InvalidDataException("write requires content, or contentRef with overwrite=true from a previous write attempt.");
+            string Hint(bool parents)
+            {
+                var id = reference.Length > 0 ? reference : pending.Register(sessionId, agent, content);
+                if (id is null) return " The attempted content was too large to cache for contentRef retry; call write again with content and " + (parents ? "createDirs=true." : "overwrite=true.");
+                return $" The attempted content is cached. Retry write({{ filePath: {System.Text.Json.JsonSerializer.Serialize(pathText)}, contentRef: {System.Text.Json.JsonSerializer.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
+            }
+            var parent = Path.GetDirectoryName(destination)!;
+            if (!Directory.Exists(parent))
+            {
+                var current = parent;
+                while (!Directory.Exists(current))
+                {
+                    if (File.Exists(current)) return Error("not_directory", $"Parent path is not a directory: {current}.");
+                    current = Path.GetDirectoryName(current) ?? throw new IOException("Missing filesystem root.");
+                }
+                if (!createDirs) return Error("missing_parent", $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true." + Hint(true));
+                Directory.CreateDirectory(parent);
+            }
+            if (Directory.Exists(destination) || File.Exists(destination) && !overwrite) return Error("file_exists", $"File already exists: {pathText}. Use overwrite=true to overwrite, or use edit to modify it." + Hint(false));
+            if (File.Exists(destination) && !RegularFile(destination)) return Error("not_file", "Write target must be a regular file.");
+            var written = await FileToolCore.WriteAtomic(destination, content, overwrite, () => _ = ResolveReadWrite(pathText, read: false), cancellationToken);
+            if (!written) return Error("file_exists", $"File already exists: {pathText}." + Hint(false));
+            if (reference.Length > 0) pending.Consume(reference);
+            return new JsonObject { ["output"] = "written" };
         }
         catch (OperationCanceledException) { throw; }
+        catch (InvalidDataException error) { return Error("invalid_tool_arguments", error.Message); }
         catch (ArgumentException) { return Error("invalid_path", "Invalid path or symbolic link."); }
-        catch (IOException) { return Error("tool_io_error", "Workspace I/O failed."); }
+        catch (IOException error) { return Error("tool_io_error", error.Message); }
         catch (UnauthorizedAccessException) { return Error("tool_io_error", "Workspace access denied."); }
+    }
+
+    private string ResolveReadWrite(string path, bool read)
+    {
+        if (read && Path.IsPathRooted(path)) return ResolveAbsoluteRead(path);
+        if (read && path == ".") return root;
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path) || path.Contains('\\') || path.Contains(':') || path.Contains('\0')) throw new ArgumentException("Invalid path.");
+        var segments = path.Split('/');
+        if (segments.Any(segment => segment.Length == 0 || segment is "." or "..")) throw new ArgumentException("Invalid segment.");
+        var current = root;
+        foreach (var segment in segments)
+        {
+            current = Path.Combine(current, segment);
+            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0 || new FileInfo(current).LinkTarget is not null) throw new ArgumentException("Symbolic link.");
+        }
+        return current;
     }
 
     private static bool RegularFile(string path)

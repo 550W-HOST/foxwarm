@@ -10,6 +10,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager : IAsyncDisposable
 {
+    private readonly PendingWriteRefs pendingWrites = new();
     private readonly string root;
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
@@ -177,7 +178,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             hosted.Emit(SessionEventKind.RequestProgress, new JsonObject { ["text"] = update.Text, ["reasoning"] = update.Reasoning });
         });
         var registry = new SessionRegistry(store, new RequestChatService(chat, hosted),
-            new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent)), hosted, this));
+            new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent), hosted, this));
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http, memory);
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);

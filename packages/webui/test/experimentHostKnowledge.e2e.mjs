@@ -196,9 +196,10 @@ try {
   assert(toolValue(skillRows, 'skill-boundary').error)
   assert(toolValue(skillRows, 'skill-big').output.includes('resource listing truncated'))
   assert.equal(toolValue(skillRows, 'skill-big').output.split('\n').filter(line => line.startsWith('- resources/')).length, 200)
-  assert.equal(toolValue(skillRows, 'read-inherited').output, 'INHERITED-RESOURCE')
-  assert.equal(toolValue(skillRows, 'read-global').output, 'GLOBAL-RESOURCE'); assert(toolValue(skillRows, 'outside-write').error)
-  for (const id of ['read-large', 'read-link', 'read-pipe', 'read-device']) assert(toolValue(skillRows, id).error, id)
+  assert(toolValue(skillRows, 'read-inherited').output.startsWith('INHERITED-RESOURCE\n---\n'))
+  assert(toolValue(skillRows, 'read-global').output.startsWith('GLOBAL-RESOURCE\n---\n')); assert(toolValue(skillRows, 'outside-write').error)
+  assert(toolValue(skillRows, 'read-large').output.includes('middle omitted')); assert(toolValue(skillRows, 'read-large').output.length < 13000)
+  for (const id of ['read-link', 'read-pipe', 'read-device']) assert(toolValue(skillRows, id).error, id)
   assert.equal(await snapshot('leaf/main'), initial, 'Skill load does not rewrite the stored catalog')
   assert.equal((await readFile(join(agentDir('leaf'), 'memory', 'MEMORY.md'), 'utf8')), 'LEAF-V1', 'Inherited directories are not copied')
 

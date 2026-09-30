@@ -175,7 +175,7 @@ try {
   const readCall = (await json(hostPort, 'GET', `/api/sessions/${layeredId}/archive/messages/18`)).body.message
   const readResult = (await json(hostPort, 'GET', `/api/sessions/${layeredId}/archive/messages/19`)).body.message
   assert.equal(readCall.parts[0].functionCall.id, 'layered-read-pair')
-  assert.equal(readResult.parts[0].functionResponse.response.output, 'PAIRED_TOOL_CONTENT')
+  assert(readResult.parts[0].functionResponse.response.output.startsWith('PAIRED_TOOL_CONTENT\n---\n'))
   try {
     await until(async () => provider.layerPlanCount >= 1 && (await history(hostPort, layeredId)).messages.some(
       row => row.__meta?.contextBlock?.level === 1), 'automatic L1 compaction', 40000)
