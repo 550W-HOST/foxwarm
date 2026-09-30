@@ -209,7 +209,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
-  const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
+  const [layout, setLayout] = useState({ isMobile: true, compactModelSelector: true })
+  const layoutRef = useRef(layout)
+  const { isMobile, compactModelSelector } = layout
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
@@ -412,12 +414,22 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     }
   }, [clearStreamingAssistantDraft, sessionBusy])
 
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
+  useLayoutEffect(() => {
+    const root = chatRootRef.current
+    if (!root) return
+    const measure = () => {
+      const width = root.getBoundingClientRect().width
+      // Hidden panes keep their last layout until they have a measurable width.
+      if (width <= 0) return
+      const next = { isMobile: width < 768, compactModelSelector: width <= 640 }
+      if (next.isMobile === layoutRef.current.isMobile && next.compactModelSelector === layoutRef.current.compactModelSelector) return
+      layoutRef.current = next
+      setLayout(next)
     }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(root)
+    return () => observer.disconnect()
   }, [])
 
   const scrollToBottom = useCallback(() => {
@@ -2101,22 +2113,22 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <button type="button" onClick={() => stepSearch(-1)} disabled={!searchMatches.length} aria-label="Previous match" className="rounded p-1.5 text-fw-text-muted hover:bg-fw-hover disabled:opacity-40"><ChevronUp size={16} /></button>
             <button type="button" onClick={() => stepSearch(1)} disabled={!searchMatches.length} aria-label="Next match" className="rounded p-1.5 text-fw-text-muted hover:bg-fw-hover disabled:opacity-40"><ChevronDown size={16} /></button>
             <button type="button" onClick={closeSearch} aria-label="Close search" className="rounded p-1.5 text-fw-text-muted hover:bg-fw-hover"><X size={16} /></button>
-            {!isFullHistoryLoaded && <span className="hidden text-xs text-fw-text-muted lg:inline">Earlier messages may still load.</span>}
+            {!isFullHistoryLoaded && <span className="foxwarm-chat-lg-label text-xs text-fw-text-muted">Earlier messages may still load.</span>}
           </div>
         ) : undefined}
         actions={(
           <>
             <button type="button" onClick={activateSearch} aria-label="Search messages" title="Search messages" className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover">
-              <Search className="h-4 w-4" /><span className="hidden sm:inline">Search</span>
+              <Search className="h-4 w-4" /><span className="foxwarm-chat-sm-label">Search</span>
             </button>
             {onOpenCode && (
               <button
                 onClick={onOpenCode}
-                className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover sm:px-3 dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
+                className="foxwarm-chat-code-button inline-flex items-center gap-1 rounded-lg border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
                 title="Code"
               >
                 <Code2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Code</span>
+                <span className="foxwarm-chat-sm-label">Code</span>
               </button>
             )}
             {onOpenTerminal && (
@@ -2126,7 +2138,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
                 title="Terminal"
               >
                 <SquareTerminal className="h-4 w-4" />
-                <span className="hidden md:inline">Terminal</span>
+                <span className="foxwarm-chat-md-label">Terminal</span>
               </button>
             )}
             <SessionUiSettingsMenu
@@ -2247,6 +2259,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       </div>
 
       <ChatComposer
+        compactModelSelector={compactModelSelector}
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
