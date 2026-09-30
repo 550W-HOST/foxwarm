@@ -133,6 +133,8 @@ public sealed record SessionSnapshot(
     long HistoryVersion,
     JsonObject AuthorityEnvelope);
 
+public sealed record DisplayNameChange(bool Changed, string? Previous, string? Current);
+
 public enum SaveKind
 {
     Strict,

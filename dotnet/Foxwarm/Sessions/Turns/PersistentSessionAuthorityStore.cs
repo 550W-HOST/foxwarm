@@ -139,6 +139,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     {
         var root = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
         root["sessionStateVersion"] = 1;
+        if (root["goalState"] is JsonObject goal) goal.Remove("remindOnTurnEnd");
         root["agent"] = agent;
         root["history"] = new JsonArray(snapshot.History.Select(message => (JsonNode)message.DeepClone()).ToArray());
         root["persistentMemorySnapshot"] ??= "";

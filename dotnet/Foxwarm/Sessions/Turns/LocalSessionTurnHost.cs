@@ -67,6 +67,9 @@ public sealed class LocalSessionTurnHost
             if (tools is ITurnToolControl control) control.BeginTurn();
             for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
+                registered.Token.ThrowIfCancellationRequested();
+                await entry.SaveLane.AppendGoalReminderAsync(registered.Token).ConfigureAwait(false);
+                registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
                 var result = await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
                 if (result.AssistantMessage is null) return result;

@@ -58,6 +58,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(definition.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
+        foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);
         definitions.Add(CompactPrompt.ToolDefinition());
         clientOptions = options with { Tools = definitions };
         this.models = models;

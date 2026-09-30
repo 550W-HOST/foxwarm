@@ -271,6 +271,16 @@ internal sealed partial class SessionManager
         var legacyCreateMarker = Path.Combine(root, "state", "experiment-faults", "legacy-create-after-rename");
         return new PersistentSessionAuthorityStore(root, id, agent, stage =>
         {
+            if (SessionSaveLane.IsGoalCommit)
+            {
+                var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".goal-before-rename"
+                    : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".goal-after-rename" : null;
+                if (suffix is not null)
+                {
+                    var goalMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + suffix);
+                    if (File.Exists(goalMarker)) { File.Delete(goalMarker); throw new IOException("Injected experimental goal commit failure."); }
+                }
+            }
             if (SessionSaveLane.IsWaitCommit)
             {
                 var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".wait-before-rename"

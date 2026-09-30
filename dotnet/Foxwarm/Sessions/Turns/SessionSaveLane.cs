@@ -22,15 +22,23 @@ public sealed partial class SessionSaveLane
     }
 
     public Task SaveStrictAsync(CancellationToken cancellationToken = default) => EnqueueAsync(SaveKind.Strict, cancellationToken);
-    public Task CommitDisplayNameAsync(string? name) => EnqueueOperationAsync(async () =>
+    public async Task<DisplayNameChange> CommitDisplayNameAsync(string? name)
+    {
+        DisplayNameChange result = new(false, null, null);
+        await EnqueueOperationAsync(async () =>
     {
         var staged = entry.WithState(state =>
         {
+            var prior = SessionWait.Text(state.AuthorityEnvelope["displayName"]);
+            if (prior is "") prior = null;
+            result = new(prior != name, prior, name);
+            if (!result.Changed) return (SessionSnapshot?)null;
             var snapshot = state.Snapshot();
             var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
             if (name is null) envelope.Remove("displayName"); else envelope["displayName"] = name;
             return snapshot with { AuthorityEnvelope = envelope };
         });
+        if (staged is null) return;
         void Publish(SessionState state)
         {
             if (name is null) state.AuthorityEnvelope.Remove("displayName"); else state.AuthorityEnvelope["displayName"] = name;
@@ -39,6 +47,8 @@ public sealed partial class SessionSaveLane
         catch (AuthorityCommittedException) { entry.WithState(Publish); entry.InvokeCommitted(entry.Snapshot()); throw; }
         entry.WithState(Publish); entry.InvokeCommitted(entry.Snapshot());
     });
+        return result;
+    }
 
     public async Task SaveBestEffortAsync(CancellationToken cancellationToken = default)
     {
@@ -138,6 +148,8 @@ public sealed partial class SessionSaveLane
         EnqueueOperationAsync(async () =>
         {
             var operation = entry.WithState(prepare);
+            var previousScope = GoalCommitScope.Value;
+            GoalCommitScope.Value = operation.StagedSnapshot.AuthorityEnvelope["goalState"] is JsonObject;
             try
             {
                 if (store is not ICompactionAuthorityStore compact)
@@ -151,6 +163,7 @@ public sealed partial class SessionSaveLane
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
             }
+            finally { GoalCommitScope.Value = previousScope; }
             entry.WithState(operation.Publish);
             entry.InvokeCommitted(entry.Snapshot());
         });

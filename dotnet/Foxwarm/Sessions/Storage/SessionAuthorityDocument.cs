@@ -158,7 +158,8 @@ public sealed class SessionAuthorityDocument
                 throw new InvalidDataException($"Session authority {field} is invalid.");
         }
 
-        foreach (var unsupported in new[] { "aliases", "indexingState", "goalState", "childHandoffState", "contextFrontier" })
+        SessionGoal.Validate(root);
+        foreach (var unsupported in new[] { "aliases", "indexingState", "childHandoffState", "contextFrontier" })
             if (root.ContainsKey(unsupported))
                 throw new UnsupportedSessionAuthorityException($"Session authority {unsupported} is unsupported by Slice C1.");
         if (root.ContainsKey("parentSessionId"))
