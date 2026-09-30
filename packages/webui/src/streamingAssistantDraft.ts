@@ -48,7 +48,7 @@ export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | 
       if (part.kind === 'reasoning-group') {
         const text = part.summaries.sort((a, b) => (a.summaryIndex ?? 0) - (b.summaryIndex ?? 0))
           .map(summary => summary.text).filter(Boolean).join('\n')
-        if (text.trim()) parts.push({ thinking: text })
+        parts.push({ thinking: text })
       } else if (part.kind === 'text' && part.text) {
         parts.push({ text: part.text, ...(part.phase ? { phase: part.phase } : {}) })
       } else if (part.kind === 'tool-call') {

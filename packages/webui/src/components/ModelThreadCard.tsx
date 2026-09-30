@@ -12,6 +12,7 @@ interface ModelThreadCardProps {
   iconName?: string
   preview: string
   previewClassName?: string
+  headerInfo?: ReactNode
   children: ReactNode
   tone?: ModelThreadTone
   defaultExpanded?: boolean
@@ -54,6 +55,7 @@ const ModelThreadCard = ({
   iconName,
   preview,
   previewClassName = '',
+  headerInfo,
   children,
   tone = 'message',
   defaultExpanded,
@@ -86,6 +88,7 @@ const ModelThreadCard = ({
         onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
       >
         <ToolTag name={kind} iconName={iconName} label={label} tone="neutral" className={`${semanticPrefix}-tag`} />
+        {headerInfo}
         {!expanded && (
           <span ref={previewFade.ref} {...previewFade.overflowFadeProps} className={`${semanticPrefix}-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS} ${previewClassName}`} title={preview}>
             {preview}

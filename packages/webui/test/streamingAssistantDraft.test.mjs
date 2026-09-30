@@ -298,3 +298,15 @@ test('a draft without llmRequestId is conservative during history correction', (
 test('invalid partial JSON remains readable raw text', () => {
   assert.equal(parseStreamingToolArguments('{"file'), '{"file')
 })
+
+
+test('ordered empty reasoning items survive without inventing a loading-only reasoning part', () => {
+  assert.equal(buildStreamingAssistantMessage({streamId:'empty',reasoning:'',text:'',toolCalls:[],parts:[]}),null)
+  const message=buildStreamingAssistantMessage({streamId:'ordered-empty',reasoning:'',text:'',toolCalls:[],parts:[
+    {outputIndex:0,kind:'reasoning',summaryIndex:0,text:''},
+    {outputIndex:1,kind:'reasoning',summaryIndex:0,text:''},
+    {outputIndex:2,kind:'text',text:'Final answer'},
+  ]})
+  assert.deepEqual(message.parts,[{thinking:''},{thinking:''},{text:'Final answer'}])
+  assert.equal(message.__meta.usage,undefined)
+})

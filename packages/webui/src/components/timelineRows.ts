@@ -11,6 +11,7 @@ import { deriveRequestTimings, type DerivedRequestTiming, type DurationSample } 
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, type TimelineTimeMarker } from './timelineTime'
+import { isReasoningPart } from './reasoningParts'
 
 /**
  * Explicit view model for one `ChatTimeline` render pass.
@@ -334,7 +335,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     parts.forEach((part) => {
       // Thinking folds into the summary whenever the group holds tool calls, including messages
       // that also carry text.
-      if (part.thinking && part.thinking.trim() && groupHasToolCalls) {
+      if (isReasoningPart(part) && groupHasToolCalls) {
         items.push({ name: 'reasoning', tone: 'neutral' })
       }
       if (part.functionCall) {
@@ -371,7 +372,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     const trailingFirstContentIdx = trailing.role === 'model' ? getGroupContentPartIndex(trailing) : -1
     const foldedThoughts = trailingFirstContentIdx === -1
       ? []
-      : trailing.parts.slice(0, trailingFirstContentIdx).filter((part) => part.thinking && part.thinking.trim())
+      : trailing.parts.slice(0, trailingFirstContentIdx).filter(isReasoningPart)
     if (foldedThoughts.length > 0) {
       foldedThinkingIdx = contentBreakIdx
       foldedThoughts.forEach(() => items.push({ name: 'reasoning', tone: 'neutral' }))

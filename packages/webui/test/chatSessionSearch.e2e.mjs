@@ -28,7 +28,7 @@ before(async () => {
       call('exec-a',109,'exec',{command:'echo command-needle'}), response('exec-a',110,'exec',{output:toolBody}),
       call('read-b',111,'read',{filePath:'search-target.txt'}), response('read-b',112,'read',{output:'read-file-needle\\nagain'}),
       call('custom-c',113,'unknown_tool',{payload:{needle:'fallback-needle'}}), response('custom-c',114,'unknown_tool',{output:{data:'json-needle'}}),
-      {role:'model',parts:[{thinking:'Reasoning **thought-needle** here'},{text:'Final hello **world** &amp; safe content'},{text:'Text plus image keeps visible-needle',inlineData:{mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='}}],__meta:{seq:115,timestamp:1700000000115}},
+      {role:'model',parts:[{thinking:'First reasoning summary'},{thinking:'Reasoning **thought-needle** here'},{thinking:'',providerMeta:{thinkingSummaries:[],encryptedThinking:'opaque-search-not-visible'}},{text:'Final hello **world** &amp; safe content'},{text:'Text plus image keeps visible-needle',inlineData:{mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='}}],__meta:{seq:115,timestamp:1700000000115,usage:{reasoningTokens:31}}},
       {role:'model',parts:[{text:'[CTX-BLOCK L1 B#7 raw#1-#3] ' + 'summary line\\n'.repeat(10) + 'CTX摘要末尾'}],__meta:{seq:116,timestamp:1700000000116,contextBlock:{id:7,level:1,rawStartSeq:1,rawEndSeq:3,sourceKind:'message'}}},
       {role:'user',parts:[{system:'<foxwarm-system kind="goal-reminder">\\n' + 'reminder line\\n'.repeat(10) + 'SYSTEM_BODY_HIDDEN_TARGET\\n</foxwarm-system>'}],__meta:{seq:117,timestamp:1700000000117}},
       call('group-a',118,'exec',{command:'echo group start'}), response('group-a',119,'exec',{output:'start done'}),
@@ -121,6 +121,15 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
     await page.click('[data-chat-search] input[aria-label="Search messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(needle)
     await page.waitForFunction(value=>[...CSS.highlights].some(([name,h])=>name.startsWith('foxwarm-chat-search-')&&[...h][0]?.toString()===value),{timeout:4000},expected)
     const state=await snapshot();assert.equal(state.visible,true,`${needle} ${JSON.stringify(state)}`);assert.equal(state.hits,'1/1',needle)
+    if(needle==='thought-needle') {
+      assert.deepEqual(await page.evaluate(()=>{
+        const entry=[...CSS.highlights].find(([name])=>name.startsWith('foxwarm-chat-search-'))
+        const range=entry?.[1].values().next().value
+        const body=range?.startContainer.parentElement.closest('[data-search-surface="reasoning"]')
+        const card=body?.closest('[data-model-thread-card="reasoning"]')
+        return {index:body?.dataset.searchPartIndex,tag:card?.querySelector('.foxwarm-reasoning-tag')?.textContent,tokens:card?.querySelector('[data-reasoning-tokens]')?.textContent}
+      }),{index:'1',tag:'Reasoning ×3',tokens:'31 tokens'})
+    }
   }
   const state=await snapshot();assert.equal(state.oldMounted,true);assert.equal(state.archive,0)
   assert.equal(await page.$eval('.foxwarm-context-block-card [aria-label="Expand CTX-BLOCK B#7"]',el=>el.getAttribute('aria-expanded')),'false')
@@ -136,7 +145,7 @@ test('literal matching and local keyboard navigation keep the match counter in s
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='2/105',{timeout:5000})
   await page.keyboard.down('Shift');await page.keyboard.press('Enter');await page.keyboard.up('Shift')
   await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='1/105',{timeout:5000})
-  for(const excluded of ['iVBORw0KGgoAAAANSUhEUg','attachment1_attachment-marker-only','attachment-ref ref=','foxwarm-system kind="goal-reminder"','functionResponse.__meta','**world**','a.*']){
+  for(const excluded of ['iVBORw0KGgoAAAANSUhEUg','opaque-search-not-visible','attachment1_attachment-marker-only','attachment-ref ref=','foxwarm-system kind="goal-reminder"','functionResponse.__meta','**world**','a.*']){
     await page.click('[data-chat-search] input[aria-label="Search messages"]');await page.keyboard.down('Control');await page.keyboard.press('A');await page.keyboard.up('Control');await page.keyboard.type(excluded)
     await page.waitForFunction(()=>document.querySelector('[role="search"] [aria-live]')?.textContent==='0/0',{timeout:2500})
   }
