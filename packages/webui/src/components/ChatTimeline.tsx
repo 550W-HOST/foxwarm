@@ -23,6 +23,7 @@ import {
 } from './chatShared'
 import ImageParts, { ImageItem } from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import { getReasoningRuns, type ReasoningRunPart } from './reasoningParts'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
@@ -879,21 +880,24 @@ const MessageRow = memo(function MessageRow({
     scrollbarAnchorKey,
   } = row
   const rowSearchTarget = searchTarget?.rowKey === messageKey ? searchTarget : null
-  const visibleModelParts = useMemo<Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }>>(() => {
-    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number }> = []
+  const reasoningRuns = useMemo(() => getReasoningRuns(msg.parts), [msg.parts])
+  const reasoningTokens = msg.__meta?.usage?.reasoningTokens
+  const visibleModelParts = useMemo(() => {
+    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null; partIndex: number; reasoningRun?: ReasoningRunPart[] }> = []
+    const runsByStart = new Map(reasoningRuns.map(run => [run[0].partIndex, run]))
     for (const [partIndex, part] of msg.parts.entries()) {
-      if (part.text || part.system || part.thinking) {
-        visible.push({ part, webSearchAction: null, partIndex })
-        continue
-      }
+      const reasoningRun = runsByStart.get(partIndex)
+      if (reasoningRun) visible.push({ part, webSearchAction: null, partIndex, reasoningRun })
+      // Mixed-field parts retain their ordinary output alongside their reasoning.
+      if (part.text || part.system) visible.push({ part, webSearchAction: null, partIndex })
       const webSearchAction = msg.role === 'model'
         ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
         : null
       if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
     }
     return visible
-  }, [msg.parts])
-  const textLikeParts = useMemo(() => visibleModelParts.map(item => item.part), [visibleModelParts])
+  }, [msg.parts, msg.role, reasoningRuns])
+  const textLikeParts = useMemo(() => visibleModelParts.filter(item => !item.reasoningRun).map(item => item.part), [visibleModelParts])
   const attachmentCorrelations = useMemo(() => findAttachmentCorrelations(msg.parts), [msg.parts])
   const associatedImageParts = useMemo(() => new Set([...attachmentCorrelations.values()].flatMap(item => item.imagePart ? [item.imagePart] : [])), [attachmentCorrelations])
   const hasInlineAttachmentFlow = msg.role === 'user' && attachmentCorrelations.size > 0
@@ -914,7 +918,7 @@ const MessageRow = memo(function MessageRow({
   const belongsToOrdinarySurface = (item: typeof visibleModelParts[number]) => {
     if (msg.role !== 'model') return false // Tool/result and event rows remain group content.
     if (item.webSearchAction) return hasVisibleTextContent // Preserve the text-bearing hosted-search exception.
-    if (item.part.thinking) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
+    if (item.reasoningRun) return firstGroupContentPartIndex !== -1 && item.partIndex < firstGroupContentPartIndex
     return true
   }
   const ordinaryParts = surface === 'all' ? visibleModelParts : visibleModelParts.filter(belongsToOrdinarySurface)
@@ -958,25 +962,25 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
-            {displayedParts.map(({ part, webSearchAction, partIndex }, partIdx) => {
+            {displayedParts.map(({ part, webSearchAction, partIndex, reasoningRun }, partIdx) => {
               if (webSearchAction) {
                 if (suppressWebSearchCards && !hasVisibleTextContent) {
                   return null
                 }
                 return <WebSearchCard key={`web-search-${partIdx}`} action={webSearchAction} />
               }
-              if (part.system) {
-                return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
-              }
-              if (part.thinking) {
-                // Ordinary model output splits a group: thinking before that content belongs
-                // to the group that ends there; later thinking belongs to this row's group.
+              if (reasoningRun) {
+                // Ordinary output separates prior-group reasoning from this row's group.
                 const foldedIntoGroupAbove = firstGroupContentPartIndex !== -1 && partIndex < firstGroupContentPartIndex
                 const folded = foldedIntoGroupAbove ? hideFoldedThinking : collapsedGroup
-                if (folded) {
-                  return null
-                }
-                return <ReasoningCard key={`thinking-${partIdx}`} thinking={part.thinking} tone="message" searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'reasoning' && rowSearchTarget.partIndex === partIndex} />
+                if (folded) return null
+                const tokens = partIndex === reasoningRuns[0]?.[0].partIndex
+                  && typeof reasoningTokens === 'number' && Number.isFinite(reasoningTokens) && reasoningTokens >= 0
+                    ? reasoningTokens : undefined
+                return <ReasoningCard key={`thinking-${partIndex}`} thinking={reasoningRun.map(item => item.thinking).join('\n')} parts={reasoningRun} reasoningTokens={tokens} tone="message" searchReveal={rowSearchTarget?.surface === 'reasoning' && reasoningRun.some(item => item.partIndex === rowSearchTarget.partIndex)} />
+              }
+              if (part.system) {
+                return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }
               // Compare source part indices: `partIndex` indexes `msg.parts` like the folded-thinking
               // check above, while `partIdx` skips parts that are not rendered as model content.

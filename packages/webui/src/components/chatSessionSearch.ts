@@ -7,6 +7,7 @@ import { buildTimelineRows } from './timelineRows'
 import { splitCommitMarkers } from '../commitMarker'
 import { parsePastedTextSegments } from '../pastedText'
 import { findAttachmentCorrelations, getPartDisplayText, stripGeneratedDescriptorLines } from './ChatTimeline'
+import { getReasoningText, isReasoningPart } from './reasoningParts'
 
 export type SearchSurface = 'user' | 'pasted' | 'system' | 'model' | 'reasoning' | 'ctx' | 'call' | 'response'
 export interface SearchField {
@@ -102,7 +103,7 @@ export function projectSessionSearchFields(messages: Message[], groupTools: bool
     const ctxIndex = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
       ? msg.parts.findIndex(part => typeof part.text === 'string' && part.text.trim()) : -1
     msg.parts.forEach((part, index) => {
-      if (part.thinking) add('reasoning', index, markdownText(part.thinking, false))
+      if (isReasoningPart(part)) add('reasoning', index, markdownText(getReasoningText(part), false))
       if (msg.role === 'model' && part.text) {
         add(index === ctxIndex ? 'ctx' : 'model', index,
           index === ctxIndex ? markdownText(getContextBlockSummaryText(part.text), false) : assistantText(part.text))

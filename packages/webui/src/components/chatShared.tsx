@@ -162,6 +162,8 @@ export interface OpenAIResponsesAnnotation {
 }
 
 export interface MessagePartProviderMeta {
+  thinkingSummaries?: string[]
+  encryptedThinking?: string
   openaiResponses?: {
     annotations?: OpenAIResponsesAnnotation[]
     outputItem?: Record<string, unknown>

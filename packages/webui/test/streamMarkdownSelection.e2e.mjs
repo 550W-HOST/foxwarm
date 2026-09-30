@@ -23,17 +23,26 @@ await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatTimeline from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatTimeline.tsx'))}
   import ReasoningCard from ${JSON.stringify(path.join(webuiRoot, 'src/components/ReasoningCard.tsx'))}
+  import { buildStreamingAssistantMessage } from ${JSON.stringify(path.join(webuiRoot, 'src/streamingAssistantDraft.ts'))}
   import ${JSON.stringify(path.join(webuiRoot, 'src/index.css'))}
 
   let assistantText = 'First assistant paragraph with selectable words.\\n\\nSecond assistant paragraph is growing.'
   let assistantCommitted = false
   let reasoningText = 'First reasoning paragraph with selectable words.\\n\\nSecond reasoning paragraph is growing.'
+  let orderedCommitted = false
+  let orderedText = 'Ordered visible summary.'
   const root = createRoot(document.getElementById('root'))
 
   function render() {
     const assistantMeta = assistantCommitted
       ? { seq: 7, timestamp: 2000, llmRequestId: 'request-selection' }
       : { synthetic: 'streamingAssistantDraft', temporary: true, streaming: true, llmRequestId: 'request-selection' }
+    const orderedMessage = buildStreamingAssistantMessage({streamId:'ordered-reasoning', llmRequestId:'request-reasoning', reasoning:orderedText, text:'Ordered answer', toolCalls:[], parts:[
+      {outputIndex:0,kind:'reasoning',summaryIndex:0,text:orderedText},
+      {outputIndex:1,kind:'reasoning',summaryIndex:0,text:''},
+      {outputIndex:2,kind:'text',text:'Ordered answer'},
+    ]})
+    if(orderedCommitted) orderedMessage.__meta={seq:8,timestamp:2001,llmRequestId:'request-reasoning',usage:{reasoningTokens:42}}
     root.render(
       <main>
         <section id="assistant-fixture">
@@ -48,6 +57,9 @@ await writeFile(entryPath, `
         <section id="reasoning-fixture">
           <ReasoningCard thinking={reasoningText} tone="processing" defaultExpanded={true} />
         </section>
+        <section id="ordered-reasoning-fixture">
+          <ChatTimeline sessionId="fixture/main" messages={[orderedMessage]} isMobile={false} groupTools={false} showUsageBadge={false} />
+        </section>
       </main>,
     )
   }
@@ -58,6 +70,8 @@ await writeFile(entryPath, `
     commitAssistant() { assistantCommitted = true; render() },
     growReasoningTail() { reasoningText += ' more'; render() },
     appendReasoningBlock() { reasoningText += '\\n\\nThird reasoning paragraph arrived.'; render() },
+    growOrderedReasoning() { orderedText += ' more'; render() },
+    commitOrderedReasoning() { orderedCommitted=true; render() },
   }
   render()
 `)
@@ -175,6 +189,18 @@ for (const browserSpec of browsers) {
       await page.evaluate(() => window.fixture.growReasoningTail())
       await page.waitForFunction(() => document.querySelector('#reasoning-fixture .foxwarm-markdown')?.textContent.includes('growing. more'))
       expectPreserved(await readSelection(reasoningSelector, '__reasoningSelection'), selectedReasoning)
+
+      const orderedCard='#ordered-reasoning-fixture [data-model-thread-card="reasoning"]'
+      assert.equal(await page.$eval(`${orderedCard} .foxwarm-reasoning-tag`,el=>el.textContent),'Reasoning ×2')
+      assert.equal(await page.$(`${orderedCard} [data-reasoning-tokens]`),null)
+      await page.$eval(`${orderedCard} .foxwarm-reasoning-header`,el=>el.click())
+      await page.waitForSelector(`${orderedCard} [data-search-part-index="1"]`)
+      await page.evaluate(()=>{window.__orderedCard=document.querySelector('#ordered-reasoning-fixture [data-model-thread-card="reasoning"]')})
+      await page.evaluate(()=>window.fixture.growOrderedReasoning())
+      await page.waitForFunction(()=>document.querySelector('#ordered-reasoning-fixture [data-search-part-index="0"]')?.textContent.includes(' more'))
+      await page.evaluate(()=>window.fixture.commitOrderedReasoning())
+      await page.waitForSelector(`${orderedCard} [data-reasoning-tokens]`)
+      assert.deepEqual(await page.$eval(orderedCard,el=>({same:el===window.__orderedCard,parts:[...el.querySelectorAll('[data-search-part-index]')].map(part=>part.dataset.searchPartIndex),tokens:el.querySelector('[data-reasoning-tokens]').textContent})),{same:true,parts:['0','1'],tokens:'42 tokens'})
 
       await page.evaluate(() => window.fixture.appendReasoningBlock())
       await page.waitForFunction(() => document.querySelectorAll('#reasoning-fixture .foxwarm-markdown p').length === 3)
