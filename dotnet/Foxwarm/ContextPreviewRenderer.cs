@@ -15,11 +15,11 @@ internal sealed partial class ContextPreviewRenderer
     private readonly Regex? literalRegex;
     private readonly List<string> warnings = [];
     private bool Active => literal is not null || include is not null || exclude is not null;
-    internal ContextPreviewRenderer(JsonObject options)
+    internal ContextPreviewRenderer(JsonObject options, int defaultBudget = 6000)
     {
         var requested = SessionWait.Number(options["previewLength"]);
         if (options["previewLength"] is not null && requested is null) throw new InvalidDataException("previewLength must be a number when provided.");
-        var value = requested is null or 0 ? 6000 : Math.Floor(requested.Value);
+        var value = requested is null or 0 ? defaultBudget : Math.Floor(requested.Value);
         if (!double.IsFinite(value)) throw new InvalidDataException("previewLength must be a number when provided.");
         budget = (int)Math.Clamp(value, 1000, 20000);
         if (value < 1000) warnings.Add($"[warning] previewLength {value} is below the minimum; using 1000.");
@@ -83,7 +83,19 @@ internal sealed partial class ContextPreviewRenderer
     internal string Render(string sessionId, string runtime, int total, double start, IReadOnlyList<JsonObject> messages)
     {
         var items = messages.Select((message, index) => Item(message, start + index)).ToArray();
+        return RenderItems(items, runtime, matched => $"Session `{sessionId}` - showing {matched} of {total} message(s)" + (matched == messages.Count ? "" : $" ({matched} matched after filters from {messages.Count} selected)") + ":",
+            messages.Count == 0 ? $"No messages found in session `{sessionId}` (total: {total} messages)." : $"No messages matched the requested filters in session `{sessionId}` (total: {total} messages).");
+    }
+    internal int Budget => budget;
+    internal PreviewItem ArchivedMessage(ArchiveMessageRecord record)
+    {
+        var item = Item(record.Message, record.Seq);
+        return item with { Heading = item.Heading.Replace($"[{record.Seq}]", $"[#{record.Seq} time {DateTimeOffset.FromUnixTimeMilliseconds((long)record.Timestamp):O}] [local]", StringComparison.Ordinal) };
+    }
+    internal string RenderItems(IReadOnlyList<PreviewItem> items, string context, Func<int, string> titleFor, string empty, IReadOnlyList<string>? extraNotices = null)
+    {
         var selected = items.AsEnumerable(); var notices = new List<string>(warnings);
+        if (extraNotices is not null) notices.AddRange(extraNotices);
         void Filter(Func<PreviewItem, bool> predicate, string label)
         {
             var before = selected.Count(); selected = selected.Where(predicate).ToArray(); var removed = before - selected.Count();
@@ -93,10 +105,8 @@ internal sealed partial class ContextPreviewRenderer
         if (include is not null) Filter(item => include.IsMatch(item.Search), "[filter] includeRegex excluded {count} additional item(s) that remained after earlier filter stages.");
         if (exclude is not null) Filter(item => !exclude.IsMatch(item.Search), "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages.");
         var matched = selected.ToArray();
-        var suffix = matched.Length == messages.Count ? "" : $" ({matched.Length} matched after filters from {messages.Count} selected)";
-        var title = $"Session `{sessionId}` - showing {matched.Length} of {total} message(s){suffix}:";
-        // Runtime is canonical owner metadata and is included even when the page/filters select nothing.
-        var runtimeLine = Clip(runtime, Math.Min(560, budget - 242));
+        var title = titleFor(matched.Length);
+        var runtimeLine = Clip(context, Math.Min(560, budget - 242));
         var medium = string.Join('\n', notices);
         var prefixBudget = budget - 242;
         var prefix = runtimeLine;
@@ -104,7 +114,6 @@ internal sealed partial class ContextPreviewRenderer
         prefix += "\n\n" + Clip(title, Math.Max(0, prefixBudget - prefix.Length - 2));
         if (matched.Length == 0)
         {
-            var empty = messages.Count == 0 ? $"No messages found in session `{sessionId}` (total: {total} messages)." : $"No messages matched the requested filters in session `{sessionId}` (total: {total} messages).";
             return Clip(prefix + "\n\n" + empty, budget);
         }
         var output = prefix + "\n\n"; var omitted = 0;

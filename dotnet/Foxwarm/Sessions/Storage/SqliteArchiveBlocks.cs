@@ -172,12 +172,17 @@ public sealed partial class SqliteArchiveMessageStore
         return inserted;
     }
 
-    public IReadOnlyList<ArchiveBlockRecord> ReadBlocks()
+    public IReadOnlyList<ArchiveBlockRecord> ReadBlocks() => ReadBlocksRange(1, 9007199254740991);
+
+    public IReadOnlyList<ArchiveBlockRecord> ReadBlocksRange(long first, long last)
     {
+        if (first <= 0 || last < first || last > 9007199254740991L) throw new ArgumentOutOfRangeException(nameof(first));
+        if (!File.Exists(databasePath)) return [];
         using var connection = OpenExistingReadOnly();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$s ORDER BY id";
+        command.CommandText = "SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$s AND id BETWEEN $first AND $last ORDER BY id";
         command.Parameters.AddWithValue("$s", sessionId);
+        command.Parameters.AddWithValue("$first", first); command.Parameters.AddWithValue("$last", last);
         using var reader = command.ExecuteReader();
         var blocks = new List<ArchiveBlockRecord>();
         while (reader.Read())

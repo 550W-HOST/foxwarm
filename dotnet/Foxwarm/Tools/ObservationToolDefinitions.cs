@@ -35,7 +35,7 @@ internal static class ObservationToolDefinitions
             ["sessionId"] = Field("string", "Target for update-display-name. Defaults to this session; status always describes this session."),
             ["name"] = Field("string", "New display name for update-display-name. An empty string clears it.")
         }),
-        Definition("get_session_messages", "Read a page of a session's messages and its current execution state. Defaults to the latest 10 messages. Filters narrow the selected page, not the entire conversation. Use recall with an exact msg#N reference for an archived message.", new JsonObject
+        Definition("get_session_messages", "Read a page of a session's messages and its current execution state. Defaults to the latest 10 messages. Filters narrow the selected page, not the entire conversation. Use recall to inspect archived context blocks or exact message ranges.", new JsonObject
         {
             ["sessionId"] = Field("string", "Session to read."),
             ["start"] = Field("number", "Zero-based message offset. Negative values count back from the end; -10 starts at the tenth-last message."),

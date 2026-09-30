@@ -233,6 +233,7 @@ public sealed partial class SqliteArchiveMessageStore
 
     public IReadOnlyList<ArchiveMessageRecord> ReadMessagesRange(long startSeq, long endSeq)
     {
+        if (!File.Exists(databasePath)) return [];
         if (startSeq <= 0 || endSeq < startSeq || endSeq > 9007199254740991L)
             throw new ArgumentOutOfRangeException(nameof(startSeq), "Archive message range must be positive and ordered.");
         using var connection = OpenExistingReadOnly();

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Concentrated localhost browser+HTTP+SQLite acceptance for the bounded .NET Chat host.
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -28,7 +28,7 @@ async function until(check, label, ms = 22000) {
     if (value) return value
     await sleep(35)
   }
-  throw new Error(`Timed out waiting for ${label}`)
+  throw new Error(`Timed out waiting for ${label}: ${JSON.stringify({ failed: provider?.failed, host: host?.output, last: provider?.requests.slice(-2).map(row => row.input.slice(-2200)) })}`)
 }
 async function port() {
   const socket = createServer()
@@ -231,6 +231,54 @@ try {
   assert(provider.requests.some(item => !item.planner && item.input.includes('post-l2 context check')
     && item.input.includes(`[CTX-BLOCK L2 B#${l2.id}`)), 'Next provider consumes new L2 active context')
 
+  // Actual exact model recall uses the same source records as original HTTP expansion.
+  const readerId = await create(hostPort)
+  const db = join(dataRoot, 'state', 'archive-store.sqlite')
+  const sql = (statement, parameters = []) => JSON.parse(execFileSync('python3', ['-c',
+    'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', db, statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
+  const archiveBefore = sql('SELECT * FROM archive_messages WHERE session_id=? ORDER BY seq', [layeredId])
+  const blocksBefore = sql('SELECT * FROM archive_blocks WHERE session_id=? ORDER BY id', [layeredId])
+  const activeBefore = await readFile(join(dataRoot, 'state', 'sessions', layeredId + '.json'), 'utf8')
+  async function exact(testId, args, expectedError = false) {
+    await send(hostPort, readerId, 'EXACT-RECALL ' + JSON.stringify({ testId, ...args }))
+    await until(async () => (await history(hostPort, readerId)).messages.some(row => row.parts?.some(part => part.text === 'EXACT-DONE-exact-' + testId)), testId)
+    await until(async () => !(await state(hostPort, readerId)).busy, testId + ' idle')
+    const result = (await history(hostPort, readerId)).messages.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'exact-' + testId)?.functionResponse.response
+    assert(result, testId); if (expectedError) { assert(result.error, testId); return result.error }
+    assert.equal(typeof result.output, 'string', testId); assert(result.output.length <= (args.previewLength || 1000), testId + ' total budget')
+    return result.output
+  }
+  const overview = await exact('overview', { sessionId: layeredId })
+  assert(overview.includes('Available message log') && overview.includes('L2:'))
+  const frontier = await exact('frontier', { sessionId: layeredId, target: 'blocks', previewLength: 20000 })
+  assert(frontier.includes('B#' + l2.id)); assert(!frontier.includes('L1 B#' + firstChild + ' '))
+  const blockDetail = await exact('l2', { sessionId: layeredId, target: 'block#' + l2.id, previewLength: 1000 })
+  assert(blockDetail.includes('B#' + l2.id) && blockDetail.includes('immediate child'))
+  const childDetail = await exact('l1', { sessionId: layeredId, target: 'B#' + firstChild, contentFilter: 'seed-l1-0', previewLength: 2000 })
+  assert(childDetail.includes('seed-l1-0'))
+  const rawDetail = await exact('raw', { sessionId: layeredId, target: 'MSG : B#' + l2.id, contentFilter: 'seed-l1-0', previewLength: 2000 })
+  assert(rawDetail.includes('seed-l1-0'))
+  const reversed = await exact('reversed', { sessionId: layeredId, target: 'msg#19-msg#18', toolDetail: 'full', previewLength: 2000 })
+  assert(reversed.includes('layered-read-pair') && reversed.includes('PAIRED_TOOL_CONTENT'))
+  const narrow = await exact('one', { sessionId: layeredId, target: 'msg#19', contentFilter: 'PAIRED_TOOL_CONTENT', toolDetail: 'names', previewLength: 1000 })
+  assert(narrow.includes('Matched in omitted tool'))
+  assert((await exact('missing-block', { sessionId: layeredId, target: 'B#999999' })).includes('No CTX-BLOCK'))
+  assert((await exact('missing-session', { sessionId: 'missing-reader-owner', target: 'overview' })).includes('not found'))
+  assert((await exact('missing-range', { sessionId: layeredId, target: 'msg#999999' })).includes('Available message log'))
+  await exact('offset', { sessionId: layeredId, target: 'msg#19', offset: 0 }, true)
+  await exact('vector', { sessionId: layeredId, vector_query: '' }, true)
+  await exact('old-syntax', { sessionId: layeredId, target: 'raw#19' }, true)
+  await exact('zero', { sessionId: layeredId, target: 'msg#0' }, true)
+  assert.deepEqual(sql('SELECT * FROM archive_messages WHERE session_id=? ORDER BY seq', [layeredId]), archiveBefore)
+  assert.deepEqual(sql('SELECT * FROM archive_blocks WHERE session_id=? ORDER BY id', [layeredId]), blocksBefore)
+  assert.equal(await readFile(join(dataRoot, 'state', 'sessions', layeredId + '.json'), 'utf8'), activeBefore)
+  assert.equal(sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', ['missing-reader-owner'])[0][0], 0)
+  assert.equal((await json(hostPort, 'GET', '/api/sessions/missing-reader-owner/state')).status, 404)
+  const rangePlan = sql('EXPLAIN QUERY PLAN SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq BETWEEN ? AND ? ORDER BY seq', [layeredId, 18, 19])
+  assert(rangePlan.some(row => row.join(' ').includes('SEARCH')) && !rangePlan.some(row => row.join(' ').includes('SCAN archive_messages')))
+  const statsPlan = sql('EXPLAIN QUERY PLAN SELECT COUNT(*),MIN(seq),MAX(seq) FROM archive_messages WHERE session_id=? AND seq BETWEEN ? AND ?', [layeredId, 1, 9007199254740991])
+  assert(statsPlan.some(row => row.join(' ').includes('COVERING INDEX')))
+
   const pruneId = await create(hostPort)
   await send(hostPort, pruneId, 'seed-prune read')
   await until(async () => (await history(hostPort, pruneId)).messages.length >= 4, 'read tool committed original')
@@ -278,14 +326,40 @@ try {
   assert(stoppedHistory.messages.length >= beforeStop.messages.length + 2)
   assert.equal(stoppedHistory.queueLength, 0)
 
+  const legacyId = await create(hostPort)
+  const legacyPath = join(dataRoot, 'state', 'sessions', legacyId + '.json')
   await hostStop(hostPort, host)
   host = null
+  // Owned offline read-old fixture: historical paired output is preserved, not regenerated by new recall.
+  const legacy = JSON.parse(await readFile(legacyPath, 'utf8')); const legacyTime = Date.now()
+  legacy.history = [
+    { role: 'model', parts: [{ functionCall: { id: 'legacy-recall', name: 'recall', args: { target: 'msg#1', offset: 0 }, rawArgsText: '{"target":"msg#1","offset":0}' } }], __meta: { seq: 1, timestamp: legacyTime } },
+    { role: 'tool', parts: [{ functionResponse: { name: 'recall', tool_use_id: 'legacy-recall', response: { target: 'msg#1', offset: 0, text: 'LEGACY-RECALL-CONTENT', totalCharacters: 15000, nextOffset: 12000 } } }], __meta: { seq: 2, timestamp: legacyTime + 1 } },
+    { role: 'model', parts: [{ text: 'Legacy completed result' }], __meta: { seq: 3, timestamp: legacyTime + 2 } }
+  ]; legacy.nextMessageSeq = 4; legacy.meta.messageCount = 3
+  await writeFile(legacyPath, JSON.stringify(legacy))
+  execFileSync('python3', ['-c', 'import sqlite3,json,sys; p=json.load(open(sys.argv[2])); c=sqlite3.connect(sys.argv[1]); c.executemany("INSERT INTO archive_messages(session_id,agent,seq,timestamp,role,message_json) VALUES(?,?,?,?,?,?)",[(sys.argv[3],"main",m["__meta"]["seq"],m["__meta"]["timestamp"],m["role"],json.dumps(m,separators=(",",":"),ensure_ascii=False)) for m in p["history"]]); c.commit()', db, legacyPath, legacyId])
+  const legacyArchive = sql('SELECT message_json FROM archive_messages WHERE session_id=? ORDER BY seq', [legacyId])
+  // Existing supported block shape can name decreasing/nonconsecutive children; keep their actual source identities.
+  const orderedIds = [4, l2.sourceBlockIds[0]]
+  execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); row=list(c.execute("SELECT * FROM archive_blocks WHERE session_id=? AND id=?",(sys.argv[2],int(sys.argv[3]))).fetchone()); names=[r[1] for r in c.execute("PRAGMA table_info(archive_blocks)")]; ids=json.loads(sys.argv[4]); row[names.index("id")]=900; row[names.index("source_start")]=ids[0]; row[names.index("source_end")]=ids[-1]; row[names.index("source_block_ids_json")]=json.dumps(ids); row[names.index("summary")]="Explicit reverse-order source fixture"; children=c.execute("SELECT raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp FROM archive_blocks WHERE session_id=? AND id IN (?,?)",(sys.argv[2],*ids)).fetchall(); row[names.index("raw_start_seq")]=min(r[0] for r in children); row[names.index("raw_end_seq")]=max(r[1] for r in children); row[names.index("raw_start_timestamp")]=min(r[2] for r in children); row[names.index("raw_end_timestamp")]=max(r[3] for r in children); c.execute("INSERT INTO archive_blocks VALUES("+",".join("?" for _ in row)+")",row); c.commit()', db, layeredId, String(l2.id), JSON.stringify(orderedIds)])
   const second = await hostStart(hostPort, dataRoot, toolRoot, modelsFile)
   host = second
   assert.notEqual(second.child.pid, firstPid)
   assert.equal((await history(hostPort, switchId)).session.modelKey, 'beta/beta-wire')
   assert.equal((await history(hostPort, switchId)).session.effectiveEffort, 'high')
   assert.equal((await history(hostPort, layeredId)).messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock?.id, l2.id)
+  await send(hostPort, legacyId, 'OLD-RECALL-RESTORE')
+  await until(async () => (await history(hostPort, legacyId)).messages.some(row => row.parts?.some(part => part.text === 'OLD-RESULT-RESTORED')), 'old paired response restored')
+  await until(async () => !(await state(hostPort, legacyId)).busy, 'old result idle')
+  assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq<=3 ORDER BY seq', [legacyId]), legacyArchive)
+  const orderHttp = await json(hostPort, 'GET', `/api/sessions/${layeredId}/context-blocks/900/expand?previewLength=6000`)
+  assert.deepEqual(orderHttp.body.items.map(item => item.block.id), orderedIds)
+  const orderModel = await exact('ordered', { sessionId: layeredId, target: 'B#900', previewLength: 6000 })
+  assert(orderModel.indexOf('L1 B#' + orderedIds[0]) < orderModel.indexOf('L1 B#' + orderedIds[1]))
+  const cappedChildren = await exact('child-cap', { sessionId: layeredId, target: 'B#900', previewLength: 20000 })
+  assert(cappedChildren.includes('capped at 1 of 2'))
+  await exact('restart-raw', { sessionId: layeredId, target: 'msg#19', toolDetail: 'snippets', contentFilter: 'PAIRED_TOOL_CONTENT' })
   await visit(page, hostPort, layeredId)
   await page.waitForSelector('.foxwarm-context-block-card')
   await page.evaluate(id => {
@@ -306,7 +380,7 @@ try {
     stopId, requestCount: provider.requests.length, planCount: provider.layerPlanCount,
     firstPlanInvalidThenCorrected: provider.invalidSent, l2Id: l2.id, childIds: l2.sourceBlockIds,
     archivedOriginalBytes: Buffer.byteLength(original.body.messageJson), browserNestedExpansion: true,
-    pruneOnlyRecallPaged: true, heldPlannerStopped: provider.heldStopClosed, frozenModelAndPersistedEffort: true }))
+    pruneOnlyRecallFiltered: true, exactLayeredRecall: true, selectedSessionReadPure: true, boundedSqlPlans: true, oldResultRestart: true, orderedSourceFixture: true, heldPlannerStopped: provider.heldStopClosed, frozenModelAndPersistedEffort: true }))
 } finally {
   if (browser) await browser.close().catch(() => {})
   if (host?.child.exitCode === null) {

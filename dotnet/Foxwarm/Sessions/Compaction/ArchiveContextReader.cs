@@ -1,0 +1,63 @@
+using System.Text.Json.Nodes;
+
+namespace Foxwarm.Sessions;
+
+// Pure source lookup shared by model recall and the existing WebUI block expansion.
+internal sealed class ArchiveContextReader(SqliteArchiveMessageStore archive)
+{
+    internal ArchiveStats Stats() => archive.MessageStats();
+    internal IReadOnlyList<ArchiveBlockTopology> Topology() => archive.BlockTopology();
+    internal ArchiveBlockRecord? Block(long id) => archive.ReadBlocksRange(id, id).FirstOrDefault();
+    internal IReadOnlyList<ArchiveMessageRecord> Messages(long first, long last) => archive.ReadMessagesRange(first, last);
+    internal IReadOnlyList<ArchiveBlockRecord> Children(ArchiveBlockRecord block)
+    {
+        if (block.SourceKind != "block") return [];
+        if (block.SourceBlockIds is { Count: > 0 }) return block.SourceBlockIds.Select(value => Block(value!.GetValue<long>())).OfType<ArchiveBlockRecord>().ToArray();
+        return archive.ReadBlocksRange(Math.Min(block.SourceStart, block.SourceEnd), Math.Max(block.SourceStart, block.SourceEnd));
+    }
+    internal IReadOnlyList<ArchiveBlockTopology> Frontier(IReadOnlyList<ArchiveBlockTopology> topology)
+    {
+        var parents = topology.Where(row => row.Kind == "block").ToArray();
+        return topology.Where(row => !parents.Any(parent => parent.Id != row.Id && (parent.Children.Length > 0 ? parent.Children.Contains(row.Id)
+            : row.Id >= Math.Min(parent.First, parent.Last) && row.Id <= Math.Max(parent.First, parent.Last)))).ToArray();
+    }
+    internal static PreviewItem BlockItem(ArchiveBlockRecord block)
+    {
+        var text = SessionWait.Text(block.ToMessage()["parts"]?[0]?["text"]) ?? block.Summary;
+        return new("[local]", text, text, null);
+    }
+    internal JsonObject? Expand(string sessionId, long blockId, int previewLength)
+    {
+        var target = Block(blockId); if (target is null) return null;
+        var items = new JsonArray();
+        if (target.SourceKind == "block")
+            foreach (var child in Children(target))
+            {
+                var message = child.ToMessage();
+                ((JsonObject)message["__meta"]!)["contextArchiveItem"] = new JsonObject { ["kind"] = "block", ["id"] = child.Id };
+                items.Add(new JsonObject { ["kind"] = "block", ["message"] = message, ["block"] = child.ToContextMeta(), ["timestamp"] = child.CreatedAt });
+            }
+        else
+            foreach (var record in Messages(target.SourceStart, target.SourceEnd))
+            {
+                var message = (JsonObject)record.Message.DeepClone();
+                var meta = message["__meta"] as JsonObject ?? new JsonObject(); message["__meta"] = meta;
+                meta["contextArchiveItem"] = new JsonObject { ["kind"] = "message", ["seq"] = record.Seq };
+                items.Add(new JsonObject { ["kind"] = "message", ["message"] = message, ["seq"] = record.Seq, ["timestamp"] = record.Timestamp });
+            }
+        var renderer = new ContextPreviewRenderer(new JsonObject { ["previewLength"] = previewLength }, 1000);
+        return new JsonObject
+        {
+            ["sessionId"] = sessionId,
+            ["blockId"] = blockId,
+            ["expansionKind"] = target.SourceKind == "block" ? "child-blocks" : "messages",
+            ["target"] = $"B#{blockId}",
+            ["previewLength"] = previewLength,
+            ["text"] = renderer.RenderItems([BlockItem(target)], $"CTX-BLOCK B#{blockId} for session `{sessionId}`.", _ => "Block summary:", "No summary."),
+            ["items"] = items,
+            ["messages"] = new JsonArray(items.OfType<JsonObject>().Select(item => item["message"]?.DeepClone()).ToArray()),
+            ["totalItems"] = items.Count,
+            ["block"] = target.ToContextMeta()
+        };
+    }
+}

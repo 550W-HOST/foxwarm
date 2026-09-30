@@ -52,7 +52,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       for await (const part of req) chunks.push(part)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'submit_compact_plan'])
-      assert.equal(body.tools[6].parameters.properties.target.pattern, '^msg#[1-9][0-9]*$')
+      assert(body.tools[6].parameters.properties.sessionId); assert.equal(body.tools[6].parameters.properties.offset, undefined)
       assert.equal(body.tools.at(-1).parameters.required[0], 'replaceAsBlocks')
       assert.equal(req.headers.authorization, `Bearer ${body.model === 'alpha-wire' ? alphaToken : betaToken}`)
       const input = JSON.stringify(body.input)
@@ -63,6 +63,17 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       requests.push({ model: body.model, authorization: req.headers.authorization,
         reasoning: body.reasoning, include: body.include, input, planner: Boolean(planPrompt), tools: body.tools })
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close', 'Cache-Control': 'no-cache' })
+      if (latestUser.includes('EXACT-RECALL ')) {
+        const args = JSON.parse(latestUser.slice(latestUser.indexOf('EXACT-RECALL ') + 'EXACT-RECALL '.length));
+        const callId = 'exact-' + args.testId; delete args.testId
+        if (!calls.some(item => item.call_id === callId)) call(res, callId, 'recall', args)
+        else completed(res, [text('EXACT-DONE-' + callId)])
+        return
+      }
+      if (latestUser.includes('OLD-RECALL-RESTORE')) {
+        assert(input.includes('totalCharacters') && input.includes('nextOffset') && input.includes('LEGACY-RECALL-CONTENT'))
+        completed(res, [text('OLD-RESULT-RESTORED')]); return
+      }
       if (planPrompt && input.includes('seed-stop')) {
         heldStop = res
         res.on('close', () => { heldStopClosed = true; heldStop = null })
@@ -91,7 +102,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
             'Normal provider received the pruned output with an exact recall source marker')
           if (input.includes('SENTINEL_MIDDLE')) completed(res, [text('The archived original contains SENTINEL_MIDDLE.')])
           else if (calls.some(call => call.name === 'recall'))
-            call(res, 'recall-middle-page', 'recall', { target: 'msg#3', offset: 12000 })
+            call(res, 'recall-middle-page', 'recall', { target: 'msg#3', contentFilter: 'SENTINEL_MIDDLE', toolDetail: 'snippets', previewLength: 2000 })
           else call(res, 'recall-first-page', 'recall', { target: 'msg#3' })
           return
         }
