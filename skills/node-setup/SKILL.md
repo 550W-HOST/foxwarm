@@ -132,7 +132,7 @@ Foxwarm cannot infer one globally correct external base URL for every node boots
 url: https://foxwarm.example.invalid/foxwarm
 ```
 
-The configured URL supplies `/node pair-help` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, those examples retain `$BASE_URL` placeholders.
+The configured URL supplies `/node pair-help` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
 
 Depending on where the node runs, the reachable master URL might be:
 
@@ -151,21 +151,17 @@ What Foxwarm **can** do is:
 Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
-- it returns configured URLs when available, otherwise `$BASE_URL` placeholders in the places where a real reachable master address is needed
-- it asks the operator to check configured reachability or choose `BASE_URL` from the node's point of view when unset
+- it returns complete configured addresses when available; otherwise replace `YOUR_MASTER` in the command you copy
+- commands are independently copyable; check that the address is reachable from the new Node
 - a configured public URL is not a guarantee that every node can reach it
 
 So the rule is:
 
 - if you fetch the bootstrap script from the same origin the node should later use, you usually do **not** need to pass `--host`
-- if the public URL has a path prefix, pass `--host="$BASE_URL"` (or Windows `-HostUrl`) to preserve it; request headers cannot recover that path
+- if the public URL has a path prefix, pass `--host=YOUR_REACHABLE_URL` (or Windows `-HostUrl`) to preserve it; request headers cannot recover that path
 - if you fetched the script through a different address, pass `--host=...` explicitly
 
-Example of choosing a reachable URL first:
-
-```bash
-BASE_URL=http://YOUR_MASTER:3001
-```
+Copy a setup command from `/node pair-help` and replace its example address if necessary.
 
 ## Pairing / approval flow
 
@@ -175,7 +171,7 @@ Two supported paths are available. For a Node created before the remote client r
 /node create my-node
 ```
 
-It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host="$BASE_URL"` or `-HostUrl`. `/node remove my-node` revokes the credential. The command is user-facing, not a model tool.
+It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` revokes the credential. The command is user-facing, not a model tool.
 
 For the existing request/approve path, start the Node with the shared pairing token:
 
@@ -224,8 +220,7 @@ offline will not be usable for worker execution and may not appear there.
 Use this when you want a direct host-side node client.
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
@@ -247,8 +242,7 @@ What it does:
 If you want background mode instead:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
@@ -262,7 +256,7 @@ script prints the exact status/log/stop commands for the selected mode.
 For systemd-managed startup and restart supervision:
 
 ```bash
-curl -fsSL "$BASE_URL/node/run.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run.sh' | bash -s -- \
   --dir=/opt/foxwarm-node \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
@@ -292,8 +286,7 @@ curl -fsSL "http://127.0.0.1:3001/node/run.sh" | bash -s -- \
 Use this when every tool call should require local confirmation:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run-interactive.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run-interactive.sh' | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-cli-node
 ```
@@ -308,8 +301,7 @@ Optional extras:
 Use this when you want the node in a containerized environment.
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run-docker.sh' | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node
 ```
@@ -325,8 +317,7 @@ That path:
 If you want it to return immediately without following logs:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s -- \
+curl -fsSL 'http://YOUR_MASTER:3001/node/run-docker.sh' | bash -s -- \
   --pairing=YOUR_PAIRING_TOKEN \
   --node-id=my-node \
   -d
@@ -339,9 +330,8 @@ For a device that needs only command execution without Node.js, use the independ
 First run `/node create my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
 
 ```sh
-BASE_URL=https://foxwarm.example.invalid/foxwarm
-curl -fsSL "$BASE_URL/node/run-shell.sh" -o run-shell.sh
-NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host="$BASE_URL" --node-id=my-shell
+curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' -o run-shell.sh
+NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
 ```
 
 Always passing `--host` preserves any deployment prefix. Curl retains certificate verification. The token is kept in an owner-only temporary curl config and Authorization headers, not URLs. The script installs no runtime or service and creates no Agent directories.
@@ -357,17 +347,15 @@ Each command's wrapper owns its foreground budget, background transition and rep
 If you want to inspect or customize before starting:
 
 ```bash
-BASE_URL=http://YOUR_MASTER:3001
-curl -fsSL "$BASE_URL/node/docker-compose.yaml" -o docker-compose.yaml
-
-COMPOSE_BASE_URL=$(printf '%s' "$BASE_URL" | sed "s/'/\\\\'/g")
-cat > .env <<EOF
-NODE_HOST='$COMPOSE_BASE_URL'
-NODE_SOURCE_URL='$COMPOSE_BASE_URL/node/source.tar.gz'
-NODE_PAIRING_TOKEN=YOUR_PAIRING_TOKEN
-NODE_ID=my-node
+curl -fsSL 'http://YOUR_MASTER:3001/node/docker-compose.yaml' -o docker-compose.yaml
+umask 077
+cat > .env <<'FOXWARM_NODE_ENV'
+NODE_HOST='http://YOUR_MASTER:3001'
+NODE_SOURCE_URL='http://YOUR_MASTER:3001/node/source.tar.gz'
+NODE_PAIRING_TOKEN='YOUR_PAIRING_TOKEN'
+NODE_ID='my-node'
 NODE_DATA_DIR=./data
-EOF
+FOXWARM_NODE_ENV
 chmod 600 .env
 
 docker compose up -d --build
@@ -550,3 +538,9 @@ Use **`agent-management`** when the task is mainly about:
 Use **`isolated-worker`** when a coordinator should create a temporary isolated
 agent/session on an already-online Node or through a configured Docker-worktree
 provider for one exact existing worktree.
+
+## WebUI onboarding
+
+Open **System Architecture → Nodes**. This view shows Node identity, type, connection/compatibility status and available services without Session rows or inspectors. **New nodes** opens setup methods for Linux CLI, interactive CLI, Shell, Docker and Windows. The address defaults to `config.url`, or the current browser address including its deployment path. You can explicitly change it for the new Node's network.
+
+Copy a setup command and keep it private. CLI clients using pairing appear in **Pending approvals**; approve only requests you recognize. The button's pending count excludes already approved clients waiting to reconnect. Shell setup instead requires an explicit **Create** action, which reserves a Node name and shows its one-time per-node credential in the command. Copy that command before closing; closing the dialog discards its credentials.

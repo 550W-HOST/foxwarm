@@ -35,7 +35,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - Model/provider and channel configuration, validation, and connectivity tests.
 - ASR and messaging-platform setup helpers.
 - Browser terminal REST/WebSocket routes.
-- Authenticated public-safe node/service summaries for WebUI launch selectors.
+- Authenticated public-safe node/service summaries for WebUI launch selectors. Separately registered modal-only setup/create/pending/approve actions are owned by [authenticated onboarding routes](./src-webui-node-onboarding.md).
 - Read-only one-layer CTX-BLOCK expansion.
 - Registration of the independent optional Code routes.
 

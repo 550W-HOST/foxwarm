@@ -53,6 +53,7 @@ import {
 } from '../webuiSessionListQueries';
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
 import { WebUiLogFile, registerWebUiLogRoutes } from './webuiLogs';
+import { registerWebUiNodeOnboardingRoutes } from './webuiNodeOnboarding';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 import { listProviderModels, parseProviderModelListRequest, ProviderModelListError } from '../providerModelList';
@@ -1009,6 +1010,7 @@ export class WebUIChannel implements Channel {
     if (this.enableWebUI) {
       registerVscodeWebRoutes(httpServerInstance);
       registerWebUiLogRoutes(httpServerInstance, this.logs);
+      registerWebUiNodeOnboardingRoutes(httpServerInstance);
 
       // Auth endpoint
       httpServerInstance.addRoute({

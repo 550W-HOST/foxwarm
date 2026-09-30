@@ -1,7 +1,7 @@
 # Unit: webui-architecture-view
 
 Files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/architectureOperations.ts, packages/webui/test/architectureOperations.test.mjs
-Secondary files: packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs
+Secondary files: packages/webui/src/components/NodeOnboardingModal.tsx, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
@@ -42,9 +42,15 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 - The current Session is exact-loaded and initially inspected, but catalog replay does not force-expand a duplicate session tree. Background refresh therefore cannot override a nonexistent tree-collapse intent.
 - A one-second clock runs only while a loaded Session is actively requesting a model or running a tool, keeping elapsed runtime labels current without treating waiting as busy.
 
+### Nodes surface
+
+- The Nodes summary card and Nodes tab enter a standalone full-width Node card surface sourced only from `/nodes`, not synthetic Session placements. It retains identity, type, online/protocol status, recent activity and service summaries, with no Session counts, filters, search, usage or right-side inspector.
+- Nodes mode retains the bounded Session cache for return navigation but pauses Architecture live subscriptions, catalog replay and busy clocks. Returning to Topology restores the ordinary bounded refresh path.
+- New nodes opens the independently mounted [onboarding modal](./webui-node-onboarding.md). Only visible Nodes/modal owns the pending poll/count; ordinary Architecture and Node status loading never request setup credentials.
+
 ### Agent registry
 
-- The Topology/Agents surface switch separates runtime Session placement from persistent Agent management. The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
+- The Topology/Agents/Nodes surface switch separates runtime Session placement, persistent Agent management and Node-only operations. The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
 - Registry cards show self-owned memory file count/recency plus session, active, queue, inheritance, and isolation summaries. Their order is independent of selection so clicking a card never moves it: `main` is first, followed by active Agents, other populated Agents, and empty workspaces, with IDs alphabetical inside each group.
 - The registry reuses `AgentCreationMenu` for Agent and Session creation. Its shared `+` opens New session directly, with Agent tags and a trailing New agent tag in the same modal flow. Agent update changes only mutable inheritance/isolation metadata; Agent ID is not renamed because it is a durable namespace, permission scope, and archive identity component.
 - The Agent inspector displays the complete inheritance chain, allows an isolation Node selection, and loads a bounded, symlink-free Markdown manifest from self-owned `memory/`. Top-level `00_SYSTEM.md`, `MEMORY.md`, `SOUL.md`, and `USER.md` are prioritized, nested project files follow, and `archive/` is last. Folder/file actions open the exact Master path in Code without copying file content through the registry API.

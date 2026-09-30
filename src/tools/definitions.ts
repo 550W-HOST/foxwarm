@@ -854,7 +854,7 @@ Example:
         },
         {
             name: 'node_bootstrap_info',
-            description: "Get Node setup instructions, bootstrap endpoints, and the pairing token. Uses config.url when set; otherwise choose a BASE_URL reachable from the new Node. Treat the pairing token as a secret.",
+            description: "Get Node setup instructions, bootstrap endpoints, and the pairing token. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node. Treat the pairing token as a secret.",
             parameters: {
                 type: 'object',
                 properties: {}

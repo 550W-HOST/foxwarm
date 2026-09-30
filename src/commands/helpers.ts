@@ -4,10 +4,10 @@ import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { COMPACT_KEEP_PERCENT, HTTP_PORT, MODEL_EFFORTS, PUBLIC_BASE_URL, resolveModelConfig, type ModelEffort } from '../config';
+import { COMPACT_KEEP_PERCENT, MODEL_EFFORTS, PUBLIC_BASE_URL, resolveModelConfig, type ModelEffort } from '../config';
 import { commandSessionMessageCount, type CommandSession } from './types';
 import { CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE, negotiateNodeProtocol } from '../../packages/shared/dist/nodeProtocol';
-import { buildNodeManualComposeExample } from '../nodes/bootstrapInfo';
+import { buildNodeBootstrapInfo } from '../nodes/bootstrapInfo';
 
 export function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
@@ -221,91 +221,31 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`
 }
 
-function shellCommand(lines: string[]): string {
-  return lines.join(' \\\n')
-}
-
 export function buildNodePairHelp(token: string, publicUrl = PUBLIC_BASE_URL): string {
-  const explicitHost = publicUrl && new URL(publicUrl).pathname !== '/'
-  const hostFlag = explicitHost ? ['  --host="$BASE_URL"'] : []
+  const info = buildNodeBootstrapInfo({ pairingToken: token, publicUrl });
+  const blocks: Array<[string, string, string]> = [
+    ['Linux CLI', 'bash', info.examples.bareMetal],
+    ['Linux CLI with systemd startup', 'bash', info.examples.bareMetalInstall],
+    ['Interactive CLI', 'bash', info.examples.interactive],
+    ['Docker', 'bash', info.examples.docker],
+    ['Manual Docker Compose', 'bash', info.examples.manualCompose],
+    ['Windows PowerShell', 'powershell', info.examples.windows],
+  ];
   return [
     '🧩 **Node Pairing / Bootstrap Help**',
     '',
-    `Current pairing token: \`${token}\``,
+    info.baseUrl.explanation,
+    info.baseUrl.operatorAction,
     '',
-    'Use the pairing token below directly as `--pairing=...` when bootstrapping a node.',
-    '',
-    publicUrl ? 'The configured public URL is used below. Check that it is reachable from the new Node.' : 'First choose a **reachable base URL** for this Foxwarm master from the node\'s point of view.',
-    publicUrl ? '' : 'There is no single globally correct external URL that Foxwarm can always know in advance — it might be localhost, a LAN IP, a Docker host IP, or a reverse-proxy domain depending on where the node runs.',
-    '',
-    'Downloaded scripts infer their default host from the HTTP request origin. They cannot infer a reverse-proxy path prefix.',
-    explicitHost ? 'The configured URL has a path prefix. Pass `--host="$BASE_URL"` so the Node keeps that prefix.' : 'Override `--host=...` only when the script was fetched through one address but the node should connect to another reachable address.',
-    '',
-    '**Pick a reachable URL first**',
-    '```bash',
-    publicUrl ? `BASE_URL=${shellQuote(publicUrl)}` : `BASE_URL=http://YOUR_MASTER:${HTTP_PORT}`,
-    '```',
-    '',
-    '**Bare metal (recommended Linux host bootstrap)**',
-    '```bash',
-    shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${token}`, '  --node-id=my-node']),
-    '```',
-    '',
+    ...blocks.flatMap(([title, language, command]) => [`**${title}**`, `\`\`\`${language}`, command, '\`\`\`', '']),
     '**Shell-only Node (POSIX sh + curl; exec only)**',
-    'First run `/node create my-shell`; use its per-node token below, not the pairing token.',
-    '```sh',
-    'curl -fsSL "$BASE_URL/node/run-shell.sh" -o run-shell.sh',
-    'NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host="$BASE_URL" --node-id=my-shell',
-    '```',
+    'First run `/node create my-shell`; replace the per-node token placeholder below with its token.',
+    '```sh', info.examples.shell, '```', '',
+    '**Approve a pending Node**',
+    'Copy the exact `/node approve <pending-id>` command shown by the client, or approve it in WebUI → Nodes → New nodes.',
     '',
-    '**Bare metal with systemd boot startup**',
-    '```bash',
-    shellCommand(['curl -fsSL "$BASE_URL/node/run.sh" | bash -s --', '  --dir=/opt/foxwarm-node', ...hostFlag, `  --pairing=${token}`, '  --node-id=my-node', '  --install']),
-    '```',
-    '',
-    '**Docker bootstrap**',
-    '```bash',
-    shellCommand(['curl -fsSL "$BASE_URL/node/run-docker.sh" | bash -s --', ...hostFlag, `  --pairing=${token}`, '  --node-id=my-node']),
-    '```',
-    '',
-    '**Explicit host override example**',
-    '```bash',
-    `curl -fsSL "http://127.0.0.1:${HTTP_PORT}/node/run.sh" | bash -s -- \
-  --dir=/opt/foxwarm-node \
-  --host=http://192.168.1.50:${HTTP_PORT} \
-  --pairing=${token} \
-  --node-id=my-node`,
-    '```',
-    '',
-    '**Manual docker-compose template**',
-    '```bash',
-    buildNodeManualComposeExample(token),
-    '```',
-    '',
-    '**Windows PowerShell (download and run)**',
-    '```powershell',
-    `$BASE_URL = '${(publicUrl || `http://YOUR_MASTER:${HTTP_PORT}`).replace(/'/g, "''")}'`,
-    'Invoke-WebRequest "$BASE_URL/node/run.ps1" -OutFile .\\run.ps1',
-    explicitHost
-      ? `.\\run.ps1 -HostUrl "$BASE_URL" -Pairing '${token}' -NodeId my-node`
-      : `.\\run.ps1 -Pairing '${token}' -NodeId my-node`,
-    '```',
-    '',
-    '**Approve the pending node from Foxwarm**',
-    '```text',
-    '/node',
-    '/node approve <pending-id> my-node',
-    '```',
-    '',
-    'Notes:',
-    '- `/node/run.sh` = bare-metal bootstrap; requires `--dir`; runs in foreground by default, use `-d` for tmux/nohup background mode or `--install` for a systemd service',
-    '- `/node/run-docker.sh` = Docker bootstrap; starts containers and follows logs by default, use `-d` to skip log following',
-    '- `/node/run-interactive.sh` = cli-node TUI mode (tool approvals plus bound-session chat)',
-    '- `/node/docker-compose.yaml` = inspect/customize the self-contained compose template first',
-    '- `/node` = list current node, approved nodes, and pending approvals',
-    '- `/node approve` / `/node reject` = act on pending approvals',
-    '- agent/tool workflows can use the `node_bootstrap_info` tool for structured bootstrap info',
-  ].join('\n')
+    'The commands above contain pairing credentials. Keep them private.',
+  ].join('\n');
 }
 
 export async function buildNodeListReply(currentNode: string, boundNode?: string): Promise<string> {

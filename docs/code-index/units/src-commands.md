@@ -39,7 +39,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | `formatChannelInfo(ctx)` | Formats current channel identifiers and state |
 | `formatChannelRuntimeStatus(channelId, typeFilter)` | Formats runtime status of managed channels |
 | `getManagedPlatformHelp()` | Returns comma-separated managed channel IDs |
-| `buildNodePairHelp(token)` | Builds node pairing/bootstrap help text |
+| `buildNodePairHelp(token)` | Builds independently copyable Node setup commands through the shared bootstrap generator |
 | `shellQuote(value)` | Quotes configured public URL for generated shell setup instructions |
 | `buildNodeListReply(currentNode, boundNode)` | Builds the operator-facing master/approved-remote Node list, pending approvals, and `/node` command help, including remove/move |
 | `handleCompactCommand(ctx, args, sessionId, session)` | Handles /compact command logic |

@@ -16,7 +16,7 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 - `initializeNodeRegistry()` — loads registry and cleans expired pairings
 - `createPendingPairing(input)` — creates a new pairing request identified by its full pending ID
 - `createApprovedNode(nodeId)` — reserves an approved ID with a newly generated per-node token; returns plaintext only after writing its hash
-- `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` — approves a pairing, optionally checks a live external caller after asynchronous lookup and before trust mutation, generates auth token, notifies via WebSocket
+- `approvePendingPairing(pendingId, requestedNodeId?, assertBeforeApproval?)` — approves a pairing, rechecks that the same unapproved pending entry remains after asynchronous lookup, optionally checks a live external caller before trust mutation, generates auth token, notifies via WebSocket
 - `rejectPendingPairing(pendingId, reason?)` — rejects and notifies client
 - `claimApprovedPairing(pendingId)` — retrieves credentials for offline-approved pairings
 - `listPendingPairings()` — returns pending pairings with connection status

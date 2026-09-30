@@ -477,6 +477,9 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
 
   // An external caller can become unavailable while registry reads or ID
   // allocation are pending. Fence that caller before mutating Node trust.
+  if (data.pendingPairings[pendingId] !== pending || pending.approvedNodeId) {
+    throw new Error(`Pending pairing \`${pendingId}\` is no longer awaiting approval`)
+  }
   assertBeforeApproval?.()
   const authToken = randomToken(32)
   const now = Date.now()

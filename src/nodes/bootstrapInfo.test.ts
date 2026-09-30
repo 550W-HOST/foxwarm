@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildNodeBootstrapInfo, NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER } from './bootstrapInfo';
+import { buildNodeBootstrapInfo, buildNodeBootstrapCommands, NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER } from './bootstrapInfo';
 import * as tools from '../tools';
 import fs from 'fs-extra';
 import os from 'node:os';
@@ -10,67 +10,32 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-test('buildNodeBootstrapInfo uses placeholder base-url semantics instead of pretending to know a unique external url', () => {
-  const result = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123' });
-
+test('bootstrap retains external metadata and gives independent literal-address commands', () => {
+  const result = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: '' });
   assert.equal(result.pairingToken, 'TOKEN123');
   assert.equal(result.baseUrl.placeholder, NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER);
   assert.equal(result.baseUrl.requestDerivedDefaultInDownloadedScripts, NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER);
   assert.equal(result.baseUrl.canSystemKnowUniqueExternalBaseUrl, false);
-  assert.match(result.baseUrl.explanation, /cannot reliably know/i);
-  assert.match(result.baseUrl.operatorAction, /Choose BASE_URL/i);
-  assert.equal(result.endpoints.runShUrl, '$BASE_URL/node/run.sh');
-  assert.equal(result.endpoints.composeUrl, '$BASE_URL/node/docker-compose.yaml');
-});
-
-test('buildNodeBootstrapInfo examples use BASE_URL placeholders and pairing token', () => {
-  const result = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123' });
-
-  assert.equal(result.examples.chooseBaseUrl, 'BASE_URL=http://YOUR_MASTER:3001');
-  assert.match(result.examples.bareMetal, /\$BASE_URL\/node\/run\.sh/);
-  assert.match(result.examples.bareMetal, /--dir=\/opt\/foxwarm-node/);
-  assert.match(result.examples.bareMetal, /--pairing=TOKEN123/);
+  assert.equal(result.endpoints.runShUrl, 'http://YOUR_MASTER:3001/node/run.sh');
+  for (const command of Object.values(result.examples)) assert.doesNotMatch(command, /BASE_URL/);
+  assert.match(result.examples.bareMetal, /--dir='\/opt\/foxwarm-node'/);
+  assert.match(result.examples.bareMetal, /--host='http:\/\/YOUR_MASTER:3001'/);
+  assert.match(result.examples.bareMetal, /--pairing='TOKEN123'/);
   assert.match(result.examples.bareMetalBackground, /-d/);
   assert.match(result.examples.bareMetalInstall, /--install/);
-  assert.match(result.examples.explicitHostOverride, /--host="\$BASE_URL"/);
-  assert.match(result.examples.manualCompose, /NODE_SOURCE_URL='\$COMPOSE_BASE_URL\/node\/source\.tar\.gz'/);
 });
 
-test('configured path URL is used in all endpoints and host flags, while origin uses HTTP request defaults', () => {
-  const prefixed = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: "https://example.invalid/fox'base" });
-  assert.equal(prefixed.baseUrl.configuredUrl, "https://example.invalid/fox'base");
-  assert.equal(prefixed.endpoints.sourceUrl, "https://example.invalid/fox'base/node/source.tar.gz");
-  assert.equal(prefixed.examples.chooseBaseUrl, `BASE_URL='https://example.invalid/fox'"'"'base'`);
-  for (const command of [prefixed.examples.bareMetal, prefixed.examples.bareMetalInstall, prefixed.examples.bareMetalBackground, prefixed.examples.docker, prefixed.examples.interactive]) {
-    assert.match(command, /--host="\$BASE_URL"/);
-  }
-  assert.match(prefixed.examples.windows, /-HostUrl "\$BASE_URL"/);
-
-  const origin = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: 'https://example.invalid' });
-  assert.equal(origin.endpoints.runShUrl, 'https://example.invalid/node/run.sh');
-  assert.doesNotMatch(origin.examples.bareMetal, /--host=/);
-  assert.doesNotMatch(origin.examples.windows, /-HostUrl/);
-});
-
-test('PowerShell setup is self-contained for placeholder, configured origin, and quoted deployment path', () => {
-  for (const { publicUrl, expectedBaseUrl, pathPrefix } of [
-    { publicUrl: undefined, expectedBaseUrl: 'http://YOUR_MASTER:3001', pathPrefix: false },
-    { publicUrl: 'https://example.invalid', expectedBaseUrl: 'https://example.invalid', pathPrefix: false },
-    { publicUrl: "https://example.invalid/fox'base", expectedBaseUrl: "https://example.invalid/fox'base", pathPrefix: true },
-  ]) {
-    const { windows } = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl }).examples;
-    const [assignment, fetch, run] = windows.split('\n');
-    assert.equal(windows.split('\n').length, 3);
-    const declared = /^\$BASE_URL = '((?:[^']|'')*)'$/.exec(assignment);
-    assert.ok(declared, 'PowerShell example must assign its own literal BASE_URL');
-    const assignedBaseUrl = declared[1].replace(/''/g, "'");
-    assert.equal(assignedBaseUrl, expectedBaseUrl);
-    const fetchTarget = /^Invoke-WebRequest "([^"]+)" -OutFile \.\\run\.ps1$/.exec(fetch)?.[1];
-    assert.equal(fetchTarget?.replace('$BASE_URL', assignedBaseUrl), `${expectedBaseUrl}/node/run.ps1`);
-    assert.match(run, /^\.\\run\.ps1 /);
-    const hostArg = /-HostUrl "([^"]+)"/.exec(run)?.[1];
-    assert.equal(hostArg?.replace('$BASE_URL', assignedBaseUrl), pathPrefix ? expectedBaseUrl : undefined);
-    assert.match(run, /-Pairing 'TOKEN123' -NodeId my-node$/);
+test('PowerShell commands inline literal addresses with explicit origin or deployment host', () => {
+  for (const url of ['http://YOUR_MASTER:3001', 'https://example.invalid', "https://example.invalid/fox'base/$literal"]) {
+    const result = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: url });
+    assert.equal(result.endpoints.sourceUrl, `${url}/node/source.tar.gz`);
+    const [fetch, run] = result.examples.windows.split('\n');
+    const target = /^Invoke-WebRequest '((?:[^']|'')*)' -OutFile \.\\run\.ps1$/.exec(fetch)?.[1];
+    assert.equal(target?.replace(/''/g, "'"), `${url}/node/run.ps1`);
+    const host = /-HostUrl '((?:[^']|'')*)' -Pairing/.exec(run)?.[1];
+    assert.equal(host?.replace(/''/g, "'"), url);
+    assert.match(run, /-Pairing 'TOKEN123' -NodeId 'my-node'$/);
+    for (const command of Object.values(result.examples)) assert.doesNotMatch(command, /BASE_URL/);
   }
 });
 
@@ -84,16 +49,54 @@ test('generated manual Compose commands preserve a path with shell/Compose metac
     }
     const url = "https://example.invalid/fox'base/$literal";
     const example = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: url });
-    await execFileAsync('/bin/bash', ['-c', `${example.examples.chooseBaseUrl}\n${example.examples.manualCompose}`], {
+    await execFileAsync('/bin/bash', ['-c', example.examples.manualCompose], {
       cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, timeout: 3_000,
     });
     const envFile = await fs.readFile(path.join(root, '.env'), 'utf8');
     assert.match(envFile, /NODE_HOST='https:\/\/example.invalid\/fox\\'base\/\$literal'/);
     assert.match(envFile, /NODE_SOURCE_URL='https:\/\/example.invalid\/fox\\'base\/\$literal\/node\/source.tar.gz'/);
     assert.equal((await fs.stat(path.join(root, '.env'))).mode & 0o077, 0);
+    await fs.copy(path.resolve(__dirname, '../../templates/node/docker-compose.yaml'), path.join(root, 'docker-compose.yaml'));
+    const { stdout } = await execFileAsync('docker', ['compose', 'config', '--format', 'json'], { cwd: root, timeout: 5000 });
+    const service = JSON.parse(stdout).services['foxwarm-node'];
+    // Compose represents a literal dollar using $$ in serialized service values.
+    assert.equal(service.environment.NODE_URL.replace(/\$\$/g, '$'), url);
+    assert.equal(service.build.args.NODE_SOURCE_URL.replace(/\$\$/g, '$'), `${url}/node/source.tar.gz`);
   } finally {
     await fs.remove(root);
   }
+});
+
+test('each shell launcher command executes independently with literal URL, directory and credential arguments', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-inline-node-'));
+  try {
+    const bin = path.join(root, 'bin'); await fs.ensureDir(bin);
+    await fs.writeFile(path.join(bin, 'curl'), `#!/bin/sh
+out=
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; http*) printf '%s\\0' "$1" >> "$CURL_LOG"; shift ;; *) shift ;; esac
+done
+if [ -n "$out" ]; then
+  printf '#!/bin/sh\\nprintf \"%%s\\\\0\" \"$@\" >> \"$LAUNCH_LOG\"\\n' > "$out"
+else
+  printf '#!/bin/sh\\nprintf \"%%s\\\\0\" \"$@\" >> \"$LAUNCH_LOG\"\\n'
+fi
+`, { mode: 0o755 });
+    const url = "https://example.invalid/deploy'path/$literal";
+    const directory = "/opt/node's directory/$literal";
+    const token = "fixture'token/$literal";
+    const commands = buildNodeBootstrapCommands({ baseUrl: url, pairingToken: token, installDir: directory, nodeId: 'literal-node', authToken: token });
+    for (const [name, command] of Object.entries(commands).filter(([name]) => !['windows', 'manualCompose'].includes(name))) {
+      await fs.remove(path.join(root, 'args')); await fs.remove(path.join(root, 'urls'));
+      await execFileAsync('/bin/sh', ['-c', command], { cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CURL_LOG: path.join(root, 'urls'), LAUNCH_LOG: path.join(root, 'args') }, timeout: 3000 });
+      const args = (await fs.readFile(path.join(root, 'args'), 'utf8')).split('\0').filter(Boolean);
+      assert.ok(args.includes(`--host=${url}`), name);
+      assert.ok(args.includes('--node-id=literal-node'), name);
+      if (name !== 'shell') assert.ok(args.includes(`--pairing=${token}`), name);
+      if (name.startsWith('bareMetal')) assert.ok(args.includes(`--dir=${directory}`), name);
+      assert.ok((await fs.readFile(path.join(root, 'urls'), 'utf8')).startsWith(`${url}/node/`), name);
+    }
+  } finally { await fs.remove(root); }
 });
 
 test('tool catalog includes node_bootstrap_info with no required baseUrl parameter', () => {

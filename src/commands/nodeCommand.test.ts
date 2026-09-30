@@ -129,17 +129,16 @@ test('/node create returns one per-node credential and direct-auth setup, and re
   });
 });
 
-test('/node pair-help preserves configured paths in launcher host flags and leaves origin-only defaults request-derived', () => {
-  const configured = buildNodePairHelp('global-fixture', "https://example.invalid/fox'base");
-  assert.match(configured, /BASE_URL='https:\/\/example.invalid\/fox'"'"'base'/);
-  assert.match(configured, /--host="\$BASE_URL"/);
-  assert.match(configured, /-HostUrl "\$BASE_URL"/);
-  assert.match(configured, /NODE_HOST='\$COMPOSE_BASE_URL'/);
-  assert.match(configured, /cat > \.env <<EOF/);
-  const origin = buildNodePairHelp('global-fixture', 'https://example.invalid');
-  assert.doesNotMatch(origin, /  --host="\$BASE_URL"/);
-  const fallback = buildNodePairHelp('global-fixture', undefined);
-  assert.match(fallback, /BASE_URL=http:\/\/YOUR_MASTER:/);
+test('/node pair-help contains independently copyable quoted origin and deployment commands', () => {
+  for (const url of ["https://example.invalid/fox'base", 'https://example.invalid', '']) {
+    const help = buildNodePairHelp('global-fixture', url);
+    assert.doesNotMatch(help, /BASE_URL/);
+    assert.match(help, /--host='/);
+    assert.match(help, /-HostUrl '/);
+    assert.match(help, /cat > \.env <<'FOXWARM_NODE_ENV'/);
+    assert.match(help, /--pairing='global-fixture'/);
+    if (!url) assert.match(help, /http:\/\/YOUR_MASTER:/);
+  }
 });
 
 test('/node list keeps master first, uses checkmarks only for online status, and does not query provider topology', async () => {
