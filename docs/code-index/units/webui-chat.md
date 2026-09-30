@@ -1,7 +1,7 @@
 # Unit: WebUI Chat
 
 Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/chatSessionSearch.ts, packages/webui/src/streamingAssistantDraft.ts, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionContinuation.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/streamingAssistantDraft.test.mjs, packages/webui/test/sessionContinuation.test.mjs, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/lazyTimelineRestore.e2e.mjs, packages/webui/test/chatSessionSearch.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs, packages/webui/test/orderedResponsesDraft.e2e.mjs
-Secondary files: packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/contextScrollbarSettings.ts, packages/webui/test/threadCardHeight.e2e.mjs
+Secondary files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/contextScrollbarSettings.ts, packages/webui/test/threadCardHeight.e2e.mjs
 
 ## Purpose
 
@@ -60,6 +60,8 @@ Queue-origin history deltas update committed and queued timelines through one re
 
 ## Other behavior
 
+- Responsive content follows the individual Chat root width; see [D-chat-container-layout](#d-chat-container-layout). App navigation remains viewport-owned.
+
 - Header state and cwd come from the per-session history/stream snapshot, including in Code leaf Chat.
 - Header launch actions are standalone `Code` and `Terminal` buttons. Code delegates to the ordinary App launch callback, including the browser-local opening preference; the header has no separate new-tab action.
 - The header menu owns the existing browser-local Input and Chat preferences plus `Show user message metadata` (default off) and Debug. The move from the global menu does not make these settings server-backed or Session-semantic. Canonical placement: [D-webui-settings-placement](../modules/webui.md#d-webui-settings-placement).
@@ -77,6 +79,10 @@ ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolS
 The browser history fixture verifies that the React root installed its renderer before exercising history and stream races; initial document loading alone does not establish fixture readiness.
 
 ## Design decisions
+
+### D-chat-container-layout
+
+[2026-10-01] Each mounted Chat uses its own content width for narrow/wide timeline, processing, queued-preview, context minimap, header labels, and composer layout. The named `foxwarm-chat` inline-size container owns CSS queries: 640px header labels, 768px desktop timeline/minimap, 1024px header hints, and 420px child-model trigger text. A root ResizeObserver publishes only the 768px timeline and 640px model-picker layout bands, measures synchronously before the first paint, and retains the last band while hidden at zero width. The portaled model picker receives the Chat's compact band for columns and preferred size while viewport geometry still bounds its fixed placement. App/workbench navigation, input-device behavior, and page-level mobile handling remain viewport-owned. Resizing does not introduce a new draft, subscription, or scroll owner. The focused `workbenchPreview.e2e.mjs` case covers real divider movement before release, simultaneous wide/narrow panes, equal content widths across browser widths, sidebar resizing, hidden/revealed content, and embedded/popup leaf layouts.
 
 ### D-chat-header-launch-actions
 

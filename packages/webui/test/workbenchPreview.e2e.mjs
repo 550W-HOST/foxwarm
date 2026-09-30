@@ -6,7 +6,8 @@ import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const dist = new URL('../dist/', import.meta.url)
-const browserPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+const firefox = process.env.FOXWARM_E2E_BROWSER === 'firefox'
+const browserPath = firefox ? (process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox') : (process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium')
 let browser
 let server
 let baseUrl
@@ -36,7 +37,7 @@ async function serve(request, response) {
 }
 
 before(async () => {
-  browser = await puppeteer.launch({ executablePath: browserPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  browser = await puppeteer.launch({ browser: firefox ? 'firefox' : 'chrome', executablePath: browserPath, headless: true, args: firefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
   server = createServer(serve)
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}/prefix/ui/`
@@ -46,10 +47,10 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, themeId, codeNewWindow } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, themeId, codeNewWindow, responsiveChat = false, width = 1400 } = {}) {
   const page = await browser.newPage()
-  await page.setViewport({ width: 1400, height: 900 })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, themeId, codeNewWindow }) => {
+  await page.setViewport({ width, height: 900 })
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, themeId, codeNewWindow, responsiveChat }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = splitPanes
@@ -73,7 +74,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.endsWith('/api/nodes')) return json({ nodes: [] })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
       if (pathname.endsWith('/api/webui/settings')) return json({ settings: {} })
-      if (pathname.endsWith('/api/models')) return json({ models: [] })
+      if (pathname.endsWith('/api/models')) return json({ models: responsiveChat ? [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] : [] })
       if (pathname.endsWith('/api/commands')) return json({ commands: [] })
       if (pathname.endsWith('/api/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [sessionFixture('e2e-a'), sessionFixture('e2e-b'), sessionFixture('e2e-c')], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
       if (pathname.endsWith('/api/session-list/by-id')) return json({ results: [] })
@@ -83,7 +84,10 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
         window.__sent.push({ path: pathname, body: options.body })
         return json({ ok: true })
       }
-      if (pathname.includes('/api/sessions/') && pathname.endsWith('/history')) return json({ messages: [], queuedMessages: [], session: { id: decodeURIComponent(pathname.split('/').at(-2)), messageCount: 0, historyVersion: 1 }, latestSeq: 0, historyVersion: 1 })
+      if (pathname.includes('/api/sessions/') && pathname.endsWith('/history')) {
+        const messages = responsiveChat ? Array.from({ length: 35 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: 'Responsive message ' + index + '\n\n' + 'Pane-local content wraps normally. '.repeat(8) }], __meta: { seq: index + 1, timestamp: 1700000000000 + index } })) : []
+        return json({ messages, queuedMessages: [], session: { id: decodeURIComponent(pathname.split('/').at(-2)), messageCount: messages.length, historyVersion: 1, ...(responsiveChat ? { modelKey: 'fixture/model', childModelDefault: 'fixture/model', childModelPolicySource: 'explicit' } : {}) }, latestSeq: messages.length, historyVersion: 1, historyComplete: true })
+      }
       return json({})
     }
     function sessionFixture(id) { return { id, aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
@@ -92,11 +96,18 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
       constructor() { queueMicrotask(() => this.onopen?.({})) }
-      send() {}
+      send(raw) {
+        if (!responsiveChat) return
+        const data = JSON.parse(raw)
+        if (data.type === 'set-subscriptions') queueMicrotask(() => {
+          this.onmessage?.({ data: JSON.stringify({ type: 'subscriptions-accepted', revision: data.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(data.sessionIds.map(id => [id, id])) }) })
+          this.onmessage?.({ data: JSON.stringify({ type: 'subscriptions-applied', revision: data.revision }) })
+        })
+      }
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, themeId, codeNewWindow })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, themeId, codeNewWindow, responsiveChat })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => !!window.foxwarmTest)
   return page
@@ -599,5 +610,124 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
     await page.waitForFunction(() => !!window.foxwarmTest)
     assert.equal(await page.$(menu), null)
     assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
+  } finally { await page.close() }
+})
+
+
+test('Chat follows each pane through real divider dragging without changing desktop navigation or drafts', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false)], split: true, splitSecondChat: true, responsiveChat: true, width: 1800 })
+  const main = '[data-pane-id="pane-main"]'
+  const other = '[data-pane-id="pane-other"]'
+  const editor = ' [role="textbox"][aria-label="Message"]'
+  const paneLayout = selector => page.$eval(selector + ' .foxwarm-chat-root', root => {
+    const visible = selector => { const el = root.querySelector(selector); return !!el && getComputedStyle(el).display !== 'none' }
+    const messages = root.querySelector('.foxwarm-chat-messages')
+    return {
+      width: root.getBoundingClientRect().width,
+      sm: visible('.foxwarm-chat-sm-label'), md: visible('.foxwarm-chat-md-label'),
+      minimap: visible('.foxwarm-context-scrollbar-shell'),
+      gutter: getComputedStyle(root.querySelector('.foxwarm-chat-messages-content')).paddingRight,
+      nativeScrollbar: getComputedStyle(messages).scrollbarWidth,
+      compact: root.querySelector('.foxwarm-model-selector-root').dataset.chatLayout,
+      childLabel: visible('.foxwarm-model-child-trigger > span'),
+      back: !!root.querySelector('button[title="Back"]'),
+      overflow: [...root.querySelectorAll('.foxwarm-chat-composer-form, [data-chat-timeline], .sticky')].some(el => el.scrollWidth > el.clientWidth + 1),
+    }
+  })
+  const resizeMain = async target => {
+    const box = await (await page.$('[role="separator"]')).boundingBox()
+    const width = (await paneLayout(main)).width
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2 + target - width, box.y + box.height / 2, { steps: 8 })
+    // The content must react while the pointer is still held, not only on release.
+    await page.waitForFunction((target) => {
+      const root = document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-root')
+      const width = root?.getBoundingClientRect().width
+      return Math.abs(width - target) < 2 && !!root.querySelector('.foxwarm-context-scrollbar-shell') === (width >= 768)
+    }, {}, target)
+    await page.mouse.up()
+  }
+  try {
+    await page.waitForSelector(main + editor)
+    await page.waitForSelector(main + ' [data-chat-timeline] [data-search-row]')
+    await page.click(main + editor); await page.keyboard.type('main draft remains')
+    await page.click(other + editor); await page.keyboard.type('other draft remains')
+    await resizeMain(1030)
+    const wide = await paneLayout(main), narrow = await paneLayout(other)
+    assert.equal(wide.md, true); assert.equal(wide.minimap, true); assert.equal(wide.gutter, '32px'); assert.equal(wide.nativeScrollbar, 'none')
+    assert.equal(narrow.md, false); assert.equal(narrow.minimap, false); assert.equal(narrow.gutter, '0px'); assert.notEqual(narrow.nativeScrollbar, 'none')
+    assert.equal(wide.back, false); assert.equal(narrow.back, false)
+    assert.equal(wide.overflow, false); assert.equal(narrow.overflow, false)
+    const scrollBox = await (await page.$(main + ' .foxwarm-chat-messages')).boundingBox()
+    await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2)
+    await page.mouse.wheel({ deltaY: -650 })
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-messages')
+      return el.scrollHeight - el.scrollTop - el.clientHeight > 500
+    })
+    await page.click(other + ' .foxwarm-model-selector-trigger')
+    await page.waitForSelector('[data-model-selector-popup][data-model-layout="compact"]')
+    const popup = await page.$eval('[data-model-selector-popup]', el => ({ width: el.getBoundingClientRect().width, columns: getComputedStyle(el.querySelector('.foxwarm-model-columns')).gridTemplateColumns.split(' ').length, left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right }))
+    assert.equal(popup.columns, 1); assert.ok(popup.width <= 360 && popup.left >= 8 && popup.right <= 1792)
+    await page.keyboard.press('Escape')
+    await resizeMain(767)
+    assert.equal((await paneLayout(main)).minimap, false)
+    await resizeMain(769)
+    assert.equal((await paneLayout(main)).minimap, true)
+    await resizeMain(639)
+    assert.equal((await paneLayout(main)).sm, false)
+    await resizeMain(641)
+    assert.equal((await paneLayout(main)).sm, true)
+    assert.ok(await page.$eval(main + ' .foxwarm-chat-messages', el => el.scrollHeight - el.scrollTop - el.clientHeight > 200), 'resizing must not rejoin bottom after upward user intent')
+    await page.click(main + ' .foxwarm-model-selector-trigger')
+    await page.waitForSelector('[data-model-selector-popup][data-model-layout="wide"]')
+    assert.equal(await page.$eval('.foxwarm-model-columns', el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2)
+    await page.keyboard.press('Escape')
+    // Equal content widths produce the same layout in different browser widths.
+    await resizeMain(600)
+    const beforeViewportResize = await paneLayout(main)
+    await page.setViewport({ width: 1600, height: 900 })
+    await resizeMain(600)
+    const afterViewportResize = await paneLayout(main)
+    assert.deepEqual({ ...afterViewportResize, width: 600 }, { ...beforeViewportResize, width: 600 })
+    await resizeMain(410)
+    assert.equal((await paneLayout(main)).childLabel, false)
+    // Sidebar collapse changes width/anchor position while the portaled picker stays open.
+    await page.click(main + ' .foxwarm-model-selector-trigger')
+    await page.waitForSelector('[data-model-layout="compact"]')
+    const previousLeft = await page.$eval('[data-model-selector-popup]', el => el.getBoundingClientRect().left)
+    await page.$eval('button[title="Collapse sidebar"]', button => button.click())
+    await page.waitForFunction(left => document.querySelector('[data-model-selector-popup]')?.getBoundingClientRect().left < left - 100, {}, previousLeft)
+    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-root').getBoundingClientRect().width > 420)
+    assert.equal((await paneLayout(main)).childLabel, true)
+    await page.keyboard.press('Escape')
+    for (const [selector, text] of [[main, 'main draft remains'], [other, 'other draft remains']]) {
+      assert.equal(await page.$eval(selector + editor, (el, text) => el.textContent.includes(text), text), true)
+      assert.equal((await paneLayout(selector)).overflow, false)
+    }
+    assert.deepEqual((await state(page)).active, ['chat:e2e-a', 'chat:e2e-b'])
+    assert.equal(await page.$$eval('.foxwarm-chat-root', elements => elements.length), 2)
+    if (process.env.FOXWARM_CONTAINER_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_CONTAINER_SCREENSHOT_PATH })
+    // A hidden mounted Chat retains its band and recomputes when revealed.
+    await page.$eval(main + ' .foxwarm-chat-root', root => { root.style.display = 'none' })
+    await page.waitForFunction(() => document.querySelector('[data-pane-id="pane-main"] .foxwarm-chat-root').getBoundingClientRect().width === 0)
+    await page.$eval(main + ' .foxwarm-chat-root', root => { root.style.display = ''; root.style.width = '768px' })
+    await page.waitForFunction(() => !!document.querySelector('[data-pane-id="pane-main"] .foxwarm-context-scrollbar-shell'))
+    assert.equal((await paneLayout(main)).gutter, '32px')
+    await page.$eval(main + ' .foxwarm-chat-root', root => { root.style.width = '' })
+    // The production embedded and popup routes use the same container boundary.
+    for (const query of ['foxwarmEmbed=chat&foxwarmEmbedNonce=container-fixture-nonce&sessionId=e2e-a', 'foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a']) {
+      await page.setViewport({ width: 410, height: 900 })
+      await page.goto(baseUrl + '?' + query, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('.foxwarm-chat-root [data-search-row]')
+      const leaf = await paneLayout('')
+      assert.equal(leaf.sm, false); assert.equal(leaf.md, false); assert.equal(leaf.minimap, false); assert.equal(leaf.childLabel, false); assert.equal(leaf.overflow, false)
+      await page.click('.foxwarm-model-selector-trigger')
+      await page.waitForSelector('[data-model-layout="compact"]')
+      const rect = await page.$eval('[data-model-selector-popup]', el => ({ left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right }))
+      assert.ok(rect.left >= 8 && rect.right <= 402)
+      await page.keyboard.press('Escape')
+    }
   } finally { await page.close() }
 })

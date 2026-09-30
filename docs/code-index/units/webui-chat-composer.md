@@ -2,7 +2,7 @@
 
 Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/InlineComposerEditor.tsx, packages/webui/src/composerDraft.ts, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/composerDraft.test.mjs, packages/webui/test/composerPastedText.e2e.mjs, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
 Secondary files: packages/webui/src/attachmentRefs.ts, packages/webui/src/attachmentSend.ts, packages/webui/test/attachmentRefs.test.mjs, packages/webui/test/attachmentSend.test.mjs
-Integration files: packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
+Integration files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
 ## Purpose
 
@@ -52,6 +52,8 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 - `../config` — `API_BASE_PATH` (used for slash-command fetch endpoint)
 
 ## Behavior
+
+- Chat passes the optional `compactModelSelector` layout band to the portaled picker: compact explicit-child pickers stack their current/child columns and prefer 360px, while wide ones prefer 720px. Viewport/anchor geometry still clamps fixed positioning; an open picker's anchor container ResizeObserver follows pane resizes. Standalone composer callers that omit the band retain viewport-responsive defaults. The child-model trigger's text follows the owning Chat container at 420px. Canonical boundary: [D-chat-container-layout](./webui-chat.md#d-chat-container-layout).
 
 - Maintains a versioned ordered draft of ordinary text, pasted-text blocks, and atomic attachment metadata segments, plus slash-command suggestions, audio recording, waveform visualization, and drag-over status.
 - Persists structured drafts to localStorage by exact Session ID, reads the former plain-string key as one ordinary text segment, and writes only the new versioned shape. Persistence/quota failures leave the live draft intact and show an actionable in-composer warning instead of silently losing it.
