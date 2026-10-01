@@ -911,3 +911,41 @@ test('ordinary Terminal close selects another still-open tab rather than restori
     assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-fallback'])
   } finally { await page.close() }
 })
+
+
+test('Chat composer uses a smaller empty editor below 600px in Default and 550A', async () => {
+  for (const themeId of ['foxwarm.default', 'foxwarm.550a']) {
+    const sessionId = 'compact-' + themeId
+    const page = await openFixture({ tabs: [chat(sessionId, false), chat('e2e-b', false)], activeTabId: 'chat:' + sessionId, split: true, splitSecondChat: true, width: 1800, themeId })
+    const root = '[data-pane-id="pane-main"] .foxwarm-chat-root'
+    const editor = root + ' [role="textbox"][aria-label="Message"]'
+    const geometry = () => page.$eval(editor, el => ({
+      height: el.getBoundingClientRect().height,
+      minHeight: getComputedStyle(el).minHeight,
+      marginBottom: getComputedStyle(el.parentElement).marginBottom,
+      lineHeight: getComputedStyle(el).lineHeight,
+      padding: getComputedStyle(el).padding,
+    }))
+    try {
+      await page.waitForSelector(editor)
+      const original = await geometry()
+      for (const [width, minHeight] of [[600, 60], [599, 35]]) {
+        await page.$eval(root, (el, width) => { el.style.width = width + 'px' }, width)
+        await page.waitForFunction((selector, height) => getComputedStyle(document.querySelector(selector)).minHeight === height + 'px', {}, editor, minHeight)
+        const actual = await geometry()
+        assert.equal(await page.$eval(root, el => el.getBoundingClientRect().width), width)
+        assert.equal(actual.height, minHeight, themeId + ' empty editor at ' + width)
+        assert.equal(actual.marginBottom, '0px')
+        assert.equal(actual.lineHeight, original.lineHeight)
+        assert.equal(actual.padding, original.padding)
+      }
+      await page.click(editor)
+      await page.keyboard.type('First line')
+      for (let index = 0; index < 3; index++) {
+        await page.keyboard.down('Shift'); await page.keyboard.press('Enter'); await page.keyboard.up('Shift')
+        await page.keyboard.type('Another line')
+      }
+      assert.ok((await geometry()).height > 60, themeId + ' multiline editor can grow')
+    } finally { await page.close() }
+  }
+})

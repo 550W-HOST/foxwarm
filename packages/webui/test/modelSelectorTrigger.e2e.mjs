@@ -166,6 +166,8 @@ test('model trigger shrinks and ellipsizes without horizontal overflow in a narr
   assert.equal(await page.$$eval('[data-model-column]', columns => columns.length), 2)
   await page.keyboard.press('Escape')
   assert.equal(await page.evaluate(() => document.activeElement?.matches('.foxwarm-model-selector-trigger')), true)
+  assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', el => getComputedStyle(el).minHeight), '60px', 'standalone composer retains its minimum height outside Chat')
+  assert.equal(await page.$eval('[role="textbox"][aria-label="Message"]', el => getComputedStyle(el.parentElement).marginBottom), '0px')
 })
 
 test('model popup is fixed before first paint and preserves page and composer scroll on first and remounted opens', async () => {

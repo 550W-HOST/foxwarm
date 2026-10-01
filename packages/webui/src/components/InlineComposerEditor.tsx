@@ -999,7 +999,7 @@ const InlineComposerEditor = forwardRef<InlineComposerEditorHandle, InlineCompos
   }, [])
 
   return (
-    <div className="relative mb-1.5">
+    <div className="relative">
       <div
         ref={editorRef}
         role="textbox"
