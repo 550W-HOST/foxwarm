@@ -21,6 +21,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly HttpClient http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private readonly Foxwarm.McpClient mcp;
     private readonly ModelRouting modelRouting = new();
+    private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
     private readonly SessionWaitTimeouts waitTimeouts;
     private readonly WaitLiveness waitLiveness;
@@ -179,7 +180,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = target => Find(target)?.Metadata() };
         hosted.Archive = store.Archive;
         hosted.Executor = executor;
-        var requests = new ModelRequestOwner(http, clientOptions, modelRouting);
+        var requests = new ModelRequestOwner(http, clientOptions, modelRouting, websockets: websockets);
         var chat = new SessionChatService(requests, clientOptions, hosted, models, memory, (sessionId, update) =>
         {
             hosted.PublishDraftProgress(update);
@@ -219,6 +220,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         lock (lifecycle) accepting = false;
         executor.BeginShutdown();
         mcp.BeginShutdown();
+        websockets.BeginShutdown();
         waitTimeouts.Stop(); waitLiveness.Stop();
         foreach (var session in sessions.Values) session.CloseSubscribers();
     }
@@ -229,6 +231,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await waitLiveness.DisposeAsync();
         await executor.DisposeAsync();
         await mcp.DisposeAsync();
+        await websockets.DisposeAsync();
         http.Dispose();
     }
 

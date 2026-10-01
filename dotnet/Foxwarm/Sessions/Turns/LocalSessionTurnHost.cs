@@ -73,63 +73,68 @@ public sealed class LocalSessionTurnHost
                 registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
                 var result = await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
-                if (result.AssistantMessage is null) return result;
-                var assistant = (JsonObject)result.AssistantMessage.DeepClone();
-                if (assistant["role"]?.GetValue<string>() != "model" || assistant["parts"] is not JsonArray)
-                    throw new InvalidOperationException("Chat result assistant message must be a canonical model message.");
-                await AppendHistoryMessageStrictAsync(assistant).ConfigureAwait(false);
-
-                var calls = ExtractFunctionCalls(assistant);
-                if (calls.Count == 0) return result;
-
-                var toolParts = new JsonArray();
-                foreach (var planned in ToolCallControls.Plan(calls))
+                try
                 {
-                    var call = planned.Call;
-                    var callId = call["id"]?.GetValue<string>()
-                        ?? throw new InvalidOperationException("Canonical function call is missing its stable ID.");
-                    var name = call["name"]?.GetValue<string>() ?? "";
-                    JsonObject response;
-                    if (registered.Token.IsCancellationRequested)
-                        response = new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." };
-                    else if (planned.Preset is JsonObject preset) response = preset;
-                    else if (call["argsParseError"] is JsonValue parseErrorValue
-                        && parseErrorValue.TryGetValue<string>(out var parseError)
-                        && parseError.Length > 0)
-                    {
-                        response = UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", parseError);
-                    }
-                    else
-                    {
-                        try { response = await tools.ExecuteAsync((JsonObject)call.DeepClone(), registered.Token).ConfigureAwait(false); }
-                        catch (OperationCanceledException)
-                        { response = UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
-                    }
-                    toolParts.Add(new JsonObject
-                    {
-                        ["functionResponse"] = new JsonObject
-                        {
-                            ["tool_use_id"] = callId,
-                            ["name"] = name,
-                            ["response"] = response.DeepClone()
-                        }
-                    });
-                }
+                    if (result.AssistantMessage is null) return result;
+                    var assistant = (JsonObject)result.AssistantMessage.DeepClone();
+                    if (assistant["role"]?.GetValue<string>() != "model" || assistant["parts"] is not JsonArray)
+                        throw new InvalidOperationException("Chat result assistant message must be a canonical model message.");
+                    var appended = await AppendHistoryMessageStrictAsync(assistant).ConfigureAwait(false);
+                    result.FinalizeHistory(appended, entry.RecordBestEffortFailure);
 
-                if (toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse
-                    && assistant["__meta"]?["llmRequestTiming"] is JsonObject timing
-                    && SessionWait.Number(timing["completedAt"]) is double completedAt && double.IsFinite(completedAt)
-                    && completedAt >= DateTimeOffset.MinValue.ToUnixTimeMilliseconds() && completedAt <= DateTimeOffset.MaxValue.ToUnixTimeMilliseconds()
-                    && SessionWait.Number(timing["durationMs"]) is double duration && double.IsFinite(duration))
-                    firstResponse["previousLlmRequest"] = new JsonObject { ["time"] = ArchiveBlockRecord.LocalTimestamp(completedAt), ["durationMs"] = duration };
-                var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
-                await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
-                var stopping = entry.WithState(state => state.Stopping);
-                var terminal = tools is ITurnToolControl turnControl && await turnControl.CompleteBatchAsync(toolMessage, stopping).ConfigureAwait(false);
-                if (stopping) throw new OperationCanceledException(registered.Token);
-                if (terminal) return result;
-                await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
-                if (iteration + 1 >= maxToolIterations) throw new ToolLoopLimitException(maxToolIterations);
+                    var calls = ExtractFunctionCalls(assistant);
+                    if (calls.Count == 0) return result;
+
+                    var toolParts = new JsonArray();
+                    foreach (var planned in ToolCallControls.Plan(calls))
+                    {
+                        var call = planned.Call;
+                        var callId = call["id"]?.GetValue<string>()
+                            ?? throw new InvalidOperationException("Canonical function call is missing its stable ID.");
+                        var name = call["name"]?.GetValue<string>() ?? "";
+                        JsonObject response;
+                        if (registered.Token.IsCancellationRequested)
+                            response = new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." };
+                        else if (planned.Preset is JsonObject preset) response = preset;
+                        else if (call["argsParseError"] is JsonValue parseErrorValue
+                            && parseErrorValue.TryGetValue<string>(out var parseError)
+                            && parseError.Length > 0)
+                        {
+                            response = UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", parseError);
+                        }
+                        else
+                        {
+                            try { response = await tools.ExecuteAsync((JsonObject)call.DeepClone(), registered.Token).ConfigureAwait(false); }
+                            catch (OperationCanceledException)
+                            { response = UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
+                        }
+                        toolParts.Add(new JsonObject
+                        {
+                            ["functionResponse"] = new JsonObject
+                            {
+                                ["tool_use_id"] = callId,
+                                ["name"] = name,
+                                ["response"] = response.DeepClone()
+                            }
+                        });
+                    }
+
+                    if (toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse
+                        && assistant["__meta"]?["llmRequestTiming"] is JsonObject timing
+                        && SessionWait.Number(timing["completedAt"]) is double completedAt && double.IsFinite(completedAt)
+                        && completedAt >= DateTimeOffset.MinValue.ToUnixTimeMilliseconds() && completedAt <= DateTimeOffset.MaxValue.ToUnixTimeMilliseconds()
+                        && SessionWait.Number(timing["durationMs"]) is double duration && double.IsFinite(duration))
+                        firstResponse["previousLlmRequest"] = new JsonObject { ["time"] = ArchiveBlockRecord.LocalTimestamp(completedAt), ["durationMs"] = duration };
+                    var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
+                    await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
+                    var stopping = entry.WithState(state => state.Stopping);
+                    var terminal = tools is ITurnToolControl turnControl && await turnControl.CompleteBatchAsync(toolMessage, stopping).ConfigureAwait(false);
+                    if (stopping) throw new OperationCanceledException(registered.Token);
+                    if (terminal) return result;
+                    await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
+                    if (iteration + 1 >= maxToolIterations) throw new ToolLoopLimitException(maxToolIterations);
+                }
+                finally { result.FinalizeHistory(null, entry.RecordBestEffortFailure); }
             }
             throw new ToolLoopLimitException(maxToolIterations);
         }
@@ -140,11 +145,12 @@ public sealed class LocalSessionTurnHost
         }
     }
 
-    private async Task AppendHistoryMessageStrictAsync(JsonObject message)
+    private async Task<IReadOnlyList<JsonObject>> AppendHistoryMessageStrictAsync(JsonObject message)
     {
-        await entry.SaveLane.CommitCanonicalAppendAsync(state =>
+        var rows = await entry.SaveLane.CommitCanonicalAppendWithResultAsync(state =>
             PrepareCanonicalAppend(state, [message], [], updateLastMessageTime: false, finalizing: false, clock)).ConfigureAwait(false);
         entry.InvokeCommitted(entry.Snapshot());
+        return rows;
     }
 
     private static IReadOnlyList<JsonObject> ExtractFunctionCalls(JsonObject assistant)

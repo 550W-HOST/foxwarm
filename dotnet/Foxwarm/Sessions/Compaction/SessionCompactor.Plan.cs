@@ -9,7 +9,7 @@ internal sealed partial class SessionCompactor
     private async Task<CompactPlan> PlanAsync(SessionSnapshot snapshot, CompactCandidates candidates,
         string? guidance, CancellationToken cancellationToken)
     {
-        var detached = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToList();
+        var detached = snapshot.History.Take(Math.Max(0, candidates.Split)).Select(row => (JsonObject)row.DeepClone()).ToList();
         var prompt = CompactPrompt.Build(candidates, guidance);
         var promptSnapshot = snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? models.Capture().DefaultKey;
@@ -29,12 +29,20 @@ internal sealed partial class SessionCompactor
             var catalog = models.Capture();
             ChatResult result;
             try { result = await requests.RequestAsync(hosted.Id, catalog, routeKey, rawEffort, cacheKey, turnId, detached,
-                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken); }
+                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.CompactPlan); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (ModelRequestException) { throw; }
             catch (Exception error) { throw new ModelPreparationException(ConfiguredModelRequests.SafeError(error, catalog.Resolve(routeKey)), error); }
             var assistant = result.AssistantMessage;
-            if (assistant is not null) detached.Add((JsonObject)assistant.DeepClone());
+            try
+            {
+                if (assistant is not null)
+                {
+                    var appended = (JsonObject)assistant.DeepClone(); detached.Add(appended);
+                    result.FinalizeHistory([appended], hosted.Entry.RecordBestEffortFailure);
+                }
+            }
+            finally { result.FinalizeHistory(null, hosted.Entry.RecordBestEffortFailure); }
             var calls = (assistant?["parts"] as JsonArray)?.OfType<JsonObject>()
                 .Select(part => part["functionCall"] as JsonObject).Where(call => call is not null).ToArray() ?? [];
             var wrongName = calls.FirstOrDefault(call => call?["name"]?.GetValue<string>() != "submit_compact_plan")?["name"]?.GetValue<string>();

@@ -59,6 +59,8 @@ public sealed class ToolLoopLimitException(int limit)
 
 public sealed record ChatResult(JsonObject? AssistantMessage, JsonObject? Usage = null)
 {
+    internal HistoryAppendFinalizer? HistoryAppend { get; init; }
+    internal void FinalizeHistory(IReadOnlyList<JsonObject>? rows, Action<Exception>? warning = null) => HistoryAppend?.Settle(rows, warning);
     public static ChatResult Text(string text) => new(new JsonObject
     {
         ["role"] = "model",
@@ -70,4 +72,15 @@ public sealed class UnsupportedSessionTurnException : InvalidOperationException
 {
     public string Path { get; }
     public UnsupportedSessionTurnException(string path) : base($"Experimental Session turns do not support {path}.") => Path = path;
+}
+
+internal sealed class HistoryAppendFinalizer(Action<IReadOnlyList<JsonObject>?> finalize)
+{
+    private int settled;
+    internal void Settle(IReadOnlyList<JsonObject>? rows, Action<Exception>? warning)
+    {
+        if (Interlocked.Exchange(ref settled, 1) != 0) return;
+        try { finalize(rows); }
+        catch (Exception error) { try { warning?.Invoke(error); } catch { } }
+    }
 }

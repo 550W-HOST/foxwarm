@@ -5,7 +5,7 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Models;
 
 internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions defaults, ModelRouting routing,
-    Func<int, CancellationToken, Task>? delay = null)
+    Func<int, CancellationToken, Task>? delay = null, ResponsesWsTransport? websockets = null)
 {
     internal static int RetryDelay(int failedAttempt) => failedAttempt switch { <= 1 => 2000, 2 => 5000, 3 => 10000, 4 => 20000, 5 => 40000, _ => 60000 };
 
@@ -25,14 +25,14 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
         string cacheKey, string turnId, IReadOnlyList<JsonObject> history,
         Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
         Func<ModelRetryEvent, Task<bool>>? retry, Action? beginAttempt,
-        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken) =>
-        RequestAsync(sessionId, Capture(catalog, routeKey, rawEffort), cacheKey, turnId, history, prompt, retry, beginAttempt, progress, warning, cancellationToken);
+        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel) =>
+        RequestAsync(sessionId, Capture(catalog, routeKey, rawEffort), cacheKey, turnId, history, prompt, retry, beginAttempt, progress, warning, cancellationToken, scope);
 
     internal async Task<ChatResult> RequestAsync(string sessionId, CapturedRequest captured,
         string cacheKey, string turnId, IReadOnlyList<JsonObject> history,
         Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
         Func<ModelRetryEvent, Task<bool>>? retry, Action? beginAttempt,
-        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken)
+        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel)
     {
         var catalog = captured.Catalog; var route = captured.Route; var request = captured.Routing; var rawEffort = captured.RawEffort;
         const int maxAttempts = 6;
@@ -48,15 +48,16 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
             // Local canonical/snapshot/cache/plan preparation is deliberately outside provider retry handling.
             var instructions = await prompt(leaf, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            var options = ConfiguredModelRequests.Plan(leaf, defaults, effort, instructions, cacheKey, turnId);
+            var providerCache = ProviderPromptCache.Resolve(leaf.ProviderType, sessionId, cacheKey);
+            var options = ConfiguredModelRequests.Plan(leaf, defaults, effort, instructions, providerCache, turnId);
             var prepared = ConcreteRequestHistory.Prepare(history, leaf.Key);
-            var service = ConfiguredModelRequests.CreatePreparedService(http, leaf, options, cacheKey, progress);
+            var service = ConfiguredModelRequests.CreatePreparedService(http, leaf, options, providerCache, progress, websockets, scope);
             beginAttempt?.Invoke();
-            ModelAttemptFailure failure;
+            ModelAttemptFailure failure; ChatResult? result = null; var succeeded = false;
             try
             {
                 requestStarted ??= Stopwatch.GetTimestamp();
-                var result = await service.ChatAsync(sessionId, prepared, cancellationToken);
+                result = await service.ChatAsync(sessionId, prepared, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (request is not null) routing.Success(request, leaf.Key);
                 if (result.AssistantMessage is JsonObject message)
@@ -70,6 +71,7 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
                     if (request is null) meta.Remove("virtualModelKey"); else meta["virtualModelKey"] = route.Key;
                     if (meta.Parent is null) message["__meta"] = meta;
                 }
+                succeeded = true;
                 return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -85,6 +87,7 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
                     _ => new ModelAttemptFailure(error.Message, "request-error", true, true)
                 };
             }
+            finally { if (!succeeded) result?.FinalizeHistory(null, warning); }
             cancellationToken.ThrowIfCancellationRequested();
             var terminalTarget = failure.Countable && request is not null && selection is not null && routing.Failed(request, selection).Terminal;
             var final = !failure.Retryable || terminalTarget || attempt == maxAttempts;

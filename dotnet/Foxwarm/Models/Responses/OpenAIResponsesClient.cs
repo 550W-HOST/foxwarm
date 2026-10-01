@@ -22,6 +22,7 @@ public sealed record ResponsesClientOptions(
     int? StreamInactivityTimeoutMs = null,
     bool DisallowEmptyResponse = false)
 {
+    internal string? ProviderPromptCacheKey { get; init; }
     public Uri ResponsesUri => new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
 }
 
@@ -634,32 +635,7 @@ public sealed class ResponsesChatService : IChatService
         IReadOnlyList<JsonObject> history,
         CancellationToken cancellationToken)
     {
-        var body = ResponsesRequestSerializer.BuildRequest(
-            history,
-            options.RequestModel,
-            options.ConcreteModelId,
-            options.Instructions,
-            options.MaxOutputTokens,
-            options.Tools,
-            options.Effort);
-        if (options.ExtraFields is not null) foreach (var (key, value) in options.ExtraFields) body[key] = value?.DeepClone();
-        if (options.Effort is string effort)
-        {
-            var reasoning = body["reasoning"] as JsonObject ?? new JsonObject(); reasoning["effort"] = effort;
-            var include = body["include"] as JsonArray ?? new JsonArray();
-            if (effort == "none")
-            {
-                reasoning.Remove("summary"); var filtered = new JsonArray(include.Where(value => SessionWait.Text(value) != "reasoning.encrypted_content").Select(value => value?.DeepClone()).ToArray());
-                if (filtered.Count > 0) body["include"] = filtered; else body.Remove("include");
-            }
-            else
-            {
-                if (!reasoning.ContainsKey("summary")) reasoning["summary"] = "auto";
-                if (!include.Any(value => SessionWait.Text(value) == "reasoning.encrypted_content")) include.Add("reasoning.encrypted_content");
-                body["include"] = include.DeepClone();
-            }
-            body["reasoning"] = reasoning.DeepClone();
-        }
+        var body = ResponsesRequestPlan.Build(history, options);
         var completed = await OpenAIHttp.RequestAsync(httpClient, options.ResponsesUri, body, options, sessionId, progress, null,
             (stream, token, callbacks) => ResponsesSseCollector.CollectAsync(stream, token, callbacks), cancellationToken).ConfigureAwait(false);
         var assistant = ResponsesCanonicalConverter.ConvertAssistant(completed.Payload, options.ConcreteModelId, completed.CompletedAt, completed.DurationMs);

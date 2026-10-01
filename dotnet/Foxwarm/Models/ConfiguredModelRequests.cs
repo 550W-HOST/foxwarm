@@ -8,8 +8,8 @@ internal static class ConfiguredModelRequests
     internal static ResponsesClientOptions Plan(ConcreteHostModel model, ResponsesClientOptions defaults,
         string effort, string instructions, string cacheKey, string turnId)
     {
-        if (model.IsVirtual || model.ProviderType == "openai-ws") throw new InvalidDataException("Selected model executor is not implemented: " + model.ProviderType + ".");
-        var responses = model.ProviderType is "openai" or "openai-responses";
+        if (model.IsVirtual) throw new InvalidDataException("Selected model executor is not implemented: " + model.ProviderType + ".");
+        var responses = model.ProviderType is "openai" or "openai-responses" or "openai-ws";
         if (model.Configuration["imageGeneration"]?["enabled"] is JsonValue image && image.TryGetValue<bool>(out var generate) && generate)
             throw new InvalidDataException("Selected model enables unimplemented image generation.");
         if (responses)
@@ -33,6 +33,7 @@ internal static class ConfiguredModelRequests
         {
             BaseUri = model.BaseUri, RequestModel = model.ModelId, ConcreteModelId = model.Key, Token = model.Token,
             Effort = effort, Instructions = instructions,
+            ProviderPromptCacheKey = model.ProviderType == "openai-ws" ? cacheKey : null,
             ExtraHeaders = Expand(model.Configuration["extraHeaders"]) as JsonObject,
             ExtraFields = Expand(model.Configuration["extraFields"]) as JsonObject,
             RequestCompression = compression,
@@ -46,9 +47,11 @@ internal static class ConfiguredModelRequests
         return new ConcreteRequestHistory.ChatService(CreatePreparedService(http, model, options, cacheKey, progress), model.Key);
     }
     internal static IChatService CreatePreparedService(HttpClient http, ConcreteHostModel model, ResponsesClientOptions options,
-        string cacheKey, Action<string, ResponsesStreamProgress>? progress = null)
+        string cacheKey, Action<string, ResponsesStreamProgress>? progress = null, ResponsesWsTransport? websockets = null, ModelRequestScope scope = ModelRequestScope.LowLevel)
     {
-        IChatService service = model.ProviderType == "openai-completions"
+        IChatService service = model.ProviderType == "openai-ws"
+            ? new ResponsesWsChatService(options, websockets ?? new ResponsesWsTransport(), scope, websockets is null, cacheKey, progress)
+            : model.ProviderType == "openai-completions"
             ? new CompletionsChatService(http, options, SessionWait.Text(model.Configuration["historyReasoningField"]) ?? "reasoning_content", cacheKey, progress)
             : model.ProviderType is "openai" or "openai-responses"
                 ? new ResponsesChatService(http, options, progress)

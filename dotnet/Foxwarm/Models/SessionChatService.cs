@@ -28,7 +28,7 @@ internal sealed class SessionChatService(
         {
             return await requests.RequestAsync(sessionId, captured, cacheKey, turnId, history, Prompt,
                 notice.NotifyAsync, () => { if (++attempts > 1) hosted.RestartDraft(); }, progress,
-                hosted.Entry.RecordBestEffortFailure, cancellationToken);
+                hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.Canonical);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (ModelRequestException) { throw; }

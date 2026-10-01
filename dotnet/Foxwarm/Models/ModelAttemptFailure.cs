@@ -6,8 +6,8 @@ namespace Foxwarm.Models;
 
 internal sealed class ModelPreparationException(string message, Exception? inner = null) : Exception(message, inner);
 
-internal sealed class ModelAttemptFailure(string message, string kind, bool retryable, bool countable, string? status = null)
-    : Exception(message)
+internal sealed class ModelAttemptFailure(string message, string kind, bool retryable, bool countable, string? status = null, Exception? inner = null)
+    : Exception(message, inner)
 {
     internal string Kind { get; } = kind;
     internal bool Retryable { get; } = retryable;

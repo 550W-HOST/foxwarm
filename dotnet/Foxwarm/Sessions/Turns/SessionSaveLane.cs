@@ -117,6 +117,18 @@ public sealed partial class SessionSaveLane
             entry.WithState(operation.Publish);
         });
 
+    internal async Task<IReadOnlyList<JsonObject>> CommitCanonicalAppendWithResultAsync(Func<SessionState, CanonicalAppendPreparation> prepare)
+    {
+        IReadOnlyList<JsonObject> rows = [];
+        await CommitCanonicalAppendAsync(state =>
+        {
+            var operation = prepare(state);
+            rows = operation.AppendedMessages.Select(row => (JsonObject)row.DeepClone()).ToArray();
+            return operation;
+        }).ConfigureAwait(false);
+        return rows;
+    }
+
     public Task CommitCompactionAsync(Func<SessionState, CompactionPreparation> prepare, CancellationToken cancellationToken = default) =>
         EnqueueOperationAsync(async () =>
         {
