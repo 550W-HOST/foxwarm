@@ -52,13 +52,13 @@ internal sealed class AnthropicMessagesService(HttpClient http, ResponsesClientO
             }
             var text = Encoding.UTF8.GetString(raw);
             if (text.StartsWith('\uFEFF')) text = text[1..];
-            if (!success) throw new InvalidDataException($"Anthropic HTTP {(int)response.StatusCode}: {text}");
+            if (!success) throw ModelAttemptFailure.Http((int)response.StatusCode, text);
             JsonNode? payload;
             try { payload = JsonNode.Parse(text); }
             catch (JsonException) { payload = JsonValue.Create(text); } // Fixed Axios silently retains non-JSON response text.
             var assistant = AnthropicCanonicalConverter.ConvertAssistant(payload, options.ConcreteModelId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), watch.Elapsed.TotalMilliseconds);
             if (options.DisallowEmptyResponse && (assistant is null || !OpenAIHttp.HasMeaningfulAssistant(assistant)))
-                throw new InvalidDataException("Selected model disallows an empty completed response.");
+                throw ModelAttemptFailure.Empty();
             return new ChatResult(assistant, AnthropicCanonicalConverter.Usage(payload));
         }
         catch (Exception error) when (activity.IsCancellationRequested && !cancellationToken.IsCancellationRequested && error is OperationCanceledException or IOException or ObjectDisposedException)

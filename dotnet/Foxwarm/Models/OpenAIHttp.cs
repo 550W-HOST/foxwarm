@@ -26,7 +26,7 @@ internal static class OpenAIHttp
         };
         var started = Stopwatch.GetTimestamp();
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        if (response.StatusCode != System.Net.HttpStatusCode.OK)
         {
             var (error, truncated) = await ReadBoundedAsync(response.Content, token).ConfigureAwait(false);
             throw new ResponsesHttpException(response.StatusCode, error, truncated);

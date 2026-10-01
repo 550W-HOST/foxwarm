@@ -157,7 +157,10 @@ internal static class WebUiContract
                 ["isVirtual"] = model.IsVirtual,
                 ["targets"] = new JsonArray(model.Targets.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
                 ["allowedEfforts"] = new JsonArray(model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
-                ["defaultEffort"] = model.DefaultEffort
+                ["defaultEffort"] = model.DefaultEffort,
+                ["asyncCompact"] = !ModelRoutingFingerprint.False(model.Configuration["asyncCompact"]),
+                ["failureThreshold"] = model.IsVirtual && model.ProviderType == "failover" ? model.Configuration["failureThreshold"]?.DeepClone() : null,
+                ["cooldownMs"] = model.IsVirtual && model.ProviderType == "failover" ? model.Configuration["cooldownMs"]?.DeepClone() : null
             };
         }).ToArray())
     };

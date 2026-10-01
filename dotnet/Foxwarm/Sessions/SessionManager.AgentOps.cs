@@ -236,10 +236,10 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("forceModel accepts only modelId and effort.");
         if (forceModel?.ContainsKey("modelId") == true && forceModel["modelId"] is not JsonValue
             || forceModel?.ContainsKey("effort") == true && forceModel["effort"] is not JsonValue)
-            throw new InvalidDataException("forceModel values must be concrete model and effort strings.");
+            throw new InvalidDataException("forceModel values must be configured model and effort strings.");
         var model = forceModel?["modelId"] is JsonNode modelValue
             ? modelValue is JsonValue m && m.TryGetValue<string>(out var id) && models.Contains(id)
-                ? id : throw new InvalidDataException("Unsupported requested concrete model.")
+                ? id : throw new InvalidDataException("Unknown configured model key.")
             : inherited?.Model;
         if (model is not null && !models.Contains(model)) model = null;
         var leaf = models.Resolve(model);

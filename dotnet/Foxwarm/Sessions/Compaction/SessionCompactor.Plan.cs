@@ -12,21 +12,27 @@ internal sealed partial class SessionCompactor
         var detached = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToList();
         var prompt = CompactPrompt.Build(candidates, guidance);
         var promptSnapshot = snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
-        var catalog = models.Capture(); var selected = catalog.Select(snapshot);
+        var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? models.Capture().DefaultKey;
+        var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
         var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync(); var turnId = Guid.NewGuid().ToString();
-        if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != selected.Model.Key)
-            promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
-        var options = ConfiguredModelRequests.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
-            baseOptions.Instructions.Length == 0 ? promptSnapshot : baseOptions.Instructions + "\n\n" + promptSnapshot, cacheKey, turnId);
+        async Task<string> ResolvePrompt(ConcreteHostModel leaf, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != leaf.Key)
+                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key);
+            return baseOptions.Instructions.Length == 0 ? promptSnapshot : baseOptions.Instructions + "\n\n" + promptSnapshot;
+        }
         for (var round = 0; round < 15; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             detached.Add(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }) });
-            var service = ConfiguredModelRequests.CreateService(http, selected.Model, options, cacheKey);
+            var catalog = models.Capture();
             ChatResult result;
-            try { result = await service.ChatAsync(hosted.Id, detached, cancellationToken); }
+            try { result = await requests.RequestAsync(hosted.Id, catalog, routeKey, rawEffort, cacheKey, turnId, detached,
+                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception error) { throw new InvalidDataException(ConfiguredModelRequests.SafeError(error, selected.Model)); }
+            catch (ModelRequestException) { throw; }
+            catch (Exception error) { throw new ModelPreparationException(ConfiguredModelRequests.SafeError(error, catalog.Resolve(routeKey)), error); }
             var assistant = result.AssistantMessage;
             if (assistant is not null) detached.Add((JsonObject)assistant.DeepClone());
             var calls = (assistant?["parts"] as JsonArray)?.OfType<JsonObject>()

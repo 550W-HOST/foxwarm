@@ -17,7 +17,7 @@ internal static class CompletionsCanonicalConverter
         {
             if (raw is not JsonObject call || SessionWait.Text(call["type"]) != "function") continue;
             var id = SessionWait.Text(call["id"]);
-            if (string.IsNullOrEmpty(id)) throw new InvalidDataException("Chat Completions output has no stable call ID; the legacy/malformed fallback is not implemented.");
+            if (string.IsNullOrEmpty(id)) throw new ModelPreparationException("Chat Completions output has no stable call ID; the legacy/malformed fallback is not implemented.");
             var function = call["function"] as JsonObject ?? new JsonObject();
             var args = FunctionCallArguments.Parse(function["arguments"]);
             var canonical = new JsonObject { ["id"] = id, ["name"] = SessionWait.Text(function["name"]) ?? "", ["args"] = args.Args.DeepClone() };

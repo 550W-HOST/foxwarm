@@ -25,7 +25,7 @@ public sealed class AnthropicTests
         Assert.Equal("tool_use", wire[1]!["content"]![3]!["type"]!.GetValue<string>()); Assert.Equal(4, wire[1]!["content"]!.AsArray().Count);
         Assert.Contains("prevLLMReqTime", wire[2]!["content"]![0]!["content"]!.GetValue<string>()); Assert.Equal("", wire[2]!["content"]![0]!["reasoning_content"]!.GetValue<string>());
         Assert.Equal(originals, rows.Select(row => row.ToJsonString()).ToArray());
-        Assert.Throws<InvalidDataException>(() => AnthropicRequestSerializer.ConvertHistory([Obj("""{"role":"user","parts":[{"inlineDataRef":{"id":"blob"}}]}""")], new Uri("http://localhost")));
+        Assert.Throws<ModelPreparationException>(() => AnthropicRequestSerializer.ConvertHistory([Obj("""{"role":"user","parts":[{"inlineDataRef":{"id":"blob"}}]}""")], new Uri("http://localhost")));
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public sealed class AnthropicTests
     {
         using var client = new HttpClient(new Handler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("not-json") })));
         Assert.Null((await new AnthropicMessagesService(client, Options()).ChatAsync("session", [], CancellationToken.None)).AssistantMessage);
-        await Assert.ThrowsAsync<InvalidDataException>(() => new AnthropicMessagesService(client, Options() with { DisallowEmptyResponse = true }).ChatAsync("session", [], CancellationToken.None));
+        await Assert.ThrowsAsync<ModelAttemptFailure>(() => new AnthropicMessagesService(client, Options() with { DisallowEmptyResponse = true }).ChatAsync("session", [], CancellationToken.None));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public sealed class AnthropicTests
     {
         using var client = new HttpClient(new Handler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
         { Content = new StringContent("{\"content\":[{\"type\":\"tool_use\",\"id\":\"call\",\"name\":\"write\",\"input\":{}}]}") })));
-        await Assert.ThrowsAsync<InvalidDataException>(() => new AnthropicMessagesService(client, Options()).ChatAsync("session", [], CancellationToken.None));
+        await Assert.ThrowsAsync<ModelAttemptFailure>(() => new AnthropicMessagesService(client, Options()).ChatAsync("session", [], CancellationToken.None));
     }
 
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler

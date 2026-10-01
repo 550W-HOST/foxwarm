@@ -20,6 +20,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly LocalExecManager executor;
     private readonly HttpClient http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private readonly Foxwarm.McpClient mcp;
+    private readonly ModelRouting modelRouting = new();
     private readonly ToolRegistry tools;
     private readonly SessionWaitTimeouts waitTimeouts;
     private readonly WaitLiveness waitLiveness;
@@ -178,7 +179,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = target => Find(target)?.Metadata() };
         hosted.Archive = store.Archive;
         hosted.Executor = executor;
-        var chat = new SessionChatService(http, clientOptions, hosted, models, memory, (sessionId, update) =>
+        var requests = new ModelRequestOwner(http, clientOptions, modelRouting);
+        var chat = new SessionChatService(requests, clientOptions, hosted, models, memory, (sessionId, update) =>
         {
             hosted.PublishDraftProgress(update);
             hosted.Emit(SessionEventKind.RequestProgress, new JsonObject { ["text"] = update.Text, ["reasoning"] = update.Reasoning });
@@ -186,7 +188,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var registry = new SessionRegistry(store, new RequestChatService(chat, hosted),
             new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent), hosted, this, tools));
         hosted.Registry = registry;
-        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http, memory);
+        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, requests, memory);
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.TriggerOverride = _ => Accepting ? hosted.StartProcessing() : Task.CompletedTask;

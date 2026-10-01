@@ -14,7 +14,7 @@ internal sealed class CompletionsChatService(HttpClient http, ResponsesClientOpt
             (stream, token, callbacks) => CompletionsSseCollector.CollectAsync(stream, token, callbacks), cancellationToken).ConfigureAwait(false);
         var assistant = CompletionsCanonicalConverter.ConvertAssistant(completed.Payload, options.ConcreteModelId, completed.CompletedAt, completed.DurationMs);
         if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
-            throw new InvalidDataException("Selected model disallows an empty completed response.");
+            throw ModelAttemptFailure.Empty();
         return new ChatResult(assistant);
     }
 }

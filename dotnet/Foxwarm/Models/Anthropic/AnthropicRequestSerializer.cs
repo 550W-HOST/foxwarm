@@ -18,7 +18,7 @@ internal static class AnthropicRequestSerializer
             {
                 var part = view.ToJson();
                 if (part["inlineData"] is not null || part["inlineDataRef"] is not null)
-                    throw new InvalidDataException("Anthropic native input/blob hydration is not implemented.");
+                    throw new ModelPreparationException("Anthropic native input/blob hydration is not implemented.");
                 if (CompletionsRequestSerializer.Truthy(part["thinking"]) && CompletionsRequestSerializer.Truthy(part["providerMeta"]?["signature"]))
                     blocks.Add(new JsonObject { ["type"] = "thinking", ["thinking"] = part["thinking"]!.DeepClone(), ["signature"] = part["providerMeta"]!["signature"]!.DeepClone() });
                 if (SessionWait.Text(part["system"]) is { Length: > 0 } system)
@@ -27,7 +27,7 @@ internal static class AnthropicRequestSerializer
                 if (part["functionCall"] is JsonObject call)
                 {
                     var id = SessionWait.Text(call["id"]);
-                    if (string.IsNullOrEmpty(id)) throw new InvalidDataException("Anthropic history has no stable call ID; the legacy/malformed fallback is not implemented.");
+                    if (string.IsNullOrEmpty(id)) throw new ModelPreparationException("Anthropic history has no stable call ID; the legacy/malformed fallback is not implemented.");
                     blocks.Add(new JsonObject { ["type"] = "tool_use", ["id"] = id, ["name"] = call["name"]?.DeepClone(),
                         ["input"] = CompletionsRequestSerializer.Truthy(call["args"]) ? call["args"]!.DeepClone() : new JsonObject() });
                 }

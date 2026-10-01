@@ -10,7 +10,7 @@ internal sealed partial class SessionCompactor
     private readonly PersistentSessionAuthorityStore store;
     private readonly HostModels models;
     private readonly ResponsesClientOptions baseOptions;
-    private readonly HttpClient http;
+    private readonly ModelRequestOwner requests;
     private readonly AgentMemory memory;
     private readonly object gate = new();
     private CompactRun? active;
@@ -24,9 +24,9 @@ internal sealed partial class SessionCompactor
     }
 
     public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
-        HostModels models, ResponsesClientOptions baseOptions, HttpClient http, AgentMemory memory)
+        HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory)
     {
-        this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions; this.http = http;
+        this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions; this.requests = requests;
         this.memory = memory;
     }
     public bool Active { get { lock (gate) return active is not null; } }

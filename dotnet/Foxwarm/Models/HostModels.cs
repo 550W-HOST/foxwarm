@@ -1,6 +1,4 @@
 using System.Text.Json.Nodes;
-using System.Security.Cryptography;
-using System.Text;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Models;
@@ -37,11 +35,11 @@ internal sealed partial class HostModels
     public bool Contains(string key) => owner is null ? entries.ContainsKey(key) : Capture().Contains(key);
     public IReadOnlyList<ConcreteHostModel> Options => owner is null ? displayKeys.Select(key => entries[key] with { Key = key }).ToArray() : Capture().Options;
     internal IReadOnlyCollection<ConcreteHostModel> All => owner is null ? entries.Values : Capture().All;
-    public (ConcreteHostModel Model, string? RawModel, string? RawEffort, string EffectiveEffort) Select(SessionSnapshot snapshot)
+    public (ConcreteHostModel Model, string? RawModel, string? RawEffort, string? EffectiveEffort) Select(SessionSnapshot snapshot)
     {
         if (owner is not null) return Capture().Select(snapshot);
         var rawModel = SessionWait.Text(snapshot.AuthorityEnvelope["model"]); var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
-        var model = Resolve(rawModel); var effective = rawEffort is not null && model.AllowedEfforts.Contains(rawEffort) ? rawEffort : model.DefaultEffort ?? "high";
+        var model = Resolve(rawModel); var effective = rawEffort is not null && model.AllowedEfforts.Contains(rawEffort) ? rawEffort : model.DefaultEffort;
         return (model, rawModel, rawEffort, effective);
     }
     // Explicit dependency injection for low-level host tests, not a runtime file format.
@@ -105,7 +103,11 @@ internal sealed partial class HostModels
             var resolved = (JsonObject)config.DeepClone();
             resolved["failureThreshold"] = Positive(config["failureThreshold"], 5, "failureThreshold");
             resolved["cooldownMs"] = Positive(config["cooldownMs"], 600000, "cooldownMs");
-            resolved["fingerprint"] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", leaves.Select(leaf => leaf.Configuration.ToJsonString())) + resolved.ToJsonString()))).ToLowerInvariant();
+            var canonicalTargets = leaves.Select(leaf => leaf.Key).ToArray();
+            resolved["targets"] = new JsonArray(canonicalTargets.Select(target => (JsonNode?)JsonValue.Create(target)).ToArray());
+            resolved["asyncCompact"] = leaves.All(leaf => !ModelRoutingFingerprint.False(leaf.Configuration["asyncCompact"]));
+            resolved["fingerprint"] = ModelRoutingFingerprint.Build(type, canonicalTargets, leaves,
+                Positive(resolved["failureThreshold"], 5, "failureThreshold"), Positive(resolved["cooldownMs"], 600000, "cooldownMs"));
             models[key] = new ConcreteHostModel(key, key, "", type, null, "", leaves.Min(leaf => leaf.ContextLimit), Efforts.Where(effort => leaves.Any(leaf => leaf.AllowedEfforts.Contains(effort))).ToArray(), null, resolved, leaves.Select(leaf => leaf.Key).ToArray()); display.Add(key);
         }
         var ordered = source.SelectMany(provider => display.Where(key => models[key].ProviderKey == provider.Key)).ToArray();

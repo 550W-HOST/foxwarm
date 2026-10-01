@@ -16,7 +16,7 @@ internal static class CompletionsRequestSerializer
             var parts = message.Parts.Select(part => part.ToJson()).ToArray();
             foreach (var part in parts)
                 if (part["inlineData"] is not null || part["image"] is not null || part["imageMeta"] is not null)
-                    throw new InvalidDataException("Chat Completions image/blob projection is not implemented.");
+                    throw new ModelPreparationException("Chat Completions image/blob projection is not implemented.");
             if (message.Role == "tool")
             {
                 var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -24,7 +24,7 @@ internal static class CompletionsRequestSerializer
                 {
                     if (part["functionResponse"] is not JsonObject response) continue;
                     var id = SessionWait.Text(response["tool_use_id"]) ?? SessionWait.Text(part["toolUseId"]);
-                    if (string.IsNullOrEmpty(id)) throw new InvalidDataException("Chat Completions tool response needs a stable call ID; the legacy fallback is not implemented.");
+                    if (string.IsNullOrEmpty(id)) throw new ModelPreparationException("Chat Completions tool response needs a stable call ID; the legacy fallback is not implemented.");
                     if (!groups.TryGetValue(id, out var outputs)) groups.Add(id, outputs = []);
                     if (OpenAIRequestText.PreviousRequest(response) is string time) outputs.Insert(0, time);
                     var text = ToolResponseFormatting.Format(response["response"] as JsonObject ?? new JsonObject());
@@ -40,7 +40,7 @@ internal static class CompletionsRequestSerializer
             }
             var role = message.Role == "model" ? "assistant" : message.Role;
             if (role == "user" && parts.Length > 1 && parts.All(part => (part.ContainsKey("text") || part.ContainsKey("system")) && !Truthy(part["thinking"]) && !Truthy(part["functionCall"]) && !Truthy(part["functionResponse"]) && !Truthy(part["inlineData"])))
-                parts = [new JsonObject { ["text"] = string.Join("\n", parts.Select(part => part.ContainsKey("system") ? OpenAIRequestText.System(SessionWait.Text(part["system"]) ?? throw new InvalidDataException("System content must be a string.")) : SessionWait.Text(part["text"])).Where(text => !string.IsNullOrEmpty(text))) }];
+                parts = [new JsonObject { ["text"] = string.Join("\n", parts.Select(part => part.ContainsKey("system") ? OpenAIRequestText.System(SessionWait.Text(part["system"]) ?? throw new ModelPreparationException("System content must be a string.")) : SessionWait.Text(part["text"])).Where(text => !string.IsNullOrEmpty(text))) }];
             var content = new JsonArray(); var calls = new JsonArray(); string? thinking = null;
             foreach (var part in parts)
             {
@@ -50,7 +50,7 @@ internal static class CompletionsRequestSerializer
                 if (part["functionCall"] is JsonObject call)
                 {
                     var id = SessionWait.Text(call["id"]);
-                    if (string.IsNullOrEmpty(id)) throw new InvalidDataException("Chat Completions function call needs a stable ID; the legacy fallback is not implemented.");
+                    if (string.IsNullOrEmpty(id)) throw new ModelPreparationException("Chat Completions function call needs a stable ID; the legacy fallback is not implemented.");
                     calls.Add(new JsonObject { ["id"] = id, ["type"] = "function", ["function"] = new JsonObject
                     {
                         ["name"] = SessionWait.Text(call["name"]) ?? "",

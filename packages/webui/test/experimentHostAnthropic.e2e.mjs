@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path'
 import { gunzipSync, brotliDecompressSync } from 'node:zlib'
 import puppeteer from 'puppeteer-core'
 import yamlReader from 'js-yaml'
+import { saveModelsInOriginalApp } from './experimentHostFixture.mjs'
 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 async function until(check, label, timeout = 22000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await check()) return; await sleep(25) } throw new Error('Timed out: ' + label) }
@@ -63,6 +64,8 @@ function peer(label) {
       const userTexts = body.messages.filter(message => message.role === 'user').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content.filter(block => block.type === 'text').map(block => block.text))
       const latest = userTexts.findLast(value => value.trim()) || '', planning = userTexts.findLast(value => value.includes('COMPACTION STARTED:'))
       const record = { body, headers: request.headers, label, user: latest }; requests.push(record)
+      const repeatedFailure = ['empty-array-guard', 'http-error', 'held-headers-default'].find(name => latest.includes(name))
+      if (repeatedFailure && requests.filter(item => item.user.includes(repeatedFailure)).length > 1) { response.writeHead(400, { 'content-type': 'application/json' }); response.end('{"error":"synthetic terminal after observed first failure"}'); return }
       assert.equal(request.url, '/v1/messages'); assert.equal(body.model, 'same-wire'); assert.equal(body.max_tokens, 911); assert(!('stream' in body)); assert(!('prompt_cache_key' in body))
       assert.equal(request.headers['anthropic-version'], '2023-06-01'); assert.equal(request.headers['anthropic-beta'], 'interleaved-thinking-2025-05-14'); assert.equal(request.headers['user-agent'], 'foxwarm/1.0'); assert(!request.headers.authorization)
       assert.equal(Number(request.headers['content-length']), wire.length); assert(body.tools.every(tool => tool.input_schema && !('parameters' in tool) && !('strict' in tool)))
@@ -113,13 +116,11 @@ try {
   await start(); current = (await api('POST', '/api/sessions', {})).body.sessionId
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: join(root, 'browser') }); page = await browser.newPage()
   await page.goto(origin, { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', apiToken); await page.click('button[type="submit"]'); await page.waitForSelector('.foxwarm-chat-root')
-  await page.evaluate(() => { location.hash = 'setup' }); await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models'); await page.waitForSelector('[aria-label="Models YAML editor"] [role="textbox"]')
-  const original = configuration(first, oldToken); await page.focus('[aria-label="Models YAML editor"] [role="textbox"]'); await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.sendCharacter(original)
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click()); await until(async () => (await readFile(modelPath, 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === original.replaceAll('\r\n', '\n'), 'original Models saved')
-  await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Close')); await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Close')?.click()); await page.evaluate(id => window.foxwarmTest.switchToSession(id), current)
+  const original = configuration(first, oldToken); await saveModelsInOriginalApp(page, original, modelPath)
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), current)
   await page.waitForSelector('.foxwarm-model-selector-trigger'); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
   await until(async () => (await history()).session.modelKey === 'a', 'original leaf selected'); await page.evaluate(() => window.foxwarmTest.sendMessage('tool-flow')); await until(() => flowHold, 'real nonstream body held')
-  assert.equal((await history()).messages.filter(row => row.role === 'model').length, 0); assert.equal(await readFile(effectPath, 'utf8').catch(() => null), null); assert(!(await page.evaluate(() => document.body.innerText)).includes('Signed A thinking'))
+  assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, 0); assert.equal(await readFile(effectPath, 'utf8').catch(() => null), null); assert(!(await page.evaluate(() => document.body.innerText)).includes('Signed A thinking'))
   const captured = flowHold.record; assert.match(captured.body.cache, /^[0-9a-f-]{36}$/); assert.match(captured.body.turn, /^[0-9a-f-]{36}$/)
   await save(configuration(second, newToken, 'br')); flowHold.finish(); await until(async () => (await history()).messages.some(row => row.parts?.some(part => part.text === 'FLOW-DONE')), 'actual paired loop'); await until(async () => !(await state()).busy, 'idle')
   assert.equal(errors.length, 0, errors.join('\n')); const rows = (await history()).messages, assistant = rows.find(row => row.parts?.some(part => part.functionCall?.id === 'call_write'))
@@ -132,11 +133,11 @@ try {
   await api('POST', route(current) + '/model', { model: 'c' }); await send('cross-openai', 'OPENAI-CROSS-DONE'); assert.deepEqual((await history()).messages.find(row => row.__meta?.seq === assistant.__meta.seq), assistant); assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, assistant.__meta.seq]), archived)
   await api('POST', route(current) + '/model', { model: 'a' }); await send('same-concrete', 'REPLAY-DONE')
   await api('POST', route(current) + '/model', { model: 'a', effort: 'none' }); await send('none-effort', 'NONE-DONE'); await api('POST', route(current) + '/model', { model: 'a', effort: 'high' })
-  for (const value of ['empty-array', 'raw-non-json']) { const count = (await history()).messages.filter(row => row.role === 'model').length; await send(value); assert.equal((await history()).messages.filter(row => row.role === 'model').length, count) }
+  for (const value of ['empty-array', 'raw-non-json']) { const count = (await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length; await send(value); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, count) }
   await send('empty-block'); assert.equal((await history()).messages.at(-1).parts[0].text, '')
   const strict = yamlReader.load(configuration(second, newToken, 'br')); strict.providers.a.disallowEmptyResponse = true; await save(JSON.stringify(strict)); let failures = (await state()).failureCount; await send('empty-array-guard'); assert.equal((await state()).failureCount, failures + 1); await save(configuration(second, newToken, 'br'))
   failures = (await state()).failureCount; await send('http-error'); assert.equal((await state()).failureCount, failures + 1); assert(!(await state()).lastError.includes(newToken))
-  const stopRows = (await history()).messages.filter(row => row.role === 'model').length; await api('POST', route(current) + '/message', { text: 'stop-headers' }); await until(() => stopHold, 'held Stop request'); assert.equal((await api('POST', route(current) + '/stop')).status, 200); await until(async () => !(await state()).busy && closed.has('stop'), 'Stop closed own headers wait'); assert.equal((await history()).messages.filter(row => row.role === 'model').length, stopRows)
+  const stopRows = (await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length; await api('POST', route(current) + '/message', { text: 'stop-headers' }); await until(() => stopHold, 'held Stop request'); assert.equal((await api('POST', route(current) + '/stop')).status, 200); await until(async () => !(await state()).busy && closed.has('stop'), 'Stop closed own headers wait'); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, stopRows)
   await stopHost(); await start(); await send('after-restart', 'RESTART-DONE'); assert.equal(await readFile(effectPath, 'utf8'), 'héllo')
   current = (await api('POST', '/api/sessions', {})).body.sessionId
   for (let index = 0; index < 15; index++) await send('compact-seed-' + index + ' ' + ('retained-context-' + index + '-').repeat(100), 'PLAIN-DONE')

@@ -43,17 +43,26 @@ internal static class ConfiguredModelRequests
     internal static IChatService CreateService(HttpClient http, ConcreteHostModel model, ResponsesClientOptions options,
         string cacheKey, Action<string, ResponsesStreamProgress>? progress = null)
     {
+        return new ConcreteRequestHistory.ChatService(CreatePreparedService(http, model, options, cacheKey, progress), model.Key);
+    }
+    internal static IChatService CreatePreparedService(HttpClient http, ConcreteHostModel model, ResponsesClientOptions options,
+        string cacheKey, Action<string, ResponsesStreamProgress>? progress = null)
+    {
         IChatService service = model.ProviderType == "openai-completions"
             ? new CompletionsChatService(http, options, SessionWait.Text(model.Configuration["historyReasoningField"]) ?? "reasoning_content", cacheKey, progress)
             : model.ProviderType is "openai" or "openai-responses"
                 ? new ResponsesChatService(http, options, progress)
                 : new AnthropicMessagesService(http, options);
-        return new ConcreteRequestHistory.ChatService(service, model.Key);
+        return service;
     }
 
     internal static string SafeError(Exception error, ConcreteHostModel model)
     {
-        var message = error is InvalidDataException or UnsupportedResponsesFeatureException ? error.Message : "Configured model request failed.";
+        var message = error is InvalidDataException or UnsupportedResponsesFeatureException or ModelPreparationException or ModelRequestException ? error.Message : "Configured model request failed.";
+        return SafeReason(message, model);
+    }
+    internal static string SafeReason(string message, ConcreteHostModel model)
+    {
         var secrets = new[] { model.Token }.Concat((model.Configuration["extraHeaders"] as JsonObject ?? new JsonObject()).Select(pair => SessionWait.Text(pair.Value) ?? ""));
         return secrets.Any(secret => secret.Length > 0 && message.Contains(secret, StringComparison.Ordinal)) ? "Configured model request failed." : message;
     }

@@ -98,7 +98,8 @@ internal sealed partial class SessionOwner
                 if (failures != lastReportedFailureCount)
                 {
                     lastReportedFailureCount = failures;
-                    Emit(SessionEventKind.ProcessingError, JsonValue.Create(Entry.LastBackgroundProcessorFailure?.Message));
+                    if (Entry.LastBackgroundProcessorFailure is not ModelRequestException { TerminalNoticeDelivered: true })
+                        Emit(SessionEventKind.ProcessingError, JsonValue.Create(Entry.LastBackgroundProcessorFailure?.Message));
                 }
                 Emit(SessionEventKind.StateChanged);
                 running.TryRemove(index, out _);

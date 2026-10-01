@@ -19,6 +19,7 @@ internal sealed partial class HostModels
         config["contextLimit"] = rawContext?.DeepClone() ?? JsonValue.Create(context);
         foreach (var scope in new[] { provider, model })
             if (scope?.ContainsKey("keepReasoningOnError") == true && (scope["keepReasoningOnError"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))) throw new InvalidDataException("keepReasoningOnError must be boolean.");
+        config["asyncCompact"] = provider["asyncCompact"]?.DeepClone() ?? JsonValue.Create(true);
         config["keepReasoningOnError"] = model?["keepReasoningOnError"]?.DeepClone() ?? provider["keepReasoningOnError"]?.DeepClone() ?? JsonValue.Create(false);
         foreach (var scope in new[] { provider, model }) if (scope?.ContainsKey("streamContentInactivityTimeoutMs") == true)
         {

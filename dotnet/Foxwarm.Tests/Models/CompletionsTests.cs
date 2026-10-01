@@ -96,7 +96,7 @@ public sealed class CompletionsTests
     public void Missing_stable_call_ids_fail_before_a_canonical_effect_batch()
     {
         var response = Obj("""{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"write","arguments":"{}"}}]}}]}""");
-        Assert.Throws<InvalidDataException>(() => CompletionsCanonicalConverter.ConvertAssistant(response, "a/wire", 1, 0));
+        Assert.Throws<ModelPreparationException>(() => CompletionsCanonicalConverter.ConvertAssistant(response, "a/wire", 1, 0));
     }
 
     [Fact]

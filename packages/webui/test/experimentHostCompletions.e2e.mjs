@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path'
 import { gunzipSync, brotliDecompressSync } from 'node:zlib'
 import puppeteer from 'puppeteer-core'
 import yamlReader from 'js-yaml'
+import { saveModelsInOriginalApp } from './experimentHostFixture.mjs'
 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 async function until(check, label, timeout = 22000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await check()) return; await sleep(25) } throw new Error('Timed out: ' + label) }
@@ -54,6 +55,8 @@ function peer(label) {
       }
       const user = body.messages.filter(message => message.role === 'user').at(-1), input = inputOf(body)
       const record = { label, body, headers: request.headers, wireBytes: wire.length, user: textOf(user?.content) }; requests.push(record)
+      const repeatedFailure = ['malformed-sse', 'provider-error', 'http-error', 'empty-eof', 'whitespace-disallowed', 'inactivity', 'first-content'].find(name => record.user.includes(name))
+      if (repeatedFailure && requests.filter(item => item.user.includes(repeatedFailure)).length > 1) { response.writeHead(400, { 'content-type': 'application/json' }); response.end('{"error":"synthetic terminal after observed first failure"}'); return }
       assert.equal(request.url, '/v1/chat/completions'); assert.equal(request.headers['user-agent'], 'foxwarm/1.0'); assert.equal(body.model, 'same-wire'); assert.equal(body.max_tokens, 911); assert.deepEqual(body.stream_options, { include_usage: true }); assert.equal(body.stream, true)
       assert.equal(Number(request.headers['content-length']), wire.length); assert.equal(body.reasoning_effort, 'high'); assert.equal(body.messages[0].role, 'system')
       assert(body.tools?.every(tool => tool.type === 'function' && tool.function.strict === false))
@@ -152,14 +155,12 @@ try {
   await start(); current = (await api('POST', '/api/sessions', {})).body.sessionId
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: join(root, 'browser') })
   page = await browser.newPage(); await page.evaluateOnNewDocument(() => { const Native = window.WebSocket; window.observedFrames = []; window.WebSocket = class extends Native { constructor(...args) { super(...args); this.addEventListener('message', event => { if (typeof event.data !== 'string') return; window.observedFrames.push(event.data); if (window.observedFrames.length > 600) window.observedFrames.shift() }) } } }); await page.goto(origin, { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', apiToken); await page.click('button[type="submit"]'); await page.waitForSelector('.foxwarm-chat-root')
-  await page.evaluate(() => { location.hash = 'setup' }); await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models'); await page.waitForSelector('[data-setup-section="models"]', { visible: true }); await page.waitForSelector('[aria-label="Models YAML editor"] [role="textbox"]')
-  const original = configuration(first, oldToken); await page.focus('[aria-label="Models YAML editor"] [role="textbox"]'); await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.sendCharacter(original)
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click()); await until(async () => (await readFile(modelPath, 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === original.replaceAll('\r\n', '\n'), 'original Models saved')
-  await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Close')); await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Close')?.click()); await page.waitForFunction(() => !document.body.innerText.includes('Manage models, channels, app settings, and appearance.')); await page.evaluate(id => window.foxwarmTest.switchToSession(id), current); await page.waitForSelector('.foxwarm-model-selector-trigger'); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('button[title="Refresh models"]'); await page.click('button[title="Refresh models"]'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
+  const original = configuration(first, oldToken); await saveModelsInOriginalApp(page, original, modelPath)
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), current); await page.waitForSelector('.foxwarm-model-selector-trigger'); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('button[title="Refresh models"]'); await page.click('button[title="Refresh models"]'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
   await until(async () => (await history()).session.modelKey === 'a', 'original model selected')
   await page.evaluate(() => window.foxwarmTest.sendMessage('tool-flow'))
   await until(() => flowHold, 'real fragmented tool stream'); await until(async () => (await page.evaluate(() => document.body.innerText)).includes('Compatibility reasoning') && (await page.evaluate(() => window.observedFrames.join('\n'))).includes('Preferred reasoning'), 'original live reasoning and complete real stream payload')
-  assert.equal(await readFile(effectPath, 'utf8').catch(() => null), null); assert.equal((await history()).messages.filter(row => row.role === 'model').length, 0)
+  assert.equal(await readFile(effectPath, 'utf8').catch(() => null), null); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, 0)
   const captured = flowHold.record; assert.equal(captured.headers['x-captured'], oldToken); assert.match(captured.body.cache, /^[0-9a-f-]{36}$/); assert.match(captured.body.turn, /^[0-9a-f-]{36}$/)
   await save(configuration(second, newToken, 'br')); await flowHold.finish(); await until(async () => (await history()).messages.some(row => row.parts?.some(part => part.text === 'FLOW-DONE')), 'whole tool loop completed'); await until(async () => !(await state()).busy, 'tool flow idle')
   assert.equal(errors.length, 0, errors.join('\n'))
@@ -177,15 +178,15 @@ try {
   await api('POST', route(current) + '/model', { model: 'a' }); await send('same-concrete-replay', 'REPLAY-DONE')
   const plain = await send('no-terminal', 'EOF-DONE'); assert.equal(plain.length, 1); assert.notEqual(plain[0].body.turn, captured.body.turn); assert.equal(plain[0].body.cache, captured.body.cache)
   for (const name of ['malformed-sse', 'provider-error', 'http-error', 'empty-eof', 'missing-id']) {
-    const models = (await history()).messages.filter(row => row.role === 'model').length, count = (await state()).failureCount
-    await send(name); assert.equal((await history()).messages.filter(row => row.role === 'model').length, models); assert.equal((await state()).failureCount, count + 1); assert(!(await state()).lastError.includes(newToken))
+    const models = (await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, count = (await state()).failureCount
+    await send(name); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, models); assert.equal((await state()).failureCount, count + 1); assert(!(await state()).lastError.includes(newToken))
   }
   assert.equal(await readFile(join(work, 'must-not-exist'), 'utf8').catch(() => null), null)
   await send('usage-only'); assert.equal((await history()).messages.at(-1).role, 'model'); assert.equal((await history()).messages.at(-1).parts[0].text, '')
   await send('whitespace'); assert.equal((await history()).messages.at(-1).parts[0].text, ' \t')
   const strict = yamlReader.load(configuration(second, newToken, 'br')); strict.providers.a.disallowEmptyResponse = true; await save(JSON.stringify(strict)); const failed = (await state()).failureCount; await send('whitespace-disallowed'); assert.equal((await state()).failureCount, failed + 1)
   const inactivity = yamlReader.load(configuration(second, newToken, 'br')); inactivity.providers.a.streamContentInactivityTimeoutMs = 200; await save(JSON.stringify(inactivity)); const began = Date.now(); await send('inactivity'); assert(Date.now() - began < 4000); await until(() => closed.has('inactivity'), 'inactivity closes peer')
-  await save(configuration(second, newToken, 'br')); const stopModels = (await history()).messages.filter(row => row.role === 'model').length; await api('POST', route(current) + '/message', { text: 'stop-stream' }); await until(() => stopHold, 'held Stop stream'); assert.equal((await api('POST', route(current) + '/stop')).status, 200); await until(async () => !(await state()).busy && closed.has('stop'), 'Stop released stream'); assert.equal((await history()).messages.filter(row => row.role === 'model').length, stopModels)
+  await save(configuration(second, newToken, 'br')); const stopModels = (await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length; await api('POST', route(current) + '/message', { text: 'stop-stream' }); await until(() => stopHold, 'held Stop stream'); assert.equal((await api('POST', route(current) + '/stop')).status, 200); await until(async () => !(await state()).busy && closed.has('stop'), 'Stop released stream'); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, stopModels)
   // Source-visible historical wrapper fixture, never a substitute for provider dispatch/effects.
   const beforeRestart = JSON.parse(await readFile(join(data, 'state/sessions', current + '.json'), 'utf8')); const historical = beforeRestart.history.find(row => row.role === 'user'); historical.parts.push({ system: 'Session goal reminder:\nHistorical persisted goal.' }); await stopHost(); await writeFile(join(data, 'state/sessions', current + '.json'), JSON.stringify(beforeRestart)); await start()
   const restarted = await send('after-restart', 'RESTART-DONE'); assert.equal(restarted.length, 1); assert(inputOf(restarted[0].body).includes('<foxwarm-system kind="goal-reminder">\nHistorical persisted goal.\n</foxwarm-system>')); assert.equal(await readFile(effectPath, 'utf8'), 'héllo')

@@ -37,13 +37,20 @@ internal sealed partial class SessionOwner
         var status = BuildDto(); status["success"] = true; status["sessionId"] = Id; return status;
     }
 
+    internal void RestartDraft()
+    {
+        string? requestId;
+        lock (draftGate) requestId = SessionWait.Text(draft?["llmRequestId"]);
+        BeginDraft(requestId);
+    }
+
     public JsonObject DraftSnapshot()
     {
         lock (draftGate)
             return draft is null ? new JsonObject() : (JsonObject)draft.DeepClone();
     }
 
-    public string BeginDraft()
+    public string BeginDraft(string? outerRequestId = null)
     {
         var requestId = Guid.NewGuid().ToString("N");
         var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -56,7 +63,7 @@ internal sealed partial class SessionOwner
                 ["iteration"] = 1,
                 ["sequence"] = 0,
                 ["startedAt"] = startedAt,
-                ["llmRequestId"] = requestId,
+                ["llmRequestId"] = outerRequestId ?? requestId,
                 ["text"] = "",
                 ["reasoning"] = "",
                 ["toolCalls"] = new JsonArray()

@@ -34,6 +34,8 @@ function peer(label) {
     if (req.headers['content-encoding'] === 'br') bytes = brotliDecompressSync(bytes)
     assert.notEqual(req.headers['user-agent'], 'foxwarm/1.0', 'Responses must not acquire the Completions transport default'); const body = JSON.parse(bytes); const user = body.input.filter(item => item.role === 'user').at(-1)?.content?.map(part => part.text || '').join('') || ''
     requests.push({ label, headers: req.headers, body, user }); res.setHeader('content-type', 'text/event-stream')
+    const retryCase = ['inactivity', 'whitespace-guard'].find(name => user.includes(name))
+    if (retryCase && requests.filter(record => record.user.includes(retryCase)).length > 1) { res.writeHead(400, { 'content-type': 'application/json' }); res.end('{"error":"synthetic terminal after observed first failure"}'); return }
     const id = 'response-' + requests.length
     if (user.includes('hold-old')) { held = { finish: () => finish(res, id, 'OLD-FROZEN'), request: requests.at(-1) }; return }
     if (user.includes('paired') && !body.input.some(item => item.call_id === 'yaml-write')) {
@@ -99,7 +101,7 @@ try {
   await save(raw)
   const count = requests.length; await api('POST', route(current) + '/message', { text: 'hold-old' }); await until(() => held, 'old request held'); const captured = held.request; const updated = yaml(second, newSecret, 'br'); await save(updated); held.finish(); await until(async () => (await history()).messages.some(row => row.parts?.some(part => part.text === 'OLD-FROZEN')), 'held completion'); await idle(); assert.equal(captured.headers.authorization, 'Bearer ' + oldSecret); assert.equal(captured.body.model, 'wire/slash'); assert.equal(requests.length, count + 1)
   const next = await send('next-config', 'DONE-second'); assert.equal(next[0].headers.authorization, 'Bearer ' + newSecret); assert.equal(next[0].headers['content-encoding'], 'br'); assert.equal(next[0].body.cache, captured.body.cache); assert.notEqual(next[0].body.turn, captured.body.turn)
-  for (const model of ['future', 'route']) { assert.equal((await api('POST', route(current) + '/model', { model })).status, 200); const before = requests.length; await send('unsupported-' + model); assert.equal(requests.length, before); assert(!JSON.stringify(await history()).includes(newSecret)) }
+  for (const model of ['future']) { assert.equal((await api('POST', route(current) + '/model', { model })).status, 200); const before = requests.length; await send('unsupported-' + model); assert.equal(requests.length, before); assert(!JSON.stringify(await history()).includes(newSecret)) }
   assert.equal((await api('POST', route(current) + '/model', { model: 'alpha/wire/slash', effort: 'low' })).status, 200); await send('qualified-lookup', 'DONE-second')
   assert.equal((await api('POST', route(current) + '/model', { model: 'alpha', effort: 'none' })).status, 200)
   const none = await send('effort-none', 'DONE-second'); assert.equal(none[0].body.reasoning.effort, 'none'); assert(!('summary' in none[0].body.reasoning)); assert.deepEqual(none[0].body.include, ['vendor.option'])
@@ -110,8 +112,8 @@ try {
     await save(updated.replace('      nested:', '      ' + addition + '\r\n      nested:')); const count = requests.length; await send('unsupported-extra-media'); assert.equal(requests.length, count)
   }
   await save(updated.replace('    contextLimit:', '    disallowEmptyResponse: true\r\n    streamContentInactivityTimeoutMs: 150\r\n    contextLimit:'))
-  const empty = await send('whitespace'); assert.equal(empty.length, 1); assert(!(await history()).messages.some(row => row.parts?.some(part => part.text === '  \t')))
-  const stalled = await send('inactivity'); assert.equal(stalled.length, 1); assert(!(await history()).session.busy)
+  const empty = await send('whitespace-guard'); assert.equal(empty.length, 2); assert(!(await history()).messages.some(row => row.parts?.some(part => part.text === '  \t')))
+  const stalled = await send('inactivity'); assert.equal(stalled.length, 2); assert(!(await history()).session.busy)
   await save(updated.replace('    contextLimit:', '    disallowEmptyResponse: false\r\n    contextLimit:')); await send('whitespace', '  \t'); assert((await history()).messages.some(row => row.parts?.some(part => part.text === '  \t')))
   await save(updated)
   const form = await api('POST', '/api/setup/models', { providers: [{ id: 'alpha', providerType: 'openai-responses', models: 'wire/slash' }], default: 'alpha' }); assert.equal(form.status, 200); const formYaml = JSON.parse(await readFile(modelPath, 'utf8')); assert.equal(formYaml.providers.alpha.models[0].id, 'wire/slash'); assert.equal(formYaml.providers.alpha.extraFields.nested.old, 'kept')

@@ -29,7 +29,7 @@ internal static class AnthropicCanonicalConverter
                     break;
                 case "tool_use":
                     var id = SessionWait.Text(block["id"]);
-                    if (string.IsNullOrEmpty(id)) throw new InvalidDataException("Anthropic output has no stable call ID; the legacy/malformed fallback is not implemented.");
+                    if (string.IsNullOrEmpty(id)) throw new ModelPreparationException("Anthropic output has no stable call ID; the legacy/malformed fallback is not implemented.");
                     parts.Add(new JsonObject { ["functionCall"] = new JsonObject { ["id"] = id, ["name"] = block["name"]?.DeepClone(), ["args"] = block["input"]?.DeepClone() } });
                     break;
             }
