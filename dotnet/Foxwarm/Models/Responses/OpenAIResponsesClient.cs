@@ -263,7 +263,10 @@ public static partial class ResponsesRequestSerializer
             if (output.TryGetValue<bool>(out var boolean)) return boolean ? "true" : "false";
             return output.ToJsonString();
         }
-        if (response.Count == 1 && response["error"] is JsonObject error)
+        if (response.Count == 1 && response["error"] is JsonObject { Count: 2 } error
+            && error.All(pair => pair.Key is "type" or "message")
+            && error["type"] is JsonValue errorType && errorType.TryGetValue<string>(out _)
+            && error["message"] is JsonValue errorMessage && errorMessage.TryGetValue<string>(out _))
         {
             var type = String(error, "type") ?? "tool_error";
             var message = String(error, "message") ?? "Tool execution failed";
@@ -287,7 +290,7 @@ public static partial class ResponsesRequestSerializer
             && (response["exitCode"] is null || response["exitCode"] is JsonValue code && code.TryGetValue<int>(out _))
             && response.All(item => item.Key is "status" or "exitCode" or "output" or "offset" or "nextOffset" or "totalBytes"))
             return response.ToJsonString();
-        throw new UnsupportedResponsesFeatureException("non-bounded tool response formatting");
+        return Foxwarm.Tools.ToolResponseFormatting.Format(response);
     }
 
     private static string YamlScalar(string value)

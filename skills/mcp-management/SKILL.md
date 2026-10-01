@@ -24,7 +24,7 @@ List configured servers through the hidden safe-summary builtin:
 }
 ```
 
-Invoke that descriptor with `call_tool`. The result includes safe metadata such as enabled state, transport, command/URL, argument count, environment/header key names, whether a token exists, and the configured tool-call timeout override (`null` means the MCP SDK default). It does not return secret values.
+Invoke that descriptor with `call_tool`. The result includes safe metadata such as enabled state, transport, command/URL, argument count, environment/header key names, whether a token exists, and the configured tool-call timeout override (`null` means the default of 60 seconds). It does not return secret values.
 
 If the builtin names are uncertain, first use:
 
@@ -80,7 +80,7 @@ Provider schemas may hide free-form objects. In that case, use the documented `e
 
 ### Tool-call timeout
 
-`timeoutSeconds` is optional and applies only to tool calls for that server. Acceptable overrides are finite values from 1 through 3600 seconds. Omitting it preserves the installed MCP SDK default (currently 60 seconds). To remove an existing override without changing the connection settings, invoke `mcp_config` with the server name and `timeoutSeconds: 0`; the canonical persisted configuration removes the field. Connection setup and tool listing do not use this override.
+`timeoutSeconds` is optional and applies only to tool calls for that server. Acceptable overrides are finite values from 1 through 3600 seconds. Omitting the field leaves the current timeout setting unchanged; servers without an override use 60 seconds. To remove an existing override without changing the connection settings, invoke `mcp_config` with the server name and `timeoutSeconds: 0`; the canonical persisted configuration removes the field. Connection setup and tool listing do not use this override.
 
 ## Disable or re-enable
 

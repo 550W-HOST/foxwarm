@@ -19,6 +19,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly Skills skills;
     private readonly LocalExecManager executor;
     private readonly HttpClient http = new();
+    private readonly Foxwarm.McpClient mcp;
+    private readonly ToolRegistry tools;
     private readonly SessionWaitTimeouts waitTimeouts;
     private readonly WaitLiveness waitLiveness;
     private readonly ConcurrentDictionary<string, SessionOwner> sessions = new();
@@ -62,7 +64,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in SessionSettingsDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(CompactPrompt.ToolDefinition());
-        clientOptions = options with { Tools = definitions };
+        foreach (var definition in UnifiedToolDefinitions.All()) definitions.Add(definition?.DeepClone());
+        mcp = new Foxwarm.McpClient(this.root);
+        tools = SessionToolExecutor.CreateRegistry(definitions, mcp, owner => agents.AgentDirectory(owner.Agent));
+        clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
@@ -179,7 +184,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             hosted.Emit(SessionEventKind.RequestProgress, new JsonObject { ["text"] = update.Text, ["reasoning"] = update.Reasoning });
         });
         var registry = new SessionRegistry(store, new RequestChatService(chat, hosted),
-            new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent), hosted, this));
+            new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent), hosted, this, tools));
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, http, memory);
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
@@ -211,6 +216,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         lock (lifecycle) accepting = false;
         executor.BeginShutdown();
+        mcp.BeginShutdown();
         waitTimeouts.Stop(); waitLiveness.Stop();
         foreach (var session in sessions.Values) session.CloseSubscribers();
     }
@@ -220,6 +226,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await waitTimeouts.DisposeAsync();
         await waitLiveness.DisposeAsync();
         await executor.DisposeAsync();
+        await mcp.DisposeAsync();
         http.Dispose();
     }
 

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -82,14 +83,17 @@ public sealed class LocalSessionTurnHost
                 if (calls.Count == 0) return result;
 
                 var toolParts = new JsonArray();
-                foreach (var call in calls)
+                foreach (var planned in ToolCallControls.Plan(calls))
                 {
-                    registered.Token.ThrowIfCancellationRequested();
+                    var call = planned.Call;
                     var callId = call["id"]?.GetValue<string>()
                         ?? throw new InvalidOperationException("Canonical function call is missing its stable ID.");
                     var name = call["name"]?.GetValue<string>() ?? "";
                     JsonObject response;
-                    if (call["argsParseError"] is JsonValue parseErrorValue
+                    if (registered.Token.IsCancellationRequested)
+                        response = new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." };
+                    else if (planned.Preset is JsonObject preset) response = preset;
+                    else if (call["argsParseError"] is JsonValue parseErrorValue
                         && parseErrorValue.TryGetValue<string>(out var parseError)
                         && parseError.Length > 0)
                     {
@@ -97,7 +101,9 @@ public sealed class LocalSessionTurnHost
                     }
                     else
                     {
-                        response = await tools.ExecuteAsync((JsonObject)call.DeepClone(), registered.Token).ConfigureAwait(false);
+                        try { response = await tools.ExecuteAsync((JsonObject)call.DeepClone(), registered.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException)
+                        { response = UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
                     }
                     toolParts.Add(new JsonObject
                     {
