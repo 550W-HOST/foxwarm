@@ -798,9 +798,12 @@ function App() {
       return
     }
 
-    if (focusedActiveTabId) {
-      setRoute({ view: 'tab', tabId: focusedActiveTabId })
-      setTabHash(focusedActiveTabId)
+    const currentState = useWorkbenchStore.getState()
+    const currentFocusedPane = currentState.focusedPaneId ? findPaneNode(currentState.root, currentState.focusedPaneId) : null
+    const currentActiveTabId = currentFocusedPane?.activeTabId
+    if (currentActiveTabId && currentState.tabsById[currentActiveTabId] && !closingRouteTabIdsRef.current.has(currentActiveTabId)) {
+      setRoute({ view: 'tab', tabId: currentActiveTabId })
+      setTabHash(currentActiveTabId)
     }
   }, [route, tabsById, focusedActiveTabId])
 
@@ -1601,7 +1604,7 @@ function App() {
         emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
         showPaneControls={!isMobile}
-        hideTabStrip={paneIds.length === 1 && paneTabs.length === 1}
+        hideTabStrip={paneTabs.length === 1 && paneTabs[0].type !== 'vscode'}
         canClosePane={paneIds.length > 1}
         content={content}
         onFocusPane={handleFocus}

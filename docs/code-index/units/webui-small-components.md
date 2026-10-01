@@ -9,7 +9,7 @@ A collection of small, reusable React UI components and utility functions for th
 
 ## Key Exports
 
-- `ContentHeader` — Page/section header with icon, title, optional back button and actions
+- `ContentHeader` — Page/section header with icon, title, optional back button and actions; inside a sole-tab Workbench pane, the close/drag icon contract is owned by [Single-tab headers](./webui-workbench.md#single-tab-headers)
 - `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal
 - `CollapsedSidebar` — Fixed-width collapsed sidebar rail with expand/new-session controls and root-session avatar buttons and the shared settings menu
 - `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states

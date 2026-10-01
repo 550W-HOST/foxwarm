@@ -2,6 +2,8 @@ import type { ReactNode } from 'react'
 import { useDndContext, useDroppable } from '@dnd-kit/core'
 import { Columns2, Rows2, X } from 'lucide-react'
 import WorkbenchTabs from './WorkbenchTabs'
+import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
+import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
 interface WorkbenchPaneProps {
@@ -72,6 +74,10 @@ export default function WorkbenchPane({
   onSplitDown,
   onClosePane,
 }: WorkbenchPaneProps) {
+  const { openContextMenu, openMenuAtElement, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
+  const header = hideTabStrip && tabs.length === 1
+    ? { tab: tabs[0], paneId, dragEnabled, onCloseTab, onKeepTab, openContextMenu, openMenuAtElement }
+    : null
   const hasActiveTab = !!activeTabId
   const { active } = useDndContext()
   const dragActive = !!active
@@ -116,8 +122,9 @@ export default function WorkbenchPane({
       )}
 
       <div className="min-h-0 flex-1 overflow-hidden bg-fw-canvas">
-        {content}
+        <WorkbenchTabHeaderProvider value={header}>{content}</WorkbenchTabHeaderProvider>
       </div>
+      {menu}
 
       {dragActive && (
         <div className="pointer-events-none absolute inset-0 z-[80]">

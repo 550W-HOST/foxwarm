@@ -1,6 +1,6 @@
 # Unit: webui-workbench
 
-Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs
+Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/components/WorkbenchTabHeader.tsx, packages/webui/src/components/useWorkbenchTabMenu.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs
 
 ## Purpose
 
@@ -10,7 +10,9 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 
 - `WorkbenchLayout` — recursive component rendering split/pane layout tree with resizable panels
 - `WorkbenchPane` — single pane component with tab bar, drop zones, and toolbar controls
-- `WorkbenchTabs` — single-row sortable tab strip with context menu
+- `WorkbenchTabs` — single-row sortable tab strip with the shared tab menu
+- `WorkbenchTabHeaderProvider`, `WorkbenchTabClose`, `WorkbenchTabIcon` — pane-owned sole-tab controls and drag handle for content headers
+- `useWorkbenchTabMenu` — existing Keep/copy/popout/close actions shared by strips and header icons
 - `useWorkbenchStore` — Zustand store with all workbench state and actions
 - `getWorkbenchTabById` — standalone accessor for a tab by ID
 - `WorkbenchTab`, `WorkbenchLayoutNode`, `WorkbenchPaneNode`, `WorkbenchSplitNode`, `WorkbenchPersistedState`, `WorkbenchDropTarget` — core types, including `chat`, `terminal`, `vscode`, `agents`, `search`, `logs`, and `setup` tab records
@@ -28,12 +30,16 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 | `TabIcon({ type })` | ~38–42 | Returns icon component based on tab type |
 | `isHorizontallyFullyVisible(element, container)` | ~44–49 | Checks if element is fully visible within container bounds |
 | `getNormalizedWheelDelta(event, container)` | ~51–60 | Normalizes wheel event delta across delta modes |
-| `copyTextToClipboard(text)` | ~62–78 | Copies text to clipboard with fallback to execCommand |
-| `getTabCopyId(tab)` | ~80–83 | Returns copyable identifier for a tab |
-| `getTabCopyPath(tab)` | ~85–90 | Returns copyable cwd for terminal tabs |
+| `copyTextToClipboard(text)` | useWorkbenchTabMenu.tsx | Copies text to clipboard with fallback to execCommand |
+| `getTabCopyId(tab)` | useWorkbenchTabMenu.tsx | Returns copyable identifier for a tab |
+| `getTabCopyPath(tab)` | useWorkbenchTabMenu.tsx | Returns copyable cwd for terminal tabs |
 | `TabStripRow(props)` | ~92–165 | Renders the pane's single row of sortable tabs |
 | `SortableTab(props)` | ~167–230 | Individual draggable/sortable tab element with interactions |
-| `WorkbenchTabs(props)` | ~main export | Full single-row tab bar with context menu and toolbar |
+| `WorkbenchTabs(props)` | ~main export | Full single-row tab bar with shared menu and toolbar |
+| `useWorkbenchTabMenu(options)` | useWorkbenchTabMenu.tsx | Owns shared tab menu state, entries, pointer and keyboard anchors |
+| `WorkbenchTabClose(props)` | WorkbenchTabHeader.tsx | Calls the exact pane-owned tab close callback without starting a drag |
+| `TabDragHandle(props)` | WorkbenchTabHeader.tsx | Registers the sole-tab icon in the existing DND context and exposes tab actions |
+| `WorkbenchTabIcon(props)` | WorkbenchTabHeader.tsx | Uses a draggable icon only inside a single-tab Workbench provider |
 | `readJsonStorageItem(key)` | ~16–22 | Safely reads and parses JSON from localStorage |
 | `loadLegacyWorkbenchState()` | ~24–34 | Migrates legacy v3 tab storage to v4 layout format |
 | `getDefaultWorkbenchState()` | ~36–48 | Returns initial state, migrating legacy data if present |
@@ -76,7 +82,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.
 - The tab Close button stops its pointer-down event before the sortable tab drag listener; pointer motion within that small control cannot start a tab drag instead of closing it. The rest of the tab remains draggable.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
-- A pane with exactly one tab hides its split and close-pane toolbar buttons. When it is also the only pane, the entire tab strip is omitted without leaving header space; content and pane drop zones remain mounted. Other panes retain their tab strips, and empty panes retain their existing controls.
+- A pane with exactly one tab hides its split and close-pane toolbar buttons. Sole non-Code tabs omit the strip in every pane, with content and pane drop zones still mounted. Code retains its single-tab strip; multi-tab strips and empty-pane controls are unchanged. Header behavior is owned by [Single-tab headers](#single-tab-headers).
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.
 - Context menus also expose `Move to new window` for every tab type. A terminal draft keeps the item disabled until it has a backend terminal ID. App owns popup/confirmation/route behavior and removes the tab through the ordinary layout-only store action without invoking its separate resource-close lifecycle.
 - Bulk close operations still run each tab's ordinary resource and component close lifecycle. `Close others` preserves its target tab, while `Close all` may leave the pane empty and a forced Setup tab remains protected. Route fencing and final publication are canonical in [D-webui-app-route-close](./webui-app.md#d-webui-app-route-close).
@@ -86,9 +92,16 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 
 Logs tab identity, bounded display and popout semantics are documented in [WebUI Logs](./webui-logs.md).
 
+### Single-tab headers
+
+- Each sole non-Code tab has a content-header Close control and an icon drag handle. Chat and Setup use `ContentHeader`; Terminal, Agents, History, and Logs retain their own header layout. Terminal's compact X and adjacent terminal icon fit inside its existing status row.
+- A pane-owned context supplies the exact tab and ordinary close/menu callbacks only while the strip is hidden. It is absent from popup and Code-embedded leaf roots. Setup suppresses its duplicate right-side Close in this mode; forced OOBE still refuses closure through App's existing guard.
+- Only the icon registers `useDraggable` with the existing tab ID and `{ type: 'tab', paneId }` data. The strip and icon never register the same ID simultaneously. Header/title/Close are not drag activators; Close isolates pointer-down. App's existing drag-end, Keep, overlay, and center/edge drop semantics remain unchanged.
+- Icon click, context menu, or Shift+F10 opens the shared existing tab menu, retaining Keep, copy, Move to new window, and close operations. A terminal without a backend ID retains the existing disabled popout action. Header X uses App's ordinary resource-close and route-fencing lifecycle, not Back navigation.
+
 ## Tests
 
-- `workbenchPreview.e2e.mjs` covers preview identity, route/close behavior, drag promotion, focused Chat search, and actual App header launches. The header probes verify the 550A console's single Code control, preference-selected new-tab versus embedded opening, and Terminal target dispatch. Application-menu probes cover leading icon geometry, Setup active state, Logs activation, and real reload navigation.
+- `workbenchPreview.e2e.mjs` covers preview identity, route/close behavior, drag promotion, focused Chat search, and actual App header launches. The header probes verify the 550A console's single Code control, preference-selected new-tab versus embedded opening, and Terminal target dispatch. Application-menu probes cover leading icon geometry, Setup active state, Logs activation, and real reload navigation. Single-tab probes cover all normal leaf headers, Code strip retention, multi-pane hidden strips, actual icon drag/cancel/docking, Close pointer isolation, and Terminal status-row height plus backend DELETE, completed empty-root/empty-hash close, explicit reopen, and fallback to a still-open tab.
 
 ## Integration
 

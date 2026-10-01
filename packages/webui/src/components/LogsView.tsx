@@ -1,3 +1,4 @@
+import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, FileText } from 'lucide-react'
 import { makeApiUrl } from '../config'
@@ -32,6 +33,7 @@ function appendWindow(current: LogWindow[], next: LogWindow): LogWindow[] {
 }
 
 export default function LogsView({ onBack }: { onBack?: () => void }) {
+  const tabHeader = useWorkbenchTabHeader()
   const [blocks, setBlocks] = useState<LogWindow[]>([])
   const [live, setLive] = useState(true)
   const [liveEpoch, setLiveEpoch] = useState(0)
@@ -143,8 +145,8 @@ export default function LogsView({ onBack }: { onBack?: () => void }) {
   return <section data-logs-view aria-busy={busy} className="flex h-full min-h-0 flex-col bg-fw-canvas text-fw-text">
     <div data-logs-toolbar className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-b border-fw-border bg-fw-surface p-3">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
-        <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4" />Logs</h2>
+        {tabHeader ? <WorkbenchTabClose className={buttonClass} iconClassName="h-4 w-4" /> : onBack && <button type="button" className={buttonClass} onClick={onBack} aria-label="Back"><ArrowLeft className="h-4 w-4" /></button>}
+        <h2 className="mr-2 flex items-center gap-2 text-sm font-semibold"><WorkbenchTabIcon className="inline-flex items-center"><FileText className="h-4 w-4" /></WorkbenchTabIcon>Logs</h2>
         <button type="button" className={buttonClass} disabled={busy || !first || first.startOffset === 0} onClick={() => void load('before')}>Older</button>
         <button type="button" className={buttonClass} disabled={busy || live || !last || last.endOffset >= last.size - last.pendingBytes} onClick={() => void load('after')}>Newer</button>
         <button type="button" className={buttonClass} onClick={latest}>Latest · Live</button>

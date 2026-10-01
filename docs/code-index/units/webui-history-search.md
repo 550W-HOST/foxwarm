@@ -14,3 +14,7 @@ The independent workbench Search tab shows authenticated Archive search groups a
 - Query changes, scope changes, unmount and new submissions invalidate/abort old requests; late responses cannot replace current results. No browser-global search state is required.
 - `App` opens one restorable `system:search` tab labeled `History` from the history-clock icon in the desktop/mobile/collapsed footer. Footer icons keep the `Search history` action label and their existing size and placement; the mobile footer Settings menu opens upward within the viewport. Persisted search tabs retain their identity and normalize their display title to `History`. Popout uses the existing leaf route and window title `History`, while the viewer heading remains `Search history`. The ChatTimeline/ToolTimelineItems rendering and Chat-local search mechanics remain unchanged.
 - Browser fixtures verify Timeline grouping, independent paging, tool/CTX/image behavior, reference paste and deployment subpath. Backend HTTP fixtures and the shared source contract are described in [context compaction and recall](../threads/context-compaction-and-recall.md#d-context-history-search-viewer).
+
+## Workbench header integration
+
+The normal sole-tab header close/icon controls use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.

@@ -47,10 +47,10 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, themeId, codeNewWindow, responsiveChat = false, width = 1400 } = {}) {
+async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, themeId, codeNewWindow, responsiveChat = false, terminal = null, width = 1400 } = {}) {
   const page = await browser.newPage()
   await page.setViewport({ width, height: 900 })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, themeId, codeNewWindow, responsiveChat }) => {
+  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, themeId, codeNewWindow, responsiveChat, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = splitPanes
@@ -66,11 +66,26 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__sent = []
+    window.__terminalDeletes = []
+    window.__terminalCreates = []
+    const terminalTemplate = terminal
     window.fetch = (input, options = {}) => {
       const url = new URL(typeof input === 'string' ? input : input.url, location.href)
       const pathname = url.pathname
       if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
-      if (pathname.endsWith('/api/terminals')) return json({ terminals: [] })
+      if (pathname.endsWith('/api/terminals') && options.method === 'POST' && terminalTemplate) {
+        const request = JSON.parse(options.body)
+        window.__terminalCreates.push(request)
+        terminal = { ...terminalTemplate, ...request, id: 'term-reopened' }
+        return json({ terminal })
+      }
+      if (pathname.includes('/api/terminals/') && options.method === 'DELETE') {
+        window.__terminalDeletes.push(pathname)
+        terminal = null
+        return json({ ok: true })
+      }
+      if (pathname.includes('/api/terminals/') && terminal) return json({ terminal })
+      if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
       if (pathname.endsWith('/api/nodes')) return json({ nodes: [] })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
       if (pathname.endsWith('/api/webui/settings')) return json({ settings: {} })
@@ -95,7 +110,10 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       static OPEN = 1
       readyState = 1
       onopen = null; onmessage = null; onclose = null; onerror = null
-      constructor() { queueMicrotask(() => this.onopen?.({})) }
+      constructor(url) { queueMicrotask(() => {
+        this.onopen?.({})
+        if (new URL(url).pathname.endsWith('/terminals/stream') && terminal) this.onmessage?.({ data: JSON.stringify({ type: 'ready', terminal, backlog: '' }) })
+      }) }
       send(raw) {
         if (!responsiveChat) return
         const data = JSON.parse(raw)
@@ -107,7 +125,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, themeId, codeNewWindow, responsiveChat })
+  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, themeId, codeNewWindow, responsiveChat, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => !!window.foxwarmTest)
   return page
@@ -130,6 +148,7 @@ async function drag(page, from, to) {
   await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
   await page.mouse.down()
   await page.mouse.move(a.x + a.width / 2 + 12, a.y + a.height / 2, { steps: 4 })
+  await page.waitForSelector('[data-pane-id] > .pointer-events-none')
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
   await page.mouse.up()
 }
@@ -229,8 +248,8 @@ test('cancel and no-op drag preserve preview; real reorder and cross-pane drop K
 
   const otherPage = await openFixture({ split: true })
   try {
-    await otherPage.waitForSelector('[data-tab-id="chat:e2e-a"][title$="(preview)"]')
-    await drag(otherPage, '[data-tab-id="chat:e2e-a"]', '[data-pane-id="pane-other"] [data-tab-id="system:agents"]')
+    await otherPage.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    await drag(otherPage, '[data-workbench-tab-handle="chat:e2e-a"]', '[data-pane-id="pane-other"]')
     await otherPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:e2e-a']?.preview === false)
     assert.equal((await state(otherPage)).hash, '#tab/chat:e2e-a')
     assert.ok(await otherPage.$('[data-pane-id="pane-other"] [data-tab-id="chat:e2e-a"]'))
@@ -250,8 +269,8 @@ test('Sidebar drag into a tab row Keeps the Session; docking a preview to a pane
 
   const dockPage = await openFixture({ split: true })
   try {
-    await dockPage.waitForSelector('[data-tab-id="chat:e2e-a"][title$="(preview)"]')
-    const source = await (await dockPage.$('[data-tab-id="chat:e2e-a"]')).boundingBox()
+    await dockPage.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    const source = await (await dockPage.$('[data-workbench-tab-handle="chat:e2e-a"]')).boundingBox()
     const target = await (await dockPage.$('[data-pane-id="pane-other"]')).boundingBox()
     await dockPage.mouse.move(source.x + source.width / 2, source.y + source.height / 2)
     await dockPage.mouse.down()
@@ -263,7 +282,7 @@ test('Sidebar drag into a tab row Keeps the Session; docking a preview to a pane
     const snapshot = await state(dockPage)
     assert.equal(snapshot.hash, '#tab/chat:e2e-a')
     assert.equal(snapshot.root.kind, 'split')
-    assert.ok(await dockPage.$('[data-tab-id="chat:e2e-a"]'))
+    assert.ok(await dockPage.$('[data-workbench-tab-handle="chat:e2e-a"]'))
   } finally { await dockPage.close() }
 })
 
@@ -368,16 +387,18 @@ test('Close tab owns a small pointer move inside its button instead of starting 
   } finally { await page.close() }
 })
 
-test('multi-pane single-tab strips remain visible while pane controls follow each tab count', async () => {
+test('each single-tab pane uses its header while multi-tab panes retain their strips and controls', async () => {
   const page = await openFixture({ split: true })
   try {
-    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-a"]')
-    await page.waitForSelector('[data-pane-id="pane-other"] [data-tab-id="system:agents"]')
+    await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-a"]')
+    await page.waitForSelector('[data-workbench-tab-handle="system:agents"]')
+    assert.equal(await page.$('[data-tab-id]'), null)
+    if (process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR}/single-tab-panes.png` })
     assert.equal(await page.$(paneButtons), null)
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-b'))
-    await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]')
+    await page.waitForSelector('[data-workbench-tab-handle="chat:e2e-b"]')
     assert.equal(await page.$(paneButtons), null, 'replacing the preview keeps one tab in the pane')
-    await page.click('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]', { clickCount: 2 })
+    await page.click('[data-workbench-tab-handle="chat:e2e-b"]', { clickCount: 2 })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-c'))
     await page.waitForSelector('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"]')
     assert.equal(await page.$$eval('[data-pane-id="pane-main"] [data-tab-id]', nodes => nodes.length), 2)
@@ -385,7 +406,7 @@ test('multi-pane single-tab strips remain visible while pane controls follow eac
     assert.equal(await page.$('[data-pane-id="pane-other"] ' + paneButtons.split(', ').join(', [data-pane-id="pane-other"] ')), null)
     await page.click('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-c"] button[title="Close tab"]')
     await page.waitForFunction(() => !document.querySelector('[data-tab-id="chat:e2e-c"]'))
-    assert.ok(await page.$('[data-pane-id="pane-main"] [data-tab-id="chat:e2e-b"]'))
+    assert.ok(await page.$('[data-workbench-tab-handle="chat:e2e-b"]'))
     assert.equal(await page.$(paneButtons), null)
   } finally { await page.close() }
 })
@@ -729,5 +750,136 @@ test('Chat follows each pane through real divider dragging without changing desk
       assert.ok(rect.left >= 8 && rect.right <= 402)
       await page.keyboard.press('Escape')
     }
+  } finally { await page.close() }
+})
+
+test('every ordinary single tab closes from its header; Code retains the strip', async () => {
+  for (const tab of [chat('e2e-a'), system, { id: 'system:search', type: 'search', title: 'History' }, { id: 'system:logs', type: 'logs', title: 'Logs' }, { id: 'system:setup', type: 'setup', title: 'Setup' }, { id: 'vscode-web', type: 'vscode', title: 'Code' }]) {
+    const page = await openFixture({ tabs: [tab], activeTabId: tab.id })
+    try {
+      const close = tab.type === 'vscode' ? '[data-tab-id="vscode-web"] button[title="Close tab"]' : `[data-workbench-tab-close=${JSON.stringify(tab.id)}]`
+      await page.waitForSelector(close)
+      if (tab.type !== 'vscode') {
+        assert.equal(await page.$('[data-tab-id]'), null, tab.type)
+        assert.ok(await page.$(`[data-workbench-tab-handle=${JSON.stringify(tab.id)}]`), tab.type)
+        if (tab.type === 'setup') assert.equal(await page.$$eval('button', buttons => buttons.filter(button => button.textContent.trim() === 'Close').length), 0, 'Setup has no extra Close action')
+      } else {
+        assert.equal(await page.$('[data-workbench-tab-handle]'), null)
+        if (process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR}/single-code.png` })
+      }
+      await page.click(close)
+      await page.waitForFunction(id => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], {}, tab.id)
+      assert.equal((await state(page)).hash, '')
+      assert.deepEqual((await state(page)).root.tabIds, [])
+      assert.match(await page.$eval('[data-pane-id]', pane => pane.textContent), /Empty pane/)
+    } finally { await page.close() }
+  }
+})
+
+test('single Chat icon owns drag and its existing menu; cancel and Close pointer motion do not Keep', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a')] })
+  try {
+    const handle = '[data-workbench-tab-handle="chat:e2e-a"]'
+    await page.waitForSelector(handle)
+    const bounds = await (await page.$(handle)).boundingBox()
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(bounds.x + bounds.width / 2 + 12, bounds.y + bounds.height / 2, { steps: 4 })
+    await page.waitForSelector('[data-pane-id] > .pointer-events-none')
+    await page.keyboard.press('Escape')
+    await page.mouse.up()
+    assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true)
+    await page.waitForFunction(() => {
+      let delivered = false
+      const probe = () => { delivered = true }
+      document.body.addEventListener('click', probe, { once: true })
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      document.body.removeEventListener('click', probe)
+      return delivered
+    })
+    await page.focus(handle)
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('F10')
+    await page.keyboard.up('Shift')
+    await page.waitForSelector('[role="menu"]')
+    const entries = await page.$$eval('[role="menu"] button', buttons => buttons.map(button => button.textContent.trim()))
+    assert.ok(entries.includes('Keep'))
+    assert.ok(entries.includes('Move to new window'))
+    await page.keyboard.press('Escape')
+    const close = await (await page.$('[data-workbench-tab-close="chat:e2e-a"]')).boundingBox()
+    const x = close.x + close.width / 2 - 4
+    const y = close.y + close.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + 8, y, { steps: 4 })
+    assert.equal(await page.$('[data-pane-id] > .pointer-events-none'), null)
+    assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, true)
+    await page.mouse.up()
+    await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:e2e-a'])
+    assert.equal((await state(page)).hash, '')
+  } finally { await page.close() }
+})
+
+test('Terminal single-tab chrome preserves status-row height and closes its backend resource', async () => {
+  const terminal = { id: 'term-header', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
+  const tab = { id: 'terminal:term-header', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
+  for (const viewportWidth of [1400, 390]) {
+    const options = { activeTabId: tab.id, terminal, hash: '#tab/terminal%3Aterm-header', viewportWidth }
+    const single = await openFixture({ ...options, tabs: [tab] })
+    const multi = await openFixture({ ...options, tabs: [system, tab] })
+    try {
+      for (const page of [single, multi]) {
+        await page.bringToFront()
+        await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+      }
+      const height = async page => { await page.bringToFront(); return page.$eval('[data-terminal-header]', element => element.getBoundingClientRect().height) }
+      const singleHeight = await height(single), multiHeight = await height(multi)
+      assert.ok(singleHeight <= multiHeight, `single-tab Terminal must not grow at ${viewportWidth}px: ${singleHeight} vs ${multiHeight}`)
+      await single.bringToFront()
+      assert.match(await single.$eval('[data-terminal-header]', element => element.textContent), /status ready.*node master.*pid 42/)
+      assert.ok(await single.$('[data-terminal-header] button[aria-label="Show Web keyboard"]'))
+      await multi.close()
+      if (process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR) {
+        await single.bringToFront()
+        await single.screenshot({ path: `${process.env.FOXWARM_SINGLE_TAB_SCREENSHOT_DIR}/single-terminal-${viewportWidth}.png`, clip: await (await single.$('[data-terminal-header]')).boundingBox(), fromSurface: false })
+      }
+      assert.equal(await single.$eval('[data-workbench-tab-close="terminal:term-header"]', button => {
+        const box = button.getBoundingClientRect()
+        return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('button') === button
+      }), true, 'Terminal X owns its hit target')
+      await single.click('[data-workbench-tab-close="terminal:term-header"]')
+      await single.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-header'] && !location.hash).catch(async error => {
+        throw new Error(`${error.message}: ${JSON.stringify(await single.evaluate(() => ({ state: JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state, hash: location.hash, deletes: window.__terminalDeletes, header: document.querySelector('[data-terminal-header]')?.textContent, body: document.body.textContent.slice(0, 300) })))}`)
+      })
+      assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-header'])
+      assert.equal((await state(single)).hash, '')
+      if (viewportWidth === 1400) {
+        await single.click('button[title="Create terminal tab"]')
+        await single.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal' && tab.terminalId === 'term-reopened'))
+        await single.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+        const reopened = await state(single)
+        const fresh = Object.values(reopened.tabsById).find(tab => tab.type === 'terminal' && tab.terminalId === 'term-reopened')
+        assert.notEqual(fresh.id, tab.id)
+        assert.equal(reopened.hash, `#tab/${fresh.id}`)
+        assert.ok(await single.evaluate(() => window.__terminalCreates.length > 0), 'explicit reopen sends a terminal create request')
+        assert.deepEqual(await single.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-header'])
+      }
+    } finally { await single.close(); if (!multi.isClosed()) await multi.close() }
+  }
+})
+
+
+test('ordinary Terminal close selects another still-open tab rather than restoring the closed route', async () => {
+  const terminal = { id: 'term-fallback', nodeId: 'master', cwd: '/workspace', pid: 42, cols: 80, rows: 24 }
+  const tab = { id: 'terminal:term-fallback', type: 'terminal', terminalId: terminal.id, nodeId: terminal.nodeId, cwd: terminal.cwd, title: 'Terminal' }
+  const page = await openFixture({ tabs: [system, tab], activeTabId: tab.id, terminal, hash: '#tab/terminal%3Aterm-fallback' })
+  try {
+    await page.bringToFront()
+    await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
+    await page.click('[data-tab-id="terminal:term-fallback"] button[title="Close tab"]')
+    await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['terminal:term-fallback'] && decodeURIComponent(location.hash) === '#tab/system:agents')
+    assert.deepEqual((await state(page)).root.tabIds, ['system:agents'])
+    assert.ok(await page.$('[data-workbench-tab-handle="system:agents"]'))
+    assert.deepEqual(await page.evaluate(() => window.__terminalDeletes), ['/prefix/ui/api/terminals/term-fallback'])
   } finally { await page.close() }
 })
