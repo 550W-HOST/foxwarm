@@ -63,7 +63,7 @@ function peer(label) {
       response.setHeader('content-type', 'text/event-stream')
       const plan = body.messages.map(message => textOf(message.content)).findLast(text => text.includes('COMPACTION STARTED:'))
       if (plan) {
-        assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')); plannerRound++; assert.equal(body.tools.length, 23); assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
+        assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')); plannerRound++; assert.equal(body.tools.length, 24); assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
         if (plannerRound === 1) { call(response, 'plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid range.' }] }); return }
         assert(input.includes('COMPACT PLAN INVALID.'))
         const ranges = [...plan.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
@@ -126,7 +126,7 @@ function peer(label) {
 const first = peer('first'), second = peer('second'); first.listen(0, '127.0.0.1'); second.listen(0, '127.0.0.1'); await Promise.all([once(first, 'listening'), once(second, 'listening')])
 function configuration(server, token, compression = 'gzip') {
   const url = server => `http://127.0.0.1:${server.address().port}/v1`
-  const leaf = (server, token, field) => ({ providerType: 'openai-completions', baseUrl: url(server), apiKey: token, contextLimit: 20000, historyReasoningField: field,
+  const leaf = (server, token, field) => ({ providerType: 'openai-completions', asyncCompact: false, baseUrl: url(server), apiKey: token, contextLimit: 20000, historyReasoningField: field,
     requestCompression: compression, webSearch: true, keepReasoningOnError: true, extraHeaders: { 'Content-Encoding': 'overridden', 'Content-Length': '1', 'X-Captured': token },
     extraFields: { max_tokens: 911, reasoning_effort: 'none', cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}', nested: { kept: null } }, models: ['same-wire'] })
   const responses = { ...leaf(second, newToken, 'reasoning_content'), providerType: 'openai-responses', webSearch: false, keepReasoningOnError: false,

@@ -93,7 +93,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert.equal(body.tools.length, 23); assert(body.tools.some(tool => tool.name === 'skill'))
+      assert.equal(body.tools.length, 24); assert(body.tools.some(tool => tool.name === 'skill'))
       const id = /currentSessionId="([^"]+)"/.exec(messageText(body))?.[1]
       assert(id, 'Real snapshot Session identity'); const n = counts.get(id) || 0; counts.set(id, n + 1)
       requests.push({ id, n, body })

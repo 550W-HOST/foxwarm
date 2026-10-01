@@ -10,7 +10,7 @@ internal static class WebUiContract
     {
         models = models.Capture();
         var selected = models.Select(snapshot);
-        var queueLength = snapshot.Queue.Count;
+        var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
         var runtime = new JsonObject
         {
             ["state"] = snapshot.Busy ? toolActive ? "running-tool" : "requesting-model" : "idle",
@@ -93,14 +93,14 @@ internal static class WebUiContract
             ["messages"] = new JsonArray(selected.Select(message => (JsonNode?)message.DeepClone()).ToArray()),
             ["persistentMemorySnapshot"] = "",
             ["queuedMessages"] = preview,
-            ["queueLength"] = snapshot.Queue.Count,
+            ["queueLength"] = snapshot.Queue.Count(SessionCompactor.Ordinary),
             ["latestSeq"] = snapshot.NextMessageSeq - 1,
             ["nextMessageSeq"] = snapshot.NextMessageSeq,
             ["historyVersion"] = snapshot.HistoryVersion,
             ["prefixLength"] = prefix,
             ["historyComplete"] = complete,
             ["queuedPreviewLimit"] = 20,
-            ["queuedPreviewOmittedCount"] = Math.Max(0, snapshot.Queue.Count - preview.Count)
+            ["queuedPreviewOmittedCount"] = Math.Max(0, snapshot.Queue.Count(SessionCompactor.Ordinary) - preview.Count)
         };
         return result;
     }

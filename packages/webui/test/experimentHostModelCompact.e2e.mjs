@@ -107,10 +107,10 @@ try {
   provider = await startScriptedProvider({ alphaToken, betaToken })
   const modelsFile = join(root, 'models.json')
   await writeFile(modelsFile, JSON.stringify({ default: 'alpha', providers: {
-    alpha: { providerType: 'openai', baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_ALPHA_PROVIDER_KEY',
+    alpha: { providerType: 'openai', asyncCompact: false, baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_ALPHA_PROVIDER_KEY',
       contextLimit: 18000, effort: { allowed: ['none', 'low', 'high'], default: 'low' }, models: [{ id: 'alpha-wire' }] },
-    gamma: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_BETA_PROVIDER_KEY', contextLimit: 20000, effort: { allowed: ['medium'], default: 'medium' }, models: [{ id: 'gamma-wire' }] },
-    beta: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_BETA_PROVIDER_KEY',
+    gamma: { providerType: 'openai-responses', asyncCompact: false, baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_BETA_PROVIDER_KEY', contextLimit: 20000, effort: { allowed: ['medium'], default: 'medium' }, models: [{ id: 'gamma-wire' }] },
+    beta: { providerType: 'openai-responses', asyncCompact: false, baseUrl: `http://127.0.0.1:${provider.port}`, apiKeyEnv: 'FOXWARM_BETA_PROVIDER_KEY',
       contextLimit: 18000, effort: { allowed: ['none', 'low', 'high'], default: 'none' }, models: [{ id: 'beta-wire' }] },
   } }))
   const hostPort = await port()

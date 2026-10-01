@@ -1,8 +1,10 @@
-using Foxwarm.Sessions;
+using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
+
+internal sealed record CompactAdmission(bool AlreadyPending, bool Started, bool Background, bool BackgroundUnavailable);
 
 internal sealed partial class SessionCompactor
 {
@@ -13,101 +15,142 @@ internal sealed partial class SessionCompactor
     private readonly ModelRequestOwner requests;
     private readonly AgentMemory memory;
     private readonly object gate = new();
+    private readonly ConcurrentDictionary<CompactRun, Task> lifetimes = new();
     private CompactRun? active;
-    private Task? manualTask;
-    private sealed class CompactRun
+    private sealed class CompactRun(SessionSnapshot snapshot, HostModels catalog, double keep, bool background, bool standalone)
     {
-        public CancellationTokenSource Cancellation { get; } = new();
-        public bool Committed;
-        public bool Committing;
-        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly SessionSnapshot Snapshot = snapshot;
+        internal readonly HostModels Catalog = catalog;
+        internal readonly double Keep = keep;
+        internal readonly bool Background = background, Standalone = standalone;
+        internal readonly CancellationTokenSource Cancellation = new();
+        internal readonly TaskCompletionSource PipelineDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal string Phase = "planning";
+        internal bool Committed, Applying, Ready, OwnsProcessor;
+        internal int Finished;
+        internal CompactCandidates? Candidates;
+        internal CompactPlan? Plan;
+        internal string? CacheKey;
+        internal Exception? Failure;
+        internal object? PhaseLease;
     }
 
     public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
         HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory)
     {
-        this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions; this.requests = requests;
-        this.memory = memory;
+        this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions;
+        this.requests = requests; this.memory = memory;
     }
     public bool Active { get { lock (gate) return active is not null; } }
-    public Task DrainAsync() { lock (gate) return manualTask ?? Task.CompletedTask; }
-    private CompactRun? Begin()
+    public bool Standalone { get { lock (gate) return active is { Standalone: true, OwnsProcessor: true }; } }
+    public bool HasCompletedJob { get { lock (gate) return active is { Background: true, Ready: true, Applying: false } run && !run.Cancellation.IsCancellationRequested; } }
+    public string? Phase { get { lock (gate) return active?.Phase; } }
+    public async Task DrainAsync()
+    {
+        while (!lifetimes.IsEmpty) await Task.WhenAll(lifetimes.Values.ToArray());
+    }
+    private CompactRun? Begin(SessionSnapshot snapshot, HostModels catalog, double keep, bool background, bool standalone)
     {
         lock (gate)
         {
             if (active is not null) return null;
-            active = new CompactRun();
-            hosted.SetCompacting(true);
-            return active;
+            var run = new CompactRun(snapshot, catalog, keep, background, standalone);
+            active = run; lifetimes[run] = run.Completion.Task;
+            return run;
         }
     }
-    private void End(CompactRun run)
+    private void Report(Exception error)
     {
-        lock (gate)
+        hosted.Entry.RecordBestEffortFailure(error);
+        hosted.PublishCompactError(error);
+    }
+    private async Task FinishAsync(CompactRun run)
+    {
+        if (Interlocked.Exchange(ref run.Finished, 1) != 0) { await run.Completion.Task; return; }
+        lock (gate) { if (ReferenceEquals(active, run)) active = null; }
+        try
         {
-            if (ReferenceEquals(active, run)) active = null;
-            hosted.SetCompacting(false);
-            run.Completion.TrySetResult();
+            await run.PipelineDone.Task;
+            await hosted.Entry.SaveLane.RemoveCompactWakeAsync(run);
+        }
+        catch (Exception error) { Report(error); }
+        finally
+        {
+            if (run.PhaseLease is not null) hosted.EndCompactPhase(run.PhaseLease);
             run.Cancellation.Dispose();
+            run.Completion.TrySetResult(); lifetimes.TryRemove(run, out _);
         }
     }
     public async Task<(bool Cancelled, bool TooLate)> StopAsync()
     {
         CompactRun? run;
-        lock (gate)
-        {
-            run = active;
-            if (run is null) return (false, false);
-            if (run.Committed) return (false, true);
-        }
-        try { run.Cancellation.Cancel(); }
-        catch (ObjectDisposedException) { /* Completed between checking and cancellation. */ }
+        lock (gate) run = active;
+        if (run is null) return (false, false);
+        try { run.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+        await run.PipelineDone.Task;
+        bool finish;
+        lock (gate) finish = ReferenceEquals(active, run) && !run.Applying;
+        if (finish) await FinishAsync(run);
         await run.Completion.Task;
         return run.Committed ? (false, true) : (true, false);
     }
 
-    public async Task<bool> StartManualAsync(string? guidance = null)
+    public async Task<CompactAdmission> StartManualAsync(string? guidance = null, double? keepPercent = null)
     {
+        var snapshot = hosted.Entry.Snapshot(); var catalog = models.Capture();
+        var background = SupportsBackground(snapshot, catalog);
+        lock (gate) { if (active is not null) return new(true, false, background, false); }
+        if (!background && (snapshot.Busy || snapshot.Stopping || snapshot.Queue.Any(Ordinary)))
+            return new(false, false, false, true);
+        var run = Begin(snapshot, catalog, keepPercent ?? catalog.CompactKeepFraction, background, !background);
+        if (run is null) return new(true, false, background, false);
+        if (background)
+        {
+            _ = ProduceBackgroundAsync(run, guidance);
+            return new(false, true, true, false);
+        }
         var entry = hosted.Entry;
-        if (!entry.TryClaimProcessor()) return false;
-        var turn = hosted.Registry.HostFor(hosted.Id);
+        if (!entry.TryClaimProcessor())
+        {
+            run.PipelineDone.TrySetResult(); await FinishAsync(run);
+            return new(false, false, false, true);
+        }
+        run.OwnsProcessor = true;
         var claimed = false;
-        var handedOff = false;
         try
         {
-            claimed = await turn.TryClaimBusyAsync();
-            if (!claimed) return false;
-            var run = Begin();
-            if (run is null) return false;
-            lock (gate) manualTask = RunManualAsync(run, turn, guidance);
-            handedOff = true;
-            return true;
+            claimed = await hosted.Registry.HostFor(hosted.Id).TryClaimBusyAsync();
+            if (!claimed) return new(false, false, false, true);
+            run.PhaseLease = hosted.BeginCompactPhase();
+            _ = RunStandaloneAsync(run, guidance);
+            return new(false, true, false, false);
         }
         finally
         {
-            if (!claimed) entry.ReleaseProcessor();
-            else if (!handedOff)
+            if (!claimed)
             {
-                await turn.ReleaseBusyAsync();
-                entry.ReleaseProcessor();
+                entry.ReleaseProcessor(); run.PipelineDone.TrySetResult(); await FinishAsync(run);
             }
         }
     }
 
-    private async Task RunManualAsync(CompactRun run, LocalSessionTurnHost turn, string? guidance)
+    private async Task RunStandaloneAsync(CompactRun run, string? guidance)
     {
         await Task.Yield();
-        try { await RunAsync(run, guidance); }
+        try { await PlanAndApplyAwaitedAsync(run, guidance); }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
-        catch (Exception error) { hosted.Entry.RecordBackgroundProcessorFailure(error); hosted.PublishCompactError(error); }
+        catch (CompactionSnapshotIncompatibleException) { }
+        catch (Exception error) { Report(error); }
         finally
         {
-            End(run);
-            try { await turn.ReleaseBusyAsync(); }
-            catch (Exception error) { hosted.Entry.RecordBackgroundProcessorFailure(error); hosted.PublishCompactError(error); }
+            try { await hosted.Entry.SaveLane.ReleaseStandaloneCompactAsync(); }
+            catch (Exception error) { Report(error); }
             hosted.Entry.ReleaseProcessor();
+            run.PipelineDone.TrySetResult(); await FinishAsync(run);
             hosted.PublishStateChanged();
-            if (hosted.Entry.Snapshot().Queue.Count > 0) _ = hosted.StartProcessing();
+            if (hosted.Entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Any(Ordinary)))
+                _ = hosted.StartProcessing();
         }
     }
 
@@ -115,155 +158,143 @@ internal sealed partial class SessionCompactor
     {
         var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
         if (usage is null) return;
-        var cached = CompactCandidateBuilder.Finite(usage["cachedTokens"]) ?? 0;
-        var input = CompactCandidateBuilder.Finite(usage["inputTokens"]) ?? 0;
-        var output = CompactCandidateBuilder.Finite(usage["outputTokens"]) ?? 0;
-        var total = cached + input + output;
-        if (total <= 0) return;
-        var snapshot = hosted.Entry.Snapshot();
-        var threshold = SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, models);
-        if (total <= threshold) return;
-        var run = Begin();
+        var total = (CompactCandidateBuilder.Finite(usage["cachedTokens"]) ?? 0)
+            + (CompactCandidateBuilder.Finite(usage["inputTokens"]) ?? 0)
+            + (CompactCandidateBuilder.Finite(usage["outputTokens"]) ?? 0);
+        var snapshot = hosted.Entry.Snapshot(); var catalog = models.Capture();
+        if (total <= 0 || total <= SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)) return;
+        var background = SupportsBackground(snapshot, catalog);
+        var run = Begin(snapshot, catalog, catalog.CompactKeepFraction, background, false);
         if (run is null) return;
-        try { await RunAsync(run, null, auto: true); }
-        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
-        catch (Exception error) { hosted.Entry.RecordBackgroundProcessorFailure(error); hosted.PublishCompactError(error); }
-        finally { End(run); }
-    }
-
-    private async Task<bool> RunAsync(CompactRun run, string? guidance, bool auto = false)
-    {
-        var token = run.Cancellation.Token;
-        var snapshot = hosted.Entry.Snapshot();
-        token.ThrowIfCancellationRequested();
-        if (auto && await TryPruneToolsAsync(snapshot, token))
-        {
-            lock (gate) run.Committed = true;
-            return true;
-        }
-        var candidates = CompactCandidateBuilder.Build(snapshot.History, models.Capture().CompactKeepFraction);
-        if (candidates.Split <= 0 || candidates.Items.Count == 0 && candidates.Preserved.Count == 0
-            && !snapshot.History.Take(candidates.Split).Any(row => !CompactCandidateBuilder.Visible(row))) return false;
-        var plan = candidates.Items.Count == 0 && candidates.Preserved.Count == 0
-            ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
-            : await PlanAsync(snapshot, candidates, guidance, token);
-        token.ThrowIfCancellationRequested();
-        lock (gate) run.Committing = true;
+        var handedOff = false;
         try
         {
-            await hosted.Entry.SaveLane.CommitCompactionAsync(state => PrepareCompact(state, snapshot, candidates, plan), token);
-            lock (gate) run.Committed = true;
-            hosted.PublishStateChanged();
-            return true;
+            if (await TryPruneToolsAsync(snapshot, run.Cancellation.Token, run.Keep, catalog))
+            {
+                run.Committed = true; run.PipelineDone.TrySetResult(); await FinishAsync(run); return;
+            }
+            if (background) { handedOff = true; _ = ProduceBackgroundAsync(run, null); return; }
+            run.PhaseLease = hosted.BeginCompactPhase();
+            await PlanAndApplyAwaitedAsync(run, null);
         }
-        catch (AuthorityCommittedException)
+        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
+        catch (CompactionSnapshotIncompatibleException) { }
+        catch (AuthorityCommittedException error) { run.Committed = true; Report(error); }
+        catch (Exception error) { Report(error); }
+        finally
         {
-            lock (gate) run.Committed = true;
-            hosted.PublishStateChanged();
-            throw;
+            if (!handedOff)
+            { run.PipelineDone.TrySetResult(); await FinishAsync(run); }
         }
     }
 
-    private CompactionPreparation PrepareCompact(SessionState live, SessionSnapshot original,
-        CompactCandidates candidates, CompactPlan plan)
+    private static bool SupportsBackground(SessionSnapshot snapshot, HostModels catalog) =>
+        !ModelRoutingFingerprint.False(catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).Configuration["asyncCompact"]);
+    internal static bool Ordinary(QueueItem item) => item.Type != QueueItemType.CompactCommit;
+
+    private async Task PreparePlanAsync(CompactRun run, string? guidance)
     {
-        if (live.HistoryVersion != original.HistoryVersion || live.History.Count < original.History.Count
-            || original.History.Where((message, index) => !JsonNode.DeepEquals(message, live.History[index])).Any())
-            throw new InvalidOperationException("Compaction snapshot changed incompatibly before authority commit.");
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var nextBlockId = CompactCandidateBuilder.Number(live.AuthorityEnvelope["nextBlockId"]) ?? 1;
-        var operations = new List<(CompactOperation Operation, ArchiveBlockRecord Record)>();
-        foreach (var op in plan.Operations)
-        {
-            var sourceIds = op.Kind == "block" ? new JsonArray(candidates.Items.Skip(op.CandidateStart)
-                .Take(op.CandidateEnd - op.CandidateStart + 1).Select(item => (JsonNode?)JsonValue.Create(item.Start)).ToArray()) : null;
-            var summary = FormatSummary(op.Summary, op.MemoryFacts);
-            var record = new ArchiveBlockRecord(live.Id, "main", nextBlockId++, op.Level, op.Kind,
-                op.First.Start, op.Last.End, sourceIds, op.RawStart, op.RawEnd,
-                op.First.StartTimestamp, op.Last.EndTimestamp, summary,
-                op.MemoryFacts is null ? null : (JsonArray)op.MemoryFacts.DeepClone(), now);
-            operations.Add((op, record));
-        }
-        var history = new List<JsonObject>();
-        var cursor = 0;
-        foreach (var (op, record) in operations)
-        {
-            AppendRetained(original.History.Skip(cursor).Take(op.HistoryStart - cursor), plan.Remove, history);
-            history.Add(record.ToMessage());
-            foreach (var row in original.History.Skip(op.HistoryStart).Take(op.HistoryEnd - op.HistoryStart + 1))
-                if (CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]) is long seq && plan.Preserve.Contains(seq))
-                {
-                    var preserved = (JsonObject)row.DeepClone();
-                    ((JsonObject)preserved["__meta"]!)["preservedFromBlockId"] = record.Id;
-                    history.Add(preserved);
-                }
-            cursor = op.HistoryEnd + 1;
-        }
-        AppendRetained(original.History.Skip(cursor).Take(candidates.Split - cursor), plan.Remove, history);
-        AppendRetained(live.History.Skip(candidates.Split), new HashSet<long>(), history);
-        var completion = new JsonObject
-        {
-            ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["system"] = CompletionMarker(live.Id, now) }),
-            ["__meta"] = new JsonObject { ["seq"] = live.NextMessageSeq, ["timestamp"] = now }
-        };
-        var liveGoal = live.AuthorityEnvelope["goalState"] as JsonObject;
-        var hasGoal = SessionWait.Text(liveGoal?["goal"]) is string goalText && SessionGoal.Trim(goalText).Length > 0;
-        if (hasGoal)
-        {
-            ((JsonArray)completion["parts"]!).Add(new JsonObject { ["system"] = SessionGoal.Format(SessionWait.Text(liveGoal!["goal"])!) });
-            var completionMeta = (JsonObject)completion["__meta"]!;
-            completionMeta["goalReminder"] = true; completionMeta["goalReminderKind"] = "compact-completion";
-            completionMeta["goalAnchorSeq"] = live.NextMessageSeq;
-        }
-        history.Add(completion);
-        var envelope = (JsonObject)live.AuthorityEnvelope.DeepClone();
-        envelope["nextBlockId"] = nextBlockId;
-        if (hasGoal) ((JsonObject)envelope["goalState"]!)["anchorSeq"] = live.NextMessageSeq;
-        var meta = (JsonObject)live.Meta.DeepClone();
-        meta["messageCount"] = history.Count;
-        var staged = live.Snapshot() with
-        {
-            History = history,
-            Meta = meta,
-            NextMessageSeq = live.NextMessageSeq + 1,
-            HistoryVersion = live.HistoryVersion + 1,
-            AuthorityEnvelope = envelope
-        };
-        var previousNext = live.NextMessageSeq;
-        var previousVersion = live.HistoryVersion;
-        void Publish(SessionState state)
-        {
-            state.PublishCommittedHistoryRewrite(history, previousVersion, previousNext, previousNext + 1, nextBlockId);
-            if (hasGoal && state.AuthorityEnvelope["goalState"] is JsonObject currentGoal) currentGoal["anchorSeq"] = previousNext;
-        }
-        return new CompactionPreparation(staged, operations.Select(item => item.Record).ToArray(), [completion], Publish);
+        var token = run.Cancellation.Token;
+        token.ThrowIfCancellationRequested();
+        run.CacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
+        token.ThrowIfCancellationRequested();
+        var candidates = CompactCandidateBuilder.Build(run.Snapshot.History, run.Keep);
+        run.Candidates = candidates;
+        if (candidates.Split <= 0 || candidates.Items.Count == 0 && candidates.Preserved.Count == 0
+            && !run.Snapshot.History.Take(candidates.Split).Any(row => !CompactCandidateBuilder.Visible(row))) return;
+        run.Plan = candidates.Items.Count == 0 && candidates.Preserved.Count == 0
+            ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
+            : await PlanAsync(run.Snapshot, candidates, guidance, token, run.CacheKey,
+                run.Background ? ModelRequestScope.BackgroundCompactPlan : ModelRequestScope.CompactPlan, run.Catalog.DefaultKey);
     }
 
-    private static void AppendRetained(IEnumerable<JsonObject> source, IReadOnlySet<long> removed, List<JsonObject> output)
+    private async Task ProduceBackgroundAsync(CompactRun run, string? guidance)
     {
-        foreach (var row in source)
+        await Task.Yield();
+        try
         {
-            if (!CompactCandidateBuilder.Visible(row) || CompactCandidateBuilder.Completion(row)) continue;
-            var seq = CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]);
-            if (seq is not null && removed.Contains(seq.Value)
-                && CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["preservedFromBlockId"]) is > 0) continue;
-            output.Add((JsonObject)row.DeepClone());
+            try { await PreparePlanAsync(run, guidance); }
+            catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { throw; }
+            catch (Exception error) { run.Failure = error; }
+            run.Cancellation.Token.ThrowIfCancellationRequested();
+            lock (gate)
+            {
+                if (!ReferenceEquals(active, run)) return;
+                run.Ready = true; run.Phase = "enqueueing";
+            }
+            await hosted.Entry.SaveLane.PublishCompactWakeAsync(run, run.Cancellation.Token);
+            lock (gate)
+                if (ReferenceEquals(active, run) && !run.Applying) run.Phase = "ready";
+        }
+        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
+        catch (Exception error) { Report(error); run.Ready = false; }
+        finally
+        {
+            run.PipelineDone.TrySetResult();
+            bool finish, wake;
+            lock (gate)
+            {
+                var cancelled = run.Cancellation.IsCancellationRequested;
+                finish = !run.Applying && (cancelled || !run.Ready);
+                wake = !cancelled && run.Ready;
+            }
+            if (finish) await FinishAsync(run);
+            else if (wake && hosted.Entry.WithState(state => !state.Busy && !state.Stopping)) _ = hosted.StartProcessing();
         }
     }
-    private static string FormatSummary(string summary, JsonArray? facts)
+
+    public async Task ApplyCompletedAsync()
     {
-        if (facts is not { Count: > 0 }) return summary;
-        var lines = facts.OfType<JsonObject>().Select(fact =>
+        CompactRun? run;
+        lock (gate)
         {
-            var extras = new List<string>();
-            if (fact["context"]?.GetValue<string>() is string context && context.Trim().Length > 0)
-                extras.Add("context: " + context.Trim());
-            if (fact["attributedTo"]?.GetValue<string>() is string attributed) extras.Add("attributed to: " + attributed);
-            return $"- **{fact["kind"]?.GetValue<string>()}:** {fact["text"]?.GetValue<string>()?.Trim()}{(extras.Count == 0 ? "" : $" _({string.Join("; ", extras)})_")}";
-        });
-        return summary.Trim() + "\n\n### Memory facts\n" + string.Join('\n', lines);
+            run = active;
+            if (run is not { Background: true, Ready: true, Applying: false } || run.Cancellation.IsCancellationRequested) return;
+            run.Applying = true; run.Phase = "committing";
+        }
+        run.PhaseLease = hosted.BeginCompactPhase();
+        try
+        {
+            if (run.Failure is not null) throw run.Failure;
+            if (run.Plan is not null) await ApplyAsync(run);
+        }
+        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
+        catch (CompactionSnapshotIncompatibleException) { }
+        catch (Exception error) { Report(error); }
+        finally { await FinishAsync(run); }
     }
-    private static string CompletionMarker(string id, long now) =>
-        $"<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"(none)\" currentSessionId=\"{id}\" time=\"{ArchiveBlockRecord.LocalTimestamp(now)}\" />";
+    public async Task SafePointAsync()
+    {
+        await ApplyCompletedAsync();
+        try { await hosted.Entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true); }
+        catch (Exception error) { Report(error); }
+    }
+    private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
+    {
+        await PreparePlanAsync(run, guidance);
+        if (run.Plan is not null) await ApplyAsync(run);
+    }
+    private async Task ApplyAsync(CompactRun run)
+    {
+        run.Cancellation.Token.ThrowIfCancellationRequested();
+        lock (gate) run.Phase = "committing";
+        try
+        {
+            await hosted.Entry.SaveLane.CommitCompactionAsync(state => PrepareCompact(state, run.Snapshot, run.Candidates!, run.Plan!),
+                run.Cancellation.Token, RefreshCommitMemoryAsync);
+            run.Committed = true; hosted.PublishStateChanged();
+        }
+        catch (AuthorityCommittedException) { run.Committed = true; hosted.PublishStateChanged(); throw; }
+    }
+    private async Task<string?> RefreshCommitMemoryAsync(SessionSnapshot live, CancellationToken token)
+    {
+        var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "");
+        if (modelId is null)
+        {
+            var model = models.Capture().Resolve(SessionWait.Text(live.AuthorityEnvelope["model"]));
+            if (model.IsVirtual) return null;
+            modelId = model.Key;
+        }
+        return await memory.BuildAsync(hosted.Agent, hosted.Id, modelId, token);
+    }
 }

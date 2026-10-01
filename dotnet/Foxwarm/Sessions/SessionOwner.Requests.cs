@@ -12,12 +12,20 @@ internal sealed partial class SessionOwner
     private JsonObject? draft;
     private volatile bool toolActive;
     public bool ToolActive => toolActive;
-    private volatile bool compacting;
-    public bool Compacting => compacting;
+    private object? compactPhase;
+    public bool Compacting => Volatile.Read(ref compactPhase) is not null;
 
-    public void SetCompacting(bool value)
+    public object BeginCompactPhase()
     {
-        compacting = value;
+        var lease = new object();
+        Interlocked.Exchange(ref compactPhase, lease);
+        PublishStateChanged();
+        return lease;
+    }
+
+    public void EndCompactPhase(object lease)
+    {
+        if (!ReferenceEquals(Interlocked.CompareExchange(ref compactPhase, null, lease), lease)) return;
         PublishStateChanged();
     }
 

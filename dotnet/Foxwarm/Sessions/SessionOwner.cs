@@ -111,9 +111,14 @@ internal sealed partial class SessionOwner
         return task;
     }
 
-    public async Task DrainAsync()
+    public async Task DrainForegroundAsync()
     {
         while (running.Count > 0) await Task.WhenAll(running.Values.ToArray());
+    }
+
+    public async Task DrainAsync()
+    {
+        await DrainForegroundAsync();
         await Compactor.DrainAsync();
     }
 

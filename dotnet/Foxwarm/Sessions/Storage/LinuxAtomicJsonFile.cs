@@ -44,7 +44,7 @@ public sealed class LinuxAtomicJsonFile
     public string FilePath => filePath;
     public DirectorySyncResult LastDirectorySyncResult { get; private set; }
 
-    public void Write(SessionAuthorityDocument document)
+    public void Write(SessionAuthorityDocument document, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         var tempPath = Path.Combine(Path.GetDirectoryName(filePath)!, $"{Path.GetFileName(filePath)}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}");
@@ -60,6 +60,7 @@ public sealed class LinuxAtomicJsonFile
             }
             stageHook?.Invoke(AtomicJsonWriteStage.AfterTempFileSync);
             stageHook?.Invoke(AtomicJsonWriteStage.BeforeRename);
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(tempPath, filePath, overwrite: true);
             renamed = true;
             stageHook?.Invoke(AtomicJsonWriteStage.AfterRenameBeforeDirectorySync);

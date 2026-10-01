@@ -73,7 +73,7 @@ function peer(label) {
       assert.equal(body.output_config.effort, 'high'); assert.equal(body.output_config.vendor, 'preserved'); assert.equal(body.thinking.type, 'enabled'); assert(body.system.length > 0)
       response.setHeader('content-type', 'application/json')
       if (planning) {
-        plannerRound++; assert.equal(body.tools.length, 23)
+        plannerRound++; assert.equal(body.tools.length, 24)
         if (plannerRound === 1) { finish(response, [tool('plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid range.' }] })]); return }
         assert(input.includes('COMPACT PLAN INVALID.'))
         const ranges = [...planning.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])]); assert(ranges.length)
@@ -106,9 +106,9 @@ function peer(label) {
 }
 const first = peer('first'), second = peer('second'); first.listen(0, '127.0.0.1'); second.listen(0, '127.0.0.1'); await Promise.all([once(first, 'listening'), once(second, 'listening')])
 function configuration(server, token, compression = 'gzip') {
-  const leaf = (server, token, providerType) => ({ providerType, baseUrl: `http://127.0.0.1:${server.address().port}`, apiKey: token, contextLimit: 20000, requestCompression: compression,
+  const leaf = (server, token, providerType) => ({ providerType, asyncCompact: false, baseUrl: `http://127.0.0.1:${server.address().port}`, apiKey: token, contextLimit: 20000, requestCompression: compression,
     extraHeaders: { 'Content-Encoding': 'overridden', 'Content-Length': '1', 'X-Captured': token }, extraFields: { max_tokens: 911, thinking: { type: 'enabled', budget_tokens: 600 }, output_config: { effort: 'max', vendor: 'preserved' }, cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}' }, models: ['same-wire'] })
-  const responses = { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${second.address().port}/v1`, apiKey: newToken, contextLimit: 20000, requestCompression: compression,
+  const responses = { providerType: 'openai-responses', asyncCompact: false, baseUrl: `http://127.0.0.1:${second.address().port}/v1`, apiKey: newToken, contextLimit: 20000, requestCompression: compression,
     extraFields: { max_output_tokens: 911, cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}' }, models: ['same-wire'] }
   return yamlReader.dump({ default: 'a', providers: { a: leaf(server, token, 'anthropic'), b: leaf(second, newToken, 'custom-messages'), c: responses } }).replaceAll('\n', '\r\n')
 }

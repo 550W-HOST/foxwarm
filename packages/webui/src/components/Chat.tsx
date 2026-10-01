@@ -2082,7 +2082,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canon
               loading={loading}
               isMobile={isMobile}
               onStop={handleStop}
-              onRunQueued={experimentalTextOnly ? undefined : handleRunQueued}
+              onRunQueued={handleRunQueued}
               onContinue={handleContinue}
             />
             {queuedMessages.length > 0 && (

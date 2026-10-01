@@ -30,7 +30,10 @@ public sealed class PersistencePrimitiveTests
         Assert.True(JsonNode.DeepEquals(queue["queue"], queued["queue"]));
         var compact = (JsonObject)root.DeepClone();
         ((JsonArray)compact["queue"]!).Add(new JsonObject { ["type"] = "compact-commit" });
-        Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(compact, Fixture.SessionId));
+        var signals = SessionAuthorityDocument.FromOwned(compact, Fixture.SessionId).CloneRoot();
+        Assert.Equal("compact-commit", signals["queue"]!.AsArray().Last()!["type"]!.GetValue<string>());
+        var signal = PersistentSessionAuthorityStore.FromQueueJson(signals["queue"]!.AsArray().Last()!.AsObject());
+        Assert.Equal(QueueItemType.CompactCommit, signal.Type); Assert.Null(signal.CompactOwner);
         var block = (JsonObject)root.DeepClone();
         ((JsonObject)((JsonObject)((JsonArray)block["history"]!)[0]!)["__meta"]!)["contextBlock"] = new JsonObject { ["id"] = 1 };
         Assert.Throws<UnsupportedSessionAuthorityException>(() => SessionAuthorityDocument.FromOwned(block, Fixture.SessionId));

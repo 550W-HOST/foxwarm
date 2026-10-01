@@ -43,10 +43,12 @@ public sealed class SessionTurnRunner
             {
                 if (entry.WithState(state => state.Stopping))
                 {
+                    if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)) continue;
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
                     claimed = false;
                     break;
                 }
+                await host.SafePointAsync().ConfigureAwait(false);
                 if (retryPending)
                 {
                     retryPending = false;
@@ -55,26 +57,23 @@ public sealed class SessionTurnRunner
                 }
                 else
                 {
-                    if (!entry.WithState(state => state.Queue.Count > 0)) break;
-                    await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
-                    var batch = DrainLeading(entry);
-                    if (batch.Count == 0)
-                    {
-                        var remainingHead = entry.WithState(state => state.Queue.FirstOrDefault()?.CloneItem());
-                        if (remainingHead is not null) SessionIngress.EnsureSupportedForRunner(remainingHead);
-                        break;
-                    }
+                    if (!entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary))) break;
                     if (registry.OnTurnStarting is not null) await registry.OnTurnStarting(entry).ConfigureAwait(false);
+                    await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+                    await host.SafePointAsync().ConfigureAwait(false);
+                    var batch = DrainLeading(entry);
+                    if (batch.Count == 0) break;
                     await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
                 }
                 try
                 {
                     var result = await host.ChatAsync(Guid.NewGuid().ToString()).ConfigureAwait(false);
-                    if (result.AssistantMessage is not null && registry.OnTurnCompleted is not null)
+                    if ((result.AssistantMessage is not null || result.Usage is not null) && registry.OnTurnCompleted is not null)
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
                 {
+                    if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)) continue;
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
                     claimed = false;
                     break;
@@ -106,7 +105,7 @@ public sealed class SessionTurnRunner
             finally
             {
                 entry.ReleaseProcessor();
-                if (!failed && entry.WithState(state => !state.Busy && state.Queue.Count > 0)) registry.Trigger(sessionId);
+                if (!failed && entry.WithState(state => !state.Busy) && registry.HasRunnableWork(entry)) registry.Trigger(sessionId);
             }
         }
     }
@@ -115,16 +114,19 @@ public sealed class SessionTurnRunner
     {
         return entry.WithState(state =>
         {
-            var result = new List<QueueItem>();
-            var index = 0;
-            while (index < state.Queue.Count)
-            {
-                var item = state.Queue[index];
-                if (item.Type == QueueItemType.CompactCommit) break;
-                result.Add(item);
-                index++;
-            }
-            return (IReadOnlyList<QueueItem>)result;
+            return (IReadOnlyList<QueueItem>)state.Queue.Where(SessionCompactor.Ordinary).ToArray();
         });
+    }
+
+    private static async Task<bool> ResumeQueuedOverrideAsync(SessionEntry entry)
+    {
+        var resume = entry.WithState(state =>
+        {
+            if (state.Meta["runQueuedAfterStop"]?.GetValue<bool>() != true) return false;
+            state.Meta.Remove("runQueuedAfterStop"); state.Stopping = false;
+            return true;
+        });
+        if (resume) await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+        return resume;
     }
 }

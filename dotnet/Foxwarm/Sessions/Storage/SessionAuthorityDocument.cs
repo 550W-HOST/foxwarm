@@ -202,6 +202,7 @@ public sealed class SessionAuthorityDocument
             var item = queue[index] as JsonObject
                 ?? throw new InvalidDataException($"Session authority queue[{index}] must be an object.");
             var type = RequiredString(item, "type", $"queue[{index}]");
+            if (type == "compact-commit") continue;
             if (!ordinaryTypes.Contains(type))
                 throw new UnsupportedSessionAuthorityException($"Session authority queue[{index}] type {type} is unsupported by Slice C2.");
             var hasParts = item["parts"] is JsonArray parts && parts.Count > 0;

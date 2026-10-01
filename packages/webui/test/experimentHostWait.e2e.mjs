@@ -220,7 +220,8 @@ try {
 
   // Own actual background exec completion wakes; its old one-shot fallback must not run again.
   const execWait = await create('exec-wait', [[call('bg', 'exec', { command: 'sleep 2; printf EXEC-FINISHED', timeout: 1 })], body => {
-    const output = body.input.find(item => item.type === 'function_call_output' && item.call_id === 'bg')?.output
+    const raw = body.input.find(item => item.type === 'function_call_output' && item.call_id === 'bg')?.output
+    const output = typeof raw === 'string' ? raw : raw?.map(part => { assert.equal(part.type, 'input_text'); return part.text }).join('\n')
     const execId = /execId: ([^\s]+)/.exec(output)?.[1]; assert(execId, output)
     return [call('exec-wait-call', 'wait', { waitExecIds: [execId], wakeIfNoActivityAfterSeconds: 3 })]
   }, body => { assert(messageText(body).includes('background-process-finished')); return [text('EXEC-WAKE-DONE')] }])

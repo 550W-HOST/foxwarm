@@ -8,7 +8,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
 {
-    public async Task<string> BuildAsync(string agentName, string sessionId, string concreteModelId)
+    public async Task<string> BuildAsync(string agentName, string sessionId, string concreteModelId, CancellationToken cancellationToken = default)
     {
         var blocks = new StringBuilder();
         var frameworkPath = File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
@@ -16,7 +16,7 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
         if (File.Exists(frameworkPath))
             AppendBlock(blocks, frameworkPath == agents.FrameworkSystemPath ? "framework" : "main",
                 frameworkPath == agents.FrameworkSystemPath || agentName != "main" ? "inherited" : "self", frameworkPath,
-                ConditionalMemory.FilterConditionalMemorySource(await File.ReadAllTextAsync(frameworkPath), concreteModelId));
+                ConditionalMemory.FilterConditionalMemorySource(await File.ReadAllTextAsync(frameworkPath, cancellationToken), concreteModelId));
 
         foreach (var sourceAgent in agents.InheritanceChain(agentName))
         {
@@ -29,12 +29,13 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
                     if (fileName == "00_SYSTEM.md" || fileName.Equals("ONBOOT.md", StringComparison.OrdinalIgnoreCase)) continue;
                     if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                         throw new InvalidDataException("Agent memory file cannot be a symbolic link.");
-                    var (visible, body) = FilterFrontMatter(await File.ReadAllTextAsync(path), sessionId);
+                    var (visible, body) = FilterFrontMatter(await File.ReadAllTextAsync(path, cancellationToken), sessionId);
                     if (visible) AppendBlock(blocks, sourceAgent, sourceAgent == agentName ? "self" : "inherited", path,
                         ConditionalMemory.FilterConditionalMemorySource(body, concreteModelId));
                 }
         }
         var catalog = await skills.ListAsync(agentName);
+        cancellationToken.ThrowIfCancellationRequested();
         if (catalog.Count > 0)
         {
             blocks.Append("\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, call skill with action=\"load\"\nand the skill's name to load its full instructions and resource list.\nRead listed resources only when the loaded skill or current task needs them:\n<available_skills>\n");

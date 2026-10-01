@@ -20,7 +20,7 @@ internal sealed class ResponsesWsChatService(ResponsesClientOptions options, Res
         try
         {
             pending = await transport.RequestAsync(options.ResponsesUri, headers, options.ConcreteModelId, body,
-                new ResponsesStreamCallbacks { OnProgress = update => progress?.Invoke(sessionId, update) }, options.StreamInactivityTimeoutMs, token, sessionId, scope == ModelRequestScope.CompactPlan ? "compact-plan" : scope == ModelRequestScope.Canonical ? "chat" : "low-level").ConfigureAwait(false);
+                new ResponsesStreamCallbacks { OnProgress = update => progress?.Invoke(sessionId, update) }, options.StreamInactivityTimeoutMs, token, sessionId, scope is ModelRequestScope.CompactPlan or ModelRequestScope.BackgroundCompactPlan ? "compact-plan" : scope == ModelRequestScope.Canonical ? "chat" : "low-level").ConfigureAwait(false);
             var assistant = ResponsesCanonicalConverter.ConvertAssistant(pending.Response, options.ConcreteModelId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant)) throw ModelAttemptFailure.Empty();
             var captured = pending;

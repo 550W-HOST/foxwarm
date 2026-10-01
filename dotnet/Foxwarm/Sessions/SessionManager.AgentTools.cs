@@ -25,6 +25,7 @@ internal sealed partial class SessionManager
                     }
                 case "set_session_child_model":
                 case "set_session_compact_threshold": return (await SessionSettingsAsync(source, name, args), false);
+                case "compact_session": return (await CompactSessionAsync(source, args), false);
                 case "session":
                 case "get_session_messages":
                 case "set_goal": return (await ObserveAsync(source, name, args), false);

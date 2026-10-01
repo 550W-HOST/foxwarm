@@ -65,6 +65,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in SessionSettingsDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
+        definitions.Add(CompactToolDefinition.Definition());
         definitions.Add(CompactPrompt.ToolDefinition());
         foreach (var definition in UnifiedToolDefinitions.All()) definitions.Add(definition?.DeepClone());
         mcp = new Foxwarm.McpClient(this.root);
@@ -192,6 +193,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, requests, memory);
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
+        registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
+        registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
         registry.TriggerOverride = _ => Accepting ? hosted.StartProcessing() : Task.CompletedTask;
         return hosted;
     }
@@ -206,10 +209,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
         // the host waits on any Session's best-effort persistence lane.
         var compactStops = current.Where(session => session.Compactor.Active)
             .Select(session => session.Compactor.StopAsync()).ToArray();
-        await Task.WhenAll(compactStops);
         var stops = current.Where(session => session.Entry.Snapshot().Busy)
             .Select(session => session.Registry.Control.StopAsync(session.Id)).ToArray();
-        await Task.WhenAll(stops);
+        await Task.WhenAll(compactStops.Select(task => (Task)task).Concat(stops));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
         foreach (var session in current)
             await session.Entry.SaveLane.SaveStrictAsync();

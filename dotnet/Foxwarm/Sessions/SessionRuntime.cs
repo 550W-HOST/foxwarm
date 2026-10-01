@@ -27,10 +27,12 @@ internal sealed class SessionRuntime(SessionManager manager)
     public async Task<StopResult> StopAsync(string id)
     {
         var owner = Required(id);
+        if (owner.Compactor.Standalone) return new(false, false);
         var result = await owner.Registry.Control.StopAsync(id);
-        await owner.DrainAsync();
+        await owner.DrainForegroundAsync();
         return result;
     }
+    public Task<DequeueResult> DequeueAsync(string id) => Required(id).Registry.Control.DequeueAsync(id);
     private SessionOwner Required(string id) => Owner(id) ?? throw new InvalidDataException("Session not found.");
 }
 
@@ -43,7 +45,7 @@ internal sealed partial class SessionOwner
         static long Number(JsonNode? node) => node is JsonValue value && value.TryGetValue<long>(out var number) ? number : 0;
         static bool Flag(JsonNode? node) => node is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
         return new SessionMetadata(Id, Agent, Text(envelope["parentSessionId"]), Text(envelope["displayName"]),
-            state.Busy, state.Stopping, state.BusyStartedAt, state.Queue.Count, state.History.Count,
+            state.Busy, state.Stopping, state.BusyStartedAt, state.Queue.Count(SessionCompactor.Ordinary), state.History.Count,
             state.NextMessageSeq, state.HistoryVersion, Number(state.Meta["lastMessageTime"]),
             Flag(envelope["archived"]), Flag(envelope["pinned"]),
             envelope["sidebarOrder"] is JsonValue order && order.TryGetValue<double>(out var rawOrder) ? rawOrder : null,
@@ -58,7 +60,7 @@ internal sealed partial class SessionOwner
         var model = catalog.Resolve(meta.Model);
         var effort = meta.Effort is not null && model.AllowedEfforts.Contains(meta.Effort, StringComparer.Ordinal)
             ? meta.Effort : model.DefaultEffort;
-        var runtime = SessionRuntimeState.Build(meta, toolActive, compacting);
+        var runtime = SessionRuntimeState.Build(meta, toolActive, Compacting);
         var result = new JsonObject
         {
             ["id"] = Id,

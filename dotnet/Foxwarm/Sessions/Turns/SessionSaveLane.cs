@@ -129,10 +129,22 @@ public sealed partial class SessionSaveLane
         return rows;
     }
 
-    public Task CommitCompactionAsync(Func<SessionState, CompactionPreparation> prepare, CancellationToken cancellationToken = default) =>
+    public Task CommitCompactionAsync(Func<SessionState, CompactionPreparation> prepare, CancellationToken cancellationToken = default,
+        Func<SessionSnapshot, CancellationToken, Task<string?>>? refreshMemory = null) =>
         EnqueueOperationAsync(async () =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var memory = refreshMemory is null ? null : await refreshMemory(entry.Snapshot(), cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var operation = entry.WithState(prepare);
+            if (memory is not null)
+            {
+                var envelope = (JsonObject)operation.StagedSnapshot.AuthorityEnvelope.DeepClone();
+                envelope["persistentMemorySnapshot"] = memory;
+                var publish = operation.Publish;
+                operation = operation with { StagedSnapshot = operation.StagedSnapshot with { AuthorityEnvelope = envelope },
+                    Publish = state => { publish(state); state.AuthorityEnvelope["persistentMemorySnapshot"] = memory; } };
+            }
             var previousScope = GoalCommitScope.Value;
             GoalCommitScope.Value = operation.StagedSnapshot.AuthorityEnvelope["goalState"] is JsonObject;
             try

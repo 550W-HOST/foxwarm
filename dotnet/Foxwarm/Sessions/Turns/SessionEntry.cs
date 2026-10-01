@@ -138,12 +138,13 @@ public sealed class SessionEntry
         if (dispose) handle.Dispose();
     }
 
-    internal CancellationHandle? BeginStop()
+    internal CancellationHandle? BeginStop(bool runQueued = false)
     {
         lock (stateGate)
         {
             State.Stopping = true;
-            State.Meta.Remove("runQueuedAfterStop");
+            if (runQueued) State.Meta["runQueuedAfterStop"] = true;
+            else State.Meta.Remove("runQueuedAfterStop");
             var handle = activeCancellation;
             if (handle is not null)
             {

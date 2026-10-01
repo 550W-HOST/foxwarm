@@ -42,7 +42,10 @@ function sendSse(response, output) {
 }
 const text = body => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: body }] })
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
-const toolOutput = (body, id) => body.input.find(item => item.type === 'function_call_output' && item.call_id === id)?.output || ''
+const toolOutput = (body, id) => {
+  const output = body.input.find(item => item.type === 'function_call_output' && item.call_id === id)?.output
+  return typeof output === 'string' ? output : output?.map(part => { assert.equal(part.type, 'input_text'); return part.text }).join('\n') || ''
+}
 function extractExecId(output) { const id = /execId: ([a-z]+-[a-z]+)/.exec(output)?.[1]; assert(id, `Missing execId in ${String(output).slice(-250)}`); return id }
 try {
   await mkdir(dataRoot); await mkdir(workRoot)
@@ -58,7 +61,7 @@ try {
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses'); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
       assert.deepEqual(body.tools.map(tool => tool.name),
-        ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan', 'search_tools', 'call_tool'])
+        ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'compact_session', 'submit_compact_plan', 'search_tools', 'call_tool'])
       const payload = JSON.stringify(body.input)
       const latest = body.input.filter(item => item.type === 'message' && item.role === 'user')
         .at(-1)?.content?.map(item => item.text).join(' ') || ''

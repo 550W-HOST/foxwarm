@@ -60,7 +60,7 @@ try {
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses')
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert.equal(body.tools.length, 23)
+      assert.equal(body.tools.length, 24)
       const id = idFrom(body); const latest = userFrom(body)
       assert(id, 'Canonical Session identity must reach the actual provider request')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)

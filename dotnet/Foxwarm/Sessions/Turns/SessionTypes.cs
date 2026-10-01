@@ -41,6 +41,8 @@ public sealed record QueueItem(
     string? SourceSessionRelation = null,
     JsonObject? OpenFields = null)
 {
+    // An owner wake is opaque on disk; this exact identity survives only runtime clones.
+    internal object? CompactOwner { get; init; }
     public static QueueItem UserText(string text, QueueSource? source = null, string? clientMessageId = null) =>
         new(QueueItemType.User, new[] { new JsonObject { ["text"] = text } }, null, source, clientMessageId);
 

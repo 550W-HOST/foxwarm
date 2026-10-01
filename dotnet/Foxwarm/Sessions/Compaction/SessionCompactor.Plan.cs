@@ -7,19 +7,19 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionCompactor
 {
     private async Task<CompactPlan> PlanAsync(SessionSnapshot snapshot, CompactCandidates candidates,
-        string? guidance, CancellationToken cancellationToken)
+        string? guidance, CancellationToken cancellationToken, string cacheKey, ModelRequestScope scope, string capturedDefault)
     {
         var detached = snapshot.History.Take(Math.Max(0, candidates.Split)).Select(row => (JsonObject)row.DeepClone()).ToList();
         var prompt = CompactPrompt.Build(candidates, guidance);
         var promptSnapshot = snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
-        var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? models.Capture().DefaultKey;
+        var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? capturedDefault;
         var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
-        var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync(); var turnId = Guid.NewGuid().ToString();
+        var turnId = Guid.NewGuid().ToString();
         async Task<string> ResolvePrompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != leaf.Key)
-                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key);
+                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key, token);
             return baseOptions.Instructions.Length == 0 ? promptSnapshot : baseOptions.Instructions + "\n\n" + promptSnapshot;
         }
         for (var round = 0; round < 15; round++)
@@ -29,7 +29,7 @@ internal sealed partial class SessionCompactor
             var catalog = models.Capture();
             ChatResult result;
             try { result = await requests.RequestAsync(hosted.Id, catalog, routeKey, rawEffort, cacheKey, turnId, detached,
-                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.CompactPlan); }
+                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken, scope); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (ModelRequestException) { throw; }
             catch (Exception error) { throw new ModelPreparationException(ConfiguredModelRequests.SafeError(error, catalog.Resolve(routeKey)), error); }

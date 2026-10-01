@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text;
+using Foxwarm.Models;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
@@ -90,9 +91,9 @@ internal sealed partial class SessionCompactor
         return tokens;
     }
 
-    private async Task<bool> TryPruneToolsAsync(SessionSnapshot snapshot, CancellationToken token)
+    private async Task<bool> TryPruneToolsAsync(SessionSnapshot snapshot, CancellationToken token, double keep, HostModels catalog)
     {
-        var cutoff = CompactCandidateBuilder.Split(snapshot.History, models.Capture().CompactKeepFraction);
+        var cutoff = CompactCandidateBuilder.Split(snapshot.History, keep);
         if (cutoff <= 0) return false;
         var bySeq = store.Archive.ReadMessages().GroupBy(row => row.Seq).ToDictionary(group => group.Key, group => group.ToArray());
         var counts = snapshot.History.Select(row => CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]))
@@ -122,7 +123,7 @@ internal sealed partial class SessionCompactor
         if (affected.Count == 0) return false;
         var persistentSnapshot = snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var after = EstimateHistory(rewritten, persistentSnapshot);
-        var limit = models.Select(snapshot).Model.ContextLimit;
+        var limit = catalog.Select(snapshot).Model.ContextLimit;
         if (after > Math.Max(1, (int)Math.Floor(limit * .5))) return false;
         foreach (var seq in affected)
         {

@@ -96,7 +96,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         {
             var hosted = FindRoute(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
-            if (hosted.Compactor.Active) return Results.Conflict(new { error = "Use /stop compact to cancel compaction only." });
+            if (hosted.Compactor.Standalone) return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
             if (!hosted.Metadata().Busy) return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
             try
             {

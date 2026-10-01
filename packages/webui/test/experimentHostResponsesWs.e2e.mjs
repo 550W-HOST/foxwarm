@@ -91,7 +91,7 @@ const http = createServer(async (request, response) => {
 http.listen(0, '127.0.0.1'); await once(http, 'listening')
 function configuration(generation = 'one', path = '') {
   return { default: 'a', providers: {
-    a: { providerType: 'openai-ws', baseUrl: `http://127.0.0.1:${peer.address().port}${path}`, apiKey: 'synthetic-' + generation, models: ['wire'], contextLimit: 19000, extraHeaders: { 'X-Generation': generation, 'X-Cache': '${SESSION_CACHE_KEY}' }, extraFields: { cache: '${SESSION_CACHE_KEY}' } },
+    a: { providerType: 'openai-ws', asyncCompact: false, baseUrl: `http://127.0.0.1:${peer.address().port}${path}`, apiKey: 'synthetic-' + generation, models: ['wire'], contextLimit: 19000, extraHeaders: { 'X-Generation': generation, 'X-Cache': '${SESSION_CACHE_KEY}' }, extraFields: { cache: '${SESSION_CACHE_KEY}' } },
     b: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${http.address().port}`, models: ['wire'], extraFields: { cache: '${SESSION_CACHE_KEY}' } },
     fail: { providerType: 'failover', targets: ['a', 'b'], failureThreshold: 1 }
   } }

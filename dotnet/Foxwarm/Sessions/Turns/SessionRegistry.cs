@@ -13,20 +13,27 @@ public sealed class LocalSessionTurnHostFactory
     private readonly ITurnToolExecutor tools;
     private readonly int maxToolIterations;
     private readonly Func<long> clock;
+    private readonly Func<SessionEntry, Task>? safePoint;
+    private readonly Func<SessionEntry, ChatResult, Task>? automaticCompact;
     public LocalSessionTurnHostFactory(
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor tools,
         int maxToolIterations,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        Func<SessionEntry, Task>? safePoint = null,
+        Func<SessionEntry, ChatResult, Task>? automaticCompact = null)
     {
         this.store = store;
         this.chat = chat;
         this.tools = tools;
         this.maxToolIterations = maxToolIterations;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        this.safePoint = safePoint; this.automaticCompact = automaticCompact;
     }
-    public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat, tools, maxToolIterations, clock);
+    public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat, tools, maxToolIterations, clock,
+        () => safePoint?.Invoke(entry) ?? Task.CompletedTask,
+        result => automaticCompact?.Invoke(entry, result) ?? Task.CompletedTask);
 }
 
 public sealed class SessionRegistry
@@ -45,7 +52,9 @@ public sealed class SessionRegistry
         Func<long>? clock = null)
     {
         Store = store;
-        hosts = new LocalSessionTurnHostFactory(store, chat, tools ?? new UnsupportedTurnToolExecutor(), maxToolIterations, clock);
+        hosts = new LocalSessionTurnHostFactory(store, chat, tools ?? new UnsupportedTurnToolExecutor(), maxToolIterations, clock,
+            entry => OnSafePoint?.Invoke(entry) ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true),
+            (entry, result) => OnTurnCompleted?.Invoke(entry, result) ?? Task.CompletedTask);
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
         control = new SessionControl(this);
@@ -58,6 +67,10 @@ public sealed class SessionRegistry
     public Func<string, Task>? TriggerOverride { get; set; }
     public Func<SessionEntry, Task>? OnTurnStarting { get; set; }
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
+    public Func<SessionEntry, Task>? OnSafePoint { get; set; }
+    public Func<SessionEntry, bool>? HasCompletedCompact { get; set; }
+    internal bool HasRunnableWork(SessionEntry entry) => HasCompletedCompact?.Invoke(entry) == true || entry.WithState(state =>
+        state.Queue.Any(item => item.Type != QueueItemType.CompactCommit || item.CompactOwner is null));
     internal ISessionAuthorityStore Store { get; }
 
     public SessionEntry Add(string sessionId, SessionSnapshot? snapshot = null)

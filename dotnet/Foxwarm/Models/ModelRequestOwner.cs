@@ -48,7 +48,7 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
             // Local canonical/snapshot/cache/plan preparation is deliberately outside provider retry handling.
             var instructions = await prompt(leaf, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            var providerCache = ProviderPromptCache.Resolve(leaf.ProviderType, sessionId, cacheKey);
+            var providerCache = ProviderPromptCache.Resolve(leaf.ProviderType, sessionId, cacheKey, scope);
             var options = ConfiguredModelRequests.Plan(leaf, defaults, effort, instructions, providerCache, turnId);
             var prepared = ConcreteRequestHistory.Prepare(history, leaf.Key);
             var service = ConfiguredModelRequests.CreatePreparedService(http, leaf, options, providerCache, progress, websockets, scope);

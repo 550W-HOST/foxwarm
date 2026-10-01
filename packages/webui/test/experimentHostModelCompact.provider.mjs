@@ -52,7 +52,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       const chunks = []
       for await (const part of req) chunks.push(part)
       const body = JSON.parse(Buffer.concat(chunks).toString())
-      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan', 'search_tools', 'call_tool'])
+      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'compact_session', 'submit_compact_plan', 'search_tools', 'call_tool'])
       assert(body.tools[6].parameters.properties.sessionId); assert.equal(body.tools[6].parameters.properties.offset, undefined)
       assert.equal(body.tools.find(tool => tool.name === 'submit_compact_plan').parameters.required[0], 'replaceAsBlocks')
       assert.equal(req.headers.authorization, `Bearer ${body.model === 'alpha-wire' ? alphaToken : betaToken}`)

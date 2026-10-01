@@ -89,7 +89,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             newBlocks = archive.WriteBlocks(blocks);
             newMessages = archive.WriteMessages(messages.Select(ToArchiveRecord).ToArray());
             cancellationToken.ThrowIfCancellationRequested();
-            authorityFile.Write(ToAuthority(stagedSnapshot));
+            authorityFile.Write(ToAuthority(stagedSnapshot), cancellationToken);
         }
         catch (AuthorityCommittedException) { throw; }
         catch (Exception error)
@@ -187,6 +187,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
 
     internal static JsonObject ToQueueJson(QueueItem item)
     {
+        if (item.Type == QueueItemType.CompactCommit) return new JsonObject { ["type"] = "compact-commit" };
         var result = item.OpenFields is null ? new JsonObject() : (JsonObject)item.OpenFields.DeepClone();
         result["type"] = item.Type switch
         {
@@ -229,6 +230,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             "background" => QueueItemType.Background,
             "trigger" => QueueItemType.Trigger,
             "onboot" => QueueItemType.OnBoot,
+            "compact-commit" => QueueItemType.CompactCommit,
             var unsupported => throw new UnsupportedSessionTurnException($"persisted queue type {unsupported}")
         };
         QueueSource? source = null;

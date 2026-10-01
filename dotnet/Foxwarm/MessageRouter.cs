@@ -23,16 +23,24 @@ internal sealed class MessageRouter(SessionRuntime runtime)
                 catch (InvalidOperationException error) { return new(409, new { error = error.Message }); }
             }
             if (command == "/compact")
-                return await owner.Compactor.StartManualAsync()
-                    ? new(202, new { accepted = true, compacting = true })
-                    : new(409, new { error = "Compaction requires an idle Session." });
+            {
+                var result = await owner.Compactor.StartManualAsync();
+                return result.Started || result.AlreadyPending
+                    ? new(202, new { accepted = true, compacting = true, alreadyPending = result.AlreadyPending, runsInBackground = result.Background })
+                    : new(409, new { error = "This model disables background compaction. Stop or wait for the current run to finish, then request compaction again." });
+            }
+            if (command == "/dequeue")
+            {
+                var result = await runtime.DequeueAsync(context.SessionId);
+                return new(200, new { success = true, queuedItems = result.QueuedItems, stoppedCurrent = result.StoppedCurrent, abortedInFlight = result.AbortedInFlight });
+            }
             if (command == "/stop compact")
             {
                 var result = await owner.Compactor.StopAsync();
                 return new(200, new { success = true, stoppedCompact = result.Cancelled, tooLate = result.TooLate });
             }
             if (command != "/stop") return new(422, new { error = "This Session command has not been implemented." });
-            if (owner.Compactor.Active) return new(409, new { error = "Use /stop compact to cancel compaction only." });
+            if (owner.Compactor.Standalone) return new(200, new { success = true, stoppedCurrent = false });
             if (!owner.Metadata().Busy) return new(200, new { success = true, stoppedCurrent = false });
             var stopped = await runtime.StopAsync(context.SessionId);
             return new(200, new { success = true, stoppedCurrent = stopped.StoppedCurrent });

@@ -15,6 +15,8 @@ public sealed class LocalSessionTurnHost
     private readonly int maxToolIterations;
     private readonly Func<long> clock;
     private int releaseCommits;
+    private readonly Func<Task>? safePoint;
+    private readonly Func<ChatResult, Task>? automaticCompact;
 
     public LocalSessionTurnHost(
         SessionEntry entry,
@@ -22,14 +24,19 @@ public sealed class LocalSessionTurnHost
         IChatService chat,
         ITurnToolExecutor? tools = null,
         int maxToolIterations = 500,
-        Func<long>? clock = null)
+        Func<long>? clock = null,
+        Func<Task>? safePoint = null,
+        Func<ChatResult, Task>? automaticCompact = null)
     {
         this.entry = entry;
         this.chat = chat;
         this.tools = tools ?? new UnsupportedTurnToolExecutor();
         this.maxToolIterations = maxToolIterations > 0 ? maxToolIterations : throw new ArgumentOutOfRangeException(nameof(maxToolIterations));
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        this.safePoint = safePoint; this.automaticCompact = automaticCompact;
     }
+
+    internal Task SafePointAsync() => safePoint?.Invoke() ?? Task.CompletedTask;
 
     public int ReleaseCommitCount => Volatile.Read(ref releaseCommits);
 
@@ -69,6 +76,8 @@ public sealed class LocalSessionTurnHost
             for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
                 registered.Token.ThrowIfCancellationRequested();
+                await SafePointAsync().ConfigureAwait(false);
+                registered.Token.ThrowIfCancellationRequested();
                 await entry.SaveLane.AppendGoalReminderAsync(registered.Token).ConfigureAwait(false);
                 registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
@@ -83,7 +92,14 @@ public sealed class LocalSessionTurnHost
                     result.FinalizeHistory(appended, entry.RecordBestEffortFailure);
 
                     var calls = ExtractFunctionCalls(assistant);
-                    if (calls.Count == 0) return result;
+                    if (calls.Count == 0)
+                    {
+                        if (!entry.WithState(state => !state.Stopping && !state.Meta.ContainsKey("runQueuedAfterStop")
+                            && state.Queue.Any(SessionCompactor.Ordinary))) return result;
+                        await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
+                        if (automaticCompact is not null) await automaticCompact(result).ConfigureAwait(false);
+                        continue;
+                    }
 
                     var toolParts = new JsonArray();
                     foreach (var planned in ToolCallControls.Plan(calls))
@@ -132,6 +148,7 @@ public sealed class LocalSessionTurnHost
                     if (stopping) throw new OperationCanceledException(registered.Token);
                     if (terminal) return result;
                     await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
+                    if (automaticCompact is not null) await automaticCompact(result).ConfigureAwait(false);
                     if (iteration + 1 >= maxToolIterations) throw new ToolLoopLimitException(maxToolIterations);
                 }
                 finally { result.FinalizeHistory(null, entry.RecordBestEffortFailure); }
@@ -164,16 +181,16 @@ public sealed class LocalSessionTurnHost
 
     private async Task AppendQueuedFollowUpsAfterToolAsync()
     {
-        if (entry.WithState(state => state.Stopping || state.Queue.Count == 0)) return;
+        await SafePointAsync().ConfigureAwait(false);
+        if (entry.WithState(state => state.Stopping || !state.Queue.Any(SessionCompactor.Ordinary))) return;
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
+        await SafePointAsync().ConfigureAwait(false);
         var batch = SessionTurnRunner.DrainLeading(entry);
         if (batch.Count > 0)
         {
             await AppendQueuedInputsAsync(batch).ConfigureAwait(false);
             return;
         }
-        var remainingHead = entry.WithState(state => state.Queue.FirstOrDefault()?.CloneItem());
-        if (remainingHead is not null) SessionIngress.EnsureSupportedForRunner(remainingHead);
     }
 
     public async Task ReleaseBusyAsync()
@@ -210,6 +227,7 @@ public sealed class LocalSessionTurnHost
 
     public async Task FinalizeStoppedAsync()
     {
+        await SafePointAsync().ConfigureAwait(false);
         var items = entry.WithState(state => state.Queue.ToArray());
         foreach (var item in items.Where(item => item.Type != QueueItemType.CompactCommit)) SessionIngress.EnsureSupportedForRunner(item);
         await entry.SaveLane.CommitCanonicalAppendAsync(state => PrepareQueuedAppend(state, items, finalizing: true, clock)).ConfigureAwait(false);
@@ -223,9 +241,10 @@ public sealed class LocalSessionTurnHost
         bool finalizing,
         Func<long> clock)
     {
-        if (state.Queue.Count < selectedItems.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
+        var available = finalizing ? state.Queue.ToArray() : state.Queue.Where(SessionCompactor.Ordinary).ToArray();
+        if (available.Length < selectedItems.Count) throw new InvalidOperationException("Selected queue items are no longer available.");
         for (var index = 0; index < selectedItems.Count; index++)
-            if (!ReferenceEquals(state.Queue[index], selectedItems[index]))
+            if (!ReferenceEquals(available[index], selectedItems[index]))
                 throw new InvalidOperationException("Selected queue identity changed before canonical append.");
 
         var rawMessages = new List<JsonObject>();
@@ -295,7 +314,8 @@ public sealed class LocalSessionTurnHost
 
         var stagedHistory = state.History.Select(message => (JsonObject)message.DeepClone()).ToList();
         stagedHistory.AddRange(canonicalMessages.Select(message => (JsonObject)message.DeepClone()));
-        var stagedQueue = state.Queue.Skip(selectedItems.Count).Select(item => item.CloneItem()).ToArray();
+        var selected = new HashSet<QueueItem>(selectedItems, ReferenceEqualityComparer.Instance);
+        var stagedQueue = state.Queue.Where(item => !selected.Contains(item)).Select(item => item.CloneItem()).ToArray();
         var stagedMeta = (JsonObject)state.Meta.DeepClone();
         JsonNode? previousLastMessageTime = state.Meta["lastMessageTime"]?.DeepClone();
         var hadLastMessageTime = state.Meta.ContainsKey("lastMessageTime");
@@ -318,11 +338,9 @@ public sealed class LocalSessionTurnHost
         {
             if (live.NextMessageSeq != capturedNextSeq || live.HistoryVersion != capturedHistoryVersion)
                 throw new InvalidOperationException("Canonical append base changed before publish.");
-            if (live.Queue.Count < selectedItems.Count) throw new InvalidOperationException("Selected queue items disappeared before publish.");
-            for (var index = 0; index < selectedItems.Count; index++)
-                if (!ReferenceEquals(live.Queue[index], selectedItems[index]))
-                    throw new InvalidOperationException("Selected queue identity changed before publish.");
-            live.Queue.RemoveRange(0, selectedItems.Count);
+            if (selectedItems.Any(item => !live.Queue.Any(current => ReferenceEquals(current, item))))
+                throw new InvalidOperationException("Selected queue items disappeared before publish.");
+            live.Queue.RemoveAll(item => selected.Contains(item));
             live.History.AddRange(canonicalMessages);
             live.NextMessageSeq = nextSeq;
             live.HistoryVersion = stagedHistoryVersion;

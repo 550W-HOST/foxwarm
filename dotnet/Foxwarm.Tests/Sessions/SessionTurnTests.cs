@@ -185,7 +185,7 @@ public sealed class SessionTurnTests
     }
 
     [Fact]
-    public async Task PreloadedCompactHeadFailsWithoutProviderOrRetrigger()
+    public async Task Restarted_stale_compact_signal_is_removed_without_provider_or_retrigger()
     {
         var store = new InMemorySessionAuthorityStore();
         var chat = new ControlledChat();
@@ -198,12 +198,12 @@ public sealed class SessionTurnTests
         };
         entry.State.Queue.Add(new QueueItem(QueueItemType.CompactCommit));
 
-        var processing = registry.Runner.ProcessQueueAsync("s");
-        await Assert.ThrowsAsync<UnsupportedSessionTurnException>(() => processing);
+        await registry.Runner.ProcessQueueAsync("s");
 
         Assert.Empty(chat.Calls);
         Assert.False(entry.Snapshot().Busy);
-        Assert.Single(entry.Snapshot().Queue);
+        Assert.Empty(entry.Snapshot().Queue);
+        Assert.Empty(entry.Snapshot().History);
         Assert.Equal(0, triggerCount);
     }
 
