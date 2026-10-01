@@ -3,16 +3,16 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Models;
 
-internal static class ConfiguredOpenAI
+internal static class ConfiguredModelRequests
 {
     internal static ResponsesClientOptions Plan(ConcreteHostModel model, ResponsesClientOptions defaults,
         string effort, string instructions, string cacheKey, string turnId)
     {
-        if (model.ProviderType is not ("openai" or "openai-responses" or "openai-completions")) throw new InvalidDataException("Selected model executor is not implemented: " + model.ProviderType + ".");
-        var completions = model.ProviderType == "openai-completions";
+        if (model.IsVirtual || model.ProviderType == "openai-ws") throw new InvalidDataException("Selected model executor is not implemented: " + model.ProviderType + ".");
+        var responses = model.ProviderType is "openai" or "openai-responses";
         if (model.Configuration["imageGeneration"]?["enabled"] is JsonValue image && image.TryGetValue<bool>(out var generate) && generate)
             throw new InvalidDataException("Selected model enables unimplemented image generation.");
-        if (!completions)
+        if (responses)
         {
             if (model.Configuration["webSearch"]?["enabled"] is JsonValue web && web.TryGetValue<bool>(out var search) && search) throw new InvalidDataException("Selected model enables unimplemented Responses web search.");
             if (model.Configuration["keepReasoningOnError"] is JsonValue keep && keep.TryGetValue<bool>(out var recovery) && recovery) throw new InvalidDataException("Responses keepReasoningOnError recovery is not implemented.");
@@ -21,7 +21,7 @@ internal static class ConfiguredOpenAI
             if (extra?["tool_choice"] is JsonObject choice && SessionWait.Text(choice["type"]) == "image_generation") throw new InvalidDataException("extraFields.tool_choice requires an enabled imageGeneration tool.");
         }
         var compression = SessionWait.Text(model.Configuration["requestCompression"]);
-        if (compression is not null && compression is not ("gzip" or "br")) throw new InvalidDataException("Unsupported OpenAI requestCompression.");
+        if (compression is not null && compression is not ("gzip" or "br")) throw new InvalidDataException("Unsupported provider requestCompression.");
         JsonNode? Expand(JsonNode? node)
         {
             if (node is JsonValue value && value.TryGetValue<string>(out var text)) return JsonValue.Create(text.Replace("${SESSION_CACHE_KEY}", cacheKey, StringComparison.Ordinal).Replace("${TURN_ID}", turnId, StringComparison.Ordinal));
@@ -45,7 +45,9 @@ internal static class ConfiguredOpenAI
     {
         IChatService service = model.ProviderType == "openai-completions"
             ? new CompletionsChatService(http, options, SessionWait.Text(model.Configuration["historyReasoningField"]) ?? "reasoning_content", cacheKey, progress)
-            : new ResponsesChatService(http, options, progress);
+            : model.ProviderType is "openai" or "openai-responses"
+                ? new ResponsesChatService(http, options, progress)
+                : new AnthropicMessagesService(http, options);
         return new ConcreteRequestHistory.ChatService(service, model.Key);
     }
 

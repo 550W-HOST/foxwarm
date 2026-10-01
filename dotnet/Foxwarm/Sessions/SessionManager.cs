@@ -18,7 +18,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly AgentMemory memory;
     private readonly Skills skills;
     private readonly LocalExecManager executor;
-    private readonly HttpClient http = new();
+    private readonly HttpClient http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private readonly Foxwarm.McpClient mcp;
     private readonly ToolRegistry tools;
     private readonly SessionWaitTimeouts waitTimeouts;

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -12,29 +11,10 @@ internal static class OpenAIHttp
         ResponsesClientOptions options, string sessionId, Action<string, ResponsesStreamProgress>? progress,
         string? userAgent, Func<Stream, CancellationToken, ResponsesStreamCallbacks, Task<JsonObject>> collect, CancellationToken cancellationToken)
     {
-        var bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
-        if (options.RequestCompression is string compression)
-        {
-            using var buffer = new MemoryStream();
-            using (Stream encoder = compression == "gzip" ? new System.IO.Compression.GZipStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true) : new System.IO.Compression.BrotliStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true)) encoder.Write(bytes);
-            bytes = buffer.ToArray();
-        }
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = new ByteArrayContent(bytes) };
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
-        if (userAgent is not null) request.Headers.TryAddWithoutValidation("user-agent", userAgent);
-        if (options.ExtraHeaders is not null) foreach (var (name, value) in options.ExtraHeaders)
-        {
-            var text = value?.ToString() ?? "";
-            if (request.Headers.TryAddWithoutValidation(name, text))
-            { request.Headers.Remove(name); request.Headers.TryAddWithoutValidation(name, text); }
-            else { request.Content.Headers.Remove(name); request.Content.Headers.TryAddWithoutValidation(name, text); }
-        }
-        if (!string.IsNullOrEmpty(options.Token) && options.ExtraHeaders?.Any(pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) != true) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Token);
-        if (options.RequestCompression is not null)
-        {
-            request.Content.Headers.ContentEncoding.Clear(); request.Content.Headers.ContentEncoding.Add(options.RequestCompression);
-            request.Content.Headers.ContentLength = bytes.Length;
-        }
+        var headers = new Dictionary<string, string>();
+        if (userAgent is not null) headers["user-agent"] = userAgent;
+        if (!string.IsNullOrEmpty(options.Token)) headers["Authorization"] = "Bearer " + options.Token;
+        using var request = ProviderHttpRequest.Create(endpoint, body, options, headers);
         using var activity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (options.StreamInactivityTimeoutMs is not null) activity.CancelAfter(180000);
         var token = activity.Token; var effectiveInactivity = options.StreamInactivityTimeoutMs;

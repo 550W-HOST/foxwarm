@@ -16,17 +16,17 @@ internal sealed partial class SessionCompactor
         var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync(); var turnId = Guid.NewGuid().ToString();
         if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != selected.Model.Key)
             promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
-        var options = ConfiguredOpenAI.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
+        var options = ConfiguredModelRequests.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
             baseOptions.Instructions.Length == 0 ? promptSnapshot : baseOptions.Instructions + "\n\n" + promptSnapshot, cacheKey, turnId);
         for (var round = 0; round < 15; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             detached.Add(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }) });
-            var service = ConfiguredOpenAI.CreateService(http, selected.Model, options, cacheKey);
+            var service = ConfiguredModelRequests.CreateService(http, selected.Model, options, cacheKey);
             ChatResult result;
             try { result = await service.ChatAsync(hosted.Id, detached, cancellationToken); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception error) { throw new InvalidDataException(ConfiguredOpenAI.SafeError(error, selected.Model)); }
+            catch (Exception error) { throw new InvalidDataException(ConfiguredModelRequests.SafeError(error, selected.Model)); }
             var assistant = result.AssistantMessage;
             if (assistant is not null) detached.Add((JsonObject)assistant.DeepClone());
             var calls = (assistant?["parts"] as JsonArray)?.OfType<JsonObject>()

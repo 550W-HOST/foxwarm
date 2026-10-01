@@ -57,7 +57,7 @@ public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
 public sealed class ToolLoopLimitException(int limit)
     : InvalidOperationException($"Experimental Session turn exceeded the {limit} iteration tool-loop limit.");
 
-public sealed record ChatResult(JsonObject? AssistantMessage)
+public sealed record ChatResult(JsonObject? AssistantMessage, JsonObject? Usage = null)
 {
     public static ChatResult Text(string text) => new(new JsonObject
     {

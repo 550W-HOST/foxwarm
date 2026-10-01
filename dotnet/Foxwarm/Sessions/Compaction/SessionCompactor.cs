@@ -113,7 +113,7 @@ internal sealed partial class SessionCompactor
 
     public async Task AutoAfterTurnAsync(ChatResult result)
     {
-        var usage = result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
+        var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
         if (usage is null) return;
         var cached = CompactCandidateBuilder.Finite(usage["cachedTokens"]) ?? 0;
         var input = CompactCandidateBuilder.Finite(usage["inputTokens"]) ?? 0;

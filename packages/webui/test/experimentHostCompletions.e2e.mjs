@@ -113,7 +113,7 @@ function peer(label) {
       if (record.user.includes('no-terminal')) { delta(response, { content: 'EOF-DONE' }); response.end(); return }
       if (record.user.includes('missing-id')) { delta(response, { tool_calls: [{ index: 0, type: 'function', function: { name: 'write', arguments: '{"filePath":"must-not-exist","content":"bad"}' } }] }); response.end(); return }
       if (record.user.includes('inactivity')) { delta(response, { content: 'one meaningful delta' }); noise(response, 'inactivity'); return }
-      if (record.user.includes('first-content')) { noise(response, 'first-content'); return }
+      if (record.user.includes('first-content')) { await sleep(110000); noise(response, 'first-content'); return }
       if (record.user.includes('stop-stream')) { delta(response, { reasoning: 'Transient only' }); stopHold = response; response.on('close', () => closed.add('stop')); return }
       if (record.user.includes('seed-compact-trigger')) { complete(response, 'COMPACT-TRIGGER', { prompt_tokens: 30000, completion_tokens: 2 }); return }
       complete(response, record.user.includes('after-restart') ? 'RESTART-DONE' : 'PLAIN-DONE')
@@ -196,7 +196,7 @@ try {
   await send('seed-compact-trigger', 'COMPACT-TRIGGER'); await until(async () => (await history()).messages.some(row => row.__meta?.contextBlock), 'real Completions automatic compaction')
   assert.equal(plannerRound, 2); assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, compactSource.__meta.seq]), compactArchive); const block = (await history()).messages.find(row => row.__meta?.contextBlock).__meta.contextBlock; assert(sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', [current])[0][0] > (await history()).messages.length)
   const expanded = await api('GET', route(current) + '/context-blocks/' + block.id + '/expand?previewLength=6000'); assert.equal(expanded.status, 200); assert(expanded.body.messages.length > 0)
-  // A role/usage/keepalive-only peer must not reset the source three-minute first-content timer.
+  // Held headers beyond 100 seconds and later nonmeaningful frames share one source three-minute deadline.
   const firstContentStart = Date.now(); await send('first-content', null, 195000); const elapsed = Date.now() - firstContentStart; assert(elapsed >= 178000 && elapsed < 193000, elapsed); await until(() => closed.has('first-content'), 'three-minute first-content peer closed')
   await stopHost(); assert.equal(errors.length, 0, errors.join('\n')); console.log(JSON.stringify({ result: 'ok', hostPids, providerRequests: requests.length, plannerRounds: plannerRound, firstContentElapsedMs: elapsed, originalSetupChat: true, pairedEffects: true, opaqueModelFiltering: true, stopAndRestart: true }))
 } catch (error) { console.error('OWNED_ROOT', root); if (host) console.error('HOST_OUTPUT', host.output); console.error('PEER_ERRORS', errors); if (page) console.error('BROWSER_TEXT', await page.evaluate(() => document.body.innerText).catch(() => 'closed')); throw error }
