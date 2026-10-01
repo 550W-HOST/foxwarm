@@ -137,14 +137,25 @@ test('awaited compaction replaces a completed tool phase while its provider is h
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('awaited no-op compaction releases its transient runtime phase', async () => {
-  const { sessionHistory } = await loadDeps();
-  const session = { ...await makeCompactableSession((await loadDeps()).archive, makeSessionId('compact_runtime_noop')), history: [] } as Session;
+test('awaited no-op compaction releases its transient runtime phase without calling the planner', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_runtime_noop'));
+  const before = structuredClone(session.history);
   const deps = makeDepsForSession(session, { count: 0 });
   const runtime = trackCompactionRuntime(deps);
-  await sessionHistory.processSessionCompactionRequest(deps, session.id, {}, 'await');
-  assert.equal(runtime.current, 'idle');
-  assert.deepEqual(runtime.events, ['requesting-model:compaction', 'idle']);
+  const originalChat = llm.chat;
+  let calls = 0;
+  try {
+    (llm as any).chat = async () => { calls += 1; throw new Error('no-op must not call the planner'); };
+    session.history = [];
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, {}, 'await');
+    session.history = structuredClone(before);
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 1 }, 'await');
+    assert.deepEqual(session.history, before);
+    assert.equal(calls, 0);
+    assert.equal(runtime.current, 'idle');
+    assert.deepEqual(runtime.events, ['requesting-model:compaction', 'idle', 'requesting-model:compaction', 'idle']);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
@@ -158,6 +169,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
   session.effort = 'none';
   session.childEffortDefault = 'max';
   session.systemPromptFiles = ['custom-memory.md'];
+  const before = structuredClone(session.history);
 
   try {
     (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
@@ -170,11 +182,24 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
       assert.equal((activeSession as any).__compactJob, true);
       assert.equal(activeSession.effort, 'none');
       assert.equal(activeSession.childEffortDefault, 'max');
+      assert.equal(activeSession.nextMessageSeq, session.nextMessageSeq);
+      assert.equal(activeSession.historyVersion, session.historyVersion);
+      assert.equal(activeSession.promptCacheKey, session.promptCacheKey);
+      assert.deepEqual(activeSession.history.slice(0, 2), before.slice(0, 2));
+      assert.deepEqual(session.history, before);
+      assert.doesNotMatch(JSON.stringify(activeSession.history), /recent (user message|model response) kept outside compact range/);
+      assert.doesNotMatch(flattenPrompt(parts), /recent (user message|model response) kept outside compact range/);
+      if (prompts.length === 0) assert.equal(activeSession.history.length, 2);
+      else {
+        assert.equal(activeSession.history.length, 4);
+        assert.equal(flattenPrompt(activeSession.history[2].parts), prompts[0]);
+      }
       assert.deepEqual(activeSession.systemPromptFiles, ['custom-memory.md']);
       assert.equal(options?.snapshotAuthority, 'detached');
       assert.equal(options?.compactPlanBackground, undefined);
       prompts.push(flattenPrompt(parts));
       purposes.push(options?.purpose);
+      if (parts) await Promise.resolve(options?.appendMessage?.({ role: 'user', parts }));
 
       if (prompts.length === 1) {
         const text = 'I can summarize this in plain text, but I forgot the tool call.';
@@ -209,6 +234,8 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert.equal(prompts.length, 2);
     assert.deepEqual(purposes, ['compact-plan', 'compact-plan']);
     assert.match(prompts[0], /COMPACTION STARTED/);
+    assert.match(prompts[0], /Recent messages \(2 rendered item\(s\), #3-#4\)/);
+    assert.deepEqual(session.history.filter(message => [3, 4].includes(message.__meta?.seq || 0)), before.slice(2));
     assert.match(prompts[1], /COMPACT TOOL CALL INVALID/);
     assert.match(prompts[1], /plain text\/no tool call cannot complete compaction/i);
     assert.match(prompts[1], /submit_compact_plan/);
@@ -521,6 +548,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
       summary: `L1 backlog ${index + 1} ${'block-summary '.repeat(1800)}`,
     })));
     session.history = [...blocks.map(layeredContext.renderBlockMessage), ...session.history.slice(0, 2)];
+    const before = structuredClone(session.history);
 
     (llm as any).chat = async (
       parts: MessagePart[] | null,
@@ -529,6 +557,9 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
       options?: { appendMessage?: (message: Message) => Promise<void> | void },
     ): Promise<ChatResult> => {
       assert.equal((activeSession as any).__compactJob, true);
+      assert.deepEqual(activeSession.history.slice(0, before.length), before);
+      assert.deepEqual(session.history, before);
+      if (prompts.length === 0) assert.equal(activeSession.history.length, before.length);
       prompts.push(flattenPrompt(parts));
       const createBlocks = prompts.length === 1
         ? [{
@@ -568,6 +599,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
     );
 
     assert.equal(prompts.length, 2);
+    assert.match(prompts[0], /Recent messages \(none\)/);
     assert.match(prompts[0], /Raw messages: .*message-source replaceAsBlocks entries must actually replace at least/i);
     assert.match(prompts[0], /Source L1 blocks: 5 block\(s\).*newest 3 are force-kept.*oldest 2 may be listed/is);
     assert.match(prompts[1], /RAW-MESSAGE HARD QUOTA REQUIRES/i);
@@ -1327,26 +1359,45 @@ test('background compact validates exact snapshot content and rejects same-metad
 test('background compact retains only an appended compatible active-history suffix', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_appended_suffix'));
+  session.history[2].role = 'model';
+  session.history[2].parts = [{ functionCall: { id: 'recent-tool', name: 'exec', args: { command: 'force-kept tool call marker' } } }];
+  session.history[3].role = 'tool';
+  session.history[3].parts = [{ functionResponse: { tool_use_id: 'recent-tool', name: 'exec', response: { output: 'force-kept tool response marker' } } }];
+  const before = structuredClone(session.history);
   const originalChat = llm.chat;
+  let providerEntered!: () => void;
+  const entered = new Promise<void>(resolve => { providerEntered = resolve; });
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   try {
-    (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      providerEntered();
+      assert.equal(options.compactPlanBackground, true);
+      assert.deepEqual(activeSession.history, before.slice(0, 2));
+      assert.deepEqual(session.history, before);
+      assert.doesNotMatch(JSON.stringify(activeSession.history), /force-kept tool (call|response) marker/);
+      assert.doesNotMatch(flattenPrompt(parts), /force-kept tool (call|response) marker/);
+      assert.match(flattenPrompt(parts), /Recent messages \(2 rendered item\(s\), #3-#4\)/);
       await gate;
+      assert.deepEqual(activeSession.history, before.slice(0, 2));
       const toolCall = { id: 'suffix', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'compacted before appended suffix',
       }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
-    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'background');
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.25 }, 'background');
+    await entered;
     const suffix: Message = { role: 'user', parts: [{ text: 'compatible appended suffix survives' }], __meta: { seq: 5, timestamp: 5000 } };
+    await archive.appendMessagesToArchive(session, [suffix]);
     session.history.push(suffix);
+    assert.deepEqual(session.history, [...before, suffix]);
     release();
     for (let index = 0; index < 200; index += 1) {
       const applied = await sessionHistory.applyCompletedCompactJob(makeDepsForSession(session, { count: 0 }), session.id);
       if (!sessionHistory.hasPendingCompactWork(session.id)) {
         assert.equal(applied, true);
+        assert.deepEqual(session.history.filter(message => [3, 4, 5].includes(message.__meta?.seq || 0)), [...before.slice(2), suffix]);
         assert.equal(session.history.some(message => message.parts.some(part => part.text === 'compatible appended suffix survives')), true);
         return;
       }

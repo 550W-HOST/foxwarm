@@ -13,6 +13,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 - At that automatic trigger, Foxwarm first dry-runs one historical function-response pruning pass against the complete authoritative history. It uses the ordinary oldest/compactable split and atomic tool boundary, keeps recent/current activity untouched, and never prunes function-call arguments.
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The default compact request keeps the newest 30% of rendered history (`llm.compactKeepPercent`, default `0.3`).
+- The transient planner forks at the start of that force-kept tail, adjusted to a complete tool-exchange boundary. Its input history is the ordered earlier prefix, while the complete snapshot still supplies candidate policy, force-kept range metadata, and commit validation. See [D-context-compact-planner-prefix](#d-context-compact-planner-prefix).
 - Async and awaited modes use the same snapshot/job/result path. Planning mutates a transient session clone; live state changes only during a compatible commit. For a selected `openai-ws` leaf, actual background planning receives the scoped outbound key while awaited/synchronous planning shares the normal Session key; persisted prompt-cache lineage is unchanged. Canonical key contract: [D-model-routing-openai-ws-prompt-cache-key](./model-routing.md#d-model-routing-openai-ws-prompt-cache-key).
 - Awaited planning publishes the existing transient `requesting-model` / `compaction` phase from operation admission through preparation, provider retries, commit, cancellation, failure, or no-op cleanup. Its owned release cannot clear a newer runtime phase. Background planning does not publish or replace a concurrent foreground phase.
 - For async-capable models, an explicit request starts snapshot planning immediately even while the live session is busy; planning is not a session queue item. Only the ready `compact-commit` enters the router queue for safe application. A busy explicit request on a model with `asyncCompact:false` reports background compaction unavailable instead of storing hidden deferred work; idle explicit and normal end-of-turn awaited compaction remain supported.
@@ -137,6 +138,10 @@ Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-h
 ### D-context-one-compact-engine
 
 Async and awaited compaction share one snapshot/job/commit engine. Planning never mutates the live session, and commit replaces only a compatible consumed prefix.
+
+### D-context-compact-planner-prefix
+
+[2026-10-01] The temporary compact planner starts with the active-history prefix before the force-kept recent tail, at the existing complete tool-exchange boundary. Preserve every prefix entry in order, including blocks, protected entries, and previously preserved raw messages; do not rebuild input from candidates or archive data. Planning instructions and retry exchanges append only to this detached prefix, keeping force-kept recent history out of the planning input. The complete job snapshot remains authoritative for candidate/range metadata, compatible commit validation, and retention of the unchanged tail plus a concurrently appended suffix. This changes neither persistent Session/fork identity nor request settings, sequence counters, history version, prompt-cache lineage, or awaited/background request scope. A zero keep fraction exposes the complete prefix; a split with no older items remains a no-op.
 
 ### D-context-compact-cancellation
 

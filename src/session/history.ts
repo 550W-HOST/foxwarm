@@ -620,11 +620,14 @@ function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions
     return null;
   }
 
+  // Keep the complete snapshot for commit validation, but fork planning before
+  // the force-kept tail at the same atomic tool boundary used by candidate selection.
+  const splitIndex = resolveCompactionSplitIndex(historySnapshot, keepPercent);
   return {
     sessionId: session.id,
     baseHistoryVersion: session.historyVersion || 0,
     historySnapshot,
-    transientSession: cloneSessionForCompactJob(session, historySnapshot),
+    transientSession: cloneSessionForCompactJob(session, historySnapshot.slice(0, Math.max(0, splitIndex))),
     keepPercent,
     completionMarker,
     completionBroadcastMessage,
