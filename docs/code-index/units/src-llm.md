@@ -1,7 +1,7 @@
 # Unit: src-llm
 
 Files: src/llm.ts, src/llmStreamingTimeout.ts, src/modelStreamDraft.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/llmStreamingTimeout.test.ts, src/llmStreamingTimeout.integration.test.ts, src/openaiWsChat.integration.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/providerImageRequest.test.ts, src/parallelToolExecution.test.ts, src/imageGenerationRequest.test.ts, src/imageGenerationStorage.test.ts, src/imageGenerationTimeout.test.ts, src/imageGenerationTransport.integration.test.ts
-Secondary files: src/llmRequestJournal.ts, src/llmProviders/openaiWsState.ts
+Secondary files: src/llmRequestJournal.ts, src/llmProviders/openaiWsState.ts, src/llmToolDefinitions.test.ts
 
 ## Purpose
 
@@ -10,7 +10,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 ## Key exports
 
 - `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the result; eligible normal Responses turns may append completed commentary prefixes before the final suffix. [Canonical streaming contract](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit).
-- `resolveSessionToolDefinitions(session, override?)` — preserves explicit schema overrides and substitutes a selected Shell Node's actual exec capability into normal direct-tool schemas; Main/CLI descriptions remain unchanged. See [Shell HTTP Node](./src-nodes-shell-http.md).
+- `resolveSessionToolDefinitions(session, override?)` — projects default definitions against the current Session's potential authorization, preserves explicit schema overrides, and substitutes a selected Shell Node's actual exec capability after filtering. Surviving descriptions, schemas and order are unchanged; the shared registry is not mutated. Main and Session-worker requests share this resolver. See [generic authorization](../threads/tool-dispatch.md#d-dispatch-generic-tool-authorization) and [Shell HTTP Node](./src-nodes-shell-http.md).
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
 - `deduplicateProviderRequestImages(contents, protocol)` — clones one concrete attempt's history, hashes only protocol-serializable current image bytes/MIME, removes repeated payloads, preserves descriptor/guidance context, and exposes duplicate status through a clone-local predicate rather than message fields.
 - `convertToAnthropicFormat(contents, config)` — serializes the prepared clone into Anthropic-compatible messages while preserving tool-result image association and dedup guidance.

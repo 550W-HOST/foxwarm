@@ -21,6 +21,7 @@ import {
   isToolAuthorizationPotentiallyVisibleSync,
   loadToolAuthorizationPolicy,
   toolAuthorizationNeedsSessionTarget,
+  type ToolAuthorizationVisibilityProjection,
 } from './toolAuthorization';
 import { populateToolAuthorizationSessionTargets, supportsToolAuthorizationSessionTarget } from './toolAuthorizationSessionTargets';
 
@@ -144,6 +145,7 @@ export function isToolVisibleForSession(
   session: Session | undefined,
   rawIdentity: ResolvedToolPermissionIdentity,
   executionNode = 'master',
+  projection: ToolAuthorizationVisibilityProjection = {},
 ): boolean {
   if (!session) return true;
   const genericIdentity = rawIdentity.source === 'node'
@@ -155,7 +157,7 @@ export function isToolVisibleForSession(
     session,
     tool: genericIdentity,
     targetNode: rawIdentity.source === 'node' ? (rawIdentity.node || executionNode) : executionNode,
-  }));
+  }), projection);
   if (!genericVisible) return false;
   if (!agentMetadata.isSessionEffectivelyIsolated(session)) return true;
   const agentName = session.agent || 'main';
@@ -169,6 +171,9 @@ export function isToolVisibleForSession(
   if (identity.source === 'builtin' && ISOLATED_ALWAYS_UNAVAILABLE_BUILTINS.has(identity.tool)) return false;
   const exactRule = findExactAgentToolRule(agentMetadata.getAgentToolRules(agentName), identity);
   if (exactRule) return exactRule.effect === 'allow';
+  // A file builtin may still use a permitted bound Node even when its unsupplied
+  // selector would default to a forbidden Node. Concrete calls retain all checks.
+  if (projection.targetNodeUnknown) return true;
   return isDefaultIsolatedCapabilityAllowed(identity, agentName, boundNode, session.currentNode, executionNode, {}, true);
 }
 

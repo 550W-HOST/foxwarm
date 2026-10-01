@@ -14,7 +14,9 @@ import * as sessionManager from './sessionManager';
 import { listNodeTopology } from './nodeExecution';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkGenericToolAuthorizationForSession, checkPathAccess } from './isolatedCheck';
+import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisibleForSession } from './isolatedCheck';
+import { isPermissionNeutralBuiltinDispatcher } from './permissions';
+import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
 import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
@@ -2288,10 +2290,20 @@ export async function executeTools(
     return toolMessage;
 }
 
-/** Keep the selected Shell Node's bounded-output capability in direct exec schemas. */
+/** Project default tools for this Session and preserve the selected Shell exec schema. */
 export async function resolveSessionToolDefinitions(session: Session, override?: ToolDefinition[]): Promise<ToolDefinition[]> {
     if (override) return override;
-    const definitions = tools.modelFacingDefinitions;
+    const currentNode = session.currentNode || 'master';
+    // Policy failures must propagate before the optional topology lookup's catch.
+    const definitions = tools.modelFacingDefinitions.filter(tool => {
+        if (isPermissionNeutralBuiltinDispatcher(tool.name)) return true;
+        if (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(tool.name as any)) {
+            return isToolVisibleForSession(session, { source: 'node', node: currentNode, tool: tool.name }, currentNode);
+        }
+        const placement = resolveBuiltinToolPlacement(tool.name, undefined, currentNode);
+        return isToolVisibleForSession(session, { source: 'builtin', tool: tool.name }, placement.executionNode,
+            { targetNodeUnknown: builtinNodeArgumentSelectsPlacement(tool.name) });
+    });
     if (!session.currentNode || session.currentNode === 'master') return definitions;
     let node;
     try { [node] = await listNodeTopology(session.id, session.currentNode); }

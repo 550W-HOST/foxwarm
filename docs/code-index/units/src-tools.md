@@ -10,7 +10,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 ## Key Exports (from src/tools.ts facade)
 
 - `definitions` — Array of all tool definition objects (from `tools/definitions.ts`)
-- `modelFacingDefinitions` — Subset of definitions directly exposed to the model
+- `modelFacingDefinitions` — Shared default-injection subset with cancellation schemas; `llm.resolveSessionToolDefinitions` creates the per-Session authorization projection without mutating this array
 - `callTool(toolName, args, context)` — Main dispatcher that routes tool calls to implementations
 - `assertToolAvailableForPlacement(toolName, args, context)` — trusted-placement pre-handler fence; Worker-unsupported operations fail retryably before raw singleton/lifecycle code.
 - The closed Main Management wrappers cover messaging/timers/catalog operations plus Worker cross-session recall/archive reads, Main-owned agent/session creation, other-target session deletion, node bootstrap/pairing, and atomic generic policy replacement.

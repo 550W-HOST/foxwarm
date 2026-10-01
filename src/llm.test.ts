@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import sharp from 'sharp';
 import path from 'path';
+import os from 'os';
 
 import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { loadModelsConfigFromObject, LOGS_DIR, MAX_OUTPUT } from './config';
@@ -27,6 +28,7 @@ import { collectOpenAIResponsesStream, convertToOpenAIResponsesFormat } from './
 import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
 import { isSessionTurnIncomplete } from './sessionContinuation';
 import { clearOpenAIWsCompletedChains, getOpenAIWsCompletedChainCountForTests, setOpenAIWsTransportTestHooks } from './llmProviders/openaiWsTransport';
+import { isToolAuthorizationPolicyUnavailable, parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests, setToolAuthorizationPolicyPathForTests } from './toolAuthorization';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -552,6 +554,63 @@ function createOpenAITestSession(id: string): Session {
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+test('local and Session-worker host requests send only potentially available default tools to the provider', async () => {
+  const originalPost = axios.post;
+  const bodies: any[] = [];
+  const policyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wire-tool-policy-'));
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('filtered') };
+  };
+  setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1
+defaultAction: allow
+rules:
+- id: deny-script
+  match: { tool: { source: builtin, name: run_script } }
+  action: deny
+- id: allow-path-read
+  match: { tool: { source: node, name: read }, path: { allWithin: "\${agent.dir}" } }
+  action: allow
+- id: deny-other-read
+  match: { tool: { source: node, name: read } }
+  action: deny
+`));
+  try {
+    for (const placement of ['local', 'session-worker'] as const) {
+      const owner = createOpenAITestSession(makeId(`tool_projection_${placement}`));
+      const effects: CurrentSessionEffects = {
+        placement,
+        appendMessage: async (target, message) => { target.history.push(message); },
+        persistSession: async () => {}, notifySessionEvent: () => {},
+        registerAbortController: () => {}, clearAbortController: () => {},
+        clearWaitById: async () => false,
+      };
+      assert.equal((await new LocalSessionTurnHost(effects, owner).chat([{ text: 'test tools' }], owner, 0, {
+        notifySessionEvents: false, registerAbortController: false,
+      })).text, 'filtered');
+      const wireNames = bodies.at(-1).tools.map((tool: any) => tool.function.name);
+      assert.deepEqual(wireNames, tools.modelFacingDefinitions.filter(tool => tool.name !== 'run_script').map(tool => tool.name));
+      assert.ok(wireNames.includes('read'));
+      assert.ok(wireNames.includes('call_tool'));
+    }
+    const unavailableFile = path.join(policyDir, 'invalid-policy.yaml');
+    await fs.writeFile(unavailableFile, 'version: unsupported\n');
+    setToolAuthorizationPolicyForTests(undefined);
+    setToolAuthorizationPolicyPathForTests(unavailableFile);
+    const blocked = createOpenAITestSession(makeId('unavailable_policy_projection'));
+    await assert.rejects(chat([{ text: 'do not send' }], blocked, 0, {
+      appendMessage: async message => { blocked.history.push(message); },
+      notifySessionEvents: false, registerAbortController: false,
+    }), isToolAuthorizationPolicyUnavailable);
+    assert.equal(bodies.length, 2, 'unavailable policy prevents the physical provider request');
+  } finally {
+    (axios as any).post = originalPost;
+    setToolAuthorizationPolicyForTests(undefined);
+    setToolAuthorizationPolicyPathForTests(undefined);
+    await fs.remove(policyDir);
+  }
+});
 
 test('chat forwards the raw Session effort override without materializing a configured default', async () => {
   const originalPost = axios.post;
