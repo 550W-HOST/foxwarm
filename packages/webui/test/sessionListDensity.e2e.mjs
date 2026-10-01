@@ -20,6 +20,8 @@ before(async () => {
       import { createRoot } from 'react-dom/client'
       import { DndContext, PointerSensor, useSensors, useSensor, pointerWithin } from '@dnd-kit/core'
       import Core from './src/components/SessionListCore'
+      import ProcessingStatus from './src/components/ProcessingStatus'
+      import CollapsedSidebar from './src/components/CollapsedSidebar'
       import { initializeThemeRuntime, setThemeSelection } from './src/theme'
       initializeThemeRuntime()
       window.fixtureTheme = setThemeSelection
@@ -61,8 +63,16 @@ before(async () => {
         return <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={event => window.fixtureDrops.push(event.over?.data.current)}>
           <div style={{ width: 'min(340px, 100vw)', height: '100vh' }} className="bg-fw-surface border-r border-fw-border">
             <div className="p-4 text-fw-text-strong font-bold border-b border-fw-border">Foxwarm · Demo sessions</div>
-            <div style={{ height: 'calc(100% - 57px)' }}><Core bounded={bounded} sessions={fixtureSessions} currentSession={current} unreadSessionIds={new Set(['demo/idle', 'demo/wait'])} onSelectSession={id => { window.fixtureSelected = id; setCurrent(id) }} /></div>
+            <div style={{ height: 'calc(100% - 57px)' }}><Core bounded={bounded} sessions={fixtureSessions} currentSession={current} unreadSessionIds={new Set(['demo/idle', 'demo/wait', ...(location.search === '?activity' ? ['demo/main'] : [])])} onSelectSession={id => { window.fixtureSelected = id; setCurrent(id) }} /></div>
           </div>
+          {location.search === '?activity' && <div data-activity-fixture style={{ position: 'absolute', left: 360, top: 0, display: 'flex', height: '100vh', gap: 24, padding: 16 }} className="bg-fw-canvas text-fw-text">
+            <div data-activity-rail><CollapsedSidebar sessions={fixtureSessions.map(session => session.id === 'demo/child' ? { ...session, pinned: true } : session)} currentSession={current} unreadSessionIds={new Set(['demo/main', 'demo/wait'])} onSelectSession={noop} onCreateSession={noop} onSelectSearch={noop} onSelectSetup={noop} onSelectLogs={noop} onToggleCollapsed={noop} /></div>
+            <div data-activity-timeline style={{ width: 520 }}>
+              {fixtureSessions.map(session => <div key={session.id} data-activity-case={session.id}>
+                <ProcessingStatus sessionBusy={!!session.busy} runtimeState={session.runtimeState} sessionQueueLength={session.id === 'demo/idle' ? 2 : 0} turnIncomplete={false} loading={false} isMobile={false} />
+              </div>)}
+            </div>
+          </div>}
         </DndContext>
       }
       createRoot(document.getElementById('root')).render(<Fixture />)
@@ -109,6 +119,8 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
       ['requesting-model', 'Status: compacting'], ['running-tool', 'Status: tool: exec'], ['waiting', 'Status: waiting: input'], ['requesting-model', 'Status: thinking'],
     ])
     assert.ok(await page.$(`${row('idle')} [aria-label="Unread idle completion"]`))
+    assert.equal(await page.$(`${row('wait')} .runtime-busy-spinner`), null)
+    assert.equal(await page.$eval(`${row('wait')} [data-session-status] > span`, e => getComputedStyle(e).animationName), 'none')
     assert.equal(await page.$('[data-session-status="idle"]'), null)
     for (const id of ['idle', 'archive']) assert.equal(await page.$(`${row(id)} [data-session-status]`), null)
     assert.equal(await page.$$eval('[data-session-status]', els => els.every(e => {
@@ -147,14 +159,17 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
     for (const themeId of ['foxwarm.default', 'foxwarm.550a-mono', 'foxwarm.seaglass']) {
       for (const colorMode of ['light', 'dark']) {
         await page.evaluate(({ themeId, colorMode }) => window.fixtureTheme({ themeId, colorMode }), { themeId, colorMode })
-        const result = await page.$eval('[data-session-status="requesting-model"]', e => ({ color: getComputedStyle(e).color, background: getComputedStyle(e).backgroundColor, animation: getComputedStyle(e).animationName }))
-        assert.equal(result.color, result.background)
-        assert.notEqual(result.animation, 'none')
+        const result = await page.$eval('[data-session-status="requesting-model"] svg', e => ({ color: getComputedStyle(e).color, stroke: getComputedStyle(e).stroke, background: getComputedStyle(e).backgroundColor, animation: getComputedStyle(e).animationName, duration: getComputedStyle(e).animationDuration, timing: getComputedStyle(e).animationTimingFunction }))
+        assert.equal(result.color, result.stroke)
+        assert.equal(result.background, 'rgba(0, 0, 0, 0)')
+        assert.equal(result.animation, 'runtime-busy-spin')
+        assert.equal(result.duration, '1s')
+        assert.equal(result.timing, 'steps(20)')
         assert.equal(await page.$eval(row('idle'), e => e.scrollWidth <= e.clientWidth), true)
       }
     }
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
-    assert.equal(await page.$eval('[data-session-status]', e => getComputedStyle(e).animationName), 'none')
+    assert.equal(await page.$eval('[data-session-status] svg', e => getComputedStyle(e).animationName), 'none')
     await page.evaluate(() => window.fixtureTheme({ themeId: 'foxwarm.default', colorMode: 'light' }))
     const output = process.env.FOXWARM_E2E_SCREENSHOT_DIR
     if (output) {
@@ -172,6 +187,9 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
     assert.equal(await page.$eval(toggle, e => e.classList.contains('bg-fw-accent-surface')), true)
     assert.ok(await page.$eval(row('main'), e => e.getBoundingClientRect().height) > 40)
     assert.equal(await page.$eval(row('main'), e => e.textContent.includes('12 msgs')), true)
+    for (const id of ['main', 'child', 'legacy']) assert.ok(await page.$(`${row(id)} .runtime-busy-spinner`))
+    for (const id of ['wait', 'idle', 'archive']) assert.equal(await page.$(`${row(id)} .runtime-busy-spinner`), null)
+    assert.equal(await page.$('.session-row .animate-bounce'), null)
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_session_list_compact_v1')), 'false')
     await page.mouse.move(800, 650)
     await page.focus(toggle)
@@ -601,5 +619,74 @@ test('remote node indicator shows only for non-master sessions in both densities
     assert.equal(metadata.followsSeparator, '•')
     assert.equal(metadata.overflow, false)
     assert.equal(metadata.ellipsis, 'ellipsis')
+  } finally { await page.close() }
+})
+
+
+test('busy rings share stepped motion across normal/detailed rows, rail and timeline while waiting and unread stay dots', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.setViewport({ width: 1080, height: 700 })
+    await page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_session_list_compact_v1', 'true'))
+    await page.goto(`${url}?activity`)
+    await page.waitForSelector('[data-activity-timeline] .runtime-busy-spinner')
+    await page.waitForSelector(row('child'))
+    assert.ok(await page.$(`${row('main')} [aria-label="Unread idle completion"]`))
+    assert.ok(await page.$(`${row('main')} .runtime-busy-spinner`))
+    assert.equal(await page.$(`${row('main')} [aria-label="Unread idle completion"] svg`), null)
+    const rail = '[data-activity-rail]'
+    const timeline = '[data-activity-timeline]'
+    const railMain = `${rail} button[aria-label="Research workspace, Unread idle completion"]`
+    const railTool = `${rail} button[aria-label="Evaluate the compact navigation"]`
+    assert.ok(await page.$(`${railTool} .runtime-busy-spinner`))
+    const railWaiting = `${rail} button[aria-label="Waiting for review, Unread idle completion"]`
+    assert.equal(await page.$$eval(`${railMain} .runtime-busy-spinner`, nodes => nodes.length), 1)
+    assert.equal(await page.$$eval(`${railMain} span.rounded-full`, nodes => nodes.length), 1, 'unread remains a separate filled dot')
+    assert.equal(await page.$$eval(`${railWaiting} span.rounded-full`, nodes => nodes.length), 2, 'waiting and unread retain their separate dots')
+    assert.equal(await page.$(`${railWaiting} .runtime-busy-spinner`), null)
+    for (const id of ['main', 'child', 'legacy']) {
+      const selector = `${timeline} [data-activity-case="demo/${id}"]`
+      assert.equal(await page.$$eval(`${selector} .runtime-busy-spinner`, nodes => nodes.length), 1)
+      assert.ok(await page.$(`${selector} button::-p-text(Stop)`))
+      assert.equal(await page.$(`${selector} .animate-bounce`), null)
+    }
+    assert.match(await page.$eval(`${timeline} [data-activity-case="demo/main"]`, e => e.textContent), /Compacting/)
+    assert.equal(await page.$(`${timeline} [data-activity-case="demo/wait"] button::-p-text(Stop)`), null)
+    for (const id of ['wait', 'idle', 'archive']) assert.equal(await page.$(`${timeline} [data-activity-case="demo/${id}"] .runtime-busy-spinner`), null)
+    assert.match(await page.$eval(`${timeline} [data-activity-case="demo/idle"]`, e => e.textContent), /2 queued messages pending/)
+
+    for (const themeId of ['foxwarm.default', 'foxwarm.550a-mono']) {
+      for (const colorMode of ['light', 'dark']) {
+        await page.evaluate(({ themeId, colorMode }) => window.fixtureTheme({ themeId, colorMode }), { themeId, colorMode })
+        const styles = await page.$$eval('.runtime-busy-spinner', nodes => nodes.map(e => {
+          const css = getComputedStyle(e)
+          return { animation: css.animationName, duration: css.animationDuration, timing: css.animationTimingFunction, fill: css.fill, stroke: css.stroke, shadow: css.boxShadow }
+        }))
+        assert.ok(styles.length >= 7)
+        assert.ok(styles.every(css => css.animation === 'runtime-busy-spin' && css.duration === '1s' && css.timing === 'steps(20)' && css.fill === 'none' && css.shadow === 'none'))
+        assert.equal(await page.$eval(`${row('wait')} [data-session-status] > span`, e => getComputedStyle(e).backgroundColor), await page.$eval(`${railWaiting} span.bg-fw-warning`, e => getComputedStyle(e).backgroundColor))
+        assert.equal(await page.$eval(`${row('main')} [aria-label="Unread idle completion"]`, e => getComputedStyle(e).backgroundColor), await page.$eval(`${row('main')} .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
+        assert.equal(await page.$eval(`${railTool} .runtime-busy-spinner`, e => getComputedStyle(e).stroke), await page.$eval(`${timeline} [data-activity-case="demo/child"] .runtime-busy-spinner`, e => getComputedStyle(e).stroke))
+        if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) {
+          await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
+          await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, `busy-surfaces-${themeId}-${colorMode}.png`) })
+        }
+      }
+    }
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
+    assert.equal(await page.$$eval('.runtime-busy-spinner', nodes => nodes.every(e => getComputedStyle(e).animationName === 'none' && getComputedStyle(e).fill === 'none')), true)
+    await page.click(toggle)
+    await page.waitForSelector('[data-session-list-density="detailed"]')
+    assert.equal(await page.$$eval('.session-row .runtime-busy-spinner', nodes => nodes.length), 3)
+    assert.equal(await page.$('.session-row .animate-bounce'), null)
+    assert.equal(await page.$$eval('.runtime-busy-spinner', nodes => nodes.every(e => getComputedStyle(e).animationName === 'none')), true)
+    if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, 'busy-surfaces-detailed-reduced.png') })
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }])
+    assert.equal(await page.$$eval('.runtime-busy-spinner', nodes => nodes.every(e => getComputedStyle(e).animationName === 'runtime-busy-spin' && getComputedStyle(e).animationTimingFunction === 'steps(20)')), true)
+    await page.evaluate(() => window.fixtureSetSessions(previous => previous.map(session => session.id === 'demo/main' ? { ...session, busy: true, runtimeState: { state: 'idle' } } : session)))
+    await page.waitForFunction(() => !document.querySelector('[data-activity-case="demo/main"] .runtime-busy-spinner'))
+    assert.equal(await page.$(`${row('main')} .runtime-busy-spinner`), null)
+    assert.equal(await page.$(`${railMain} .runtime-busy-spinner`), null)
+    assert.equal(await page.$$eval(`${railMain} span.rounded-full`, nodes => nodes.length), 1, 'unread survives the busy-to-idle presentation change')
   } finally { await page.close() }
 })

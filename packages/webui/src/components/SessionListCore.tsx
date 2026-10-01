@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server } from 'lucide-react'
+import RuntimeBusySpinner from './RuntimeBusySpinner'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -160,25 +161,9 @@ const getRuntimeBadgeTone = (session: Session): string => {
   return 'text-fw-text-muted'
 }
 
-const RuntimeActivityDots = ({ state }: { state: string }) => {
-  const colorClass = state === 'running-tool'
-    ? 'bg-fw-special dark:bg-fw-special'
-    : state === 'waiting'
-      ? 'bg-fw-warning dark:bg-fw-warning'
-      : 'bg-fw-accent dark:bg-fw-accent'
-
-  if (state === 'waiting') {
-    return <span className={`w-1.5 h-1.5 ${colorClass} rounded-full`} />
-  }
-
-  return (
-    <span className="inline-flex items-center gap-0.5">
-      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`}></span>
-      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`} style={{ animationDelay: '0.1s' }}></span>
-      <span className={`w-1.5 h-1.5 ${colorClass} rounded-full animate-bounce`} style={{ animationDelay: '0.2s' }}></span>
-    </span>
-  )
-}
+const RuntimeActivityIndicator = ({ state }: { state: string }) => state === 'waiting'
+  ? <span className="w-1.5 h-1.5 bg-fw-warning dark:bg-fw-warning rounded-full" />
+  : <RuntimeBusySpinner />
 
 const getStoredAuthToken = () => {
   return localStorage.getItem(FOXWARM_TOKEN_KEY)
@@ -1276,7 +1261,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                       title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
                       data-session-status={runtimeStateName}
                       className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
-                    />
+                    >
+                      <RuntimeActivityIndicator state={runtimeStateName} />
+                    </span>
                   )}
                 </div>
               ) : (
@@ -1308,7 +1295,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     {showRuntimeBadge && (
                       <>
                         <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
-                          <RuntimeActivityDots state={runtimeStateName} />
+                          <RuntimeActivityIndicator state={runtimeStateName} />
                           <span>{getSessionRuntimeSummary(session)}</span>
                         </span>
                         <span>•</span>

@@ -1,3 +1,4 @@
+import RuntimeBusySpinner from './RuntimeBusySpinner'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { PanelLeftOpen, Plus, History } from 'lucide-react'
 import type { Session } from './SessionListCore'
@@ -88,7 +89,9 @@ export default function CollapsedSidebar({
             >
               {initial}
               {showRuntimeIndicator && (
-                <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
+                activeRuntime
+                  ? <RuntimeBusySpinner className={`absolute -top-0.5 -right-0.5 h-3 w-3 ${runtimeState === 'running-tool' ? 'text-fw-special' : 'text-fw-accent'}`} />
+                  : <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
               )}
               {isUnread && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-fw-accent ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring" />}
             </button>

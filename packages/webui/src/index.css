@@ -1899,23 +1899,18 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   opacity: 1;
 }
 .session-compact-status {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
 }
-.session-compact-status[data-session-status="requesting-model"],
-.session-compact-status[data-session-status="running-tool"] {
-  box-shadow: 0 0 5px 1px currentColor;
-  animation: session-compact-glow 2s ease-in-out infinite;
+.runtime-busy-spinner {
+  animation: runtime-busy-spin 1s steps(20, end) infinite;
 }
-@keyframes session-compact-glow {
-  50% { box-shadow: 0 0 2px 0 currentColor; }
+@keyframes runtime-busy-spin {
+  to { transform: rotate(360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .session-compact-status { animation: none !important; }
+  .runtime-busy-spinner { animation: none; }
 }
 @media (pointer: coarse) {
   .session-compact-disclosure > button,
