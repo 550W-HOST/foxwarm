@@ -1,10 +1,12 @@
 import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ChevronDown, ChevronUp, History, Search } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronUp, History, Search } from 'lucide-react'
 import ChatTimeline from './ChatTimeline'
 import type { Message } from './chatShared'
 import { formatTimelineTimeMarker } from './timelineTime'
 import { API_BASE_PATH } from '../config'
+import { chunkBoundedIds } from '../boundedSessionReplay'
+import { makeFoxwarmPopupUrl } from '../popupWebUi'
 
 type HistoryResult = {
   key: string
@@ -25,6 +27,7 @@ type HistoryResult = {
 }
 
 type WindowResponse = Pick<HistoryResult, 'messages' | 'firstSeq' | 'lastSeq' | 'hasEarlier' | 'hasLater' | 'hasMoreInTarget' | 'shownRange'>
+type SessionHeaderMetadata = { sessionId: string; displayName?: string }
 const LOCATOR = /^msg#([1-9]\d*)(?:-([1-9]\d*))?$/i
 const COPY_REFERENCE = /^sessionId=(\S+)\s+(msg#[1-9]\d*(?:-[1-9]\d*)?)$/i
 
@@ -53,7 +56,7 @@ function HistoryStartTime({ messages }: { messages: readonly Message[] }) {
   if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp < 0
     || !Number.isFinite(new Date(timestamp).getTime())) return null
   const time = formatTimelineTimeMarker({ timestamp })
-  return <time dateTime={new Date(timestamp).toISOString()} title={time.title}>{time.text}</time>
+  return <time className="shrink-0 whitespace-nowrap" dateTime={new Date(timestamp).toISOString()} title={time.title}>{time.text}</time>
 }
 
 function HistoryRangeRow({ result, direction, onLoad }: {
@@ -86,19 +89,21 @@ function HistoryRangeRow({ result, direction, onLoad }: {
   ) : <div data-history-range className={className}>{content}</div>
 }
 
-export default function HistorySearchView({ isMobile, groupTools, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack }: {
+export default function HistorySearchView({ isMobile, groupTools, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession }: {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
   showUserMessageMetadata: boolean
   knownSessions?: string[]
   onBack?: () => void
+  onOpenSession?: (sessionId: string) => void
 }) {
   const tabHeader = useWorkbenchTabHeader()
   const [query, setQuery] = useState('')
   const [agentName, setAgentName] = useState('')
   const [sessionId, setSessionId] = useState('')
   const [results, setResults] = useState<HistoryResult[]>([])
+  const [sessionMetadata, setSessionMetadata] = useState(new Map<string, SessionHeaderMetadata>())
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
@@ -110,6 +115,7 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
     requests.current.forEach(controller => controller.abort())
     requests.current.clear()
     setResults([])
+    setSessionMetadata(new Map())
     setError('')
     setSearched(false)
     setLoading(false)
@@ -119,6 +125,39 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
     requests.current.forEach(controller => controller.abort())
     requests.current.clear()
   }, [])
+
+  const loadSessionMetadata = async (items: HistoryResult[], turn: number) => {
+    const ids = [...new Set(items.map(item => item.sessionId))]
+    if (!ids.length) return
+    const controller = new AbortController()
+    requests.current.add(controller)
+    try {
+      for (const batch of chunkBoundedIds(ids, 100)) {
+        if (controller.signal.aborted || turn !== generation.current) return
+        try {
+          const response = await fetch(`${API_BASE_PATH}/session-list/by-id`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: batch, includePaths: false }), signal: controller.signal,
+          })
+          if (!response.ok) continue
+          const payload = await response.json() as { results?: Array<{ requestedId: string; session?: { id: string; displayName?: string } | null }> }
+          if (controller.signal.aborted || turn !== generation.current) return
+          const metadata = new Map<string, SessionHeaderMetadata>()
+          for (const item of payload.results || []) {
+            const name = item.session?.displayName?.trim()
+            if (batch.includes(item.requestedId) && item.session) metadata.set(item.requestedId, {
+              sessionId: item.session.id, ...(name ? { displayName: name } : {}),
+            })
+          }
+          setSessionMetadata(previous => new Map([...previous, ...metadata]))
+        } catch {
+          // Optional list metadata must never hide or block the archived messages.
+        }
+      }
+    } finally {
+      requests.current.delete(controller)
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -148,14 +187,17 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
       }
       const payload = await readHistory(path, controller.signal)
       if (turn !== generation.current) return
+      let nextResults: HistoryResult[]
       if (locator) {
         if (!payload.messages?.length) throw new Error('No archived message found at that reference.')
-        setResults([{ key: `${selectedSession}:${locator}`, sessionId: selectedSession, kind: 'messages',
+        nextResults = [{ key: `${selectedSession}:${locator}`, sessionId: selectedSession, kind: 'messages',
           messages: payload.messages, firstSeq: payload.firstSeq, lastSeq: payload.lastSeq,
           hasEarlier: payload.hasEarlier, hasLater: payload.hasLater,
           requestedRange: payload.requestedRange, shownRange: payload.shownRange,
-          hasMoreInTarget: payload.hasMoreInTarget }])
-      } else setResults(payload.results || [])
+          hasMoreInTarget: payload.hasMoreInTarget }]
+      } else nextResults = payload.results || []
+      setResults(nextResults)
+      void loadSessionMetadata(nextResults, turn)
       setSearched(true)
     } catch (cause) {
       if (!controller.signal.aborted && turn === generation.current) setError(errorText(cause))
@@ -235,7 +277,19 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
           {results.map((result, index) => (
             <section key={`${result.key}:${index}`} data-history-result={result.key} className="min-w-0 rounded-lg border border-fw-border bg-fw-surface p-3 sm:p-4">
               <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2 border-b border-fw-border pb-2 text-xs text-fw-text-muted">
-                <span className="font-medium text-fw-text-strong">{result.sessionId}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span className="truncate font-medium text-fw-text-strong" title={result.sessionId + (sessionMetadata.get(result.sessionId)?.displayName ? ` (${sessionMetadata.get(result.sessionId)?.displayName})` : '')}>
+                    {result.sessionId}{sessionMetadata.get(result.sessionId)?.displayName && ` (${sessionMetadata.get(result.sessionId)?.displayName})`}
+                  </span>
+                  <a href={makeFoxwarmPopupUrl(window.location.href, { kind: 'chat', sessionId: sessionMetadata.get(result.sessionId)?.sessionId || result.sessionId }).toString()}
+                    target={onOpenSession ? undefined : '_blank'} rel="noopener noreferrer" title="Open session" aria-label="Open session"
+                    className="shrink-0 rounded p-1 text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
+                    onClick={event => {
+                      if (!onOpenSession || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+                      event.preventDefault()
+                      onOpenSession(sessionMetadata.get(result.sessionId)?.sessionId || result.sessionId)
+                    }}><ArrowUpRight size={14} /></a>
+                </span>
                 <HistoryStartTime messages={result.messages} />
               </header>
               {result.kind === 'unavailable' ? <p className="text-sm">The original messages are unavailable. {result.fallbackExcerpt && <span>Cached excerpt: {result.fallbackExcerpt}</span>}</p> : (

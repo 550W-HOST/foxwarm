@@ -29,11 +29,22 @@ const results = [
   { key: 'hit-b', kind: 'block', sessionId: 'beta', firstSeq: 20, lastSeq: 21, hasEarlier: true, hasLater: true, messages: [block] },
 ]
 window.__requests = []
+window.__nameRequests = []
 window.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href)
   window.__requests.push(url.pathname + url.search)
   const response = body => Promise.resolve(new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } }))
+  if (url.pathname.endsWith('/api/session-list/by-id')) {
+    const body = JSON.parse(options.body)
+    window.__nameRequests.push(body)
+    if (window.__nameMode === 'lookup-fails') return new Response('{}', { status: 503 })
+    if (window.__nameMode === 'name-slow') return new Promise(resolve => { window.__resolveNames = () => resolve(new Response(JSON.stringify({ results: body.ids.map(requestedId => ({ requestedId, session: { id: requestedId, displayName: 'Old name' } })) }), { headers: { 'Content-Type': 'application/json' } })) })
+    return response({ results: body.ids.map(requestedId => ({ requestedId, resolution: { kind: requestedId === 'off-list/历史 ?#' ? 'alias' : 'exact', sessionId: requestedId === 'off-list/历史 ?#' ? 'canonical-outside/main' : requestedId }, session: requestedId === 'missing' ? null : { id: requestedId === 'off-list/历史 ?#' ? 'canonical-outside/main' : requestedId, displayName: window.__nameMode === 'names' ? ({ alpha: 'Alpha <team>', 'off-list/历史 ?#': 'Outside sidebar', unnamed: '   ' })[requestedId] : undefined } })) })
+  }
   if (url.pathname.endsWith('/api/history/search')) {
+    window.__nameMode = url.searchParams.get('query')
+    if (window.__nameMode === 'names') return response({ results: [results[0], { ...results[0], key: 'hit-a2' }, { ...results[0], key: 'off-list', sessionId: 'off-list/历史 ?#' }, { ...results[0], key: 'unnamed', sessionId: 'unnamed' }, { ...results[0], key: 'missing', sessionId: 'missing' }] })
+    if (window.__nameMode === 'name-slow' || window.__nameMode === 'lookup-fails') return response({ results: [results[1]] })
     if (url.searchParams.get('query') === 'slow') return new Promise(resolve => { window.__resolveSlow = () => resolve(new Response(JSON.stringify({ results: [results[0]] }), { headers: { 'Content-Type': 'application/json' } })) })
     if (url.searchParams.get('query') === 'fresh') return response({ results: [results[1]] })
     if (url.searchParams.get('query') === 'stale') return response({ results: [{ key: 'stale', sessionId: 'alpha', kind: 'unavailable', messages: [], hasEarlier: false, hasLater: false, fallbackExcerpt: 'Cached excerpt only' }] })
@@ -169,6 +180,51 @@ test('invalid or missing first timestamps never fall back to a block creation ti
       assert.equal(await page.$(`[data-history-result="${query}"] header time`), null, query)
       assert.equal(await page.$eval(`[data-history-result="${query}"] header`, element => element.textContent.trim()), 'alpha', query)
     }
+  } finally { await page.close() }
+})
+
+test('result names use deduplicated exact metadata even for sessions absent from the known list', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.goto(baseUrl)
+    await page.type('#history-search-query', 'names')
+    await page.click('button[type=submit]')
+    await page.waitForFunction(() => document.querySelector('[data-history-result="off-list"] header')?.textContent.includes('Outside sidebar'))
+    assert.deepEqual(await page.evaluate(() => window.__nameRequests), [{ ids: ['alpha', 'off-list/历史 ?#', 'unnamed', 'missing'], includePaths: false }])
+    for (const key of ['hit-a', 'hit-a2']) assert.equal(await page.$eval(`[data-history-result="${key}"] header`, header => header.textContent.includes('alpha (Alpha <team>)') && !header.querySelector('team')), true)
+    assert.equal(await page.$eval('[data-history-result="unnamed"] header', header => header.textContent.includes('unnamed (')), false)
+    assert.equal(await page.$eval('[data-history-result="missing"] header', header => header.textContent.includes('missing (')), false)
+    const link = await page.$eval('[data-history-result="off-list"] a[aria-label="Open session"]', anchor => ({ href: anchor.href, target: anchor.target }))
+    const url = new URL(link.href)
+    assert.equal(url.pathname, '/prefix/ui/')
+    assert.equal(url.searchParams.get('foxwarmPopup'), 'chat')
+    assert.equal(url.searchParams.get('sessionId'), 'canonical-outside/main')
+    assert.equal(link.target, '_blank')
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-history-result="off-list"] header'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/history-result-session-name.png` })
+  } finally { await page.close() }
+})
+
+test('metadata failure or stale lookup completion never replaces or blocks the current history', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.goto(baseUrl)
+    await page.type('#history-search-query', 'lookup-fails')
+    await page.click('button[type=submit]')
+    await page.waitForSelector('[data-history-result="hit-b"]')
+    assert.equal(await page.$('[role="alert"]'), null)
+    assert.equal(await page.$eval('[data-history-result="hit-b"]', result => result.textContent.includes('Block topic')), true)
+    await page.click('#history-search-query', { clickCount: 3 })
+    await page.keyboard.type('name-slow')
+    await page.click('button[type=submit]')
+    await page.waitForFunction(() => typeof window.__resolveNames === 'function')
+    assert.ok(await page.$('[data-history-result="hit-b"]'))
+    await page.click('#history-search-query', { clickCount: 3 })
+    await page.keyboard.type('fresh')
+    await page.click('button[type=submit]')
+    await page.waitForSelector('[data-history-result="hit-b"]')
+    await page.evaluate(() => window.__resolveNames())
+    assert.equal(await page.$eval('[data-history-result="hit-b"] header', header => header.textContent.includes('Old name')), false)
+    assert.equal(await page.$('[role="alert"]'), null)
   } finally { await page.close() }
 })
 

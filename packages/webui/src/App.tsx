@@ -1482,6 +1482,7 @@ function App() {
       showUsageBadge={showUsageBadge}
       showUserMessageMetadata={showUserMessageMetadata}
       knownSessions={sidebarSessions.map(session => session.id)}
+      onOpenSession={openChatTab}
       onBack={onBack}
     />
 

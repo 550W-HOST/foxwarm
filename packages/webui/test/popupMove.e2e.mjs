@@ -62,6 +62,8 @@ function installFixture(page, initialTabs = tabs) {
       if (url.pathname.endsWith('/api/webui/settings')) return response({ settings: { instanceName: '', tabIcon: '' } })
       if (url.pathname.endsWith('/api/models')) return response({ models: [] })
       if (url.pathname.endsWith('/api/commands')) return response({ commands: [] })
+      if (url.pathname.endsWith('/api/history/search')) return response({ results: [{ key: 'popup-history-hit', sessionId: 'popup/session 中文', kind: 'messages', firstSeq: 1, lastSeq: 1, hasEarlier: false, hasLater: false, messages: [{ role: 'user', parts: [{ text: 'Popup history navigation' }], __meta: { seq: 1, timestamp: 1700000000000 } }] }] })
+      if (url.pathname.endsWith('/api/session-list/by-id')) return response({ results: JSON.parse(init.body).ids.map(requestedId => ({ requestedId, resolution: { kind: 'exact', sessionId: requestedId }, session: { id: requestedId, displayName: 'Popup session name' } })) })
       if (url.pathname.includes('/api/session-list/')) return response({ sessions: [], results: [], rootIds: [], nextCursor: null, revision: 1, total: 0 })
       if (url.pathname.includes('/api/sessions/')) return response({ messages: [], queuedMessages: [], session: { id: 'popup-test', status: 'idle' }, latestSeq: 0, historyVersion: 1, guardedPrefixLength: 0 })
       return response({})
@@ -207,6 +209,21 @@ test('History popup uses its short window title and keeps the Search history pag
     assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
     assert.equal(await page.$('[data-pane-id]'), null)
     assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
+    await page.type('#history-search-query', 'popup fixture')
+    await page.click('button[type=submit]')
+    await page.waitForFunction(() => document.querySelector('[data-history-result="popup-history-hit"] header')?.textContent.includes('Popup session name'))
+    const url = new URL(await page.$eval('a[aria-label="Open session"]', anchor => anchor.href))
+    assert.equal(url.pathname, '/prefix/ui/')
+    assert.equal(url.searchParams.get('foxwarmPopup'), 'chat')
+    assert.equal(url.searchParams.get('sessionId'), 'popup/session 中文')
+    const destination = await browser.newPage()
+    try {
+      await installFixture(destination)
+      await destination.goto(url.toString(), { waitUntil: 'domcontentloaded' })
+      await destination.waitForSelector('[data-foxwarm-popup-root="chat"]')
+      assert.ok(await page.$('[data-history-search-view]'), 'the History popup remains open')
+      assert.equal(await destination.$('[data-history-search-view]'), null)
+    } finally { await destination.close() }
   } finally { await page.close() }
 })
 

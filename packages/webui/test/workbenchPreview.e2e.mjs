@@ -92,7 +92,8 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       if (pathname.endsWith('/api/models')) return json({ models: responsiveChat ? [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] : [] })
       if (pathname.endsWith('/api/commands')) return json({ commands: [] })
       if (pathname.endsWith('/api/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [sessionFixture('e2e-a'), sessionFixture('e2e-b'), sessionFixture('e2e-c')], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
-      if (pathname.endsWith('/api/session-list/by-id')) return json({ results: [] })
+      if (pathname.endsWith('/api/session-list/by-id')) return json({ results: JSON.parse(options.body).ids.filter(id => id === 'history-outside/main').map(requestedId => ({ requestedId, resolution: { kind: 'exact', sessionId: requestedId }, session: { ...sessionFixture(requestedId), displayName: 'Outside the sidebar' } })) })
+      if (pathname.endsWith('/api/history/search')) return json({ results: ['history-outside/main', 'e2e-a'].map(sessionId => ({ key: sessionId, sessionId, kind: 'messages', firstSeq: 7, lastSeq: 7, hasEarlier: false, hasLater: false, messages: [{ role: 'user', parts: [{ text: 'Archived navigation fixture' }], __meta: { seq: 7, timestamp: 1700000000000 } }] })) })
       if (pathname.endsWith('/api/session-list/descendant-activity')) return json({ results: [] })
       if (pathname.includes('/api/session-list/')) return json({ sessions: [], results: [] })
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/message')) {
@@ -485,6 +486,33 @@ test('persisted search tabs keep their identity while showing the current Histor
       if (!refresh) await page.reload({ waitUntil: 'domcontentloaded' })
       await page.waitForSelector('[data-history-search-view]')
     }
+  } finally { await page.close() }
+})
+
+test('history result Open session reuses kept Chats or opens a preview while retaining the History tab', async () => {
+  const history = { id: 'system:search', type: 'search', title: 'History' }
+  const page = await openFixture({ tabs: [history, chat('e2e-a', false)], activeTabId: history.id })
+  try {
+    await page.waitForSelector('#history-search-query')
+    await page.type('#history-search-query', 'entry')
+    await page.click('button[type=submit]')
+    await page.waitForFunction(() => document.querySelector('[data-history-result="history-outside/main"] header')?.textContent.includes('Outside the sidebar'))
+    assert.equal(await page.$('[data-session-id="history-outside/main"]'), null)
+    await page.click('[data-history-result="e2e-a"] a[aria-label="Open session"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'chat:e2e-a')
+    assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, false)
+    assert.equal((await state(page)).tabsById['system:search'].type, 'search')
+    await page.click('[data-tab-id="system:search"]')
+    await page.waitForSelector('#history-search-query')
+    await page.type('#history-search-query', 'entry')
+    await page.click('button[type=submit]')
+    await page.waitForSelector('[data-history-result="history-outside/main"]')
+    await page.click('[data-history-result="history-outside/main"] a[aria-label="Open session"]')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'chat:history-outside/main')
+    assert.equal((await state(page)).tabsById['chat:history-outside/main'].preview, true)
+    assert.equal((await state(page)).tabsById['chat:e2e-a'].preview, false)
+    assert.equal((await state(page)).tabsById['system:search'].type, 'search')
+    assert.equal((await state(page)).hash, '#tab/chat:history-outside/main')
   } finally { await page.close() }
 })
 
