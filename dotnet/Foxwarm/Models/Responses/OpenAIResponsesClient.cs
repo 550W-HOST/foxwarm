@@ -1,10 +1,7 @@
-using System.Diagnostics;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 using Foxwarm.Models;
 
@@ -241,7 +238,9 @@ public static partial class ResponsesRequestSerializer
                 grouped.Add(callId, outputs);
                 order.Add(callId);
             }
-            outputs.Add(FormatToolResponsePayload(functionResponse["response"] as JsonObject ?? new JsonObject()));
+            if (OpenAIRequestText.PreviousRequest(functionResponse) is string timing) outputs.Insert(0, timing);
+            var output = FormatToolResponsePayload(functionResponse["response"] as JsonObject ?? new JsonObject());
+            if (output.Length > 0) outputs.Add(output);
         }
         foreach (var callId in order)
         {
@@ -346,21 +345,7 @@ public static partial class ResponsesRequestSerializer
             throw new UnsupportedResponsesFeatureException("native Responses output-item replay");
     }
 
-    private static string FormatSystemPartForModel(string system)
-    {
-        var trimmed = EcmaTrim(system);
-        if (FoxwarmMetadataLine().IsMatch(trimmed))
-        {
-            if (FoxwarmSystemLine().IsMatch(trimmed) && !FoxwarmKindAttribute().IsMatch(trimmed))
-                throw new UnsupportedResponsesFeatureException("legacy Foxwarm system metadata normalization");
-            return trimmed;
-        }
-        if (LegacySystemText().IsMatch(trimmed))
-            throw new UnsupportedResponsesFeatureException("legacy system text normalization");
-        return trimmed.Length == 0
-            ? "<foxwarm-system kind=\"system\" />"
-            : $"<foxwarm-system kind=\"system\">\n{trimmed}\n</foxwarm-system>";
-    }
+    private static string FormatSystemPartForModel(string system) => OpenAIRequestText.System(system);
 
     private static string EcmaTrim(string value)
     {
@@ -380,14 +365,7 @@ public static partial class ResponsesRequestSerializer
     private static string? String(JsonObject? value, string property) =>
         value?[property] is JsonValue scalar && scalar.TryGetValue<string>(out var result) ? result : null;
 
-    [GeneratedRegex("^</?foxwarm-(?:system|metadata|message)(?![A-Za-z0-9_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex FoxwarmMetadataLine();
-    [GeneratedRegex("^<foxwarm-system(?![A-Za-z0-9_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex FoxwarmSystemLine();
-    [GeneratedRegex("(?:^|[^A-Za-z0-9_])kind[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*=", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex FoxwarmKindAttribute();
-    [GeneratedRegex("^(?:current time[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*=|current session ID[\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]*=|Session goal reminder:|Reminder: message ended without send_to_session call\\.|Background Process Finished|session resumed after process restart|retrying last request|Managed session `|Compaction completed\\.?|\\*\\*(?:COMPACTION COMPLETED|PARENT SESSION|NEW CHILD SESSION|HISTORY ABOVE IS INHERITED))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex LegacySystemText();
+
 }
 
 public static class ResponsesCanonicalConverter
@@ -639,7 +617,6 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
 
 public sealed class ResponsesChatService : IChatService
 {
-    private const int MaxErrorBodyBytes = 64 * 1024;
     private readonly HttpClient httpClient;
     private readonly ResponsesClientOptions options;
     private readonly Action<string, ResponsesStreamProgress>? progress;
@@ -683,84 +660,11 @@ public sealed class ResponsesChatService : IChatService
             }
             body["reasoning"] = reasoning.DeepClone();
         }
-        var bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
-        if (options.RequestCompression is string compression)
-        {
-            using var buffer = new MemoryStream();
-            using (Stream encoder = compression == "gzip" ? new System.IO.Compression.GZipStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true) : new System.IO.Compression.BrotliStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true)) encoder.Write(bytes);
-            bytes = buffer.ToArray();
-        }
-        using var request = new HttpRequestMessage(HttpMethod.Post, options.ResponsesUri) { Content = new ByteArrayContent(bytes) };
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
-        if (options.RequestCompression is not null) request.Content.Headers.ContentEncoding.Add(options.RequestCompression);
-        if (options.ExtraHeaders is not null) foreach (var (name, value) in options.ExtraHeaders)
-        {
-            var text = value?.ToString() ?? "";
-            if (request.Headers.TryAddWithoutValidation(name, text))
-            { request.Headers.Remove(name); request.Headers.TryAddWithoutValidation(name, text); }
-            else { request.Content.Headers.Remove(name); request.Content.Headers.TryAddWithoutValidation(name, text); }
-        }
-        if (options.RequestCompression is not null)
-        {
-            request.Content.Headers.ContentEncoding.Clear(); request.Content.Headers.ContentEncoding.Add(options.RequestCompression);
-            request.Content.Headers.ContentLength = bytes.Length;
-        }
-        if (!string.IsNullOrEmpty(options.Token) && options.ExtraHeaders?.Any(pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) != true)
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Token);
-        using var inactivity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (options.StreamInactivityTimeoutMs is not null) inactivity.CancelAfter(180000);
-        var requestToken = inactivity.Token;
-
-        var started = Stopwatch.GetTimestamp();
-        using var response = await httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            requestToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
-            var (errorBody, truncated) = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
-            throw new ResponsesHttpException(response.StatusCode, errorBody, truncated);
-        }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(requestToken).ConfigureAwait(false);
-        var completed = await ResponsesSseCollector.CollectAsync(
-            stream,
-            requestToken,
-            callbacks: new ResponsesStreamCallbacks
-            {
-                OnProgress = update =>
-                {
-                    if (options.StreamInactivityTimeoutMs is int timeout) inactivity.CancelAfter(timeout);
-                    progress?.Invoke(sessionId, update);
-                }
-            },
-            ownership: StreamOwnership.Dispose).ConfigureAwait(false);
-        var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-        var assistant = ResponsesCanonicalConverter.ConvertAssistant(completed, options.ConcreteModelId, completedAt, elapsed);
-        if (options.DisallowEmptyResponse && (assistant?["parts"] as JsonArray)?.OfType<JsonObject>().Any(part => part["functionCall"] is not null || SessionWait.Text(part["text"]) is string text && !string.IsNullOrWhiteSpace(text)) != true)
+        var completed = await OpenAIHttp.RequestAsync(httpClient, options.ResponsesUri, body, options, sessionId, progress, null,
+            (stream, token, callbacks) => ResponsesSseCollector.CollectAsync(stream, token, callbacks), cancellationToken).ConfigureAwait(false);
+        var assistant = ResponsesCanonicalConverter.ConvertAssistant(completed.Payload, options.ConcreteModelId, completed.CompletedAt, completed.DurationMs);
+        if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
             throw new InvalidDataException("Selected model disallows an empty completed response.");
         return new ChatResult(assistant);
-    }
-
-    private static async Task<(string Body, bool Truncated)> ReadBoundedAsync(
-        HttpContent content,
-        CancellationToken cancellationToken)
-    {
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        var buffer = new byte[4096];
-        using var output = new MemoryStream();
-        var truncated = false;
-        while (true)
-        {
-            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0) break;
-            var remaining = MaxErrorBodyBytes - (int)output.Length;
-            if (remaining <= 0) { truncated = true; break; }
-            var accepted = Math.Min(remaining, read);
-            output.Write(buffer, 0, accepted);
-            if (accepted < read) { truncated = true; break; }
-        }
-        return (Encoding.UTF8.GetString(output.ToArray()), truncated);
     }
 }

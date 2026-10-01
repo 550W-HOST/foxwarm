@@ -58,7 +58,9 @@ public sealed class ResponsesClientTests
             Assert.Equal("call_write", secondInput[1]?["call_id"]?.GetValue<string>());
             Assert.Equal("{\"fileName\":\"result.txt\",\"content\":\"héllo\"}", secondInput[1]?["arguments"]?.GetValue<string>());
             Assert.Equal("call_write", secondInput[2]?["call_id"]?.GetValue<string>());
-            Assert.Equal("created", secondInput[2]?["output"]?.GetValue<string>());
+            var output = Assert.IsType<JsonArray>(secondInput[2]?["output"]);
+            Assert.StartsWith("<foxwarm-system kind=\"time\"", output[0]?["text"]?.GetValue<string>());
+            Assert.Equal("created", output[1]?["text"]?.GetValue<string>());
 
             var snapshot = entry.Snapshot();
             Assert.Equal(new[] { "user", "model", "tool", "model" }, snapshot.History.Select(message => message["role"]!.GetValue<string>()));
@@ -542,9 +544,10 @@ public sealed class ResponsesClientTests
 
         Assert.Equal("message part inlineData", error.Feature);
         Assert.Equal(before, history[0].ToJsonString());
-        Assert.Throws<UnsupportedResponsesFeatureException>(() => ResponsesRequestSerializer.ConvertHistory(
+        var legacy = ResponsesRequestSerializer.ConvertHistory(
             [new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["system"] = "current time = old" }) }],
-            "openai/test-model"));
+            "openai/test-model");
+        Assert.Equal("<foxwarm-system kind=\"time\" localTime=\"old\" />", legacy[0]?["content"]?[0]?["text"]?.GetValue<string>());
     }
 
     [Fact]

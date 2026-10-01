@@ -252,5 +252,59 @@
         ]
       }
     ]
+  },
+  {
+    "name": "legacy-source-wrapper-normalization",
+    "modelId": "openai/test-model",
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "system": "current time = 2026-07-27 05:00:00 +0800"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "system": "Session goal reminder:\nPreserve the goal."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "system": "<foxwarm-system kind=\"event\" />\nOriginal payload."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "system": "**NEW CHILD SESSION WITH PARENT SESSION `p` . CURRENT SESSION ID IS `s`.**"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "system": "**COMPACTION COMPLETED. PARENT SESSION `p`. CURRENT SESSION ID IS `s`.** Preserve history."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "system": "<foxwarm-system hint = \"current session ID = s\" />"
+          }
+        ]
+      }
+    ]
   }
 ]

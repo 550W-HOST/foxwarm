@@ -170,7 +170,12 @@ try {
     if (kind === 'resource') assert.equal(result.content[0].resource.text, 'RESOURCE-TEXT')
     if (kind === 'isError') { assert.equal(result.isError, true); assert.equal(result.error, undefined) }
     if (kind === 'opaque') assert.equal(result.customTag.retained, true)
-    if (kind === 'error_object') { assert.equal(result.error.metadata.retained, true); assert(requests.at(-1).body.input.some(item => item.call_id === 'case-error_object' && item.type === 'function_call_output' && item.output.includes('retained: true'))) }
+    if (kind === 'error_object') {
+      assert.equal(result.error.metadata.retained, true)
+      const replay = requests.at(-1).body.input.find(item => item.call_id === 'case-error_object' && item.type === 'function_call_output')
+      assert(Array.isArray(replay.output)); assert.match(replay.output[0].text, /<foxwarm-system kind="time"/)
+      assert(replay.output.some(part => part.text?.includes('retained: true')))
+    }
   }
   const protocol = await perform('mcp:local/result_case', { kind: 'protocol' }, 'protocol-error')
   assert(protocol.error); assert(!JSON.stringify(protocol).includes('synthetic-only-secret'))

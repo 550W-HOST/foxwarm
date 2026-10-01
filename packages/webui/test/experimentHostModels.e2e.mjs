@@ -32,7 +32,7 @@ function peer(label) {
     const chunks = []; for await (const chunk of req) chunks.push(chunk); let bytes = Buffer.concat(chunks)
     if (req.headers['content-encoding'] === 'gzip') bytes = gunzipSync(bytes)
     if (req.headers['content-encoding'] === 'br') bytes = brotliDecompressSync(bytes)
-    const body = JSON.parse(bytes); const user = body.input.filter(item => item.role === 'user').at(-1)?.content?.map(part => part.text || '').join('') || ''
+    assert.notEqual(req.headers['user-agent'], 'foxwarm/1.0', 'Responses must not acquire the Completions transport default'); const body = JSON.parse(bytes); const user = body.input.filter(item => item.role === 'user').at(-1)?.content?.map(part => part.text || '').join('') || ''
     requests.push({ label, headers: req.headers, body, user }); res.setHeader('content-type', 'text/event-stream')
     const id = 'response-' + requests.length
     if (user.includes('hold-old')) { held = { finish: () => finish(res, id, 'OLD-FROZEN'), request: requests.at(-1) }; return }

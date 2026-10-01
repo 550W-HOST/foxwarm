@@ -21,11 +21,11 @@ internal sealed class SessionChatService(
         }
         try
         {
-            var options = ConfiguredResponses.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
+            var options = ConfiguredOpenAI.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
                 baseOptions.Instructions.Length == 0 ? prompt : baseOptions.Instructions + "\n\n" + prompt, cacheKey, turnId);
-            return await new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
+            return await ConfiguredOpenAI.CreateService(http, selected.Model, options, cacheKey, progress).ChatAsync(sessionId, history, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception error) { throw new InvalidDataException(ConfiguredResponses.SafeError(error, selected.Model)); }
+        catch (Exception error) { throw new InvalidDataException(ConfiguredOpenAI.SafeError(error, selected.Model)); }
     }
 }

@@ -116,6 +116,12 @@ public sealed class LocalSessionTurnHost
                     });
                 }
 
+                if (toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse
+                    && assistant["__meta"]?["llmRequestTiming"] is JsonObject timing
+                    && SessionWait.Number(timing["completedAt"]) is double completedAt && double.IsFinite(completedAt)
+                    && completedAt >= DateTimeOffset.MinValue.ToUnixTimeMilliseconds() && completedAt <= DateTimeOffset.MaxValue.ToUnixTimeMilliseconds()
+                    && SessionWait.Number(timing["durationMs"]) is double duration && double.IsFinite(duration))
+                    firstResponse["previousLlmRequest"] = new JsonObject { ["time"] = ArchiveBlockRecord.LocalTimestamp(completedAt), ["durationMs"] = duration };
                 var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
                 await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
                 var stopping = entry.WithState(state => state.Stopping);

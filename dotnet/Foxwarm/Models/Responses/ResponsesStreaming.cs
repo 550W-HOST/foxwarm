@@ -197,35 +197,8 @@ public static class ResponsesSseCollector
 {
     public static async Task<JsonObject> CollectAsync(Stream stream, CancellationToken cancellationToken, ResponsesStreamCallbacks? callbacks = null, StreamOwnership ownership = StreamOwnership.Dispose)
     {
-        ArgumentNullException.ThrowIfNull(stream);
-        cancellationToken.ThrowIfCancellationRequested();
-        using var registration = ownership == StreamOwnership.Dispose ? cancellationToken.Register(static state => { try { ((Stream)state!).Dispose(); } catch { } }, stream) : default;
-        try
-        {
-            var accumulator = new ResponsesEventAccumulator(callbacks);
-            var decoder = new UTF8Encoding(false, false).GetDecoder();
-            var bytes = new byte[4096]; var chars = new char[4096]; var pending = "";
-            while (true)
-            {
-                int count;
-                try { count = await stream.ReadAsync(bytes.AsMemory(), cancellationToken).ConfigureAwait(false); }
-                catch (Exception error) when (cancellationToken.IsCancellationRequested && (error is ObjectDisposedException or IOException or OperationCanceledException)) { throw new OperationCanceledException(cancellationToken); }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
-                catch (Exception error) { throw new ResponsesStreamReadException(error); }
-                if (count == 0)
-                {
-                    var flushed = Decode(decoder, Array.Empty<byte>(), chars, true); if (flushed.Length > 0) Append(flushed, ref pending, accumulator, callbacks);
-                    return accumulator.CompleteAtEof();
-                }
-                var decoded = Decode(decoder, bytes.AsSpan(0, count), chars, false); if (decoded.Length > 0) Append(decoded, ref pending, accumulator, callbacks);
-            }
-        }
-        finally { if (ownership == StreamOwnership.Dispose) { try { stream.Dispose(); } catch { } } }
-    }
-    private static string Decode(Decoder decoder, ReadOnlySpan<byte> bytes, char[] chars, bool flush) { decoder.Convert(bytes, chars, flush, out _, out var charsUsed, out _); return new string(chars, 0, charsUsed); }
-    private static void Append(string text, ref string pending, ResponsesEventAccumulator accumulator, ResponsesStreamCallbacks? callbacks)
-    {
-        callbacks?.OnDecodedChunk?.Invoke(text); pending += text; pending = pending.Replace("\r\n", "\n", StringComparison.Ordinal);
-        while (true) { var boundary = pending.IndexOf("\n\n", StringComparison.Ordinal); if (boundary < 0) return; var block = pending[..boundary]; pending = pending[(boundary + 2)..]; callbacks?.OnSseBlock?.Invoke(block); var dataLines = block.Replace("\r", "", StringComparison.Ordinal).Split('\n').Where(line => line.StartsWith("data:", StringComparison.Ordinal)).Select(line => line[5..].TrimStart()).ToArray(); if (dataLines.Length == 0) continue; var payload = string.Join("\n", dataLines); if (payload.Length == 0 || payload == "[DONE]") continue; JsonNode? parsed; try { parsed = JsonNode.Parse(payload); } catch (JsonException error) { throw new MalformedSseEventJsonException(block, error); } if (parsed is JsonObject obj) accumulator.Consume(obj); }
+        var accumulator = new ResponsesEventAccumulator(callbacks);
+        await OpenAISseReader.ReadAsync(stream, cancellationToken, accumulator.Consume, callbacks, ownership).ConfigureAwait(false);
+        return accumulator.CompleteAtEof();
     }
 }
