@@ -1,3 +1,4 @@
+import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Activity, ArrowDownLeft, ArrowUpRight, Database, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
@@ -630,6 +631,7 @@ export default function ArchitectureView({
   onAgentsChanged,
   onOpenAgentMemory,
 }: ArchitectureViewProps) {
+  const tabHeader = useWorkbenchTabHeader()
   const [sessions, setSessions] = useState<Session[]>([])
   const [rootIds, setRootIds] = useState<string[]>([])
   const [rootCursor, setRootCursor] = useState<string | null>(null)
@@ -997,12 +999,12 @@ export default function ArchitectureView({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
-                {onBack ? (
+                {tabHeader ? <WorkbenchTabClose className="inline-flex items-center justify-center rounded-lg p-2 text-fw-text hover:bg-fw-hover" /> : onBack ? (
                   <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-fw-border bg-fw-surface px-3 py-1.5 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong dark:hover:bg-fw-hover md:hidden">
                     <ArrowLeft className="h-4 w-4" /> Back
                   </button>
                 ) : null}
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></span>
+                <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></WorkbenchTabIcon>
                 <div>
                   <h1 className="text-2xl font-bold text-fw-text-strong">System Architecture</h1>
                   <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : surface === 'nodes' ? 'Connected Nodes and new Node setup.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>

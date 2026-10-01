@@ -40,13 +40,14 @@ async function serve(request, response) {
   }
 }
 
-function installFixture(page) {
+function installFixture(page, initialTabs = tabs) {
   return page.evaluateOnNewDocument((initialTabs) => {
     const paneId = 'pane-popup-e2e'
     localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({
       state: { version: 4, tabsById: initialTabs, root: { id: paneId, kind: 'pane', tabIds: Object.keys(initialTabs), activeTabId: 'chat:popup-test' }, focusedPaneId: paneId },
       version: 1,
     }))
+    localStorage.setItem('foxwarm_last_active_tab_v1', 'chat:popup-test')
     localStorage.setItem('composer_draft_v1_popup-test', JSON.stringify({ version: 1, segments: [{ type: 'text', text: 'saved popup draft' }] }))
     const response = (body) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__fetches = []
@@ -54,7 +55,7 @@ function installFixture(page) {
       const url = new URL(typeof input === 'string' ? input : input.url, location.href)
       window.__fetches.push({ method: init.method || 'GET', path: url.pathname })
       if (url.pathname.endsWith('/api/setup/status')) return response({ oobe: false, models: { exists: true, rawYaml: 'providers: {}', providerCount: 1, defaultModel: 'test', hasPlaceholderSecrets: false, placeholderProviders: [] }, config: { rawYaml: 'channels: {}', channelsYaml: '', channelCount: 0 }, channels: [] })
-      if (url.pathname.endsWith('/api/terminals')) return response({ terminals: [{ id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 }] })
+      if (url.pathname.endsWith('/api/terminals')) return response({ terminals: initialTabs['terminal:term-1'] ? [{ id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 }] : [] })
       if (url.pathname.includes('/api/terminals/term-1')) return response({ terminal: { id: 'term-1', nodeId: 'master', cwd: '/tmp', shell: '/bin/sh', pid: 1, createdAt: 1, cols: 80, rows: 24 } })
       if (url.pathname.endsWith('/api/nodes')) return response({ nodes: [] })
       if (url.pathname.endsWith('/api/agents')) return response({ agents: [] })
@@ -74,7 +75,7 @@ function installFixture(page) {
       close() { this.readyState = 3; this.onclose?.({}) }
     }
     window.WebSocket = FixtureWebSocket
-  }, tabs)
+  }, initialTabs)
 }
 
 async function openFixture() {
@@ -88,7 +89,7 @@ async function openFixture() {
 async function chooseMove(page, tabId) {
   await page.keyboard.press('Escape')
   await page.evaluate((id) => {
-    const tab = document.querySelector(`[data-tab-id="${CSS.escape(id)}"]`)
+    const tab = document.querySelector(`[data-tab-id="${CSS.escape(id)}"], [data-workbench-tab-handle="${CSS.escape(id)}"]`)
     if (!tab) throw new Error(`Missing tab ${id}`)
     tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }))
   }, tabId)
@@ -105,7 +106,7 @@ async function chooseMove(page, tabId) {
 
 async function chooseMoveWithTrustedClick(page, tabId) {
   await page.evaluate((id) => {
-    const tab = document.querySelector(`[data-tab-id="${CSS.escape(id)}"]`)
+    const tab = document.querySelector(`[data-tab-id="${CSS.escape(id)}"], [data-workbench-tab-handle="${CSS.escape(id)}"]`)
     if (!tab) throw new Error(`Missing tab ${id}`)
     tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }))
   }, tabId)
@@ -189,6 +190,7 @@ test('popup Chat restores the existing draft and never rewrites normal workbench
     await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=popup-test&title=Popup`, { waitUntil: 'networkidle0' })
     await page.waitForSelector('[data-foxwarm-popup-root="chat"]')
     assert.equal(await page.$('[data-pane-id]'), null)
+    assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
     await page.waitForFunction(() => document.querySelector('.foxwarm-inline-composer-editor')?.textContent?.includes('saved popup draft'))
     const persisted = JSON.parse(await page.evaluate(() => localStorage.getItem('foxwarm_workbench_state_v4')))
     assert.deepEqual(Object.keys(persisted.state.tabsById).sort(), Object.keys(tabs).sort())
@@ -204,6 +206,7 @@ test('History popup uses its short window title and keeps the Search history pag
     assert.equal(await page.title(), 'History · Foxwarm')
     assert.equal(await page.$eval('[data-history-search-view] h2', heading => heading.textContent), 'Search history')
     assert.equal(await page.$('[data-pane-id]'), null)
+    assert.equal(await page.$('[data-workbench-tab-close], [data-workbench-tab-handle]'), null)
   } finally { await page.close() }
 })
 
@@ -230,4 +233,24 @@ test('a real popup keeps working after its opener closes and after refresh', asy
     if (popup && !popup.isClosed()) await popup.close()
     if (!opener.isClosed()) await opener.close()
   }
+})
+
+
+test('the sole Chat header keeps its existing Move to new window action', async () => {
+  const page = await browser.newPage()
+  try {
+    await installFixture(page, { 'chat:popup-test': tabs['chat:popup-test'] })
+    await page.goto(`${baseUrl}/prefix/ui/`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-workbench-tab-handle="chat:popup-test"]')
+    assert.equal(await page.$('[data-tab-id]'), null)
+    await page.evaluate(() => {
+      window.__opened = []
+      window.open = value => { window.__opened.push(String(value)); return { opener: window } }
+    })
+    assert.equal(await chooseMove(page, 'chat:popup-test'), 'clicked')
+    await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:popup-test'])
+    assert.equal(new URL(await page.evaluate(() => window.__opened[0])).searchParams.get('foxwarmPopup'), 'chat')
+    assert.equal(await page.$('[data-workbench-tab-close]'), null)
+    assert.equal(await page.evaluate(() => location.hash), '')
+  } finally { await page.close() }
 })

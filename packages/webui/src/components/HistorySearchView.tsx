@@ -1,5 +1,6 @@
+import { WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ChevronDown, ChevronUp, Search } from 'lucide-react'
+import { ChevronDown, ChevronUp, History, Search } from 'lucide-react'
 import ChatTimeline from './ChatTimeline'
 import type { Message } from './chatShared'
 import { formatTimelineTimeMarker } from './timelineTime'
@@ -93,6 +94,7 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
   knownSessions?: string[]
   onBack?: () => void
 }) {
+  const tabHeader = useWorkbenchTabHeader()
   const [query, setQuery] = useState('')
   const [agentName, setAgentName] = useState('')
   const [sessionId, setSessionId] = useState('')
@@ -204,7 +206,10 @@ export default function HistorySearchView({ isMobile, groupTools, showUsageBadge
     <div className="h-full min-h-0 overflow-y-auto bg-fw-canvas px-3 py-5 text-fw-text" data-history-search-view>
       <div className="mx-auto max-w-4xl space-y-5">
         <div className="flex items-center gap-3">
-          {onBack && <button type="button" onClick={onBack} className="rounded px-2 py-1 hover:bg-fw-hover">Back</button>}
+          {tabHeader ? <>
+            <WorkbenchTabClose className="rounded p-1 text-fw-text-muted hover:bg-fw-hover" iconClassName="h-5 w-5" />
+            <WorkbenchTabIcon className="inline-flex items-center text-fw-text-muted"><History className="h-5 w-5" /></WorkbenchTabIcon>
+          </> : onBack && <button type="button" onClick={onBack} className="rounded px-2 py-1 hover:bg-fw-hover">Back</button>}
           <h2 className="text-lg font-semibold text-fw-text-strong">Search history</h2>
         </div>
         <form onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">

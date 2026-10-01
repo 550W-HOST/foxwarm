@@ -57,3 +57,7 @@ History begins at the file tail and stays bounded by bytes. Live output follows 
 - Existing logger fixture checks natural async exit, directory creation, final record, dated color-free file output, unchanged console timestamps, and synchronous JSON time/natural exit.
 - Existing realtime transport, popup parser and Workbench normalization fixtures cover the shared socket, reconnect frontier, obsolete topic IDs and Logs restoration/URLs.
 - The disposable application harness's `logs.e2e.mjs` uses production routes, WS and Chromium for menu/tab/history/live/time lookup, text safety, restoration, popout, embedded-sidebar popup, mobile dark-mode entry, bounded live display, partial UTF-8 and observed replacement.
+
+## Workbench header integration
+
+The normal sole-tab header close/icon controls use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.
