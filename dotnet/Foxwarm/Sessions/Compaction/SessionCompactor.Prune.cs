@@ -92,7 +92,7 @@ internal sealed partial class SessionCompactor
 
     private async Task<bool> TryPruneToolsAsync(SessionSnapshot snapshot, CancellationToken token)
     {
-        var cutoff = CompactCandidateBuilder.Split(snapshot.History);
+        var cutoff = CompactCandidateBuilder.Split(snapshot.History, models.Capture().CompactKeepFraction);
         if (cutoff <= 0) return false;
         var bySeq = store.Archive.ReadMessages().GroupBy(row => row.Seq).ToDictionary(group => group.Key, group => group.ToArray());
         var counts = snapshot.History.Select(row => CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]))

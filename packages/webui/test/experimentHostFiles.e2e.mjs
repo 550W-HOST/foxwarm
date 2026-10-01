@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeModelFixture } from './experimentModelFixture.mjs'
 // Concentrated original-Chat file workflow with real filesystem effects and clean restart.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -57,6 +58,7 @@ try {
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const providerPort = provider.address().port; const hostPort = await port()
   async function startHost() {
+  await writeModelFixture(dataRoot, { default: 'scripted-wire', providers: { 'scripted-wire': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['scripted-wire'] } } })
     const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
       ...process.env, FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
       FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: apiToken,

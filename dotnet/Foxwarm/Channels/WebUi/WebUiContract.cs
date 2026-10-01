@@ -8,6 +8,7 @@ internal static class WebUiContract
 {
     public static JsonObject Session(SessionSnapshot snapshot, HostModels models, bool toolActive, bool compacting)
     {
+        models = models.Capture();
         var selected = models.Select(snapshot);
         var queueLength = snapshot.Queue.Count;
         var runtime = new JsonObject
@@ -31,7 +32,7 @@ internal static class WebUiContract
             ["historyVersion"] = snapshot.HistoryVersion,
             ["runtimeState"] = runtime,
             ["model"] = selected.RawModel,
-            ["modelKey"] = selected.Model.Key,
+            ["modelKey"] = selected.RawModel is not null && models.Contains(selected.RawModel) ? selected.RawModel : models.DefaultKey,
             ["defaultModelKey"] = models.DefaultKey,
             ["effort"] = selected.RawEffort,
             ["effectiveEffort"] = selected.EffectiveEffort,
@@ -135,10 +136,13 @@ internal static class WebUiContract
         }
         return Event(entry, runtime);
     }
-    public static JsonObject Models(HostModels config) => new()
+    public static JsonObject Models(HostModels config, string? current = null)
+    {
+        config = config.Capture();
+        return new()
     {
         ["defaultKey"] = config.DefaultKey,
-        ["currentKey"] = config.DefaultKey,
+        ["currentKey"] = current is not null && config.Contains(current) ? current : config.DefaultKey,
         ["models"] = new JsonArray(config.Options.Select(model =>
         {
             return (JsonNode?)new JsonObject
@@ -149,13 +153,14 @@ internal static class WebUiContract
                 ["contextLimit"] = model.ContextLimit,
                 ["providerKey"] = model.ProviderKey,
                 ["modelId"] = model.ModelId,
-                ["providerType"] = "openai-responses",
-                ["isVirtual"] = false,
-                ["targets"] = new JsonArray(),
+                ["providerType"] = model.ProviderType,
+                ["isVirtual"] = model.IsVirtual,
+                ["targets"] = new JsonArray(model.Targets.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
                 ["allowedEfforts"] = new JsonArray(model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
                 ["defaultEffort"] = model.DefaultEffort
             };
         }).ToArray())
     };
+    }
 
 }

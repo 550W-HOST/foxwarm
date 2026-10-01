@@ -223,7 +223,6 @@ function EffortRangeControl({
 type ModelSelectorScope = 'current' | 'child'
 
 function ModelSelector({
-  experimentalCurrentOnly = false,
   options,
   currentModelKey,
   sessionModel,
@@ -250,7 +249,6 @@ function ModelSelector({
   onRefreshModels,
   onOpenModelSettings,
 }: {
-  experimentalCurrentOnly?: boolean
   options: ModelOption[]
   currentModelKey?: string
   sessionModel?: string | null
@@ -638,7 +636,7 @@ function ModelSelector({
             >
               <RefreshCw aria-hidden="true" className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
-            {!experimentalCurrentOnly && <button
+            <button
               type="button"
               onClick={() => {
                 setOpen(false)
@@ -649,7 +647,7 @@ function ModelSelector({
               title="Configure models"
             >
               <Settings aria-hidden="true" className="h-3.5 w-3.5" />
-            </button>}
+            </button>
           </div>
         </div>,
         document.body,
@@ -1468,7 +1466,6 @@ const ChatComposer = memo(function ChatComposer({
               )}
             </div>
             <ModelSelector
-              experimentalCurrentOnly={experimentalTextOnly}
               options={modelOptions}
               currentModelKey={currentModelKey}
               sessionModel={sessionModel}

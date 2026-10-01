@@ -10,7 +10,6 @@ public sealed class SessionTurnRunner
 {
     private readonly SessionRegistry registry;
     private readonly LocalSessionTurnHostFactory hosts;
-    private long turnSequence;
 
     internal SessionTurnRunner(SessionRegistry registry, LocalSessionTurnHostFactory hosts)
     {
@@ -70,7 +69,7 @@ public sealed class SessionTurnRunner
                 }
                 try
                 {
-                    var result = await host.ChatAsync($"turn-{Interlocked.Increment(ref turnSequence)}").ConfigureAwait(false);
+                    var result = await host.ChatAsync(Guid.NewGuid().ToString()).ConfigureAwait(false);
                     if (result.AssistantMessage is not null && registry.OnTurnCompleted is not null)
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                 }

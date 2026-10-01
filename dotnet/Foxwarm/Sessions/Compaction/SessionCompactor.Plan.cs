@@ -12,25 +12,21 @@ internal sealed partial class SessionCompactor
         var detached = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToList();
         var prompt = CompactPrompt.Build(candidates, guidance);
         var promptSnapshot = snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
+        var catalog = models.Capture(); var selected = catalog.Select(snapshot);
+        var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync(); var turnId = Guid.NewGuid().ToString();
+        if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != selected.Model.Key)
+            promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
+        var options = ConfiguredResponses.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
+            baseOptions.Instructions.Length == 0 ? promptSnapshot : baseOptions.Instructions + "\n\n" + promptSnapshot, cacheKey, turnId);
         for (var round = 0; round < 15; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             detached.Add(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }) });
-            var selected = models.Select(hosted.Entry.Snapshot());
-            if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != selected.Model.Key)
-                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
-            var options = baseOptions with
-            {
-                BaseUri = selected.Model.BaseUri,
-                RequestModel = selected.Model.ModelId,
-                ConcreteModelId = selected.Model.Key,
-                Token = selected.Model.Token,
-                Effort = selected.EffectiveEffort,
-                Instructions = baseOptions.Instructions.Length == 0 ? promptSnapshot
-                    : baseOptions.Instructions + "\n\n" + promptSnapshot
-            };
             var service = new ResponsesChatService(http, options);
-            var result = await service.ChatAsync(hosted.Id, detached, cancellationToken);
+            ChatResult result;
+            try { result = await service.ChatAsync(hosted.Id, detached, cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error) { throw new InvalidDataException(ConfiguredResponses.SafeError(error, selected.Model)); }
             var assistant = result.AssistantMessage;
             if (assistant is not null) detached.Add((JsonObject)assistant.DeepClone());
             var calls = (assistant?["parts"] as JsonArray)?.OfType<JsonObject>()

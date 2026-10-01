@@ -141,7 +141,7 @@ internal sealed partial class SessionCompactor
             lock (gate) run.Committed = true;
             return true;
         }
-        var candidates = CompactCandidateBuilder.Build(snapshot.History);
+        var candidates = CompactCandidateBuilder.Build(snapshot.History, models.Capture().CompactKeepFraction);
         if (candidates.Split <= 0 || candidates.Items.Count == 0 && candidates.Preserved.Count == 0
             && !snapshot.History.Take(candidates.Split).Any(row => !CompactCandidateBuilder.Visible(row))) return false;
         var plan = candidates.Items.Count == 0 && candidates.Preserved.Count == 0

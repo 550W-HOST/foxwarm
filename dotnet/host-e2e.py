@@ -61,10 +61,10 @@ class Provider(BaseHTTPRequestHandler):
         assert self.path == '/responses'
         assert self.headers.get('Authorization') == 'Bearer ' + PROVIDER_TOKEN
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan']
+        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan', 'search_tools', 'call_tool']
         assert payload['tools'][1]['parameters']['required'] == ['filePath']
         assert 'sessionId' in payload['tools'][6]['parameters']['properties'] and 'offset' not in payload['tools'][6]['parameters']['properties']
-        assert payload['tools'][-1]['parameters']['required'] == ['replaceAsBlocks']
+        assert next(tool for tool in payload['tools'] if tool['name'] == 'submit_compact_plan')['parameters']['required'] == ['replaceAsBlocks']
         input_text = json.dumps(payload['input'], ensure_ascii=False)
         with REQUEST_LOCK:
             REQUESTS.append(payload)
@@ -207,10 +207,12 @@ def main():
     server_thread = threading.Thread(target=provider.serve_forever, daemon=True)
     server_thread.start()
     port = open_port()
+    (data / 'state').mkdir()
+    (data / 'state/models.yaml').write_text(json.dumps({'default': 'local-script', 'providers': {
+        'local-script': {'providerType': 'openai-responses', 'baseUrl': f'http://127.0.0.1:{provider.server_port}',
+                         'apiKey': PROVIDER_TOKEN, 'models': ['local-script']}}}) + '\n')
     env = dict(os.environ, FOXWARM_EXPERIMENT_DATA_ROOT=str(data), FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools),
-               FOXWARM_EXPERIMENT_RESPONSES_BASE_URI=f'http://127.0.0.1:{provider.server_port}',
-               FOXWARM_EXPERIMENT_PROVIDER_TOKEN=PROVIDER_TOKEN, FOXWARM_EXPERIMENT_API_TOKEN=TOKEN,
-               FOXWARM_EXPERIMENT_REQUEST_MODEL='local-script', FOXWARM_EXPERIMENT_CONCRETE_MODEL='local-script')
+               FOXWARM_EXPERIMENT_API_TOKEN=TOKEN)
     first = second = None
     try:
         first = start_host(dotnet, dll, env, port, logs, 'first')

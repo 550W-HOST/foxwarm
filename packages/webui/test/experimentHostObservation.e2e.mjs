@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeModelFixture } from './experimentModelFixture.mjs'
 // One original-App/local Responses workflow: Session observation and canonical interval goals.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -59,6 +60,7 @@ async function deliver(source, target, label, extra = []) {
   await until(async () => (await history(source)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === id)), `${label} paired`)
 }
 async function startHost() {
+  await writeModelFixture(dataRoot, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
   const child = spawn(dotnet, [process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
       FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
@@ -83,7 +85,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert.equal(body.tools.length, 21); assert(body.tools.some(tool => tool.name === 'get_session_messages'))
+      assert.equal(body.tools.length, 23); assert(body.tools.some(tool => tool.name === 'get_session_messages'))
       const compact = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').findLast(item => item.includes('COMPACTION STARTED:'))
       if (compact) {
         assert(plannerTarget)

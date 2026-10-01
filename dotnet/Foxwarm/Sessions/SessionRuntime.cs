@@ -54,7 +54,8 @@ internal sealed partial class SessionOwner
     public JsonObject BuildDto() => BuildDto(Metadata());
     public JsonObject BuildDto(SessionMetadata meta)
     {
-        var model = models.Resolve(meta.Model);
+        var catalog = models.Capture();
+        var model = catalog.Resolve(meta.Model);
         var effort = meta.Effort is not null && model.AllowedEfforts.Contains(meta.Effort, StringComparer.Ordinal)
             ? meta.Effort : model.DefaultEffort;
         var runtime = SessionRuntimeState.Build(meta, toolActive, compacting);
@@ -76,8 +77,8 @@ internal sealed partial class SessionOwner
             ["sidebarOrder"] = meta.SidebarOrder,
             ["runtimeState"] = runtime,
             ["model"] = meta.Model,
-            ["modelKey"] = model.Key,
-            ["defaultModelKey"] = models.DefaultKey,
+            ["modelKey"] = meta.Model is not null && catalog.Contains(meta.Model) ? meta.Model : catalog.DefaultKey,
+            ["defaultModelKey"] = catalog.DefaultKey,
             ["effort"] = meta.Effort,
             ["effectiveEffort"] = effort,
             ["effortAllowed"] = new JsonArray(model.AllowedEfforts.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
@@ -90,7 +91,7 @@ internal sealed partial class SessionOwner
             }
         };
         var settings = new JsonObject { ["model"] = meta.Model, ["effort"] = meta.Effort, ["childModelDefault"] = meta.ChildModel, ["childEffortDefault"] = meta.ChildEffort, ["compactThresholdTokens"] = meta.CompactThreshold };
-        foreach (var (key, value) in SessionModelSettings.Presentation(settings, models, Id)) result[key] = value?.DeepClone();
+        foreach (var (key, value) in SessionModelSettings.Presentation(settings, catalog, Id)) result[key] = value?.DeepClone();
         var hops = new List<SessionMetadata> { meta }; var seen = new HashSet<string>(StringComparer.Ordinal) { meta.Id };
         var parentId = meta.ParentSessionId;
         while (parentId is not null && seen.Add(parentId) && ResolveAncestry?.Invoke(parentId) is SessionMetadata parent)

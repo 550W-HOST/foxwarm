@@ -18,7 +18,12 @@ public sealed record ResponsesClientOptions(
     string Instructions,
     int MaxOutputTokens,
     JsonArray? Tools = null,
-    string? Effort = null)
+    string? Effort = null,
+    JsonObject? ExtraHeaders = null,
+    JsonObject? ExtraFields = null,
+    string? RequestCompression = null,
+    int? StreamInactivityTimeoutMs = null,
+    bool DisallowEmptyResponse = false)
 {
     public Uri ResponsesUri => new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
 }
@@ -660,40 +665,82 @@ public sealed class ResponsesChatService : IChatService
             options.MaxOutputTokens,
             options.Tools,
             options.Effort);
-        using var request = new HttpRequestMessage(HttpMethod.Post, options.ResponsesUri)
+        if (options.ExtraFields is not null) foreach (var (key, value) in options.ExtraFields) body[key] = value?.DeepClone();
+        if (options.Effort is string effort)
         {
-            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
-        };
-        if (!string.IsNullOrEmpty(options.Token))
+            var reasoning = body["reasoning"] as JsonObject ?? new JsonObject(); reasoning["effort"] = effort;
+            var include = body["include"] as JsonArray ?? new JsonArray();
+            if (effort == "none")
+            {
+                reasoning.Remove("summary"); var filtered = new JsonArray(include.Where(value => SessionWait.Text(value) != "reasoning.encrypted_content").Select(value => value?.DeepClone()).ToArray());
+                if (filtered.Count > 0) body["include"] = filtered; else body.Remove("include");
+            }
+            else
+            {
+                if (!reasoning.ContainsKey("summary")) reasoning["summary"] = "auto";
+                if (!include.Any(value => SessionWait.Text(value) == "reasoning.encrypted_content")) include.Add("reasoning.encrypted_content");
+                body["include"] = include.DeepClone();
+            }
+            body["reasoning"] = reasoning.DeepClone();
+        }
+        var bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
+        if (options.RequestCompression is string compression)
+        {
+            using var buffer = new MemoryStream();
+            using (Stream encoder = compression == "gzip" ? new System.IO.Compression.GZipStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true) : new System.IO.Compression.BrotliStream(buffer, System.IO.Compression.CompressionLevel.Optimal, true)) encoder.Write(bytes);
+            bytes = buffer.ToArray();
+        }
+        using var request = new HttpRequestMessage(HttpMethod.Post, options.ResponsesUri) { Content = new ByteArrayContent(bytes) };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        if (options.RequestCompression is not null) request.Content.Headers.ContentEncoding.Add(options.RequestCompression);
+        if (options.ExtraHeaders is not null) foreach (var (name, value) in options.ExtraHeaders)
+        {
+            var text = value?.ToString() ?? "";
+            if (request.Headers.TryAddWithoutValidation(name, text))
+            { request.Headers.Remove(name); request.Headers.TryAddWithoutValidation(name, text); }
+            else { request.Content.Headers.Remove(name); request.Content.Headers.TryAddWithoutValidation(name, text); }
+        }
+        if (options.RequestCompression is not null)
+        {
+            request.Content.Headers.ContentEncoding.Clear(); request.Content.Headers.ContentEncoding.Add(options.RequestCompression);
+            request.Content.Headers.ContentLength = bytes.Length;
+        }
+        if (!string.IsNullOrEmpty(options.Token) && options.ExtraHeaders?.Any(pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) != true)
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Token);
+        using var inactivity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (options.StreamInactivityTimeoutMs is not null) inactivity.CancelAfter(180000);
+        var requestToken = inactivity.Token;
 
         var started = Stopwatch.GetTimestamp();
         using var response = await httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken).ConfigureAwait(false);
+            requestToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var (errorBody, truncated) = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
             throw new ResponsesHttpException(response.StatusCode, errorBody, truncated);
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var stream = await response.Content.ReadAsStreamAsync(requestToken).ConfigureAwait(false);
         var completed = await ResponsesSseCollector.CollectAsync(
             stream,
-            cancellationToken,
-            callbacks: progress is null ? null : new ResponsesStreamCallbacks
+            requestToken,
+            callbacks: new ResponsesStreamCallbacks
             {
-                OnProgress = update => progress(sessionId, update)
+                OnProgress = update =>
+                {
+                    if (options.StreamInactivityTimeoutMs is int timeout) inactivity.CancelAfter(timeout);
+                    progress?.Invoke(sessionId, update);
+                }
             },
             ownership: StreamOwnership.Dispose).ConfigureAwait(false);
         var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-        return new ChatResult(ResponsesCanonicalConverter.ConvertAssistant(
-            completed,
-            options.ConcreteModelId,
-            completedAt,
-            elapsed));
+        var assistant = ResponsesCanonicalConverter.ConvertAssistant(completed, options.ConcreteModelId, completedAt, elapsed);
+        if (options.DisallowEmptyResponse && (assistant?["parts"] as JsonArray)?.OfType<JsonObject>().Any(part => part["functionCall"] is not null || SessionWait.Text(part["text"]) is string text && !string.IsNullOrWhiteSpace(text)) != true)
+            throw new InvalidDataException("Selected model disallows an empty completed response.");
+        return new ChatResult(assistant);
     }
 
     private static async Task<(string Body, bool Truncated)> ReadBoundedAsync(

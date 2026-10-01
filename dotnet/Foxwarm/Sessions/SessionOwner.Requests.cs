@@ -6,6 +6,8 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionOwner
 {
+    internal string LogicalTurnId { get; private set; } = Guid.NewGuid().ToString();
+    internal void BeginLogicalTurn() => LogicalTurnId = Guid.NewGuid().ToString();
     private readonly object draftGate = new();
     private JsonObject? draft;
     private volatile bool toolActive;

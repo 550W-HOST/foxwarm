@@ -9,6 +9,7 @@ internal static class SessionModelSettings
     internal static readonly string[] Efforts = ["none", "low", "medium", "high", "xhigh", "max"];
     internal static JsonObject Normalize(JsonObject current, JsonObject patch, HostModels models)
     {
+        models = models.Capture();
         var result = new JsonObject();
         void Pair(string modelField, string effortField, string? fallback)
         {
@@ -35,10 +36,12 @@ internal static class SessionModelSettings
     internal static double EffectiveThreshold(JsonObject envelope, HostModels models)
     {
         var raw = SessionWait.Number(envelope["compactThresholdTokens"]);
-        return raw is > 0 && double.IsFinite(raw.Value) ? Math.Floor(raw.Value) : Math.Max(1, Math.Floor(models.Resolve(SessionWait.Text(envelope["model"])).ContextLimit * .85));
+        models = models.Capture();
+        return raw is > 0 && double.IsFinite(raw.Value) ? Math.Floor(raw.Value) : Math.Max(1, Math.Floor(models.Resolve(SessionWait.Text(envelope["model"])).ContextLimit * models.CompactThresholdFraction));
     }
     internal static JsonObject Presentation(JsonObject envelope, HostModels models, string id)
     {
+        models = models.Capture();
         var model = SessionWait.Text(envelope["childModelDefault"]); var effort = SessionWait.Text(envelope["childEffortDefault"]);
         var leaf = models.Resolve(model ?? SessionWait.Text(envelope["model"]));
         var inherited = effort ?? SessionWait.Text(envelope["effort"]);

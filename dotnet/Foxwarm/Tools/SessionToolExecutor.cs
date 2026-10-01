@@ -14,6 +14,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     internal string CurrentCallId { get; private set; } = "";
     public void BeginTurn()
     {
+        hosted.BeginLogicalTurn();
         Interlocked.Exchange(ref finishPending, 0);
         explicitWaitIds.Clear(); handoffTargets.Clear();
     }

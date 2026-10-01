@@ -14,7 +14,8 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
     {
         var models = sessions.Models;
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
-        app.MapGet("/api/models", () => Results.Ok(WebUiContract.Models(models)));
+        app.MapGet("/api/models", (HttpRequest request) => Results.Ok(WebUiContract.Models(models, request.Query["current"])));
+        RegisterSetupRoutes(app);
         app.MapPost("/api/sessions/{id}/model", async (string id, HttpRequest request) =>
         {
             var hosted = FindRoute(request, id);

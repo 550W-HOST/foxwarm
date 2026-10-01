@@ -25,7 +25,7 @@ public sealed class WebUiRealtimeRevisionTests
         });
         var options = new ResponsesClientOptions(provider.BaseUri, "wire", "local/wire", "synthetic-token", "", 1024);
         await using var manager = new SessionManager(Path.Combine(root, "data"), Path.Combine(root, "work"),
-            options, HostModels.Load(null, options));
+            options, HostModels.ForTest(options));
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var socket = new ProbeSocket();
         var runtime = new SessionRuntime(manager);

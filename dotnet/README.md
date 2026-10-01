@@ -15,43 +15,35 @@ export FOXWARM_EXPERIMENT_DATA_ROOT=/path/to/new/experiment-data
 export FOXWARM_EXPERIMENT_TOOL_ROOT=/path/to/new/tool-workspace
 export FOXWARM_EXPERIMENT_PORT=39091
 export FOXWARM_EXPERIMENT_API_TOKEN='private-local-api-token'
-export FOXWARM_EXPERIMENT_RESPONSES_BASE_URI='http://127.0.0.1:39092'
-export FOXWARM_EXPERIMENT_PROVIDER_TOKEN='private-provider-token'
-export FOXWARM_EXPERIMENT_REQUEST_MODEL='local-scripted-model'
-export FOXWARM_EXPERIMENT_CONCRETE_MODEL='local-scripted-model'
 # Optional: the experimental Chat build from this repository.
 export FOXWARM_EXPERIMENT_WEBUI_DIST="$PWD/packages/webui/dist"
-# Optional: FOXWARM_EXPERIMENT_INSTRUCTIONS and FOXWARM_EXPERIMENT_MAX_OUTPUT_TOKENS.
+# Optional: FOXWARM_EXPERIMENT_INSTRUCTIONS.
 dotnet run --no-build --project dotnet/Foxwarm/Foxwarm.csproj
 ```
 
-The previous single-model environment variables remain a fallback when `FOXWARM_EXPERIMENT_MODELS_FILE` is absent. To select multiple concrete Responses models instead, set that variable to a **separate JSON file** with the following experiment-only subset (replace URLs and credential-environment-variable names with locally controlled values):
+Models use the canonical `state/models.yaml` under the selected data root (`FOXWARM_DATA_DIR` may select that root instead). The packaged `templates/models.example.yaml` is read only when the active file is missing. Open the original Models Setup editor to create the active file, or create it before startup with locally controlled provider settings:
 
-```json
-{
-  "default": "local-a/model-a",
-  "providers": {
-    "local-a": {
-      "providerType": "openai",
-      "baseUrl": "http://127.0.0.1:39092",
-      "apiKeyEnv": "FOXWARM_LOCAL_A_TOKEN",
-      "contextLimit": 18000,
-      "effort": { "allowed": ["none", "low", "high"], "default": "low" },
-      "models": [{ "id": "model-a" }]
-    },
-    "local-b": {
-      "providerType": "openai-responses",
-      "baseUrl": "http://127.0.0.1:39093",
-      "apiKeyEnv": "FOXWARM_LOCAL_B_TOKEN",
-      "contextLimit": 24000,
-      "effort": { "allowed": ["none", "low", "high"], "default": "none" },
-      "models": [{ "id": "model-b" }]
-    }
-  }
-}
+```yaml
+default: local-a
+providers:
+  local-a:
+    providerType: openai-responses
+    baseUrl: http://127.0.0.1:39092/v1
+    apiKey: synthetic-local-test-key
+    contextLimit: 18000
+    effort: { allowed: [none, low, high], default: low }
+    models: [model-a]
 ```
 
-Set `FOXWARM_LOCAL_A_TOKEN` and `FOXWARM_LOCAL_B_TOKEN` in the host environment before startup; `apiKeyEnv` names an environment variable and deliberately **is not** the TypeScript config's `apiKey` value. Credentials are resolved only in host memory, never serialized into Session JSON or browser model metadata. This is not a `models.yaml` parser or direct production configuration import. Only concrete `openai`/`openai-responses` HTTP loopback providers are admitted; unknown/virtual/hosted/WS/failover providers fail at startup. Provider/model `contextLimit` and `effort` defaults/allow-lists follow this explicit JSON subset; there is no Setup save or hot reload. Each provider request captures one selected model URI, credential, wire ID and effort before sending. Explicit per-Session model/effort changes use its ordered save lane and survive clean restart; changing one while a request is in flight affects only later requests.
+`apiKey` is the canonical configuration value, not an environment-variable name. The old experiment-only JSON registry and single-provider environment fallback have been removed. Authenticated Setup intentionally exposes raw configuration for editing; routine model DTOs and provider errors do not expose credentials. A single-model provider displays as `local-a`, while `local-a/model-a` remains a valid qualified lookup. Multiple models display qualified keys; model IDs may contain slashes.
+
+One immutable catalog and concrete leaf are captured before snapshot/cache persistence and provider awaits. Current and future-child settings keep their existing ordered publication; a config/model change affects later requests, not a held request. Responses consumes merged headers/fields, first-class effort, context/max-output settings, nested cache/turn placeholders, content-inactivity timeout and gzip/Brotli compression. A strictly persisted Session UUID is reused as its prompt cache key; each logical tool turn receives one UUID across provider iterations. The compact planner has its own captured logical turn identity and the same Session cache lineage.
+
+Original `GET /api/setup/status` and raw/form `POST /api/setup/models` share the validator. Raw saves retain the submitted UTF-8 text exactly after validation; form saves retain compatible overrides and write JSON text, which is valid YAML. Invalid saves leave the live catalog unchanged; a post-rename durability failure retains the committed catalog and returns an observable error. App-config diagnostics project actual configured channel counts/raw values without claiming an external Channel runtime. App save, provider list/test actions, and external Channel execution remain unimplemented.
+
+The pinned YamlDotNet reader converts mappings, sequences, scalar values and ordinary aliases/merge keys into owned JSON. It is not full `js-yaml DEFAULT_SCHEMA` parity: timestamps/custom tags and non-JSON YAML types are not claimed equivalent, cyclic aliases and nonfinite numeric values are explicitly unsupported. Normal source configuration uses the preferred `providers` and legacy `models` readers, concrete aliases/display keys, effort/media normalization and validated virtual graph metadata. Other protocols and virtual execution remain staged work; selecting a missing executor, enabled native media or reasoning recovery fails before provider effects. `asyncCompact` does not reject the existing synchronous path. Native image generation cannot be smuggled through extra tool declarations; ordinary tool overrides remain available.
+
+The concentrated original Setup/Chat workflow is `node packages/webui/test/experimentHostModels.e2e.mjs`; it uses synthetic loopback providers and separate owned roots, tests real raw editor/form saves, held configuration changes, paired effects/cache identity, compression/effort precedence, timeout/empty/media boundaries and clean restart.
 
 The API is an **experiment subset**, not the whole WebUI backend. API calls, including `/health`, accept `Authorization: Bearer $FOXWARM_EXPERIMENT_API_TOKEN`; when the optional WebUI dist is configured, the root page and its static assets can load before login, and the experiment-only `/api/auth` exchanges a manually entered token for a same-origin, HTTP-only, SameSite-Strict cookie. No token goes into the URL, localStorage, built assets, or provider request. A minimal CLI interaction after startup is:
 
@@ -67,13 +59,13 @@ curl -N -H "Authorization: Bearer $FOXWARM_EXPERIMENT_API_TOKEN" \
 
 Supported CLI routes are `GET/POST /api/agents`, `GET/POST /api/sessions`, `GET /api/sessions/{id}/state|history|stream`, `POST /api/sessions/{id}/message|stop|model|child-model|children|refresh-memory`, exact `GET /api/sessions/{id}/archive/messages/{seq}`, one-layer `GET /api/sessions/{id}/context-blocks/{blockId}/expand`, `POST /admin/shutdown`, and `GET /health`. Message accepts nonempty text and optional `clientMessageId`; HTTP 202 acknowledges an ingress queue-save **attempt**, not guaranteed durability or processing. `/compact` explicitly starts an idle synchronous planner under a durable busy claim; `/stop compact` cancels that planner without discarding ordinary queued input. `/stop` still controls a normal turn. Busy background compaction is not supported. Graceful shutdown stops admission and active provider requests, waits for processor/save completion, and reports persistence failures; an already-launched local shell is not killed. Only host-owned JSON files load on restart; Archive IDs detect missing authority but cannot rebuild it. Persisted busy/stopping state fails closed rather than attempting crash repair.
 
-Build the **same original App/Sidebar/Workbench** with `VITE_FOXWARM_DOTNET=1 npm --prefix packages/webui run build`; set `FOXWARM_EXPERIMENT_WEBUI_DIST` to its `packages/webui/dist`. Open `http://127.0.0.1:$FOXWARM_EXPERIMENT_PORT/`, enter the local API token in the small login gate, then use the ordinary Agent/Session creation menu, Sidebar and Chat tabs. There is no second App shell. The build flag adds only login and the existing text-only Chat option; it does not probe backend features or hide unimplemented App entry points. Setup, Code, Terminal, pin, destructive Session/Agent operations and global history search may return errors until their backend is ported.
+Build the **same original App/Sidebar/Workbench** with `VITE_FOXWARM_DOTNET=1 npm --prefix packages/webui run build`; set `FOXWARM_EXPERIMENT_WEBUI_DIST` to its `packages/webui/dist`. Open `http://127.0.0.1:$FOXWARM_EXPERIMENT_PORT/`, enter the local API token in the small login gate, then use the ordinary Agent/Session creation menu, Sidebar and Chat tabs. There is no second App shell. The build flag adds only login and the existing text-only Chat option; it does not probe backend features or hide unimplemented App entry points. Code, Terminal, pin, destructive Session/Agent operations and global history search may return errors until their backend is ported.
 
 The channel implements the real bounded `/api/session-list/sidebar`, `/children`, `/by-id`, `/architecture`, `/descendants/{id}`, `/descendant-activity`, and `/search` metadata projections. Root/child keyset pages, focus paths, exact misses and structural revision resets use small metadata snapshots, never serialized full history. `WS /api/webui/stream` carries the original revisioned list+Chat union, actual v2 request drafts, canonical messages, queue state, list deltas/invalidation and reconnect snapshots; CLI SSE remains separate. `POST /api/sessions/{id}/name` strictly updates the existing display name. `GET/POST /api/webui/settings` read and persist real local branding. History tail/prefix/afterSeq/version, models/effort, queued previews, `/compact`, `/stop compact`, `/stop` and exact archived CTX expansion retain their previous semantics. Unsupported commands receive an explicit error. Cookies remain local HTTP-only loopback authentication, not production authentication.
 
 Program now only assembles and starts the host. HTTP infrastructure, WebUI channel/DTO/realtime, MessageRouter, SessionManager/Runtime, turn/save/storage/compaction owners and Models/Tools are separate. The canonical [source-port map](../docs/code-index/units/dotnet.md#source-port-map) records the fixed TypeScript reference and intended continuous porting boundaries; no whole-branch merge or production configuration import is needed.
 
-The host registers and default-injects `read`, `write`, `edit`, `apply_patch`, `exec`, `read_exec`, `wait`, `skill`, `set_agent_inherit`, `session`, `get_session_messages`, `set_goal`, `set_session_child_model`, `set_session_compact_threshold`, exact-context `recall`, `create_agent`, `create_session`, `create_child_session`, `send_to_session`, `refresh_session_snapshot`, and `submit_compact_plan` Responses definitions. The ordinary turn operates on UTF-8 regular files using owning-workspace-relative paths; `read` additionally accepts absolute accessible host files/directories (bounded excerpts, no symbolic-link components, create-new `write` default). `edit` replaces one exact occurrence; `apply_patch` adds, updates or deletes in order and reports earlier changes if a later operation fails, **without transaction or rollback**. Added files may create missing workspace-parent directories. Recall reads exact immutable Archive blocks/message ranges with a shared bounded preview. The planner accepts only a single `submit_compact_plan` call and does not execute ordinary tools. Recall may select an existing hosted Session; `read_exec` remains restricted to its owning Session. These path-level limits are not an OS sandbox. `write_fixture` remains only in earlier test harnesses; no production provider/config, full Agent/catalog platform, other external Channels, Worker, non-master Nodes, images, routing/retry, crash or busy recovery, generic effect receipts, or full WebUI frontend compatibility is claimed.
+The host registers and default-injects `read`, `write`, `edit`, `apply_patch`, `exec`, `read_exec`, `wait`, `skill`, `set_agent_inherit`, `session`, `get_session_messages`, `set_goal`, `set_session_child_model`, `set_session_compact_threshold`, exact-context `recall`, `create_agent`, `create_session`, `create_child_session`, `send_to_session`, `refresh_session_snapshot`, and `submit_compact_plan` Responses definitions. The ordinary turn operates on UTF-8 regular files using owning-workspace-relative paths; `read` additionally accepts absolute accessible host files/directories (bounded excerpts, no symbolic-link components, create-new `write` default). `edit` replaces one exact occurrence; `apply_patch` adds, updates or deletes in order and reports earlier changes if a later operation fails, **without transaction or rollback**. Added files may create missing workspace-parent directories. Recall reads exact immutable Archive blocks/message ranges with a shared bounded preview. The planner accepts only a single `submit_compact_plan` call and does not execute ordinary tools. Recall may select an existing hosted Session; `read_exec` remains restricted to its owning Session. These path-level limits are not an OS sandbox. `write_fixture` remains only in earlier test harnesses; no production configuration import, full Agent/catalog platform, other external Channels, Worker, non-master Nodes, images, routing/retry, crash or busy recovery, generic effect receipts, or full WebUI frontend compatibility is claimed.
 
 ### Unified discovery and real outbound MCP
 

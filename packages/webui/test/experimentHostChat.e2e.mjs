@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeModelFixture } from './experimentModelFixture.mjs'
 // One local, bounded, real-browser experiment using the shared Chat component.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -61,6 +62,7 @@ async function json(port, method, path, body) {
   return { status: res.status, body: await res.json().catch(() => null) }
 }
 async function startHost(port, providerPort, dataRoot, toolRoot) {
+  await writeModelFixture(dataRoot, { default: 'local-browser-model', providers: { 'local-browser-model': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['local-browser-model'] } } })
   const env = {
     ...process.env,
     FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot,

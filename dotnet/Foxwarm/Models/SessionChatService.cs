@@ -9,22 +9,23 @@ internal sealed class SessionChatService(
     public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
     {
         var selectedSnapshot = hosted.Entry.Snapshot();
-        var selected = models.Select(selectedSnapshot);
+        var catalog = models.Capture();
+        var selected = catalog.Select(selectedSnapshot);
+        var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
+        var turnId = hosted.LogicalTurnId;
         var prompt = selectedSnapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         if (ConditionalMemory.ReadCurrentModelSnapshotId(prompt) != selected.Model.Key)
         {
             prompt = await memory.BuildAsync(hosted.Agent, hosted.Id, selected.Model.Key);
             await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(prompt);
         }
-        var options = baseOptions with
+        try
         {
-            BaseUri = selected.Model.BaseUri,
-            RequestModel = selected.Model.ModelId,
-            ConcreteModelId = selected.Model.Key,
-            Token = selected.Model.Token,
-            Effort = selected.EffectiveEffort,
-            Instructions = baseOptions.Instructions.Length == 0 ? prompt : baseOptions.Instructions + "\n\n" + prompt
-        };
-        return await new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
+            var options = ConfiguredResponses.Plan(selected.Model, baseOptions, selected.EffectiveEffort,
+                baseOptions.Instructions.Length == 0 ? prompt : baseOptions.Instructions + "\n\n" + prompt, cacheKey, turnId);
+            return await new ResponsesChatService(http, options, progress).ChatAsync(sessionId, history, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error) { throw new InvalidDataException(ConfiguredResponses.SafeError(error, selected.Model)); }
     }
 }

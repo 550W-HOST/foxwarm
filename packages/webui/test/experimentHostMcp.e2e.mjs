@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeModelFixture } from './experimentModelFixture.mjs'
 // Concentrated original-App -> scripted Responses -> real official-SDK MCP workflow.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -57,6 +58,7 @@ async function task(calls, { owner = current, final = true, browserSend = false 
 async function perform(target, args, id, owner = current) { await task([invoke(id, target, args)], { owner }); return pair(id, owner) }
 async function lines(file) { return (await readFile(join(peerRoot, file), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) }
 async function startHost() {
+  await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
   const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
     FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`, FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken,

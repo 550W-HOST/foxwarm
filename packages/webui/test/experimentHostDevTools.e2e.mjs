@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeModelFixture } from './experimentModelFixture.mjs'
 // One owned localhost scripted-provider development workflow, including clean restart.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -57,7 +58,7 @@ try {
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses'); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
       assert.deepEqual(body.tools.map(tool => tool.name),
-        ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan'])
+        ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan', 'search_tools', 'call_tool'])
       const payload = JSON.stringify(body.input)
       const latest = body.input.filter(item => item.type === 'message' && item.role === 'user')
         .at(-1)?.content?.map(item => item.text).join(' ') || ''
@@ -102,6 +103,7 @@ try {
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const providerPort = provider.address().port; const hostPort = await port()
   async function startHost() {
+  await writeModelFixture(dataRoot, { default: 'scripted-wire', providers: { 'scripted-wire': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['scripted-wire'] } } })
     const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
       ...process.env, FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
       FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: apiToken,

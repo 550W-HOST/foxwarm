@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { migrateModelFixture } from './experimentModelFixture.mjs'
 // Concentrated localhost browser+HTTP+SQLite acceptance for the bounded .NET Chat host.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -46,6 +47,7 @@ async function json(hostPort, method, path, body) {
   return { status: response.status, body: await response.json().catch(() => null) }
 }
 async function hostStart(hostPort, dataRoot, toolRoot, modelsFile) {
+  await migrateModelFixture(dataRoot, modelsFile, { FOXWARM_ALPHA_PROVIDER_KEY: alphaToken, FOXWARM_BETA_PROVIDER_KEY: betaToken })
   const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
     ...process.env, FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: toolRoot,
     FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: token,
@@ -113,7 +115,7 @@ try {
   } }))
   const hostPort = await port()
   host = await hostStart(hostPort, dataRoot, toolRoot, modelsFile)
-  assert.equal((await json(hostPort, 'GET', '/api/models')).body.defaultKey, 'alpha/alpha-wire')
+  assert.equal((await json(hostPort, 'GET', '/api/models')).body.defaultKey, 'alpha')
   const firstPid = host.child.pid
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium',
     headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
@@ -136,9 +138,9 @@ try {
   await page.click('.foxwarm-model-selector-trigger')
   await page.waitForSelector('[data-model-selector-popup="true"]')
   assert(await page.$('[data-model-child-mode="specific"]'), 'Original child settings entry is available')
-  assert.equal(await page.$('[aria-label="Configure models"]'), null, 'No unsupported Setup action')
-  await page.click('[data-model-column="current"] [data-model-option-key="beta/beta-wire"]')
-  await until(async () => (await history(hostPort, switchId)).session.modelKey === 'beta/beta-wire', 'browser model switch')
+  assert(await page.$('[aria-label="Configure models"]'), 'Original Models Setup is available')
+  await page.click('[data-model-column="current"] [data-model-option-key="beta"]')
+  await until(async () => (await history(hostPort, switchId)).session.modelKey === 'beta', 'browser model switch')
   if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
   await page.waitForSelector('input[aria-label="Current effort"]')
   await page.waitForFunction(() => {
@@ -155,11 +157,11 @@ try {
     }))}`)
   await page.click('[data-model-child-mode="specific"]')
   await page.waitForSelector('[data-model-column="child"]')
-  await page.click('[data-model-column="child"] [data-model-option-key="gamma/gamma-wire"]')
+  await page.click('[data-model-column="child"] [data-model-option-key="gamma"]')
   await until(async () => (await history(hostPort, switchId)).session.effectiveChildModelKey === 'gamma/gamma-wire', 'original child model UI')
   assert.equal((await history(hostPort, switchId)).session.effectiveChildEffort, 'medium')
   if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
-  await page.click('[data-model-column="child"] [data-model-option-key="beta/beta-wire"]')
+  await page.click('[data-model-column="child"] [data-model-option-key="beta"]')
   await until(async () => (await history(hostPort, switchId)).session.effectiveChildModelKey === 'beta/beta-wire', 'original child effort target')
   if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
   await page.waitForSelector('input[aria-label="Child effort"]')
@@ -438,7 +440,7 @@ try {
   const second = await hostStart(hostPort, dataRoot, toolRoot, modelsFile)
   host = second
   assert.notEqual(second.child.pid, firstPid)
-  assert.equal((await history(hostPort, switchId)).session.modelKey, 'beta/beta-wire')
+  assert.equal((await history(hostPort, switchId)).session.modelKey, 'beta')
   assert.equal((await view(parentId)).childModelDefault, 'beta/beta-wire'); assert.equal((await view(parentId)).childEffortDefault, 'high'); assert.equal((await view(parentId)).compactThresholdTokens, 12345)
   assert.equal((await history(hostPort, switchId)).session.effectiveEffort, 'high')
   assert.equal((await history(hostPort, layeredId)).messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock?.id, l2.id)

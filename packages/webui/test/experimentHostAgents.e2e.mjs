@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { migrateModelFixture } from './experimentModelFixture.mjs'
 // One owned localhost original-Chat Agent-memory/child/result workflow with clean restart.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -59,7 +60,7 @@ try {
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses')
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert.equal(body.tools.length, 21)
+      assert.equal(body.tools.length, 23)
       const id = idFrom(body); const latest = userFrom(body)
       assert(id, 'Canonical Session identity must reach the actual provider request')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)
@@ -150,6 +151,7 @@ try {
     return { status: response.status, body: await response.json().catch(() => ({})) }
   }
   async function startHost() {
+  await migrateModelFixture(dataRoot, modelsFile, { LOCAL_A_SECRET: providerToken, LOCAL_B_SECRET: providerToken })
     const child = spawn(dotnet, [dll], { stdio: ['ignore', 'pipe', 'pipe'], env: {
       ...process.env, FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
       FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile, FOXWARM_EXPERIMENT_PORT: String(hostPort),
