@@ -209,9 +209,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const [loading, setLoading] = useState(false)
   const [sessionBusy, setSessionBusy] = useState(false)
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
-  const [layout, setLayout] = useState({ isMobile: true, compactModelSelector: true })
+  const [layout, setLayout] = useState({ isMobile: true, compactModelSelector: true, compactComposer: false })
   const layoutRef = useRef(layout)
-  const { isMobile, compactModelSelector } = layout
+  const { isMobile, compactModelSelector, compactComposer } = layout
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
@@ -418,11 +418,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     const root = chatRootRef.current
     if (!root) return
     const measure = () => {
-      const width = root.getBoundingClientRect().width
-      // Hidden panes keep their last layout until they have a measurable width.
-      if (width <= 0) return
-      const next = { isMobile: width < 768, compactModelSelector: width <= 640 }
-      if (next.isMobile === layoutRef.current.isMobile && next.compactModelSelector === layoutRef.current.compactModelSelector) return
+      const { width, height } = root.getBoundingClientRect()
+      // Hidden panes keep their last layout until they have a measurable size.
+      if (width <= 0 || height <= 0) return
+      const next = { isMobile: width < 768, compactModelSelector: width <= 640, compactComposer: height < 600 }
+      if (next.isMobile === layoutRef.current.isMobile && next.compactModelSelector === layoutRef.current.compactModelSelector && next.compactComposer === layoutRef.current.compactComposer) return
       layoutRef.current = next
       setLayout(next)
     }
@@ -2082,7 +2082,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
 
   return (
-    <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
+    <div ref={chatRootRef} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
         icon={<MessageSquareText className="h-5 w-5" />}

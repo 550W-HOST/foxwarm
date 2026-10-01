@@ -129,8 +129,8 @@ html.dark {
 .foxwarm-chat-md-label,
 .foxwarm-chat-lg-label { display: none; }
 
-@container foxwarm-chat (width < 600px) {
-  .foxwarm-inline-composer-editor { min-height: 35px; }
+.foxwarm-chat-root[data-compact-composer="true"] .foxwarm-inline-composer-editor {
+  min-height: 35px;
 }
 
 @container foxwarm-chat (min-width: 640px) {

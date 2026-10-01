@@ -913,7 +913,7 @@ test('ordinary Terminal close selects another still-open tab rather than restori
 })
 
 
-test('Chat composer uses a smaller empty editor below 600px in Default and 550A', async () => {
+test('Chat composer uses a smaller empty editor below 600px content height in Default and 550A', async () => {
   for (const themeId of ['foxwarm.default', 'foxwarm.550a']) {
     const sessionId = 'compact-' + themeId
     const page = await openFixture({ tabs: [chat(sessionId, false), chat('e2e-b', false)], activeTabId: 'chat:' + sessionId, split: true, splitSecondChat: true, width: 1800, themeId })
@@ -929,15 +929,18 @@ test('Chat composer uses a smaller empty editor below 600px in Default and 550A'
     try {
       await page.waitForSelector(editor)
       const original = await geometry()
-      for (const [width, minHeight] of [[600, 60], [599, 35]]) {
-        await page.$eval(root, (el, width) => { el.style.width = width + 'px' }, width)
-        await page.waitForFunction((selector, height) => getComputedStyle(document.querySelector(selector)).minHeight === height + 'px', {}, editor, minHeight)
-        const actual = await geometry()
-        assert.equal(await page.$eval(root, el => el.getBoundingClientRect().width), width)
-        assert.equal(actual.height, minHeight, themeId + ' empty editor at ' + width)
-        assert.equal(actual.marginBottom, '0px')
-        assert.equal(actual.lineHeight, original.lineHeight)
-        assert.equal(actual.padding, original.padding)
+      assert.equal(await page.$eval(root, el => el.getBoundingClientRect().height), await page.$eval(root, el => el.parentElement.clientHeight), 'Chat fills the tab content height')
+      for (const width of [599, 800]) {
+        for (const [height, minHeight] of [[600, 60], [599, 35]]) {
+          await page.$eval(root, (el, size) => { el.style.width = size.width + 'px'; el.style.height = size.height + 'px' }, { width, height })
+          await page.waitForFunction((selector, height) => getComputedStyle(document.querySelector(selector)).minHeight === height + 'px', {}, editor, minHeight)
+          const actual = await geometry()
+          assert.deepEqual(await page.$eval(root, el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })), { width, height })
+          assert.equal(actual.height, minHeight, themeId + ' empty editor at ' + width + ' × ' + height)
+          assert.equal(actual.marginBottom, '0px')
+          assert.equal(actual.lineHeight, original.lineHeight)
+          assert.equal(actual.padding, original.padding)
+        }
       }
       await page.click(editor)
       await page.keyboard.type('First line')
