@@ -480,13 +480,13 @@ Example:
         {
             name: 'set_goal',
             defaultInject: true,
-            description: "Keep a goal reminder in this session during substantial work that may span compaction. Use it when this session will perform the work over many steps, not for short tasks or work mostly delegated to children. The reminder survives compaction and applies only to this session.",
+            description: "Keep the final objective for substantial multi-step work performed by this session, not short tasks or work mostly delegated to children. Record the requested end state, completion criteria, and essential lasting constraints. Do not use this as a plan, progress log, checklist, next-step reminder, or temporary notes. Keep the full objective stable as work progresses; update it only when the requested outcome or lasting constraints change. Completing an intermediate step does not complete or narrow the goal. The reminder survives compaction and applies only to this session.",
             parameters: {
                 type: 'object',
                 properties: {
-                    goal: { type: 'string', description: "Goal to remember. An empty string clears it." },
+                    goal: { type: 'string', description: "The final outcome to achieve, not the current phase or next action. An empty string clears it." },
                     remindEvery: { type: 'number', description: "Number of subsequent non-reminder messages between reminders. Omit to keep the current interval, or use the default of 20 if none is set." },
-                    clear: { type: 'boolean', description: "Remove the current goal reminder." }
+                    clear: { type: 'boolean', description: "Remove the reminder only when the full goal is achieved or explicitly cancelled or replaced." }
                 }
             }
         },
