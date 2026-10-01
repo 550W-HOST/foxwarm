@@ -20,7 +20,11 @@ internal sealed partial class HostModels
         foreach (var scope in new[] { provider, model })
             if (scope?.ContainsKey("keepReasoningOnError") == true && (scope["keepReasoningOnError"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))) throw new InvalidDataException("keepReasoningOnError must be boolean.");
         config["keepReasoningOnError"] = model?["keepReasoningOnError"]?.DeepClone() ?? provider["keepReasoningOnError"]?.DeepClone() ?? JsonValue.Create(false);
-        foreach (var scope in new[] { provider, model }) if (scope?.ContainsKey("streamContentInactivityTimeoutMs") == true) _ = Positive(scope["streamContentInactivityTimeoutMs"], 60000, "streamContentInactivityTimeoutMs");
+        foreach (var scope in new[] { provider, model }) if (scope?.ContainsKey("streamContentInactivityTimeoutMs") == true)
+        {
+            if (scope["streamContentInactivityTimeoutMs"] is null) throw new InvalidDataException("streamContentInactivityTimeoutMs must be an integer between 1 and 2147483647 milliseconds.");
+            _ = Positive(scope["streamContentInactivityTimeoutMs"], 60000, "streamContentInactivityTimeoutMs");
+        }
         config["streamContentInactivityTimeoutMs"] = Positive(model?["streamContentInactivityTimeoutMs"] ?? provider["streamContentInactivityTimeoutMs"], 60000, "streamContentInactivityTimeoutMs");
         if (type == "openai-ws" && provider["requestCompression"] is not null) throw new InvalidDataException("requestCompression is unsupported on openai-ws.");
         if (type != "openai-completions" && (provider.ContainsKey("historyReasoningField") || model?.ContainsKey("historyReasoningField") == true)) throw new InvalidDataException("historyReasoningField is only supported on openai-completions.");
@@ -30,13 +34,13 @@ internal sealed partial class HostModels
             if (SessionWait.Text(reasoning) is not ("reasoning_content" or "reasoning")) throw new InvalidDataException("Invalid historyReasoningField.");
             config["historyReasoningField"] = reasoning.DeepClone();
         }
-        var inherited = Effort(provider["effort"], Efforts, "high"); var effort = Effort(model?["effort"], inherited.Allowed, inherited.Default);
+        var inherited = Effort(provider, Efforts, "high"); var effort = Effort(model, inherited.Allowed, inherited.Default);
         config["effort"] = new JsonObject { ["allowed"] = new JsonArray(effort.Allowed.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()), ["default"] = effort.Default };
         var headers = Map(provider["extraHeaders"], "extraHeaders");
         foreach (var pair in Map(model?["extraHeaders"], "extraHeaders")) headers[pair.Key] = pair.Value?.DeepClone();
         config["extraHeaders"] = headers; config["extraFields"] = Merge(Map(provider["extraFields"], "extraFields"), Map(model?["extraFields"], "extraFields"));
-        config["webSearch"] = Feature(provider["webSearch"], model?["webSearch"], image: false);
-        config["imageGeneration"] = Feature(provider["imageGeneration"], model?["imageGeneration"], image: true);
+        config["webSearch"] = Feature(provider, model, "webSearch", image: false);
+        config["imageGeneration"] = Feature(provider, model, "imageGeneration", image: true);
         return new ConcreteHostModel(key, providerKey, id, type, url, token, context, effort.Allowed, effort.Default, config, []);
     }
     private static JsonObject Map(JsonNode? node, string label) => node is null ? new JsonObject() : node is JsonObject obj ? (JsonObject)obj.DeepClone() : throw new InvalidDataException(label + " must be an object.");
@@ -46,10 +50,10 @@ internal sealed partial class HostModels
         foreach (var (key, value) in later) result[key] = result[key] is JsonObject old && value is JsonObject added ? Merge(old, added) : value?.DeepClone();
         return result;
     }
-    private static (string[] Allowed, string Default) Effort(JsonNode? node, string[] inherited, string fallback)
+    private static (string[] Allowed, string Default) Effort(JsonObject? scope, string[] inherited, string fallback)
     {
-        if (node is null) return ([.. inherited], fallback);
-        var raw = node as JsonObject ?? throw new InvalidDataException("effort must be an object.");
+        if (scope?.ContainsKey("effort") != true) return ([.. inherited], fallback);
+        var raw = scope["effort"] as JsonObject ?? throw new InvalidDataException("effort must be an object.");
         var allowed = inherited;
         if (raw.ContainsKey("allowed"))
         {
@@ -62,47 +66,71 @@ internal sealed partial class HostModels
         if (selected is null || !allowed.Contains(selected)) throw new InvalidDataException("effort.default must be in allowed.");
         return (allowed, selected);
     }
-    private static JsonObject? Feature(JsonNode? earlier, JsonNode? later, bool image)
+    private static JsonObject? Feature(JsonObject provider, JsonObject? model, string property, bool image)
     {
-        if (earlier is null && later is null) return null;
-        JsonObject Normalize(JsonNode? value)
+        JsonObject? Normalize(JsonObject? scope)
         {
-            if (value is null) return new JsonObject();
+            if (scope?.ContainsKey(property) != true) return null;
+            var value = scope[property];
             if (value is JsonValue scalar && scalar.TryGetValue<bool>(out var enabled)) return new JsonObject { ["enabled"] = enabled };
-            var obj = value as JsonObject ?? throw new InvalidDataException("Hosted feature must be boolean or an options object.");
-            var normalized = (JsonObject)obj.DeepClone();
-            if (!normalized.ContainsKey("enabled")) normalized["enabled"] = true;
-            if (normalized["enabled"] is not JsonValue flag || !flag.TryGetValue<bool>(out _)) throw new InvalidDataException("Hosted feature enabled must be boolean.");
-            return normalized;
-        }
-        var result = Merge(Normalize(earlier), Normalize(later));
-        if (image)
-        {
-            foreach (var (field, choices) in new Dictionary<string, string[]> { ["action"] = ["auto", "generate", "edit"], ["quality"] = ["auto", "low", "medium", "high", "xhigh", "max"], ["background"] = ["auto", "opaque", "transparent"], ["outputFormat"] = ["png", "jpeg", "webp"] })
-                if (result[field] is not null && (SessionWait.Text(result[field]) is not string text || !choices.Contains(text))) throw new InvalidDataException("Invalid imageGeneration." + field + ".");
-            foreach (var field in new[] { "model", "size" }) if (result.ContainsKey(field))
-            { if (SessionWait.Text(result[field]) is not string text || string.IsNullOrWhiteSpace(text)) throw new InvalidDataException("imageGeneration." + field + " must be a nonempty string."); result[field] = text.Trim(); }
-            if (result["outputCompression"] is not null && (SessionWait.Number(result["outputCompression"]) is not double compression || compression < 0 || compression > 100 || Math.Floor(compression) != compression)) throw new InvalidDataException("Invalid imageGeneration.outputCompression.");
-            if (SessionWait.Text(result["background"]) == "transparent" && SessionWait.Text(result["outputFormat"]) == "jpeg") throw new InvalidDataException("Transparent image generation cannot use JPEG.");
-        }
-        else
-        {
-            foreach (var (field, choices) in new Dictionary<string, string[]> { ["toolChoice"] = ["auto", "required"], ["searchContextSize"] = ["low", "medium", "high"] })
-                if (result.ContainsKey(field) && (SessionWait.Text(result[field]) is not string text || !choices.Contains(text))) throw new InvalidDataException("Invalid webSearch." + field + ".");
-            if (result.ContainsKey("allowedDomains"))
+            var raw = value as JsonObject ?? throw new InvalidDataException(property + " must be boolean or an options object.");
+            if (raw.ContainsKey("enabled") && (raw["enabled"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))) throw new InvalidDataException(property + ".enabled must be boolean.");
+            var result = new JsonObject { ["enabled"] = raw["enabled"]?.DeepClone() ?? JsonValue.Create(true) };
+            var enums = image
+                ? new Dictionary<string, string[]> { ["action"] = ["auto", "generate", "edit"], ["quality"] = ["auto", "low", "medium", "high", "xhigh", "max"], ["background"] = ["auto", "opaque", "transparent"], ["outputFormat"] = ["png", "jpeg", "webp"] }
+                : new Dictionary<string, string[]> { ["toolChoice"] = ["auto", "required"], ["searchContextSize"] = ["low", "medium", "high"] };
+            foreach (var (field, choices) in enums) if (raw.ContainsKey(field))
             {
-                if (result["allowedDomains"] is not JsonArray domains || domains.Any(domain => string.IsNullOrWhiteSpace(SessionWait.Text(domain)))) throw new InvalidDataException("webSearch.allowedDomains must contain nonempty strings.");
-                result["allowedDomains"] = new JsonArray(domains.Select(domain => (JsonNode?)JsonValue.Create(SessionWait.Text(domain)!.Trim())).ToArray());
+                if (SessionWait.Text(raw[field]) is not string text || !choices.Contains(text)) throw new InvalidDataException("Invalid " + property + "." + field + ".");
+                result[field] = text;
             }
-            if (result.ContainsKey("userLocation"))
+            if (image)
             {
-                var location = Map(result["userLocation"], "webSearch.userLocation");
-                if (location.ContainsKey("type") && SessionWait.Text(location["type"]) != "approximate") throw new InvalidDataException("webSearch.userLocation.type must be approximate.");
-                foreach (var field in new[] { "country", "city", "region", "timezone" }) if (location.ContainsKey(field))
-                    location[field] = SessionWait.Text(location[field])?.Trim() ?? throw new InvalidDataException("webSearch.userLocation values must be strings.");
-                result["userLocation"] = location;
+                foreach (var field in new[] { "model", "size" }) if (raw.ContainsKey(field))
+                {
+                    if (SessionWait.Text(raw[field]) is not string text || string.IsNullOrWhiteSpace(text)) throw new InvalidDataException("imageGeneration." + field + " must be a nonempty string.");
+                    result[field] = text.Trim();
+                }
+                if (raw.ContainsKey("outputCompression"))
+                {
+                    if (SessionWait.Number(raw["outputCompression"]) is not double compression || !double.IsFinite(compression) || compression < 0 || compression > 100 || Math.Floor(compression) != compression) throw new InvalidDataException("Invalid imageGeneration.outputCompression.");
+                    result["outputCompression"] = compression;
+                }
+                CheckImageConflict(result);
             }
+            else
+            {
+                if (raw.ContainsKey("allowedDomains"))
+                {
+                    if (raw["allowedDomains"] is not JsonArray domains || domains.Any(domain => string.IsNullOrWhiteSpace(SessionWait.Text(domain)))) throw new InvalidDataException("webSearch.allowedDomains must contain nonempty strings.");
+                    result["allowedDomains"] = new JsonArray(domains.Select(domain => (JsonNode?)JsonValue.Create(SessionWait.Text(domain)!.Trim())).ToArray());
+                }
+                if (raw.ContainsKey("userLocation"))
+                {
+                    var location = raw["userLocation"] as JsonObject ?? throw new InvalidDataException("webSearch.userLocation must be an object.");
+                    var normalizedLocation = new JsonObject();
+                    if (location.ContainsKey("type"))
+                    {
+                        if (SessionWait.Text(location["type"]) != "approximate") throw new InvalidDataException("webSearch.userLocation.type must be approximate.");
+                        normalizedLocation["type"] = "approximate";
+                    }
+                    foreach (var field in new[] { "country", "city", "region", "timezone" }) if (location.ContainsKey(field))
+                        normalizedLocation[field] = SessionWait.Text(location[field])?.Trim() ?? throw new InvalidDataException("webSearch.userLocation values must be strings.");
+                    result["userLocation"] = normalizedLocation;
+                }
+            }
+            return result;
         }
-        return result;
+        var earlier = Normalize(provider);
+        var later = Normalize(model);
+        if (later is null) return earlier;
+        var merged = earlier ?? new JsonObject();
+        foreach (var (key, value) in later) merged[key] = value?.DeepClone();
+        if (image) CheckImageConflict(merged);
+        return merged;
+    }
+    private static void CheckImageConflict(JsonObject result)
+    {
+        if (SessionWait.Text(result["background"]) == "transparent" && SessionWait.Text(result["outputFormat"]) == "jpeg") throw new InvalidDataException("Transparent image generation cannot use JPEG.");
     }
 }

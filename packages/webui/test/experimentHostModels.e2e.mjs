@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { gunzipSync, brotliDecompressSync } from 'node:zlib'
 import puppeteer from 'puppeteer-core'
+import yamlReader from 'js-yaml'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function until(fn, label, ms = 18000) { const end = Date.now() + ms; while (Date.now() < end) { const value = await fn(); if (value) return value; await sleep(25) } throw new Error('Timed out: ' + label) }
@@ -69,6 +70,33 @@ try {
   const models = (await api('GET', '/api/models')).body; assert.equal(models.defaultKey, 'alpha'); assert.deepEqual(models.models.map(model => model.key), ['alpha', 'beta/second-a', 'beta/second-b', 'future', 'route']); assert(!JSON.stringify(models).includes(oldSecret)); assert(models.models.find(model => model.key === 'route').isVirtual)
   const changed = await send('paired', 'DONE-first'); assert.equal(changed.length, 2); assert.equal(changed[0].headers['x-provider'], 'overridden'); assert.equal(changed[0].headers['x-auth-value'], oldSecret); assert.equal(changed[0].headers.authorization, 'Bearer ' + oldSecret); assert.equal(changed[0].body.model, 'wire/slash'); assert.equal(changed[0].body.max_output_tokens, 911); assert.equal(changed[0].body.yesWord, 'yes'); assert.deepEqual(changed[0].body.nested, { old: 'kept', replace: 'model', addition: 4 }); assert.equal(changed[0].body.reasoning.effort, 'low'); assert.equal(changed[0].body.reasoning.summary, 'detailed'); assert.equal(changed[0].body.reasoning.vendor, 'preserved'); assert.deepEqual(changed[0].body.include, ['vendor.option', 'reasoning.encrypted_content']); assert.equal(changed[0].body.turn, changed[1].body.turn); assert.match(changed[0].body.turn, /^[0-9a-f-]{36}$/); assert.match(changed[0].body.cache, /^[0-9a-f-]{36}$/); assert.equal(await readFile(join(work, 'configured-effect.txt'), 'utf8'), 'source-yaml-effect')
   const before = await readFile(modelPath, 'utf8'); for (const bad of ['providers: [\n secret: synthetic-new-provider', raw.replace('default: high', 'default: max'), raw.replace('targets: [alpha, beta/second-a]', 'targets: [route]')]) { const failed = await api('POST', '/api/setup/models', { yaml: bad }); assert.equal(failed.status, 400); assert(!JSON.stringify(failed.body).includes(newSecret)); assert.equal(await readFile(modelPath, 'utf8'), before) }
+  const validCatalog = (await api('GET', '/api/models')).body
+  const invalidConfiguration = async mutate => {
+    const config = yamlReader.load(raw); mutate(config.providers.alpha, config.providers.alpha.models[0])
+    const rejected = await api('POST', '/api/setup/models', { yaml: JSON.stringify(config) })
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body)); assert.equal(await readFile(modelPath, 'utf8'), raw)
+    assert.deepEqual((await api('GET', '/api/models')).body, validCatalog)
+  }
+  for (const property of ['effort', 'streamContentInactivityTimeoutMs', 'webSearch', 'imageGeneration']) {
+    await invalidConfiguration(provider => { provider[property] = null })
+    await invalidConfiguration((provider, model) => { model[property] = null })
+  }
+  for (const property of ['outputFormat', 'outputCompression']) await invalidConfiguration(provider => { provider.imageGeneration = { enabled: false, [property]: null } })
+  await invalidConfiguration(provider => { provider.webSearch = { enabled: false, userLocation: null } })
+  await invalidConfiguration((provider, model) => { provider.imageGeneration = { quality: 'invalid' }; model.imageGeneration = { quality: 'high' } })
+  await invalidConfiguration((provider, model) => { provider.imageGeneration = { outputFormat: 'jpeg', background: 'transparent' }; model.imageGeneration = { outputFormat: 'png' } })
+  await invalidConfiguration((provider, model) => { provider.imageGeneration = { background: 'transparent' }; model.imageGeneration = { outputFormat: 'jpeg' } })
+  const open = yamlReader.load(raw); delete open.providers.alpha.effort; delete open.providers.alpha.models[0].effort
+  open.providers.alpha.effort = { ignoredOpenKey: { nested: null } }
+  open.providers.alpha.models[0].effort = { anotherOpenKey: true }
+  open.providers.alpha.webSearch = { enabled: false, userLocation: { country: ' US ', city: 'provider' }, ignored: null }
+  open.providers.alpha.models[0].webSearch = { enabled: false, userLocation: { city: 'model' } }
+  open.providers.alpha.imageGeneration = { enabled: false, outputFormat: 'png', outputCompression: 0 }
+  open.providers.alpha.extraFields.allowedNulls = { object: null, array: [null] }
+  open.providers.empty = { providerType: 'openai-responses', models: null }
+  await save(JSON.stringify(open)); const openRequest = await send('open-extra-and-null-values', 'DONE-first')
+  assert.deepEqual(openRequest[0].body.allowedNulls, { object: null, array: [null] }); assert.equal(openRequest[0].body.reasoning.effort, 'high')
+  await save(raw)
   const count = requests.length; await api('POST', route(current) + '/message', { text: 'hold-old' }); await until(() => held, 'old request held'); const captured = held.request; const updated = yaml(second, newSecret, 'br'); await save(updated); held.finish(); await until(async () => (await history()).messages.some(row => row.parts?.some(part => part.text === 'OLD-FROZEN')), 'held completion'); await idle(); assert.equal(captured.headers.authorization, 'Bearer ' + oldSecret); assert.equal(captured.body.model, 'wire/slash'); assert.equal(requests.length, count + 1)
   const next = await send('next-config', 'DONE-second'); assert.equal(next[0].headers.authorization, 'Bearer ' + newSecret); assert.equal(next[0].headers['content-encoding'], 'br'); assert.equal(next[0].body.cache, captured.body.cache); assert.notEqual(next[0].body.turn, captured.body.turn)
   for (const model of ['future', 'route']) { assert.equal((await api('POST', route(current) + '/model', { model })).status, 200); const before = requests.length; await send('unsupported-' + model); assert.equal(requests.length, before); assert(!JSON.stringify(await history()).includes(newSecret)) }
@@ -88,7 +116,7 @@ try {
   await save(updated)
   const form = await api('POST', '/api/setup/models', { providers: [{ id: 'alpha', providerType: 'openai-responses', models: 'wire/slash' }], default: 'alpha' }); assert.equal(form.status, 200); const formYaml = JSON.parse(await readFile(modelPath, 'utf8')); assert.equal(formYaml.providers.alpha.models[0].id, 'wire/slash'); assert.equal(formYaml.providers.alpha.extraFields.nested.old, 'kept')
   await save(updated.replace('providers:', 'models:')); assert.equal((await api('GET', '/api/models')).body.defaultKey, 'alpha'); await stop(); await start(); const restart = await send('after-restart', 'DONE-second'); assert.equal(restart[0].body.cache, captured.body.cache); assert.notEqual(restart[0].body.turn, next[0].body.turn); assert.equal((await api('GET', '/api/setup/status')).body.models.rawYaml, updated.replace('providers:', 'models:')); assert.equal((await history()).messages.flatMap(row => row.parts || []).filter(part => part.functionCall?.id === 'yaml-write').length, 1)
-  await stop(); console.log(JSON.stringify({ result: 'ok', hostPids: hosts, requests: requests.length, originalSetupRawSave: true, immutableConfiguredResponses: true, pairedCacheTurnIdentity: true, canonicalYamlAndRestart: true }))
+  await stop(); console.log(JSON.stringify({ result: 'ok', hostPids: hosts, requests: requests.length, originalSetupRawSave: true, immutableConfiguredResponses: true, pairedCacheTurnIdentity: true, canonicalYamlAndRestart: true, sourcePresenceAndMediaValidation: true }))
 } catch (error) { console.error("HOST-FAILURE", host?.output, "REQUESTS", JSON.stringify(requests.map(request => ({ label: request.label, user: request.user, encoding: request.headers["content-encoding"], effort: request.body.reasoning })))); throw error; } finally {
   held?.finish(); await browser?.close().catch(() => {}); if (host?.child.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(3000)]); if (host.child.exitCode === null) host.child.kill('SIGKILL') }
   first.closeAllConnections(); second.closeAllConnections(); await Promise.all([new Promise(resolve => first.close(resolve)), new Promise(resolve => second.close(resolve))]); if (process.env.FOXWARM_KEEP_E2E_ROOT) console.log('Retained owned root: ' + root); else await rm(root, { recursive: true, force: true })
