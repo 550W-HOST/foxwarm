@@ -43,7 +43,16 @@ function peer(label) {
       const wire = Buffer.concat(chunks); let bytes = wire
       if (request.headers['content-encoding'] === 'gzip') bytes = gunzipSync(bytes)
       if (request.headers['content-encoding'] === 'br') bytes = brotliDecompressSync(bytes)
-      const body = JSON.parse(bytes), user = body.messages.filter(message => message.role === 'user').at(-1), input = inputOf(body)
+      const body = JSON.parse(bytes)
+      if (request.url === '/v1/responses') {
+        const input = JSON.stringify(body.input); requests.push({ label, body, headers: request.headers, user: 'responses-destination' })
+        assert.equal(body.model, 'same-wire'); assert(!body.input.some(item => item.type === 'reasoning'))
+        assert(!input.includes('Preferred reasoning')); assert(!input.includes('synthetic-opaque-signature'))
+        assert(input.includes('FLOW-DONE')); assert(body.input.some(item => item.call_id === 'call_write')); assert(body.input.some(item => item.call_id === 'call_read'))
+        response.setHeader('content-type', 'text/event-stream')
+        event(response, { type: 'response.completed', response: { id: 'cross-response', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'RESPONSES-CROSS-DONE' }] }], usage: { input_tokens: 12, output_tokens: 3 } } }); response.end(); return
+      }
+      const user = body.messages.filter(message => message.role === 'user').at(-1), input = inputOf(body)
       const record = { label, body, headers: request.headers, wireBytes: wire.length, user: textOf(user?.content) }; requests.push(record)
       assert.equal(request.url, '/v1/chat/completions'); assert.equal(request.headers['user-agent'], 'foxwarm/1.0'); assert.equal(body.model, 'same-wire'); assert.equal(body.max_tokens, 911); assert.deepEqual(body.stream_options, { include_usage: true }); assert.equal(body.stream, true)
       assert.equal(Number(request.headers['content-length']), wire.length); assert.equal(body.reasoning_effort, 'high'); assert.equal(body.messages[0].role, 'system')
@@ -51,7 +60,7 @@ function peer(label) {
       response.setHeader('content-type', 'text/event-stream')
       const plan = body.messages.map(message => textOf(message.content)).findLast(text => text.includes('COMPACTION STARTED:'))
       if (plan) {
-        plannerRound++; assert.equal(body.tools.length, 23); assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
+        assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')); plannerRound++; assert.equal(body.tools.length, 23); assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
         if (plannerRound === 1) { call(response, 'plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid range.' }] }); return }
         assert(input.includes('COMPACT PLAN INVALID.'))
         const ranges = [...plan.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
@@ -84,7 +93,17 @@ function peer(label) {
         assert.equal(record.body.turn, flowHold.record.body.turn); assert.equal(record.body.cache, flowHold.record.body.cache)
         complete(response, 'FLOW-DONE'); return
       }
-      if (record.user.includes('cross-concrete')) { assert(body.messages.filter(message => message.role === 'assistant').every(message => !message.provider_specific_fields && !('reasoning' in message))); complete(response, 'CROSS-DONE'); return }
+      if (record.user.includes('cross-concrete')) {
+        assert(body.messages.filter(message => message.role === 'assistant').every(message => !message.provider_specific_fields && !('reasoning' in message) && !('reasoning_content' in message)))
+        assert(input.includes('FLOW-DONE')); assert(body.messages.some(message => message.tool_calls?.some(call => call.id === 'call_write'))); assert(body.messages.some(message => message.tool_call_id === 'call_read'))
+        complete(response, 'CROSS-DONE'); return
+      }
+      if (record.user.includes('same-concrete-replay')) {
+        const replay = body.messages.find(message => message.tool_calls?.some(call => call.id === 'call_write'))
+        assert.equal(replay.reasoning, 'Preferred reasoning '); assert.deepEqual(replay.provider_specific_fields, opaque); complete(response, 'REPLAY-DONE'); return
+      }
+      if (record.user.includes('seed-compact-0 ')) delta(response, { reasoning_content: 'COMPACT A THOUGHT', provider_specific_fields: { value: 'compact-a-opaque' } })
+      if (record.user.includes('seed-compact-trigger')) { assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')) }
       if (record.user.includes('malformed-sse')) { response.end('data: {broken}\n\n'); return }
       if (record.user.includes('provider-error')) { event(response, { error: { message: 'Provider error ' + newToken } }); response.end(); return }
       if (record.user.includes('http-error')) { response.writeHead(429, { 'content-type': 'text/plain' }); response.end('secret ' + newToken); return }
@@ -107,7 +126,10 @@ function configuration(server, token, compression = 'gzip') {
   const leaf = (server, token, field) => ({ providerType: 'openai-completions', baseUrl: url(server), apiKey: token, contextLimit: 20000, historyReasoningField: field,
     requestCompression: compression, webSearch: true, keepReasoningOnError: true, extraHeaders: { 'Content-Encoding': 'overridden', 'Content-Length': '1', 'X-Captured': token },
     extraFields: { max_tokens: 911, reasoning_effort: 'none', cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}', nested: { kept: null } }, models: ['same-wire'] })
-  return yamlReader.dump({ default: 'a', providers: { a: leaf(server, token, 'reasoning'), b: leaf(second, newToken, 'reasoning_content') } }).replaceAll('\n', '\r\n')
+  const responses = { ...leaf(second, newToken, 'reasoning_content'), providerType: 'openai-responses', webSearch: false, keepReasoningOnError: false,
+    extraFields: { max_output_tokens: 911, cache: '${SESSION_CACHE_KEY}', turn: '${TURN_ID}' } }
+  delete responses.historyReasoningField
+  return yamlReader.dump({ default: 'a', providers: { a: leaf(server, token, 'reasoning'), b: leaf(second, newToken, 'reasoning_content'), c: responses } }).replaceAll('\n', '\r\n')
 }
 async function api(method, path, body) { const response = await fetch(origin + path, { method, headers: { authorization: 'Bearer ' + apiToken, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, body: await response.json().catch(() => ({})) } }
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -147,7 +169,12 @@ try {
   const db = join(data, 'state/archive-store.sqlite'), sql = (statement, parameters) => JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', db, statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
   assert.equal(sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', [current])[0][0], flowHistory.length)
   if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="b"]'); await page.click('[data-model-column="current"] [data-model-option-key="b"]'); await until(async () => (await history()).session.modelKey === 'b', 'same wire other concrete selected')
-  await send('cross-concrete', 'CROSS-DONE'); await api('POST', route(current) + '/model', { model: 'a' })
+  const originalArchive = sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, assistant.__meta.seq])
+  await send('cross-concrete', 'CROSS-DONE')
+  assert.deepEqual((await history()).messages.find(row => row.__meta?.seq === assistant.__meta.seq), assistant); assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, assistant.__meta.seq]), originalArchive)
+  await api('POST', route(current) + '/model', { model: 'c' }); await send('cross-responses-destination', 'RESPONSES-CROSS-DONE')
+  assert.deepEqual((await history()).messages.find(row => row.__meta?.seq === assistant.__meta.seq), assistant); assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, assistant.__meta.seq]), originalArchive)
+  await api('POST', route(current) + '/model', { model: 'a' }); await send('same-concrete-replay', 'REPLAY-DONE')
   const plain = await send('no-terminal', 'EOF-DONE'); assert.equal(plain.length, 1); assert.notEqual(plain[0].body.turn, captured.body.turn); assert.equal(plain[0].body.cache, captured.body.cache)
   for (const name of ['malformed-sse', 'provider-error', 'http-error', 'empty-eof', 'missing-id']) {
     const models = (await history()).messages.filter(row => row.role === 'model').length, count = (await state()).failureCount
@@ -164,8 +191,10 @@ try {
   const restarted = await send('after-restart', 'RESTART-DONE'); assert.equal(restarted.length, 1); assert(inputOf(restarted[0].body).includes('<foxwarm-system kind="goal-reminder">\nHistorical persisted goal.\n</foxwarm-system>')); assert.equal(await readFile(effectPath, 'utf8'), 'héllo')
   const compactId = (await api('POST', '/api/sessions', {})).body.sessionId; current = compactId
   for (let index = 0; index < 15; index++) await send('seed-compact-' + index + ' ' + ('unique-context-' + index + '-').repeat(100), 'PLAIN-DONE')
+  const compactSource = (await history()).messages.find(row => row.parts?.some(part => part.thinking === 'COMPACT A THOUGHT')); assert(compactSource)
+  const compactArchive = sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, compactSource.__meta.seq]); await api('POST', route(current) + '/model', { model: 'b' })
   await send('seed-compact-trigger', 'COMPACT-TRIGGER'); await until(async () => (await history()).messages.some(row => row.__meta?.contextBlock), 'real Completions automatic compaction')
-  assert.equal(plannerRound, 2); const block = (await history()).messages.find(row => row.__meta?.contextBlock).__meta.contextBlock; assert(sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', [current])[0][0] > (await history()).messages.length)
+  assert.equal(plannerRound, 2); assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, compactSource.__meta.seq]), compactArchive); const block = (await history()).messages.find(row => row.__meta?.contextBlock).__meta.contextBlock; assert(sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', [current])[0][0] > (await history()).messages.length)
   const expanded = await api('GET', route(current) + '/context-blocks/' + block.id + '/expand?previewLength=6000'); assert.equal(expanded.status, 200); assert(expanded.body.messages.length > 0)
   // A role/usage/keepalive-only peer must not reset the source three-minute first-content timer.
   const firstContentStart = Date.now(); await send('first-content', null, 195000); const elapsed = Date.now() - firstContentStart; assert(elapsed >= 178000 && elapsed < 193000, elapsed); await until(() => closed.has('first-content'), 'three-minute first-content peer closed')

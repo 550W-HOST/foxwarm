@@ -41,9 +41,13 @@ internal static class ConfiguredOpenAI
         };
     }
     internal static IChatService CreateService(HttpClient http, ConcreteHostModel model, ResponsesClientOptions options,
-        string cacheKey, Action<string, ResponsesStreamProgress>? progress = null) => model.ProviderType == "openai-completions"
-        ? new CompletionsChatService(http, options, SessionWait.Text(model.Configuration["historyReasoningField"]) ?? "reasoning_content", cacheKey, progress)
-        : new ResponsesChatService(http, options, progress);
+        string cacheKey, Action<string, ResponsesStreamProgress>? progress = null)
+    {
+        IChatService service = model.ProviderType == "openai-completions"
+            ? new CompletionsChatService(http, options, SessionWait.Text(model.Configuration["historyReasoningField"]) ?? "reasoning_content", cacheKey, progress)
+            : new ResponsesChatService(http, options, progress);
+        return new ConcreteRequestHistory.ChatService(service, model.Key);
+    }
 
     internal static string SafeError(Exception error, ConcreteHostModel model)
     {
