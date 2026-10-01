@@ -86,6 +86,7 @@ export interface SessionTurnHost {
   appendSessionMessages: typeof sessionManager.appendSessionMessages;
   appendQueuedSessionMessages: typeof sessionManager.appendQueuedSessionMessages;
   notifyHistoryUpdate: typeof sessionManager.notifyHistoryUpdate;
+  hasCompletedCompactJob: typeof sessionManager.hasCompletedCompactJob;
   applyCompletedCompactJob: typeof sessionManager.applyCompletedCompactJob;
   processSessionCompactionRequest: typeof sessionManager.processSessionCompactionRequest;
   checkAndCompactIfNeeded: typeof sessionManager.checkAndCompactIfNeeded;
@@ -108,7 +109,7 @@ export interface SessionTurnHost {
 }
 
 export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
-  'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
+  'hasCompletedCompactJob' | 'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
   | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'ingestPendingQueue' | 'deliverIntermediateText' | 'deliverCommittedFinal' | 'deliverGeneratedImages'
   | 'reportChannelProgress' | 'finishChannelProgress'>>;
 
@@ -205,6 +206,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   appendSessionMessages(session: Session, messages: Message[]): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessages(session, messages); }
   appendQueuedSessionMessages(session: Session, messages: Message[]): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendQueuedMessages(session, messages); }
   notifyHistoryUpdate(sessionId: string, message: Message): void { this.assertOwnerId(sessionId); this.currentSessionEffects.notifyHistoryUpdate(sessionId, message); }
+  hasCompletedCompactJob(sessionId: string): boolean { this.assertOwnerId(sessionId); return (this.overrides.hasCompletedCompactJob || sessionManager.hasCompletedCompactJob)(sessionId); }
   get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return this.overrides.applyCompletedCompactJob || sessionManager.applyCompletedCompactJob; }
   get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return this.overrides.processSessionCompactionRequest || sessionManager.processSessionCompactionRequest; }
   get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return this.overrides.checkAndCompactIfNeeded || sessionManager.checkAndCompactIfNeeded; }
@@ -392,7 +394,8 @@ export class SessionTurnRunner {
         continue;
       }
       if (session.queue[0].type === 'compact-commit') {
-        break;
+        session.queue.shift();
+        continue;
       }
       const item = session.queue.shift();
       if (!item) continue;
@@ -407,6 +410,7 @@ export class SessionTurnRunner {
     session: Session,
     pendingParts: MessagePart[] | null,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
+    await this.runPendingCompactionIfNeeded(session.id, session);
     let parts = pendingParts;
     let consumedInput = false;
 
@@ -421,7 +425,8 @@ export class SessionTurnRunner {
         continue;
       }
       if (session.queue[0].type === 'compact-commit') {
-        break;
+        session.queue.shift();
+        continue;
       }
       const item = session.queue.shift();
       if (!item) {
@@ -445,7 +450,7 @@ export class SessionTurnRunner {
   private inspectLeadingQueuedTurnInputs(session: Session): boolean {
     for (const item of session.queue) {
       if (!isQueueItem(item)) continue;
-      if (item.type === 'compact-commit') break;
+      if (item.type === 'compact-commit') continue;
       if (!item.message && !item.parts?.length) continue;
       return true;
     }
@@ -491,10 +496,10 @@ export class SessionTurnRunner {
     let committedAnyInput = false;
 
     while (true) {
+      await this.runPendingCompactionIfNeeded(session.id, session, true);
       const messages: Message[] = [];
       const committedItems: QueueItem[] = [];
       let removedQueueItems = 0;
-      let applyCompactCommit = false;
 
       for (const item of session.queue) {
         if (!isQueueItem(item)) {
@@ -503,7 +508,6 @@ export class SessionTurnRunner {
         }
         if (item.type === 'compact-commit') {
           removedQueueItems += 1;
-          applyCompactCommit = true;
           continue;
         }
 
@@ -549,16 +553,6 @@ export class SessionTurnRunner {
           : this.host.saveSession(session),
       );
       committedMessages += messages.length;
-      if (applyCompactCommit) {
-        try {
-          await this.host.applyCompletedCompactJob(session.id);
-        } catch (error: any) {
-          logger.error({ err: error, sessionId: session.id }, 'Stop finalization failed to apply completed compact job');
-          if (this.host.hasBroadcast(session)) {
-            this.host.broadcast(session, `Error: ${error?.message || 'Compaction commit failed'}`);
-          }
-        }
-      }
     }
   }
 
@@ -574,20 +568,14 @@ export class SessionTurnRunner {
   private async runPendingCompactionIfNeeded(
     sessionId: string,
     session: Session,
-    outerQueueBoundary?: QueueItem,
-  ): Promise<'continued' | false> {
-    while (session.queue[0] && !isQueueItem(session.queue[0])) {
-      session.queue.shift();
+    stopped = false,
+  ): Promise<void> {
+    const hasCompletedJob = this.host.hasCompletedCompactJob(sessionId);
+    // Commit markers only wake the owner; their queue positions never split inputs.
+    if (session.queue.some(item => isQueueItem(item) && item.type === 'compact-commit')) {
+      session.queue = session.queue.filter(item => !isQueueItem(item) || item.type !== 'compact-commit');
     }
-    const nextItem = session.queue[0];
-    if (nextItem === outerQueueBoundary) {
-      return false;
-    }
-    if (nextItem?.type !== 'compact-commit') {
-      return false;
-    }
-
-    session.queue.shift();
+    if (!hasCompletedJob) return;
 
     try {
       this.host.setActiveSessionRuntimeState(sessionId, {
@@ -596,12 +584,16 @@ export class SessionTurnRunner {
         active: { phase: 'compaction' },
       });
       await this.host.applyCompletedCompactJob(sessionId);
-    } catch (e: any) {
-      logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
-      await this.sendSessionError(session, e);
+    } catch (error: any) {
+      logger.error({ err: error, sessionId }, 'Safe-point compaction failed');
+      if (stopped) {
+        if (this.host.hasBroadcast(session)) {
+          this.host.broadcast(session, `Error: ${error?.message || 'Compaction commit failed'}`);
+        }
+      } else {
+        await this.sendSessionError(session, error);
+      }
     }
-
-    return 'continued';
   }
 
   private async maybeRequestAutoCompactionBeforeContinuation(
@@ -618,20 +610,6 @@ export class SessionTurnRunner {
       completionMarker: 'Compaction completed. You can continue working now.',
     }, 'auto');
     logger.info('Compact requested, continuing with current history');
-  }
-
-  private async runQueuedCompaction(sessionId: string, session: Session): Promise<void> {
-    try {
-      this.host.setActiveSessionRuntimeState(sessionId, {
-        state: 'requesting-model',
-        since: Date.now(),
-        active: { phase: 'compaction' },
-      });
-      await this.host.applyCompletedCompactJob(sessionId);
-    } catch (e: any) {
-      logger.error({ err: e, sessionId }, 'Queued compaction failed');
-      await this.sendSessionError(session, e);
-    }
   }
 
   private async appendUserMessage(session: Session, parts: MessagePart[], clientMessageId?: string): Promise<void> {
@@ -693,7 +671,7 @@ export class SessionTurnRunner {
       return;
     }
 
-    if (!shouldQueueChildHandoffReminder(session) || session.queue.length > 0) {
+    if (!shouldQueueChildHandoffReminder(session) || this.inspectLeadingQueuedTurnInputs(session)) {
       return;
     }
 
@@ -792,7 +770,6 @@ export class SessionTurnRunner {
       sourceCtx?: ChannelContext;
       sendTyping?: boolean;
       session?: Session;
-      outerQueueBoundary?: QueueItem;
       onTurnOwnedRelease?: () => void;
     }
   ): Promise<'suppress-trailing-handoff' | void> {
@@ -841,10 +818,7 @@ export class SessionTurnRunner {
       let iteration = 0;
       let finalUsage: TokenUsage | undefined;
       while (iteration < 500) {
-        const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session, options.outerQueueBoundary);
-        if (pendingCompaction === 'continued') {
-          continue;
-        }
+        await this.runPendingCompactionIfNeeded(sessionId, session);
 
         if (queuedItems?.length) {
           // Keep a drained batch unsent across the pre-LLM compaction safe
@@ -1089,12 +1063,6 @@ export class SessionTurnRunner {
           break;
         }
 
-        const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session, options.outerQueueBoundary);
-        if (compactionAfterTools === 'continued') {
-          iteration++;
-          continue;
-        }
-
         await this.host.ingestPendingQueue?.(session);
         // This is the second ingestion-to-consume boundary in a tool
         // iteration. Dequeue can signal while the awaited ingestion is in
@@ -1293,6 +1261,7 @@ export class SessionTurnRunner {
           break;
         }
 
+        await this.runPendingCompactionIfNeeded(sessionId, session);
         while (session.queue[0] && !isQueueItem(session.queue[0])) {
           session.queue.shift();
         }
@@ -1300,15 +1269,9 @@ export class SessionTurnRunner {
           break;
         }
 
-        // Preserve the durable queue before selecting the next owned action.
-        // The selected compact or ordinary turn then commits its own mutation.
+        // Preserve the durable ordinary queue before selecting the next batch.
+        // The turn then commits each input as its own canonical message.
         await this.host.saveSession(session);
-
-        if (session.queue[0]?.type === 'compact-commit') {
-          session.queue.shift();
-          await this.runQueuedCompaction(sessionId, session);
-          continue;
-        }
 
         const queuedItems = this.drainLeadingQueuedTurnInputs(session);
         if (queuedItems.length === 0) {
@@ -1318,7 +1281,6 @@ export class SessionTurnRunner {
           parts: null,
           queuedItems,
           session,
-          ...(session.queue[0] ? { outerQueueBoundary: session.queue[0] } : {}),
           onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
         });
         suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';

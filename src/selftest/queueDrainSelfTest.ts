@@ -82,6 +82,7 @@ async function main(): Promise<void> {
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const originalHasCompletedCompactJob = sessionManager.hasCompletedCompactJob;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
@@ -214,6 +215,7 @@ async function main(): Promise<void> {
       const session = await ensureSession(sessionId);
 
       let compactRequestCount = 0;
+      (sessionManager as any).hasCompletedCompactJob = () => session.queue.some(item => item.type === 'compact-commit');
       (sessionManager as any).applyCompletedCompactJob = async (targetSessionId: string) => {
         assert.strictEqual(targetSessionId, sessionId);
         compactRequestCount += 1;
@@ -262,6 +264,7 @@ async function main(): Promise<void> {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    (sessionManager as any).hasCompletedCompactJob = originalHasCompletedCompactJob;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await cleanupSessions(createdSessionIds);
   }

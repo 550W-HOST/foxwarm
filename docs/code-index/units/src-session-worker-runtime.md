@@ -83,6 +83,8 @@ Transient presentation channel (subscription-gated): Main tracks per-session Web
 
 Generated-image delivery uses the same bounded, source-fenced `session-turn-delivery` reverse service with refs rather than text or raw bytes. Main verifies each blob before calling existing normal-attachment file delivery; failures are logged without a provider retry. See [D-image-generated-output-replay](../threads/image-blob-lifecycle.md#d-image-generated-output-replay).
 
+The bound runner reports no completed background compact job (`hasCompletedCompactJob:false`); explicit completed-job application remains unsupported. Awaited compaction and its exact-owner maintenance fences are unchanged. See [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
+
 ## Canonical ownership
 
 The cross-module placement, durability, fencing, idle, and future worker-owned session decisions are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#design-decisions).

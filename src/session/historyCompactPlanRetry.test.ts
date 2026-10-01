@@ -275,6 +275,7 @@ test('awaited compact cancellation aborts its provider signal without changing h
       deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone',
     );
     await started;
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
     const cancelled = await sessionHistory.cancelSessionCompaction(deps, session.id);
     await running;
     assert.deepEqual(cancelled, { outcome: 'cancelled', phase: 'planning' });
@@ -377,6 +378,61 @@ test('background enqueue/cancel race waits for producer cleanup and preserves or
     assert.deepEqual(await cancellation, { outcome: 'cancelled', phase: 'enqueueing' });
     assert.deepEqual(session.queue, [first, second]);
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('a consumed job waiting for its enqueue callback cannot erase a newer ready job', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_late_enqueue_new_job'));
+  const ordinary = { type: 'user', parts: [{ text: 'ordinary input survives both jobs' }] } as any;
+  session.queue.push(ordinary);
+  const deps = makeDepsForSession(session, { count: 0 });
+  const originalChat = llm.chat;
+  let enqueueEntered!: () => void; let releaseEnqueue!: () => void;
+  const entered = new Promise<void>(resolve => { enqueueEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseEnqueue = resolve; });
+  let enqueueCount = 0;
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'before-late-enqueue', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'first consumed compact job',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    deps.enqueueSessionItem = async (_id: string, item: any) => {
+      enqueueCount += 1;
+      if (enqueueCount === 1) { enqueueEntered(); await release; }
+      session.queue.push(item);
+      await deps.saveSession(session.id);
+    };
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background');
+    await entered;
+    assert.equal(sessionHistory.getCompactOperationPhase(session.id), 'enqueueing');
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+    assert.deepEqual(session.queue, [ordinary], 'completed state precedes wake-signal insertion');
+    assert.equal(await sessionHistory.applyCompletedCompactJob(deps, session.id), true);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
+    assert.deepEqual(session.queue, [ordinary]);
+
+    // The newly compacted, short history yields a real no-op job without a provider call.
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0 }, 'background');
+    for (let index = 0; index < 100 && sessionHistory.getCompactOperationPhase(session.id) !== 'ready'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+    assert.equal(sessionHistory.getCompactOperationPhase(session.id), 'ready');
+    assert.equal(enqueueCount, 2);
+    releaseEnqueue();
+    for (let index = 0; index < 100 && session.queue.length < 3; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.queue.length, 3);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true, 'late old producer leaves the new result owned');
+    assert.deepEqual(await sessionHistory.cancelSessionCompaction(deps, session.id), { outcome: 'cancelled', phase: 'ready' });
+    assert.deepEqual(session.queue, [ordinary]);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
+  } finally { releaseEnqueue(); (llm as any).chat = originalChat; }
 });
 
 test('pre-existing compact commit still reaches ready cancellation completion without stranding the producer', async () => {
@@ -1201,6 +1257,22 @@ test('compact planning LLM final failure aborts without rewriting session histor
     assert.equal(session.historyVersion, 0);
     assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
     assert(session.history.some(item => item.__meta?.seq === priorCompletion.__meta!.seq), 'failed planning leaves prior completion untouched');
+
+    const ordinary = { type: 'user', parts: [{ text: 'ordinary input survives a failed background job' }] } as any;
+    session.queue.push(ordinary);
+    const deps = makeDepsForSession(session, saveCounter);
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background');
+    for (let index = 0; index < 100 && !sessionHistory.hasCompletedCompactJob(session.id); index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true, 'terminal planning failures are consumable completed work');
+    await assert.rejects(() => sessionHistory.applyCompletedCompactJob(deps, session.id), /API request failed after 5 attempts/);
+    assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
+    assert.deepEqual(session.queue, [ordinary]);
+    assert.deepEqual(session.history, originalHistory);
+    assert.equal(callCount, 2);
+
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -1326,6 +1398,8 @@ test('conflicting required Archive block append fails closed before active histo
 test('background compact validates exact snapshot content and rejects same-metadata offline edits', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_exact_snapshot_edit'));
+  const ordinary = { type: 'user', parts: [{ text: 'queued input after incompatible snapshot' }] } as any;
+  session.queue.push(ordinary);
   const originalChat = llm.chat;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -1346,6 +1420,7 @@ test('background compact validates exact snapshot content and rejects same-metad
         const applied = await sessionHistory.applyCompletedCompactJob(makeDepsForSession(session, { count: 0 }), session.id);
         if (!sessionHistory.hasPendingCompactWork(session.id)) {
           assert.equal(applied, false);
+          assert.deepEqual(session.queue, [ordinary]);
           assert.equal(session.history[0].parts[0].text, 'offline edited wording with the same seq and metadata');
           return;
         }

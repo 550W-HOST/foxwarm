@@ -339,38 +339,169 @@ test('one owned processor sends many different-source rows in one provider turn 
   }
 });
 
-test('one owned processor sequences compact turn compact without another busy claim', async () => {
+test('one owned processor applies ready compaction before all ordinary input across wake markers', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_compact_turn_compact_${Date.now()}`, 'unused');
   session.queue = [
+    { type: 'user', parts: [{ text: 'before compact marker' }] },
     { type: 'compact-commit' },
-    { type: 'user', parts: [{ text: 'between compacts' }] },
+    { type: 'background', parts: [{ text: 'after compact marker' }] },
     { type: 'compact-commit' },
   ];
   const events: string[] = [];
   let compactApplies = 0;
   const effects = createEffects(session, events);
   const host = new LocalSessionTurnHost(effects, session, {
-    applyCompletedCompactJob: async () => { compactApplies += 1; return true; },
+    hasCompletedCompactJob: () => compactApplies === 0,
+    applyCompletedCompactJob: async () => {
+      assert.equal(session.history.length, 0, 'ready compaction precedes canonical queued input');
+      compactApplies += 1;
+      return true;
+    },
   });
   const runner = new SessionTurnRunner(host);
   const originalChat = llm.chat;
   (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
     assert.equal(parts, null);
-    assert.equal(compactApplies, 1, 'the trailing compact remains an outer action until this turn completes');
+    assert.equal(compactApplies, 1);
+    assert.deepEqual(session.history.map(message => message.parts[0].text), ['before compact marker', 'after compact marker']);
     await options.appendMessage({ role: 'model', parts: [{ text: 'between done' }] });
     return { text: 'between done' };
   };
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
-    assert.equal(compactApplies, 2);
-    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(compactApplies, 1);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'user', 'model']);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
   }
+});
+
+test('provider continuation commits a ready job before all follow-ups even before its wake marker exists', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_ready_followups_${Date.now()}`, 'initial input');
+  const events: string[] = [];
+  let ready = false;
+  let applies = 0;
+  const host = new LocalSessionTurnHost(createEffects(session, events), session, {
+    hasCompletedCompactJob: () => ready,
+    applyCompletedCompactJob: async () => {
+      assert.equal(session.history.at(-1)?.parts[0].text, 'first provider result');
+      assert.equal(session.history.some(message => message.parts[0].text === 'follow-up A'), false);
+      applies += 1;
+      ready = false;
+      return true;
+    },
+  });
+  const runner = new SessionTurnRunner(host);
+  const originalChat = llm.chat;
+  let requests = 0;
+  (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+    requests += 1;
+    if (requests === 1) {
+      await options.appendMessage({ role: 'model', parts: [{ text: 'first provider result' }] });
+      owner.queue.push(
+        { type: 'user', parts: [{ text: 'follow-up A' }] },
+        { type: 'background', parts: [{ text: 'follow-up B' }] },
+      );
+      ready = true;
+      return { text: 'first provider result' };
+    }
+    assert.equal(applies, 1);
+    assert.deepEqual(owner.history.slice(-2).map(message => message.parts[0].text), ['follow-up A', 'follow-up B']);
+    await options.appendMessage({ role: 'model', parts: [{ text: 'final provider result' }] });
+    return { text: 'final provider result' };
+  };
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(requests, 2);
+    assert.equal(applies, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('stale wake signals and failed or no-op jobs do not split or swallow ordinary input', async () => {
+  await initArchiveStore();
+  const originalChat = llm.chat;
+  try {
+    for (const outcome of ['signal-only', 'absent', 'noop', 'failed'] as const) {
+      const session = createSession(`detached_compact_${outcome}_${Date.now()}`, 'unused');
+      session.queue = outcome === 'signal-only' ? [{ type: 'compact-commit' }] : [
+        { type: 'user', parts: [{ text: 'input A' }] },
+        { type: 'compact-commit' },
+        { type: 'background', parts: [{ text: 'input B' }] },
+      ];
+      const events: string[] = [];
+      let ready = outcome === 'noop' || outcome === 'failed';
+      let applies = 0;
+      let requests = 0;
+      const runner = new SessionTurnRunner(new LocalSessionTurnHost(createEffects(session, events), session, {
+        hasCompletedCompactJob: () => ready,
+        applyCompletedCompactJob: async () => {
+          ready = false;
+          applies += 1;
+          if (outcome === 'failed') throw new Error('planning failed');
+          return false;
+        },
+      }));
+      (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+        requests += 1;
+        assert.deepEqual(owner.history.map(message => message.parts[0].text), ['input A', 'input B']);
+        await options.appendMessage({ role: 'model', parts: [{ text: 'done' }] });
+        return { text: 'done' };
+      };
+      await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+      assert.equal(requests, outcome === 'signal-only' ? 0 : 1);
+      assert.equal(applies, outcome === 'noop' || outcome === 'failed' ? 1 : 0);
+      assert.equal(events.filter(event => event === 'runtime:requesting-model').length, applies + requests);
+      assert.equal(session.queue.length, 0);
+    }
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('a failed canonical append replays the whole ordinary batch without replaying compact signals', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_compact_batch_rollback_${Date.now()}`, 'unused');
+  session.queue = [
+    { type: 'user', parts: [{ text: 'rollback input A' }] },
+    { type: 'compact-commit' },
+    { type: 'background', parts: [{ text: 'rollback input B' }] },
+  ];
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  let appends = 0;
+  let ready = true;
+  let applies = 0;
+  effects.appendQueuedMessages = (owner, messages) => sessionManager.appendQueuedSessionMessagesForSession(owner, messages, async () => {
+    appends += 1;
+    assert.deepEqual(messages.map(message => message.parts[0].text), ['rollback input A', 'rollback input B']);
+    if (appends === 1) throw new Error('injected queued append persistence failure');
+    await writeAuthoritativeSessionState(owner);
+  });
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session, {
+    hasCompletedCompactJob: () => ready,
+    applyCompletedCompactJob: async () => { ready = false; applies += 1; return true; },
+  }));
+  const originalChat = llm.chat;
+  let requests = 0;
+  (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+    requests += 1;
+    assert.deepEqual(owner.history.filter(message => message.role === 'user').map(message => message.parts[0].text), ['rollback input A', 'rollback input B']);
+    await options.appendMessage({ role: 'model', parts: [{ text: 'replayed batch done' }] });
+    return { text: 'replayed batch done' };
+  };
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(appends, 2);
+    assert.equal(applies, 1);
+    assert.equal(requests, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('retry consumes a later different-source queued row in the same provider turn', async () => {
@@ -514,7 +645,8 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     response?: string;
     successfulSendTargets?: string[];
     failedSend?: boolean;
-    addIncompatibleQueuedItem?: boolean;
+    addPendingInput?: boolean;
+    addStaleCompactSignal?: boolean;
   }): Promise<{ session: Session; reminders: string[] }> {
     const session = createSession(`child_handoff_${options.name}_${Date.now()}_${Math.random()}`, 'unused');
     session.parentSessionId = 'parent-session';
@@ -522,7 +654,14 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     if (options.initialState) session.childHandoffState = structuredClone(options.initialState);
     const reminders: string[] = [];
     const effects = createEffects(session, []);
+    let addedPendingInput = false;
     const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session, {
+      deliverCommittedFinal: async () => {
+        if (options.addPendingInput && !addedPendingInput) {
+          addedPendingInput = true;
+          session.queue.push({ type: 'user', parts: [{ text: 'pending ordinary input at final delivery' }] });
+        }
+      },
       queueSessionSystemEvent: async (_id, reminder) => { reminders.push(reminder); },
       checkAndCompactIfNeeded: async () => {},
       applyCompletedCompactJob: async () => true,
@@ -539,7 +678,7 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
           }] };
         }
       }
-      if (options.addIncompatibleQueuedItem) {
+      if (options.addStaleCompactSignal) {
         session.queue.push({ type: 'compact-commit' });
       }
       const text = options.response ?? 'done';
@@ -639,11 +778,21 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     const queueGuard = await runCase({
       name: 'queue-guard',
       queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
-      addIncompatibleQueuedItem: true,
+      addPendingInput: true,
     });
-    assert.deepEqual(queueGuard.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.deepEqual(queueGuard.session.childHandoffState, { boundary: 'direct-user', resolved: true });
+    assert.equal(queueGuard.session.history.filter(message => message.parts[0].text === 'pending ordinary input at final delivery').length, 1);
     assert.equal(queueGuard.reminders.length, 0);
     assert.equal(queueGuard.session.queue.length, 0);
+
+    const staleSignal = await runCase({
+      name: 'stale-signal',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      addStaleCompactSignal: true,
+    });
+    assert.deepEqual(staleSignal.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.equal(staleSignal.reminders.length, 1, 'a compact wake signal is not pending input');
+    assert.equal(staleSignal.session.queue.length, 0);
 
     const absentState = await runCase({
       name: 'absent-state-history',

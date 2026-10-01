@@ -762,6 +762,7 @@ export class SessionWorkerHost {
           this.assertId(sessionId);
           return this.applyAndPersistQueueItem({ type, parts: buildTimestampedSystemMessageParts(message) });
         },
+        hasCompletedCompactJob: sessionId => { this.assertId(sessionId); return false; },
         applyCompletedCompactJob: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
         processSessionCompactionRequest: async (sessionId, request) => {
           this.assertId(sessionId); await this.runAutomaticCompaction(request, 'pre-final');

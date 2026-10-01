@@ -2754,7 +2754,7 @@ export async function requestSessionCompaction(
   const session = await getSession(sessionId);
   assertSessionDestructiveMutationAllowed([session.id], 'start compaction work');
 
-  if (session.queue.some(item => item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
+  if (sessionHistory.hasPendingCompactWork(session.id) || sessionHistory.getCompactOperationPhase(session.id) !== undefined) {
     return {
       alreadyQueued: true,
       startedImmediately: false,
@@ -2776,7 +2776,8 @@ export async function requestSessionCompaction(
     };
   }
 
-  const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
+  const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy
+    && session.queue.every(item => item.type === 'compact-commit');
   if (canRunAwaitedNow) {
     await updateSessionBusyState(session, true);
     createStandaloneCompactAdmission(sessionId);
@@ -2861,6 +2862,10 @@ export async function processSessionCompactionRequest(
   owner: sessionHistory.CompactOperationOwner = 'turn',
 ): Promise<void> {
   await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode, owner);
+}
+
+export function hasCompletedCompactJob(sessionId: string): boolean {
+  return sessionHistory.hasCompletedCompactJob(sessionId);
 }
 
 export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {

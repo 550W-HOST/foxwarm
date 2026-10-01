@@ -15,7 +15,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - `getDefaultCompactThresholdTokens(session)` — `llm.compactThresholdPercent` (85% by default) of the resolved model context window.
 - `getEffectiveCompactThresholdTokens(session)` — positive session override or default.
 - `isAsyncCompactEnabled(session)` — true unless the resolved model explicitly sets `asyncCompact:false`.
-- `hasPendingCompactWork`, `discardPendingCompactWork`, `applyCompletedCompactJob` — compact-job lifecycle.
+- `hasPendingCompactWork`, `hasCompletedCompactJob`, `discardPendingCompactWork`, `applyCompletedCompactJob` — compact-job lifecycle. Completed readiness checks terminal job status and exact uncancelled operation identity, not signal presence or operation phase.
 
 ### Candidate and commit helpers
 
@@ -43,7 +43,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - **Planning loop:** calls the model with that detached prefix plus planning instructions and accumulated retry messages, never the force-kept tail. The prompt still describes the real force-kept count/sequence range from the complete snapshot. It accepts only `submit_compact_plan`, parses/normalizes/resolves each successful plan once, appends actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`.
 - **Result construction:** maps validator-resolved candidate ranges to active-history indices, raw ranges, and timestamps, then creates block archive records and replacement history messages without touching the live session.
 - **Compatible commit:** verifies the consumed snapshot prefix, writes archive/block state, replaces only that prefix while retaining appended suffixes and preserving the prompt-cache key, persists, and emits completion/reminder events.
-- **Background mode:** stores pending job state and later commits through the same compatibility path as awaited mode.
+- **Background mode:** stores pending job state and wakes the owner with a queue signal; safe-point priority is canonical in [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary). A completed job may be consumed while its enqueue callback still awaits. Identity guards keep that late producer from deleting a newer result, clearing its wake signals, or reviving the consumed operation. Commit shares the awaited compatibility path.
 
 ## Dependencies
 

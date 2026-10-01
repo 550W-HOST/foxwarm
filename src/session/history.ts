@@ -107,6 +107,13 @@ export function hasPendingCompactWork(sessionId: string): boolean {
   return compactJobStates.has(sessionId);
 }
 
+export function hasCompletedCompactJob(sessionId: string): boolean {
+  const state = compactJobStates.get(sessionId);
+  const operation = compactOperations.get(sessionId);
+  return !!state && state.status !== 'running' && !!operation
+    && state.operationId === operation.id && !isCompactCancelled(operation);
+}
+
 export function discardPendingCompactWork(sessionId: string): void {
   compactJobStates.delete(sessionId);
   const operation = compactOperations.get(sessionId);
@@ -1465,7 +1472,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
     } catch (error: any) {
       compactPreviewLastTimestamp.delete(sessionId);
       if (error instanceof CompactCancelledError || (isCompactCancelled(operation) && llm.isAbortError(error))) {
-        compactJobStates.delete(sessionId);
+        if (compactJobStates.get(sessionId)?.operationId === operation.id) compactJobStates.delete(sessionId);
       } else compactJobStates.set(sessionId, {
         status: 'failed',
         startedAt: Date.now(),
@@ -1482,7 +1489,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
 
     const liveSession = deps.getSessionById(sessionId);
     if (!liveSession || isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) {
-      compactJobStates.delete(sessionId);
+      if (compactJobStates.get(sessionId)?.operationId === operation.id) compactJobStates.delete(sessionId);
       compactPreviewLastTimestamp.delete(sessionId);
       finishCompactOperation(sessionId, operation);
       return;
@@ -1490,13 +1497,14 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
     if (!liveSession.queue.some(item => item.type === 'compact-commit')) {
       try { await deps.enqueueSessionItem!(sessionId, { type: 'compact-commit' }); }
       catch (error) {
-        compactJobStates.delete(sessionId);
+        if (compactJobStates.get(sessionId)?.operationId === operation.id) compactJobStates.delete(sessionId);
         finishCompactOperation(sessionId, operation);
         throw error;
       }
       if (isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) {
         const queuedSession = deps.getSessionById(sessionId);
-        if (queuedSession) {
+        const currentOperation = compactOperations.get(sessionId);
+        if (isCompactCancelled(operation) && (!currentOperation || currentOperation === operation) && queuedSession) {
           const nextQueue = queuedSession.queue.filter(item => item.type !== 'compact-commit');
           if (nextQueue.length !== queuedSession.queue.length) {
             queuedSession.queue = nextQueue;
@@ -1507,7 +1515,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         return;
       }
     }
-    operation.phase = 'ready';
+    if (compactOperations.get(sessionId) === operation) operation.phase = 'ready';
   })().catch(error => {
     logger.error({ err: error, sessionId }, 'Background compact job wrapper failed unexpectedly');
   });
