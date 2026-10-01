@@ -19,7 +19,7 @@ test('goal reminder uses one foxwarm-system part wrapping the reminder payload',
   const reminder = maybeBuildGoalReminderMessage(session);
   assert.ok(reminder);
   assert.deepEqual(reminder.parts, [
-    { system: '<foxwarm-system kind="goal-reminder">\nShip feature without losing compacted context\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>' },
+    { system: '<foxwarm-system kind="goal-reminder" hint="Keep this long-term goal in mind when deciding what to do next.">\nShip feature without losing compacted context\n</foxwarm-system>' },
   ]);
   assert.equal(session.goalState?.anchorSeq, 1);
 });

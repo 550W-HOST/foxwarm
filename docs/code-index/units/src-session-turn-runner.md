@@ -48,7 +48,7 @@ After each normal-turn `llm.chat` assistant append succeeds (including an eligib
 - Queue items retain individual canonical history boundaries even when a compatible batch shares one provider request.
 - Child-reminder pending-input checks reuse the ordinary-input peek; a compact wake signal alone cannot suppress an otherwise-required reminder.
 - Completed compact jobs have priority at input-consumption safe points but their wake signals are not batch boundaries. Stop, waits, managed yields, tool-call/result ordering, and authority/mailbox fences retain their control boundaries.
-- Goal reminders are appended only at the pre-provider safe point after complete input/tool persistence.
+- Goal reminders are appended only at the pre-provider safe point after complete input/tool persistence. Continuation classification accepts generated compact-completion reminders with guidance in the current `hint` attribute or the legacy body, while retaining exact paired metadata and part-shape checks; the WebUI mirrors this compatibility.
 - Non-null provider `parts` are cleared only after `llm.chat` returns and has appended them.
 - Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path except the fixed mutation-fenced Worker maintenance fatal described above.
 - The turn `finally` owns narrow Stop/fenced cleanup and its exact release attempt; once ownership transfers, the outer processor never retries that release. The outer processor owns later queued actions and only the ordinary busy release/final persistence.

@@ -38,11 +38,11 @@ const compactCompleted = () => ({
   parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' }],
 })
 const compactCompletionGoalReminderText = '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>'
-const compactCompletedWithGoalReminder = () => ({
+const compactCompletedWithGoalReminder = (reminder = compactCompletionGoalReminderText) => ({
   role: 'user',
   parts: [
     { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' },
-    { system: compactCompletionGoalReminderText },
+    { system: reminder },
   ],
   __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
 })
@@ -81,6 +81,12 @@ const cases = [
   { name: 'compact marker with its generated goal reminder over final model remains complete', messages: [userText(), modelText(), compactCompletedWithGoalReminder()], incomplete: false },
   { name: 'compact marker with its generated goal reminder over user remains incomplete', messages: [modelText(), userText(), compactCompletedWithGoalReminder()], incomplete: true },
   { name: 'compact marker with its generated goal reminder over dangling tool result remains incomplete', messages: [callMessage('read-compact-goal', 'read'), toolMessage('read-compact-goal', 'read'), compactCompletedWithGoalReminder()], incomplete: true },
+  ...[
+    { name: 'completed model', before: [userText(), modelText()], incomplete: false },
+    { name: 'pending user', before: [modelText(), userText()], incomplete: true },
+    { name: 'tool continuation', before: [callMessage('hint-read', 'read'), toolMessage('hint-read', 'read')], incomplete: true },
+  ].map(({ name, before, incomplete }) => ({ name: `compact goal hint preserves ${name} classification`,
+    messages: [...before, compactCompletedWithGoalReminder('<foxwarm-system kind="goal-reminder" hint="Remember &quot;the outcome&quot;.">\nFinish the requested work\n</foxwarm-system>')], incomplete })),
   { name: 'ordinary interval goal reminder remains incomplete system input', messages: [userText(), modelText(), intervalGoalReminder()], incomplete: true },
   { name: 'compact marker mixed with unrelated system content remains incomplete', messages: [userText(), modelText(), {
     role: 'user',

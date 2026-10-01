@@ -903,7 +903,7 @@ test('exact turn owner rejects continuation after a completed model answer follo
       role: 'user',
       parts: [
         { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' },
-        { system: '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>' },
+        { system: '<foxwarm-system kind="goal-reminder" hint="Keep this long-term goal in mind when deciding what to do next.">\nFinish the requested work\n</foxwarm-system>' },
       ],
       __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
     },

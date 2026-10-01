@@ -31,7 +31,7 @@ function isCanonicalSystemOnlyPart(part: MessagePart, predicate: (value: unknown
 
 function isCompactCompletionGoalReminderText(value: unknown): boolean {
   if (typeof value !== 'string') return false
-  const match = value.match(/^<foxwarm-system kind="goal-reminder">\n([\s\S]+)\n<\/foxwarm-system>$/)
+  const match = value.match(/^<foxwarm-system kind="goal-reminder"(?: hint="[^"]*")?>\n([\s\S]+)\n<\/foxwarm-system>$/)
   return !!match && match[1].trim().length > 0
 }
 

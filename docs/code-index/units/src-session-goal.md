@@ -14,7 +14,7 @@ Manages session-level goal tracking, including setting/clearing goals and buildi
 - `getLatestSessionMessageSeq(session)` — returns the highest message sequence number
 - `isGoalReminderMessage(message)` — checks if a message is a goal reminder
 - `getLatestCountedMessageSeq(session)` — latest seq excluding reminder messages
-- `formatSessionGoalReminderText(goal)` — formats the reminder as a single `<foxwarm-system kind="goal-reminder">goal/guidance</foxwarm-system>` wrapper
+- `formatSessionGoalReminderText(goal)` — formats one goal-reminder wrapper with guidance in its `hint` attribute and only the goal in its body
 - `countNonReminderMessagesAfterSeq(session, anchorSeq)` — counts non-reminder messages after a given seq
 - `resolveSessionGoalRemindEvery(session, value)` — resolves remindEvery from explicit value, session state, or default
 - `setSessionGoal(session, goal, remindEvery)` — persists goal state on the session
@@ -35,7 +35,7 @@ Manages session-level goal tracking, including setting/clearing goals and buildi
 | `latestMessageSuppressesGoalReminder(session)` | ~87–90 | Checks if latest model message contains a no-action signal |
 | `hasGoalReminderForAnchorSeq(session, anchorSeq)` | ~92–104 | Checks if a reminder already exists for a given anchor seq |
 | `buildGoalReminderMessage(state, anchorSeq)` | ~106–117 | Constructs an interval reminder Message object with metadata |
-| `formatSessionGoalReminderText(goal)` | ~119–121 | Formats goal reminder metadata tag plus goal/guidance strings |
+| `formatSessionGoalReminderText(goal)` | ~119–121 | Formats goal reminder metadata with a guidance hint and goal-only body |
 | `countNonReminderMessagesAfterSeq(session, anchorSeq)` | ~123–137 | Counts messages after anchor, excluding reminders |
 | `resolveSessionGoalRemindEvery(session, value)` | ~139–149 | Resolves effective remindEvery value with fallback chain |
 | `setSessionGoal(session, goal, remindEvery)` | ~151–164 | Normalizes inputs and writes goalState to session |
@@ -73,7 +73,7 @@ Self-test file (`goalReminderSelfTest.ts`):
 - `maybeBuildGoalReminderMessage` fires an interval reminder when the count of non-reminder messages since the last anchor reaches `remindEvery`. The router evaluates and appends it immediately before a real provider request, after queued input or a preceding tool result is canonical history.
 - The interval builder mutates `state.anchorSeq` as a side effect to track the last reminder point.
 - Reminders are suppressed when the latest model message contains a no-action signal or when the latest user message is itself a reminder.
-- Reminder messages use a one-part format: a `system` part containing `<foxwarm-system kind="goal-reminder">` with the raw goal plus guidance in the tag body.
+- Reminder messages use a one-part format: a `system` part containing `<foxwarm-system kind="goal-reminder" hint="...">` with guidance in the escaped `hint` attribute and only the trimmed goal in the body. Interval and compact-completion reminders share this formatter; existing history is not rewritten.
 
 ## Integration
 
