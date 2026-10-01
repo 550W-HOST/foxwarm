@@ -20,6 +20,8 @@ const errors = []
 const timeQueries = []
 
 async function button(label, target = page) {
+  await target.waitForFunction(text => [...document.querySelectorAll('button')]
+    .some(item => item.textContent.trim() === text && !item.disabled), {}, label)
   const clicked = await target.evaluate(text => {
     const element = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === text)
     if (!element || element.disabled) return false

@@ -108,6 +108,10 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - List and history payloads retain documented legacy busy fields while current clients prefer `runtimeState`.
 - Persisted session-list presentation metadata may be lost when the metadata index must be rebuilt from history; it is intentionally not duplicated into history files.
 
+## Route fixture setup
+
+`webuiSessionsRoute.test.ts` starts each owned `HttpServer` on port zero and reads the actual bound port after startup. HTTP, SSE, and WebSocket assertions use that same live listener; no random fixed range or reserve-and-reopen socket is involved. Route behavior and production listening configuration remain unchanged.
+
 ## Design decisions
 
 ### D-webui-message-tool-args-transport
