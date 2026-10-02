@@ -15,13 +15,16 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     private readonly SqliteArchiveMessageStore archive;
     private readonly Func<int, CancellationToken, Task>? canonicalCommitBarrier;
     private int canonicalCommitCount;
+    private readonly Action<SessionSnapshot>? publishProjection;
+    private readonly Func<JsonObject?>? mainFields;
 
     public PersistentSessionAuthorityStore(
         string root,
         string sessionId,
         string agent = "main",
         Action<AtomicJsonWriteStage>? authorityStageHook = null,
-        Func<int, CancellationToken, Task>? canonicalCommitBarrier = null)
+        Func<int, CancellationToken, Task>? canonicalCommitBarrier = null,
+        Action<SessionSnapshot>? publishProjection = null, Func<JsonObject?>? mainFields = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -29,6 +32,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         this.sessionId = sessionId;
         this.agent = agent;
         this.canonicalCommitBarrier = canonicalCommitBarrier;
+        this.publishProjection = publishProjection; this.mainFields = mainFields;
         authorityFile = new LinuxAtomicJsonFile(root, $"state/sessions/{sessionId}.json", authorityStageHook);
         archive = new SqliteArchiveMessageStore(Path.Combine(root, "state", "archive-store.sqlite"), sessionId);
         archive.Initialize();
@@ -44,6 +48,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(snapshot);
         authorityFile.Write(ToAuthority(snapshot));
+        PublishProjection(snapshot);
         return Task.CompletedTask;
     }
 
@@ -75,6 +80,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             }
             throw;
         }
+        PublishProjection(stagedSnapshot);
     }
 
     public Task CommitCompactionAsync(SessionSnapshot stagedSnapshot, IReadOnlyList<ArchiveBlockRecord> blocks,
@@ -102,7 +108,14 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             catch (Exception rollback) { throw new AggregateException("Compact precommit rollback failed.", error, rollback); }
             throw;
         }
+        PublishProjection(stagedSnapshot);
         return Task.CompletedTask;
+    }
+
+    private void PublishProjection(SessionSnapshot snapshot)
+    {
+        try { publishProjection?.Invoke(snapshot); }
+        catch (Exception error) { throw new AuthorityCommittedException("Session authority committed, but its Main catalog projection failed.", error); }
     }
 
     public Task<SessionSnapshot?> LoadAsync(string requestedSessionId, CancellationToken cancellationToken = default)
@@ -116,7 +129,12 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
                 throw new InvalidDataException("Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history.");
             return Task.FromResult<SessionSnapshot?>(null);
         }
-        var document = authorityFile.Read(sessionId, agent);
+        JsonObject raw;
+        try { raw = JsonNode.Parse(File.ReadAllText(authorityFile.FilePath)) as JsonObject ?? throw new InvalidDataException("Session authority must be an object."); }
+        catch (System.Text.Json.JsonException error) { throw new InvalidDataException("Session authority is malformed JSON.", error); }
+        var normalized = SessionCatalog.NormalizeAuthority(raw, sessionId, agent);
+        if (mainFields?.Invoke() is { } main) SessionCatalog.OverlayAuthorityContext(normalized, main);
+        var document = SessionAuthorityDocument.FromOwned(normalized, sessionId, agent);
         return Task.FromResult<SessionSnapshot?>(FromAuthority(document.CloneRoot()));
     }
 
@@ -138,6 +156,8 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     private SessionAuthorityDocument ToAuthority(SessionSnapshot snapshot)
     {
         var root = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+        if (mainFields?.Invoke() is { } main) SessionCatalog.OverlayAuthorityContext(root, main);
+        foreach (var field in new[] { "archived", "pinned", "sidebarOrder" }) root.Remove(field);
         root["sessionStateVersion"] = 1;
         if (root["goalState"] is JsonObject goal) goal.Remove("remindOnTurnEnd");
         root["agent"] = agent;
@@ -152,6 +172,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
             ["lastUsage"] = null
         };
         var meta = (JsonObject)snapshot.Meta.DeepClone();
+        meta.Remove("lastChannel");
         meta["lastMessageTime"] ??= 0;
         meta["messageCount"] = snapshot.History.Count;
         root["meta"] = meta;

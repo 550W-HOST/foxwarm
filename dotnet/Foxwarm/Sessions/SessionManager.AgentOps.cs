@@ -268,7 +268,8 @@ internal sealed partial class SessionManager
 
     private async Task<bool> IdReservedAsync(string id)
     {
-        if (Find(id) is not null || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))) return true;
+        Catalog.Initialize();
+        if (Catalog.Get(id) is not null || sessions.ContainsKey(id) || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))) return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");
         if (!File.Exists(archive)) return false;
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -277,8 +278,10 @@ internal sealed partial class SessionManager
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_branches'";
         var hasBranches = await command.ExecuteScalarAsync() is not null;
+        var hasReservations = SqliteArchiveMessageStore.HasReservationTable(connection);
         command.CommandText = "SELECT 1 FROM archive_messages WHERE session_id=$id UNION SELECT 1 FROM archive_blocks WHERE session_id=$id"
-            + (hasBranches ? " UNION SELECT 1 FROM archive_branches WHERE session_id=$id" : "") + " LIMIT 1";
+            + (hasBranches ? " UNION SELECT 1 FROM archive_branches WHERE session_id=$id" : "")
+            + (hasReservations ? " UNION SELECT 1 FROM archive_session_id_reservations WHERE session_id=$id OR canonical_session_id=$id" : "") + " LIMIT 1";
         command.Parameters.AddWithValue("$id", id);
         return await command.ExecuteScalarAsync() is not null;
     }
@@ -347,22 +350,14 @@ internal sealed partial class SessionManager
             if (stage != AtomicJsonWriteStage.BeforeRename || !SessionSaveLane.IsSnapshotCommit || !File.Exists(marker)) return;
             File.Delete(marker);
             throw new IOException("Injected experimental memory snapshot pre-rename failure.");
-        });
-    }
-
-    private void ValidateParentGraph()
-    {
-        foreach (var session in sessions.Values)
+        }, canonicalCommitBarrier: async (_, cancellationToken) =>
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal) { session.Id };
-            var parent = session.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>();
-            while (!string.IsNullOrEmpty(parent))
-            {
-                if (!seen.Add(parent) || Find(parent) is not { } ancestor)
-                    throw new InvalidDataException("Session parent relation is missing or cyclic.");
-                parent = ancestor.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>();
-            }
-        }
+            var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".canonical-hold-before-rename");
+            if (!File.Exists(hold)) return;
+            await File.WriteAllTextAsync(hold + ".reached", "reached", cancellationToken); var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (File.Exists(hold) && DateTime.UtcNow < deadline) await Task.Delay(2, cancellationToken);
+            if (File.Exists(hold)) throw new TimeoutException("Experimental canonical publication barrier expired.");
+        }, publishProjection: PublishCatalogSnapshot, mainFields: () => Catalog.Get(id));
     }
 
     private static string Escape(string text) => text.Replace("&", "&amp;", StringComparison.Ordinal)

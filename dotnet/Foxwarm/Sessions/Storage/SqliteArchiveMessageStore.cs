@@ -288,8 +288,8 @@ public sealed partial class SqliteArchiveMessageStore
         {
             DataSource = databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 5
         }.ToString());
-        connection.Open();
-        return connection;
+        try { connection.Open(); ValidateLookupReservation(connection, sessionId); return connection; }
+        catch { connection.Dispose(); throw; }
     }
 
     private SqliteConnection Open()
@@ -350,19 +350,7 @@ public sealed partial class SqliteArchiveMessageStore
         if (foreignReader.Read()) throw new InvalidDataException("archive_messages must not contain foreign-key constraints.");
     }
 
-    private void ValidateSupportedAncillaryState(SqliteConnection connection)
-    {
-        RejectRows(connection, "archive_session_id_reservations", "session_id=$session OR canonical_session_id=$session", "Archive aliases/reservations are unsupported.");
-    }
-
-    private void RejectRows(SqliteConnection connection, string table, string predicate, string message)
-    {
-        if (!TableExists(connection, table)) return;
-        using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT 1 FROM {table} WHERE {predicate} LIMIT 1";
-        command.Parameters.AddWithValue("$session", sessionId);
-        if (command.ExecuteScalar() is not null) throw new UnsupportedSessionAuthorityException(message);
-    }
+    private void ValidateSupportedAncillaryState(SqliteConnection connection) => ValidateLookupReservation(connection, sessionId);
 
     private static bool TableExists(SqliteConnection connection, string table)
     {

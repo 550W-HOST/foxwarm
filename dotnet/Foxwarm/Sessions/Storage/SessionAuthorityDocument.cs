@@ -158,15 +158,16 @@ public sealed class SessionAuthorityDocument
                 throw new InvalidDataException($"Session authority {field} is invalid.");
         }
 
+        if (root.ContainsKey("aliases") && (root["aliases"] is not JsonArray aliases || aliases.Any(node => SessionWait.Text(node) is not { Length: > 0 })))
+            throw new InvalidDataException("Session authority aliases must be nonempty strings.");
         SessionGoal.Validate(root);
-        foreach (var unsupported in new[] { "aliases", "indexingState", "childHandoffState", "contextFrontier" })
+        foreach (var unsupported in new[] { "indexingState", "childHandoffState", "contextFrontier" })
             if (root.ContainsKey(unsupported))
                 throw new UnsupportedSessionAuthorityException($"Session authority {unsupported} is unsupported by Slice C1.");
         if (root.ContainsKey("parentSessionId"))
         {
             if (root["parentSessionId"] is not JsonValue parentValue || !parentValue.TryGetValue<string>(out var parent))
                 throw new InvalidDataException("Session authority parentSessionId must be a string.");
-            if (parent == sessionId) throw new InvalidDataException("A Session cannot be its own parent.");
         }
 
         for (var index = 0; index < history.Count; index++)
@@ -184,14 +185,14 @@ public sealed class SessionAuthorityDocument
     private static void ValidateStats(JsonObject stats)
     {
         foreach (var field in new[] { "totalCachedTokens", "totalInputTokens", "totalOutputTokens" })
-            if (stats.ContainsKey(field) && stats[field] is not null)
-                _ = ReadFiniteNumber(stats[field]!, $"Session authority stats.{field}");
+            if (stats.ContainsKey(field))
+                _ = ReadFiniteNumber(stats[field] ?? throw new InvalidDataException("Session authority stats numbers cannot be null."), $"Session authority stats.{field}");
         if (!stats.ContainsKey("lastUsage") || stats["lastUsage"] is null) return;
         var usage = stats["lastUsage"] as JsonObject
             ?? throw new InvalidDataException("Session authority stats.lastUsage must be an object or null.");
         foreach (var field in new[] { "cachedTokens", "inputTokens", "reasoningTokens", "outputTokens" })
-            if (usage.ContainsKey(field) && usage[field] is not null)
-                _ = ReadFiniteNumber(usage[field]!, $"Session authority stats.lastUsage.{field}");
+            if (usage.ContainsKey(field))
+                _ = ReadFiniteNumber(usage[field] ?? throw new InvalidDataException("Session authority usage numbers cannot be null."), $"Session authority stats.lastUsage.{field}");
     }
 
     private static void ValidateQueue(JsonArray queue)

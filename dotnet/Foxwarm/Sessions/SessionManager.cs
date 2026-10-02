@@ -14,6 +14,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly string root;
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
+    internal readonly SessionCatalog Catalog;
     private readonly AgentCatalog agents;
     private readonly AgentMemory memory;
     private readonly Skills skills;
@@ -37,6 +38,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
             || this.root.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
         Directory.CreateDirectory(this.root);
+        Catalog = new SessionCatalog(this.root);
+        Catalog.Changed += () => TopologyChanged?.Invoke();
+        Catalog.BeforeAuthorityProjection = id =>
+        {
+            var marker = Path.Combine(this.root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".catalog-projection");
+            if (File.Exists(marker)) { File.Delete(marker); throw new IOException("Injected experimental catalog projection failure."); }
+        };
         agents = new AgentCatalog(this.root, workspaceRoot);
         skills = new Skills(agents, Path.GetFullPath(skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills")));
         memory = new AgentMemory(agents, skills);
@@ -78,44 +86,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public async Task LoadAsync()
     {
-        var directory = Path.Combine(root, "state", "sessions");
-        var knownFiles = Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories).ToArray() : [];
-        var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var path in knownFiles)
+        Catalog.Initialize();
+        foreach (var row in Catalog.List())
         {
-            var id = Path.GetRelativePath(directory, path[..^".json".Length]).Replace(Path.DirectorySeparatorChar, '/');
-            if (!SessionIdentity.IsValid(id) || !ids.Add(id)) throw new InvalidDataException("Unknown or duplicate authority filename in experiment root.");
-            var agent = SessionIdentity.Agent(id);
-            if (!agents.Exists(agent)) throw new InvalidDataException("Session is bound to a missing Agent.");
+            var id = SessionCatalog.Text(row["id"])!; var agent = SessionCatalog.Text(row["agent"])!;
+            if (!SessionIdentity.IsValid(id) || !agents.Exists(agent)) throw new InvalidDataException("Catalog Session binding is unsupported or its Agent is missing.");
             var store = MakeStore(id, agent);
-            var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("An indexed authority file is missing.");
+            var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("Cataloged Session authority is missing.");
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
-            if (snapshot.Busy || snapshot.Stopping)
-                throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
-            var hosted = MakeSession(id, agent, store);
-            hosted.Registry.Add(id, snapshot);
-            hosted.EnableCommittedNotifications();
-            if (!sessions.TryAdd(id, hosted)) throw new InvalidDataException("Duplicate Session ID in experiment root.");
+            if (snapshot.Busy || snapshot.Stopping) throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
+            var hosted = MakeSession(id, agent, store); hosted.Registry.Add(id, snapshot); hosted.EnableCommittedNotifications();
+            if (!sessions.TryAdd(id, hosted)) throw new InvalidDataException("Duplicate Session ID in catalog.");
             NotifyCreated(hosted);
-        }
-        ValidateParentGraph();
-        // Archive is never a history source. Its existing IDs only detect an authority
-        // file that disappeared between clean runs, rather than silently dropping a Session.
-        var archivePath = Path.Combine(root, "state", "archive-store.sqlite");
-        if (File.Exists(archivePath))
-        {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = archivePath,
-                Mode = SqliteOpenMode.ReadOnly
-            }.ToString());
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT session_id FROM archive_messages UNION SELECT session_id FROM archive_blocks";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-                if (!ids.Contains(reader.GetString(0)))
-                    throw new InvalidDataException("Active Session authority is missing while Archive rows exist; Archive cannot rebuild history.");
         }
         foreach (var owner in sessions.Values) WaitTransition(owner.Id);
         await executor.InitializeAsync(id => sessions.ContainsKey(id));
@@ -131,9 +113,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         owner.Changed += value =>
         {
+            if (value.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted) CaptureLocalProjection(owner);
             if (value.Kind == SessionEventKind.StateChanged) WaitTransition(owner.Id);
             Changed?.Invoke(value);
         };
+        CaptureLocalProjection(owner);
         TopologyChanged?.Invoke();
     }
     private void WaitTransition(string id) { waitTimeouts.Transition(id); waitLiveness.Transition(id); }
@@ -142,7 +126,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public bool Accepting => accepting;
     public HostModels Models => models;
 
-    public SessionOwner? Find(string id) => SessionIdentity.IsValid(id) && sessions.TryGetValue(id, out var value) ? value : null;
+    public SessionOwner? Find(string id)
+    {
+        if (sessions.TryGetValue(id, out var exact)) return exact;
+        var canonical = SessionCatalog.Text(Catalog.Resolve(id)["sessionId"]);
+        return canonical is not null && sessions.TryGetValue(canonical, out var value) ? value : null;
+    }
 
     public async Task<SessionOwner> CreateAsync()
     {
@@ -190,7 +179,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
     {
-        var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = target => Find(target)?.Metadata() };
+        var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = CatalogMetadata, MainMetadata = OverlayMainMetadata };
         hosted.Archive = store.Archive;
         hosted.Executor = executor;
         var requests = new ModelRequestOwner(http, clientOptions, modelRouting, websockets: websockets);
@@ -248,6 +237,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.DisposeAsync();
         await mcp.DisposeAsync();
         await websockets.DisposeAsync();
+        Catalog.Dispose();
         http.Dispose();
     }
 

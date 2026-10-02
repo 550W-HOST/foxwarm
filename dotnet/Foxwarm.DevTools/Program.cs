@@ -15,6 +15,11 @@ switch (args[0])
     case "responses-stream":
         await ResponsesStreamCommand.RunAsync(commandArgs);
         break;
+    case "catalog-import-dotnet-v1":
+        if (commandArgs.Length != 3 || commandArgs[2] != "--declare-pre-catalog-dotnet-v1")
+            throw new ArgumentException("Usage: catalog-import-dotnet-v1 ROOT WORKSPACE --declare-pre-catalog-dotnet-v1");
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { imported = Foxwarm.Sessions.SessionCatalogImport.ImportPreCatalogDotNetV1(commandArgs[0], commandArgs[1]) }));
+        break;
     case "session-restart":
         await SessionRestartCommand.RunAsync(commandArgs);
         break;

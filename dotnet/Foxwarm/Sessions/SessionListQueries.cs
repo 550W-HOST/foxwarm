@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -9,20 +8,13 @@ internal sealed class SessionListQueryException(string code, string message) : E
     public string Code { get; } = code;
 }
 
-/// <summary>Source-mapped webuiSessionListQueries: keyset/epoch queries over Main-local metadata, not active history.</summary>
-internal sealed class SessionListQueries
+// Fixed source list queries over the Main-owned catalog and incremental local projections.
+internal sealed partial class SessionListQueries
 {
     private readonly SessionRuntime runtime;
-    private readonly Dictionary<string, SessionMetadata> rows;
-    public string Revision { get; }
-    public SessionListQueries(SessionRuntime runtime)
-    {
-        this.runtime = runtime;
-        rows = runtime.ListMetadata().ToDictionary(row => row.Id, StringComparer.Ordinal);
-        var signature = string.Join('\n', rows.Values.OrderBy(row => row.Id, StringComparer.Ordinal)
-            .Select(row => $"{row.Id}\0{row.ParentSessionId}\0{row.Agent}\0{row.LastMessageTime}\0{row.Archived}\0{row.Pinned}\0{row.SidebarOrder}\0{row.DisplayName}"));
-        Revision = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)))[..24];
-    }
+    private SessionCatalog Catalog => runtime.Catalog;
+    public string Revision => runtime.PresentationRevision;
+    public SessionListQueries(SessionRuntime runtime) => this.runtime = runtime;
     public static string Mode(string? value) => value is null or "default" ? "default"
         : value is "time" or "flat-time" ? value
         : throw new SessionListQueryException("SESSION_LIST_MODE_INVALID", "mode must be default, time, or flat-time.");
@@ -46,23 +38,26 @@ internal sealed class SessionListQueries
             throw new SessionListQueryException("SESSION_LIST_IDS_INVALID", $"ids must contain at most {max} bounded Session IDs.");
         return array.Select(node => node!.GetValue<string>()).ToArray();
     }
-    public JsonObject? Projection(string id)
-    {
-        if (!rows.TryGetValue(id, out var meta) || runtime.Owner(id) is not { } owner) return null;
-        var result = owner.BuildDto(meta);
-        result["childTotal"] = rows.Values.Count(row => row.ParentSessionId == id && !row.Pinned);
-        return result;
-    }
-    private JsonArray Project(IEnumerable<SessionMetadata> selected) => new(selected.Select(row => (JsonNode?)Projection(row.Id)).ToArray());
-    private static JsonArray Key(SessionMetadata row, string mode, bool child = false)
+    public JsonObject? Projection(string id) => runtime.Projection(id);
+    internal JsonArray ProjectionRows(string[] ids) => Array(runtime.Projections(ids));
+    private static JsonArray Array(IEnumerable<JsonObject> rows) => new(rows.Select(row => (JsonNode?)row).ToArray());
+    private static string Id(JsonObject row) => SessionCatalog.Text(row["id"])!;
+    private static JsonArray Key(JsonObject row, string mode, bool child = false)
     {
         var key = new JsonArray();
-        if (!child) key.Add(row.Pinned ? 0 : 1);
-        key.Add(row.Archived ? 1 : 0);
-        if (mode == "default") { key.Add(row.SidebarOrder is null ? 1 : 0); key.Add(row.SidebarOrder ?? 0); }
-        key.Add(-row.LastMessageTime); key.Add(row.Id);
-        return key;
+        if (!child) key.Add(SessionCatalog.Flag(row["pinned"]) ? 0 : 1);
+        key.Add(SessionCatalog.Flag(row["archived"]) ? 1 : 0);
+        if (mode == "default") { key.Add(SessionCatalog.Number(row["sidebarOrder"]) is null ? 1 : 0); key.Add(SessionCatalog.Number(row["sidebarOrder"]) ?? 0); }
+        key.Add(-(SessionCatalog.Number(row["lastMessageTime"]) ?? 0)); key.Add(Id(row)); return key;
     }
+    private bool InScope(JsonObject row, string mode, bool roots, string? agent, JsonObject? scope)
+    {
+        if (agent is not null && SessionCatalog.Text(row["agent"]) != agent) return false;
+        if (!roots || mode == "flat-time") return true;
+        return agent is null ? SessionCatalog.Flag(row["pinned"]) || row["parentSessionId"] is null
+            : row["parentSessionId"] is null || SessionCatalog.Text(scope?["parentAgent"]) != agent;
+    }
+    internal static int CompareIds(string left, string right) => Encoding.UTF8.GetBytes(left).AsSpan().SequenceCompareTo(Encoding.UTF8.GetBytes(right));
     private static int Compare(JsonArray left, JsonArray right)
     {
         for (var index = 0; index < left.Count; index++)
@@ -99,7 +94,7 @@ internal sealed class SessionListQueries
         catch (Exception error) when (error is FormatException or System.Text.Json.JsonException or InvalidOperationException)
         { throw new SessionListQueryException("SESSION_LIST_CURSOR_INVALID", "Cursor does not match this mode and scope."); }
     }
-    private string Cursor(SessionMetadata last, string mode, string scope, bool child) => Encode(new JsonObject
+    private string Cursor(JsonObject last, string mode, string scope, bool child) => Encode(new JsonObject
     {
         ["v"] = 1,
         ["kind"] = "page",
@@ -112,116 +107,56 @@ internal sealed class SessionListQueries
     {
         var scope = agent is not null ? $"agent:{agent}:{(roots ? "roots" : "all")}" : roots && mode != "flat-time" ? "roots" : "flat";
         var decoded = Decode(cursor, mode, scope, false);
-        var reset = decoded is not null && decoded["revision"]!.GetValue<string>() != Revision;
-        var after = reset ? null : decoded?["key"] as JsonArray;
-        var ordered = rows.Values.Where(row => (agent is null || row.Agent == agent)
-                && (!roots || mode == "flat-time" || (agent is null ? row.Pinned || row.ParentSessionId is null
-                    : row.ParentSessionId is null || !rows.TryGetValue(row.ParentSessionId, out var parent) || parent.Agent != agent)))
-            .Where(row => after is null || Compare(Key(row, mode), after) > 0)
-            .OrderBy(row => Key(row, mode), Comparer<JsonArray>.Create(Compare)).Take(limit + 1).ToArray();
-        var selected = ordered.Take(limit).ToArray();
-        return new JsonObject
+        (CatalogPage Page, JsonObject[] Candidates) Read(JsonArray? after)
         {
-            ["version"] = 1,
-            ["revision"] = Revision,
-            ["mode"] = mode,
-            ["scope"] = scope,
-            ["sessions"] = Project(selected),
-            ["reset"] = reset,
-            ["nextCursor"] = ordered.Length > limit && selected.Length > 0 ? Cursor(selected[^1], mode, scope, false) : null
-        };
-    }
-    public JsonObject ChildPage(string parent, string mode, int limit, string? cursor = null, string? agent = null, bool ignoreCursor = false)
-    {
-        var scope = $"children:{parent}:agent:{agent ?? "*"}";
-        var decoded = Decode(cursor, mode, scope, true);
-        var reset = decoded is not null && decoded["revision"]!.GetValue<string>() != Revision;
-        var after = ignoreCursor || reset ? null : decoded?["key"] as JsonArray;
-        var all = rows.Values.Where(row => row.ParentSessionId == parent && (agent is null ? !row.Pinned : row.Agent == agent)).ToArray();
-        var ordered = all.Where(row => after is null || Compare(Key(row, mode, true), after) > 0)
-            .OrderBy(row => Key(row, mode, true), Comparer<JsonArray>.Create(Compare)).Take(limit + 1).ToArray();
-        var selected = ordered.Take(limit).ToArray();
-        return new JsonObject
-        {
-            ["parentSessionId"] = parent,
-            ["sessions"] = Project(selected),
-            ["total"] = all.Length,
-            ["nextCursor"] = ordered.Length > limit && selected.Length > 0 ? Cursor(selected[^1], mode, scope, true) : null,
-            ["reset"] = reset
-        };
-    }
-    public JsonArray Path(string id)
-    {
-        var path = new List<string>(); var visited = new HashSet<string>(StringComparer.Ordinal);
-        while (rows.TryGetValue(id, out var row) && visited.Add(id))
-        {
-            path.Insert(0, id);
-            if (row.ParentSessionId is not { } parent) break;
-            id = parent;
+            var page = Catalog.Page(mode, limit, after, roots, agent);
+            var candidates = runtime.Projections(page.Rows.Select(Id).ToArray(), true);
+            var scopes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+            foreach (var chunk in candidates.Select(Id).Chunk(200)) foreach (var pair in Catalog.Scopes(chunk)) scopes[pair.Key] = pair.Value;
+            var ordered = candidates.Where(row => InScope(row, mode, roots, agent, scopes.GetValueOrDefault(Id(row))))
+                .Where(row => after is null || Compare(Key(row, mode), after) > 0).OrderBy(row => Key(row, mode), Comparer<JsonArray>.Create(Compare)).ToArray();
+            return (page, ordered);
         }
-        return new JsonArray(path.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
+        var result = Read(decoded?["key"] as JsonArray);
+        var reset = decoded is not null && SessionCatalog.Text(decoded["revision"]) != Revision;
+        if (reset) result = Read(null);
+        var selected = result.Candidates.Take(limit).ToArray();
+        return new JsonObject { ["version"] = 1, ["revision"] = Revision, ["mode"] = mode, ["scope"] = scope, ["sessions"] = Array(selected), ["reset"] = reset,
+            ["nextCursor"] = (result.Page.HasMore || result.Candidates.Length > limit) && selected.Length > 0 ? Cursor(selected[^1], mode, scope, false) : null };
     }
+    public JsonObject[] ChildPages((string Id, string? Cursor)[] requests, string mode, int limit, string? agent = null, bool previews = false)
+    {
+        requests = requests.GroupBy(request => request.Id, StringComparer.Ordinal).Select(group => group.Last()).ToArray();
+        string Scope(string parent) => $"children:{parent}:agent:{agent ?? "*"}";
+        var decoded = requests.Select(request => Decode(request.Cursor, mode, Scope(request.Id), true)).ToArray();
+        var reset = decoded.Any(cursor => cursor is not null && SessionCatalog.Text(cursor["revision"]) != Revision);
+        var baseRows = Catalog.Children(requests.Select((request, index) => (request.Id, reset ? null : decoded[index]?["key"] as JsonArray)).ToArray(), mode, limit, agent);
+        var candidates = runtime.Projections(baseRows.SelectMany(group => group.Rows.Select(Id)).Distinct(StringComparer.Ordinal).ToArray(), true);
+        return baseRows.Select((group, index) =>
+        {
+            var after = reset ? null : decoded[index]?["key"] as JsonArray;
+            var all = candidates.Where(row => SessionCatalog.Text(row["parentSessionId"]) == group.Parent && (agent is null ? !SessionCatalog.Flag(row["pinned"]) : SessionCatalog.Text(row["agent"]) == agent))
+                .Where(row => after is null || Compare(Key(row, mode, true), after) > 0).OrderBy(row => Key(row, mode, true), Comparer<JsonArray>.Create(Compare)).ToArray();
+            var selected = all.Take(limit).ToArray(); var total = previews ? Math.Max(group.Total, selected.Length) : group.Total;
+            return new JsonObject { ["parentSessionId"] = group.Parent, ["sessions"] = Array(selected), ["total"] = total, ["reset"] = reset,
+                ["nextCursor"] = (previews ? total > selected.Length : group.HasMore || all.Length > limit) && selected.Length > 0 ? Cursor(selected[^1], mode, Scope(group.Parent), true) : null };
+        }).ToArray();
+    }
+    public JsonArray Path(string id) => new(Catalog.Paths([id]).GetValueOrDefault(id, []).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
     public JsonObject Exact(string[] ids, bool includePaths)
     {
-        var results = new JsonArray(); var paths = new JsonObject();
-        foreach (var id in ids)
+        var resolved = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200)) foreach (var pair in Catalog.ResolveMany(chunk)) resolved[pair.Key] = pair.Value;
+        var canonical = resolved.Values.Select(row => SessionCatalog.Text(row["sessionId"])).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+        var projected = runtime.Projections(canonical).ToDictionary(Id, StringComparer.Ordinal); var paths = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        if (includePaths) foreach (var chunk in canonical.Chunk(100)) foreach (var pair in Catalog.Paths(chunk)) paths[pair.Key] = pair.Value;
+        var results = new JsonArray(); var pathJson = new JsonObject();
+        foreach (var requested in ids)
         {
-            var found = rows.ContainsKey(id);
-            results.Add(new JsonObject
-            {
-                ["requestedId"] = id,
-                ["resolution"] = found ? new JsonObject { ["kind"] = "exact", ["sessionId"] = id } : new JsonObject { ["kind"] = "missing" },
-                ["session"] = Projection(id)
-            });
-            if (found && includePaths) paths[id] = Path(id);
+            var resolution = resolved[requested]; var id = SessionCatalog.Text(resolution["sessionId"]);
+            results.Add(new JsonObject { ["requestedId"] = requested, ["resolution"] = resolution.DeepClone(), ["session"] = id is not null ? projected.GetValueOrDefault(id)?.DeepClone() : null });
+            if (includePaths && id is not null) pathJson[requested] = new JsonArray(paths.GetValueOrDefault(id, []).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
         }
-        var result = new JsonObject { ["version"] = 1, ["revision"] = Revision, ["results"] = results };
-        if (includePaths) result["paths"] = paths;
-        return result;
+        var result = new JsonObject { ["version"] = 1, ["revision"] = Revision, ["results"] = results }; if (includePaths) result["paths"] = pathJson; return result;
     }
-    public SessionMetadata[] DescendantRows(string id)
-    {
-        var found = new List<SessionMetadata>(); var pending = new Queue<string>(); var visited = new HashSet<string>(StringComparer.Ordinal) { id };
-        pending.Enqueue(id);
-        while (pending.TryDequeue(out var parent)) foreach (var child in rows.Values.Where(row => row.ParentSessionId == parent))
-            if (visited.Add(child.Id)) { found.Add(child); pending.Enqueue(child.Id); }
-        return found.ToArray();
-    }
-    public JsonObject Search(string query, int limit)
-    {
-        var term = query.ToLowerInvariant();
-        var matches = rows.Values.Where(row => Projection(row.Id) is { } dto && new[] {
-                "displayName", "id", "agent", "currentNode", "cwd", "model", "modelKey", "defaultModelKey", "childModelDefault", "effectiveChildModelKey" }
-            .Any(field => dto[field] is JsonValue value && value.TryGetValue<string>(out var text)
-                && !string.IsNullOrWhiteSpace(text) && text.ToLowerInvariant().Contains(term, StringComparison.Ordinal))).ToArray();
-        return new JsonObject
-        {
-            ["version"] = 1,
-            ["query"] = query,
-            ["sessions"] = Project(matches.Take(limit)),
-            ["hasMore"] = matches.Length > limit,
-            ["candidateCount"] = rows.Count
-        };
-    }
-    public JsonObject Summary(IEnumerable<SessionMetadata> values)
-    {
-        var entries = values.ToArray();
-        return new JsonObject
-        {
-            ["total"] = entries.Length,
-            ["busy"] = entries.Count(row => row.Busy),
-            ["queued"] = entries.Count(row => row.QueueLength > 0),
-            ["cachedTokens"] = entries.Sum(row => row.CachedTokens),
-            ["inputTokens"] = entries.Sum(row => row.InputTokens),
-            ["outputTokens"] = entries.Sum(row => row.OutputTokens)
-        };
-    }
-    public JsonObject GlobalSummary()
-    {
-        var summary = Summary(rows.Values);
-        summary["managed"] = 0; // Managed states are rejected when loading this host's supported authorities.
-        return summary;
-    }
-    public JsonArray AgentCounts() => new(rows.Values.GroupBy(row => row.Agent).OrderBy(group => group.Key, StringComparer.Ordinal)
-        .Select(group => (JsonNode?)new JsonObject { ["agent"] = group.Key, ["count"] = group.Count() }).ToArray());
 }

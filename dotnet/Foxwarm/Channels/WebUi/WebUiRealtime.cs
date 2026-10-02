@@ -95,16 +95,20 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     requestedList = SessionListQueries.Ids(input["sessionListIds"], MaxSubscriptions).Distinct(StringComparer.Ordinal).ToArray();
                 }
                 catch (SessionListQueryException error) { await ProtocolError(error.Message); break; }
-                var existing = requestedSessions.Where(id => runtime.Owner(id) is not null).ToArray();
+                var semantic = requestedSessions.ToDictionary(id => id, id => runtime.Owner(id)?.Id, StringComparer.Ordinal);
+                var resolvedList = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+                foreach (var chunk in requestedList.Chunk(200)) foreach (var pair in runtime.Catalog.ResolveMany(chunk)) resolvedList[pair.Key] = pair.Value;
+                var existing = semantic.Values.OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+                var listCanonical = resolvedList.Values.Select(row => SessionCatalog.Text(row["sessionId"])).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
                 lock (gate)
                 {
                     revision = requested; initializing = true; pending.Clear();
                     sessionIds = existing.ToHashSet(StringComparer.Ordinal);
-                    listIds = requestedList.ToHashSet(StringComparer.Ordinal); listActive = active;
+                    listIds = listCanonical.ToHashSet(StringComparer.Ordinal); listActive = active;
                 }
                 var sessionMap = new JsonObject(); var listMap = new JsonObject();
-                foreach (var id in existing) sessionMap[id] = id;
-                foreach (var id in requestedList.Where(id => runtime.Owner(id) is not null)) listMap[id] = id;
+                foreach (var pair in semantic) if (pair.Value is not null) sessionMap[pair.Key] = pair.Value;
+                foreach (var pair in resolvedList) if (SessionCatalog.Text(pair.Value["sessionId"]) is { } canonical) listMap[pair.Key] = canonical;
                 await Send(new JsonObject
                 {
                     ["type"] = "subscriptions-accepted",
@@ -118,12 +122,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     await Send(new JsonObject
                     {
                         ["type"] = "session-list-delta",
-                        ["deletedIds"] = new JsonArray(requestedList.Where(id => runtime.Owner(id) is null).Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
-                        ["sessions"] = new JsonArray(requestedList
-                        .Select(id => view.Projection(id)).Where(row => row is not null).Select(row => (JsonNode?)row).ToArray())
+                        ["deletedIds"] = new JsonArray(requestedList.Where(id => !listMap.ContainsKey(id)).Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
+                        ["sessions"] = view.ProjectionRows(listCanonical)
                     });
                 }
-                foreach (var id in requestedSessions.Except(existing, StringComparer.Ordinal))
+                foreach (var id in requestedSessions.Where(id => semantic[id] is null))
                     await Send(new JsonObject { ["type"] = "session-deleted", ["sessionId"] = id });
                 foreach (var id in existing)
                 {

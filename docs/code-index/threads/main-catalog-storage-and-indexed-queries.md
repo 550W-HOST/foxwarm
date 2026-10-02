@@ -253,3 +253,7 @@ fork metadata. Only `archive_branches.parent_session_id` establishes a fork;
 ordinary parent relations never subtract. Fork counts are branch-local and
 include every post-fork sequence, including system and tool scaffolding.
 Runtime `messageCount` semantics and Architecture rendering remain unchanged.
+
+## Bounded .NET implementation
+
+The separate [limited .NET host](../units/dotnet.md#main-owned-session-catalog) implements this storage/projection/query boundary with eager known-live owners and fail-closed non-idle restart. Its predecessor catalog-less .NET-v1 format has an explicit one-shot DevTools importer; normal serve has no directory enumeration fallback. Metadata reads remain Main-only, while this stage does not implement lazy semantic admission, Worker ownership or deletion/move/recovery.

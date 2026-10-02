@@ -19,12 +19,10 @@ internal sealed partial class WebUIChannel
                 throw new SessionListQueryException("SESSION_LIST_FOCUS_INVALID", "focusSessionId accepts at most 8 bounded values.");
             var view = new SessionListQueries(runtime);
             var result = view.Page(mode, limit, Query(query, "cursor"));
-            var children = new JsonArray();
-            if (mode != "flat-time") foreach (var row in (result["sessions"] as JsonArray)!.OfType<JsonObject>())
-            {
-                var group = view.ChildPage(row["id"]!.GetValue<string>(), mode, childLimit);
-                group.Remove("nextCursor"); group.Remove("reset"); children.Add(group);
-            }
+            var rootIds = (result["sessions"] as JsonArray)!.OfType<JsonObject>().Select(row => row["id"]!.GetValue<string>()).ToArray();
+            var groups = mode == "flat-time" ? [] : view.ChildPages(rootIds.Select(id => (id, (string?)null)).ToArray(), mode, childLimit, previews: true);
+            foreach (var group in groups) { group.Remove("nextCursor"); group.Remove("reset"); }
+            var children = new JsonArray(groups.Select(group => (JsonNode?)group).ToArray());
             var focus = view.Exact(focusIds.Cast<string>().Distinct(StringComparer.Ordinal).ToArray(), true);
             var forced = new JsonObject(); var context = new HashSet<string>(StringComparer.Ordinal);
             foreach (var path in (focus["paths"] as JsonObject)!.Select(pair => (JsonArray)pair.Value!))
@@ -53,9 +51,12 @@ internal sealed partial class WebUIChannel
         app.MapPost("/api/session-list/children", async (HttpRequest request) => await ListBody(request, body =>
         {
             SessionListQueries.Keys(body.Select(pair => pair.Key), "mode", "limit", "parents", "agent");
-            var mode = SessionListQueries.Mode(body["mode"]?.GetValue<string>());
-            var limit = BodyLimit(body, "limit", 20, 20);
-            var agent = body["agent"]?.GetValue<string>();
+            var mode = !body.ContainsKey("mode") ? "default" : body["mode"] is JsonValue modeValue && modeValue.TryGetValue<string>(out var modeText)
+                ? SessionListQueries.Mode(modeText) : throw new SessionListQueryException("SESSION_LIST_MODE_INVALID", "mode must be default, time, or flat-time.");
+            var limit = BodyLimit(body, "limit", 10, 20);
+            var agent = !body.ContainsKey("agent") ? null : body["agent"] is JsonValue agentValue && agentValue.TryGetValue<string>(out var agentText) && agentText.Length is > 0 and <= 128
+                ? agentText : throw new SessionListQueryException("SESSION_LIST_AGENT_INVALID", "agent is invalid.");
+            if (agent is not null && mode != "time") throw new SessionListQueryException("SESSION_LIST_MODE_INVALID", "Agent-scoped children require time mode.");
             if (body["parents"] is not JsonArray parents || parents.Count > 20)
                 throw new SessionListQueryException("SESSION_LIST_CHILDREN_INVALID", "parents accepts at most 20 requests.");
             var seen = new HashSet<string>(StringComparer.Ordinal); var requests = new List<(string Id, string? Cursor)>();
@@ -63,15 +64,16 @@ internal sealed partial class WebUIChannel
             {
                 if (node is not JsonObject parent) throw new SessionListQueryException("SESSION_LIST_CHILDREN_INVALID", "Invalid child request.");
                 SessionListQueries.Keys(parent.Select(pair => pair.Key), "parentSessionId", "cursor");
-                var id = parent["parentSessionId"]?.GetValue<string>();
+                var id = SessionCatalog.Text(parent["parentSessionId"]);
                 if (id is null || id.Length is < 1 or > 512 || !seen.Add(id))
                     throw new SessionListQueryException("SESSION_LIST_CHILDREN_INVALID", "Child parent IDs must be unique bounded strings.");
-                requests.Add((id, parent["cursor"]?.GetValue<string>()));
+                if (parent.ContainsKey("cursor") && SessionCatalog.Text(parent["cursor"]) is null)
+                    throw new SessionListQueryException("SESSION_LIST_CHILDREN_INVALID", "Child cursor must be a string.");
+                requests.Add((id, SessionCatalog.Text(parent["cursor"])));
             }
             var view = new SessionListQueries(runtime);
-            var pages = requests.Select(item => view.ChildPage(item.Id, mode, limit, item.Cursor, agent)).ToArray();
+            var pages = view.ChildPages(requests.ToArray(), mode, limit, agent);
             var reset = pages.Any(page => page["reset"]!.GetValue<bool>());
-            if (reset) pages = requests.Select(item => view.ChildPage(item.Id, mode, limit, item.Cursor, agent, true)).ToArray();
             foreach (var page in pages) page.Remove("reset");
             return new JsonObject
             {
@@ -85,6 +87,7 @@ internal sealed partial class WebUIChannel
         {
             SessionListQueries.Keys(body.Select(pair => pair.Key), "ids");
             var ids = SessionListQueries.Ids(body["ids"]); var view = new SessionListQueries(runtime);
+            var counts = view.DescendantActivity(ids);
             return new JsonObject
             {
                 ["version"] = 1,
@@ -92,15 +95,15 @@ internal sealed partial class WebUIChannel
                 ["results"] = new JsonArray(ids.Select(id => (JsonNode?)new JsonObject
                 {
                     ["sessionId"] = id,
-                    ["busy"] = view.DescendantRows(id).Count(row => row.Busy)
+                    ["busy"] = counts.GetValueOrDefault(id)
                 }).ToArray())
             };
         }));
         app.MapGet("/api/session-list/search", (HttpRequest request) => ListResult(() =>
         {
             SessionListQueries.Keys(request.Query.Keys, "q", "limit");
-            var query = (Query(request.Query, "q") ?? "").Trim();
-            if (query.Length is < 1 or > 256) throw new SessionListQueryException("SESSION_LIST_QUERY_INVALID", "q must contain 1 to 256 characters.");
+            var query = SessionCatalog.Trim(Query(request.Query, "q") ?? "");
+            if (query.Length is < 1 or > 256) throw new SessionListQueryException("SESSION_LIST_SEARCH_INVALID", "q must contain 1 to 256 characters.");
             return new SessionListQueries(runtime).Search(query, SessionListQueries.Limit(Query(request.Query, "limit"), 50, 100));
         }));
         app.MapGet("/api/session-list/architecture", (HttpRequest request) => ListResult(() =>
@@ -108,8 +111,8 @@ internal sealed partial class WebUIChannel
             SessionListQueries.Keys(request.Query.Keys, "agent", "limit", "childLimit", "cursor");
             var view = new SessionListQueries(runtime); var agent = Query(request.Query, "agent");
             var roots = view.Page("time", SessionListQueries.Limit(Query(request.Query, "limit"), 50, 100), Query(request.Query, "cursor"), true, agent);
-            var children = (roots["sessions"] as JsonArray)!.OfType<JsonObject>().Select(row =>
-                view.ChildPage(row["id"]!.GetValue<string>(), "time", SessionListQueries.Limit(Query(request.Query, "childLimit"), 10, 20), agent: agent)).ToArray();
+            var rootIds = (roots["sessions"] as JsonArray)!.OfType<JsonObject>().Select(row => row["id"]!.GetValue<string>()).ToArray();
+            var children = view.ChildPages(rootIds.Select(id => (id, (string?)null)).ToArray(), "time", SessionListQueries.Limit(Query(request.Query, "childLimit"), 10, 20), agent, previews: true);
             foreach (var child in children) child.Remove("reset");
             return new JsonObject
             {
@@ -127,12 +130,7 @@ internal sealed partial class WebUIChannel
             SessionListQueries.Keys(request.Query.Keys, "limit");
             var raw = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()?.RawTarget?.Split('?', 2)[0].Split('/').Last();
             var canonical = Uri.UnescapeDataString(raw ?? id);
-            if (runtime.Owner(canonical) is null) throw new SessionListQueryException("SESSION_NOT_FOUND", "Session not found.");
-            var view = new SessionListQueries(runtime); var descendants = view.DescendantRows(canonical);
-            var result = view.Summary(descendants); result["version"] = 1; result["sessionId"] = canonical; result["previewOnly"] = true;
-            result["sessions"] = new JsonArray(descendants.Take(SessionListQueries.Limit(Query(request.Query, "limit"), 20, 100))
-                .Select(row => (JsonNode?)view.Projection(row.Id)).ToArray());
-            return result;
+            return new SessionListQueries(runtime).Descendants(canonical, SessionListQueries.Limit(Query(request.Query, "limit"), 20, 100));
         }));
     }
     private static string? Query(IQueryCollection query, string name)
@@ -142,7 +140,7 @@ internal sealed partial class WebUIChannel
         return values[0];
     }
     private static int BodyLimit(JsonObject body, string name, int fallback, int max) => !body.ContainsKey(name) ? fallback
-        : body[name] is JsonValue value && value.TryGetValue<int>(out var number) && number > 0 && number <= max ? number
+        : SessionCatalog.Number(body[name]) is { } number && Math.Truncate(number) == number && number > 0 && number <= max ? (int)number
         : throw new SessionListQueryException("SESSION_LIST_LIMIT_INVALID", "Invalid limit.");
     private static IResult ListResult(Func<JsonObject> build)
     {
