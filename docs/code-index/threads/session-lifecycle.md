@@ -141,4 +141,4 @@ A model/tool source may delete another permitted local or Worker-owned target th
 
 ## Ordinary .NET lifecycle
 
-The Main-local .NET host supports the bounded fork/clear owner, caller-specific notices, selected prompt snapshots and pure cumulative-cap Archive reads described in [its lifecycle unit](../units/dotnet.md#session-fork-clear-and-capped-archive-reads). It retains fail-closed startup rather than porting catalog migration, busy recovery or coordinated deletion.
+The Main-local .NET host uses Main-owned catalog membership and presentation, lazy exact semantic admission, and selective validated restart. The [.NET unit](../units/dotnet.md) owns these contracts, including [fork, clear and capped Archive reads](../units/dotnet.md#session-fork-clear-and-capped-archive-reads). Coordinated deletion, identity relocation and busy/crash recovery remain unimplemented.
