@@ -48,13 +48,14 @@ internal sealed partial class SessionManager
     private void CaptureLocalProjection(SessionOwner owner)
     {
         var meta = owner.Metadata();
+        var context = owner.Entry.WithState(state => (Node: SessionWait.Text(state.AuthorityEnvelope["currentNode"]), Cwd: SessionWait.Text(state.AuthorityEnvelope["cwd"])));
         var active = meta.Busy || meta.Stopping || meta.QueueLength > 0 || meta.Wait is not null || owner.ToolActive || owner.Compacting;
         var projected = new JsonObject { ["id"] = meta.Id, ["agent"] = meta.Agent, ["parentSessionId"] = meta.ParentSessionId,
             ["busy"] = meta.Busy, ["stopping"] = meta.Stopping, ["busyStartedAt"] = meta.BusyStartedAt, ["queueLength"] = meta.QueueLength,
             ["model"] = meta.Model, ["effort"] = meta.Effort, ["childModelDefault"] = meta.ChildModel, ["childEffortDefault"] = meta.ChildEffort, ["compactThresholdTokens"] = meta.CompactThreshold,
             ["meta"] = new JsonObject { ["lastMessageTime"] = meta.LastMessageTime, ["messageCount"] = meta.MessageCount, ["wait"] = meta.Wait?.DeepClone() },
             ["stats"] = new JsonObject { ["totalCachedTokens"] = meta.CachedTokens, ["totalInputTokens"] = meta.InputTokens, ["totalOutputTokens"] = meta.OutputTokens },
-            ["currentNode"] = "master", ["_toolActive"] = owner.ToolActive, ["_compacting"] = owner.Compacting };
+            ["currentNode"] = context.Node, ["cwd"] = context.Cwd, ["_toolActive"] = owner.ToolActive, ["_compacting"] = owner.Compacting };
         // Signature contains only list-visible bounded data, never messages or queue bodies.
         if (meta.Effort is null) projected.Remove("effort");
         if (meta.ChildEffort is null) projected.Remove("childEffortDefault");

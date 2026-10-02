@@ -1,0 +1,101 @@
+using System.Text.Json.Nodes;
+using Foxwarm.Models;
+using Foxwarm.Sessions;
+
+namespace Foxwarm.Tests;
+
+public sealed class SessionExecutionEnvironmentTests
+{
+    private static ResponsesClientOptions Options => new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+    private static async Task Seed(string data, string id, JsonObject context)
+    {
+        using var catalog = new SessionCatalog(data); catalog.Initialize();
+        await SessionCatalogMigrationTests.Authority(data, id);
+        var file = Path.Combine(data, "state", "sessions", id + ".json");
+        var raw = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        foreach (var pair in context) raw[pair.Key] = pair.Value?.DeepClone();
+        await File.WriteAllTextAsync(file, raw.ToJsonString());
+        var row = SessionCatalogTests.Row(id, 0);
+        foreach (var pair in context) row[pair.Key] = pair.Value?.DeepClone();
+        catalog.Upsert([row]);
+    }
+
+    [Theory]
+    [InlineData(null, null, true)]
+    [InlineData("", "", true)]
+    [InlineData("\ufeff \tmaster\n", "\ufeff \t", true)]
+    [InlineData("master", "/owned/process/workspace/.", true)]
+    [InlineData("master", "/owned/process/workspace/../workspace/", true)]
+    [InlineData("master", "workspace", false)]
+    [InlineData("master", "/different", false)]
+    [InlineData("remote", null, false)]
+    [InlineData("Master", null, false)]
+    [InlineData("\u0085master", null, false)]
+    public void Default_equivalence_uses_source_node_trim_and_both_file_and_exec_cwd_defaults(string? node, string? cwd, bool supported)
+    {
+        var context = new JsonObject { ["currentNode"] = node, ["cwd"] = cwd };
+        Action validate = () => SessionManager.ValidateExecutionEnvironment(context, "/owned/process/workspace", "/owned/process");
+        if (supported) validate(); else Assert.Throws<UnsupportedSessionExecutionEnvironmentException>(validate);
+    }
+
+    [Fact]
+    public void Relative_and_home_defaults_are_checked_without_inventing_an_Agent_relative_base()
+    {
+        SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = "." }, "/owned/process", "/owned/process");
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (var cwd in new[] { "~", "~/.", "~\\." })
+            SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = cwd }, home, "/owned/process");
+        Assert.Throws<UnsupportedSessionExecutionEnvironmentException>(() => SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = "workspace" }, "/owned/process/workspace", "/owned/process"));
+    }
+
+    [Fact]
+    public async Task Dormant_unsupported_execution_is_not_corrupt_or_deleted_and_preserves_authority_for_retry()
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "remote" });
+        var file = Path.Combine(data, "state", "sessions", "foreign.json"); var original = await File.ReadAllTextAsync(file);
+        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadAsync();
+        Assert.Empty(manager.Owners()); Assert.Equal("remote", manager.Catalog.Get("foreign")!["currentNode"]!.GetValue<string>());
+        await new SessionRuntime(manager).UpdateDisplayNameAsync("foreign", "Inspectable metadata");
+        var error = await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() => manager.RequiredAsync("foreign"));
+        Assert.Contains("execution environment", error.Message); Assert.Empty(manager.Owners()); Assert.Equal(original, await File.ReadAllTextAsync(file));
+        Assert.Equal("exact", manager.Catalog.Resolve("foreign")["kind"]!.GetValue<string>());
+        var repaired = JsonNode.Parse(original)!.AsObject(); repaired["currentNode"] = " master "; repaired["cwd"] = work + "/.";
+        await File.WriteAllTextAsync(file, repaired.ToJsonString()); var owner = await manager.RequiredAsync("foreign");
+        var projection = manager.CatalogPresentations(["foreign"], true)[0];
+        Assert.Equal(" master ", projection["currentNode"]!.GetValue<string>()); Assert.Equal(work + "/.", projection["cwd"]!.GetValue<string>());
+        Assert.Equal(repaired.ToJsonString(), await File.ReadAllTextAsync(file)); Assert.Same(owner, await manager.RequiredAsync("foreign"));
+    }
+
+    [Fact]
+    public async Task Mandatory_foreign_environment_cannot_arm_a_siblings_original_deadline()
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        await Seed(data, "deadline", new JsonObject()); await Seed(data, "foreign", new JsonObject { ["currentNode"] = "remote" });
+        var file = Path.Combine(data, "state", "sessions", "deadline.json"); var raw = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
+        raw["meta"]!["wait"] = new JsonObject { ["id"] = "original", ["startedAt"] = 1, ["timeoutSeconds"] = 1, ["declarationVersion"] = 1 };
+        await File.WriteAllTextAsync(file, raw.ToJsonString());
+        using (var catalog = new SessionCatalog(data))
+        {
+            catalog.Initialize(); var row = SessionCatalogTests.Row("deadline", 0); row["meta"]!["wait"] = raw["meta"]!["wait"]!.DeepClone();
+            var foreign = catalog.Get("foreign")!; foreign["queueLength"] = 1; catalog.Upsert([row, foreign]);
+        }
+        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options));
+        await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() => manager.LoadAsync()); await Task.Delay(100);
+        Assert.Null(manager.Find("foreign")); var owner = manager.Find("deadline")!;
+        Assert.Equal("original", owner.WaitSnapshot()!["id"]!.GetValue<string>()); Assert.Empty(owner.Entry.Snapshot().History); Assert.Empty(owner.Entry.Snapshot().Queue);
+        Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
+    }
+
+    [Fact]
+    public async Task Source_migration_keeps_valid_foreign_intent_for_exact_admission_rejection()
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        await SessionCatalogMigrationTests.Authority(data, "foreign"); var file = Path.Combine(data, "state", "sessions", "foreign.json");
+        var raw = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject(); raw["cwd"] = Path.Combine(temp.Path, "different"); await File.WriteAllTextAsync(file, raw.ToJsonString());
+        await File.WriteAllTextAsync(Path.Combine(data, "state", "sessions.json"), new JsonObject { ["sessions"] = new JsonObject { ["foreign"] = SessionCatalogTests.Row("foreign", 0) } }.ToJsonString());
+        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadAsync(); Assert.Empty(manager.Owners());
+        Assert.Equal(raw["cwd"]!.GetValue<string>(), manager.Catalog.Get("foreign")!["cwd"]!.GetValue<string>());
+        await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() => manager.RequiredAsync("foreign")); Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
+    }
+}

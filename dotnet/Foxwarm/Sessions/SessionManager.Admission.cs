@@ -66,6 +66,7 @@ internal sealed partial class SessionManager
             var store = MakeStore(id, agent);
             var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("Cataloged Session authority is missing.");
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
+            ValidateExecutionEnvironment(snapshot.AuthorityEnvelope, agents.AgentDirectory(agent), Directory.GetCurrentDirectory());
             if (snapshot.Busy || snapshot.Stopping) throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
             token.ThrowIfCancellationRequested();
             var owner = MakeSession(id, agent, store); owner.Registry.Add(id, snapshot);
@@ -74,6 +75,28 @@ internal sealed partial class SessionManager
         }
         catch (Exception error) { FailIdentity(id, slot, error); }
         finally { slot.Finished.TrySetResult(); }
+    }
+
+    internal static void ValidateExecutionEnvironment(JsonObject envelope, string workspace, string processCwd)
+    {
+        var node = SessionGoal.Trim(SessionWait.Text(envelope["currentNode"]) ?? "");
+        if (node.Length > 0 && node != "master")
+            throw new UnsupportedSessionExecutionEnvironmentException($"The .NET host does not support this Session's execution environment: currentNode '{node}' is not master.");
+        var cwd = SessionGoal.Trim(SessionWait.Text(envelope["cwd"]) ?? "");
+        if (cwd.Length == 0) return;
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var expanded = cwd == "~" ? home : cwd.StartsWith("~/", StringComparison.Ordinal) || cwd.StartsWith("~\\", StringComparison.Ordinal) ? Path.Combine(home, cwd[2..]) : cwd;
+        try
+        {
+            // Source file defaults resolve Session cwd directly. Source exec's default resolves
+            // base=Session cwd and candidate=Session cwd; relative values can combine twice.
+            var fileDefault = Path.GetFullPath(expanded, processCwd);
+            var execDefault = Path.GetFullPath(Path.IsPathRooted(expanded) ? expanded : Path.Combine(expanded, expanded), processCwd);
+            var configured = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+            if (Path.TrimEndingDirectorySeparator(fileDefault) == configured && Path.TrimEndingDirectorySeparator(execDefault) == configured) return;
+        }
+        catch (ArgumentException) { } catch (NotSupportedException) { }
+        throw new UnsupportedSessionExecutionEnvironmentException("The .NET host does not support this Session's execution environment: its cwd changes the configured Agent workspace defaults.");
     }
 
     private readonly object admissionObservationGate = new();
@@ -166,3 +189,5 @@ internal sealed partial class SessionManager
         await Task.WhenAll(pending);
     }
 }
+
+internal sealed class UnsupportedSessionExecutionEnvironmentException(string message) : InvalidOperationException(message);
