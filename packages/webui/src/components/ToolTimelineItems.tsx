@@ -622,6 +622,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onOpenCodeFile,
   toolIndex,
   searchTarget,
+  manualExpanded: controlledExpanded,
+  onExpandedChange,
 }: {
   call?: FunctionCall
   responses: FunctionResponse[]
@@ -630,12 +632,16 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   onOpenCodeFile?: OpenCodeFileHandler
   toolIndex: number
   searchTarget?: SessionSearchMatch | null
+  manualExpanded?: boolean
+  onExpandedChange?: (expanded: boolean) => void
 }) {
-  const [manualExpanded, setExpanded] = useState(false)
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const manualExpanded = controlledExpanded ?? localExpanded
+  const setExpanded = onExpandedChange ?? setLocalExpanded
   const searchReveal = searchTarget?.toolIndex === toolIndex && (searchTarget.surface === 'call' || searchTarget.surface === 'response')
   const expanded = manualExpanded || searchReveal
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
-  const toggle = () => { prepare(); setExpanded(current => !current) }
+  const toggle = () => { prepare(); setExpanded(!manualExpanded) }
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
   const displayedViewMode = searchReveal ? 'default' : viewMode
   const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && displayedViewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
@@ -651,7 +657,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       if (!expanded) { prepare(); setExpanded(true) }
     }
     setViewMode(mode)
-  }, [expanded, prepare])
+  }, [expanded, prepare, setExpanded])
 
   const setDiffMode = useCallback((mode: 'unified' | 'split') => {
     setDiffViewMode(mode)
@@ -887,7 +893,16 @@ export const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKey
   ]
 }
 
-export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, onOpenCodeFile, searchTarget }: { msg: Message; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null }) {
+interface ToolDisclosureProps {
+  expandedToolKeys?: ReadonlySet<string>
+  onToolToggle?: (key: string, expanded: boolean) => void
+}
+
+const toolCallDisclosureKey = (call: FunctionCall, index: number): string => (
+  call.id ? `call-id-${call.id}` : `call-index-${index}`
+)
+
+export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, nextMsg, messageKeyPrefix, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; nextMsg: Message; messageKeyPrefix: string; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const entries = useMemo(() => getGroupedToolEntries(msg, nextMsg, messageKeyPrefix), [messageKeyPrefix, msg, nextMsg])
 
   return (
@@ -895,6 +910,8 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
       {entries.map((entry, index) => (
         <ToolCallResponseItem
           key={entry.key}
+          manualExpanded={expandedToolKeys?.has(entry.call ? toolCallDisclosureKey(entry.call, index) : entry.key)}
+          onExpandedChange={onToolToggle ? expanded => onToolToggle(entry.call ? toolCallDisclosureKey(entry.call, index) : entry.key, expanded) : undefined}
           toolIndex={index}
           searchTarget={searchTarget}
           call={entry.call}
@@ -908,20 +925,31 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
   )
 })
 
-export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile, searchTarget }: { msg: Message; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null }) {
+export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, onOpenCodeFile, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; onOpenCodeFile?: OpenCodeFileHandler; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const functionCalls = useMemo(() => msg.parts.filter(p => p.functionCall).map(p => p.functionCall!), [msg.parts])
   if (functionCalls.length === 0) return null
 
   return (
     <div>
       {functionCalls.map((call, callIdx) => (
-        <ToolCallResponseItem key={`call-${call.id || callIdx}`} toolIndex={callIdx} searchTarget={searchTarget} call={call} responses={[]} imageParts={[]} modelMessage={msg} onOpenCodeFile={onOpenCodeFile} />
+        <ToolCallResponseItem
+          key={`call-${call.id || callIdx}`}
+          manualExpanded={expandedToolKeys?.has(toolCallDisclosureKey(call, callIdx))}
+          onExpandedChange={onToolToggle ? expanded => onToolToggle(toolCallDisclosureKey(call, callIdx), expanded) : undefined}
+          toolIndex={callIdx}
+          searchTarget={searchTarget}
+          call={call}
+          responses={[]}
+          imageParts={[]}
+          modelMessage={msg}
+          onOpenCodeFile={onOpenCodeFile}
+        />
       ))}
     </div>
   )
 })
 
-export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, searchTarget }: { msg: Message; searchTarget?: SessionSearchMatch | null }) {
+export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, searchTarget, expandedToolKeys, onToolToggle }: { msg: Message; searchTarget?: SessionSearchMatch | null } & ToolDisclosureProps) {
   const functionResponses = useMemo(() => msg.parts.filter(p => p.functionResponse).map(p => p.functionResponse!), [msg.parts])
   if (functionResponses.length === 0) return null
 
@@ -930,6 +958,8 @@ export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, search
       {functionResponses.map((resp, respIdx) => (
         <ToolCallResponseItem
           key={`resp-${resp.tool_use_id || respIdx}`}
+          manualExpanded={expandedToolKeys?.has(`response-${resp.tool_use_id || respIdx}`)}
+          onExpandedChange={onToolToggle ? expanded => onToolToggle(`response-${resp.tool_use_id || respIdx}`, expanded) : undefined}
           toolIndex={respIdx}
           searchTarget={searchTarget}
           responses={[resp]}

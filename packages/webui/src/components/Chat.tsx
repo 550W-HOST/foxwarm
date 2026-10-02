@@ -1823,7 +1823,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
 
     setLoading(true)
-    clearStreamingAssistantDraft()
 
     const userMessage = text.trim()
     const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
@@ -1907,7 +1906,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
     setLoading(false)
     return true
-  }, [clearStreamingAssistantDraft, loading, scheduleHistoryRefresh, sessionId, sessionMissing])
+  }, [loading, scheduleHistoryRefresh, sessionId, sessionMissing])
 
   const sendSessionCommand = useCallback(async (command: string) => {
     if (sessionMissing) return

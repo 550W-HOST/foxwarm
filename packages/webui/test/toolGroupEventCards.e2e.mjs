@@ -238,7 +238,7 @@ test('streaming updates within the forced-open tail retain the wrapper and first
   await page.waitForFunction(() => document.querySelectorAll('#tail [data-system-message-kind="event"]').length === 2)
 })
 
-test('the final keep-expanded group has no collapse control, retains wrapper identity as it becomes history, and then follows ordinary grouping', async () => {
+test('a manually opened tail tool retains its group through historical regrouping and still allows group collapse', async () => {
   const before = await page.$eval('#tail [data-tool-group]', node => {
     window.tailGroupNode = node
     return { key: node.dataset.toolGroup, expanded: node.dataset.toolGroupExpanded, groupControl: !!node.querySelector('[data-tool-group-card]') }
@@ -246,9 +246,12 @@ test('the final keep-expanded group has no collapse control, retains wrapper ide
   assert.equal(before.expanded, 'true')
   assert.equal(before.groupControl, false)
   await page.evaluate(() => window.moveTailToHistory())
-  await page.waitForSelector('#tail [aria-label="Expand tool group"]')
+  await page.waitForSelector('#tail [aria-label="Collapse tool group"]')
+  assert.equal(await page.$eval('#tail .foxwarm-tool-card .foxwarm-thread-line-button', node => node.getAttribute('aria-expanded')), 'true', 'the earlier manual tool expansion survives historical regrouping')
   assert.equal(await page.$eval('#tail [data-tool-group]', node => node === window.tailGroupNode), true, 'tail-to-history keeps the same group wrapper')
   assert.equal(await page.$eval('#tail [data-tool-group]', node => node.dataset.toolGroup), before.key)
+  await page.click('#tail [aria-label="Collapse tool group"]')
+  await page.waitForSelector('#tail [aria-label="Expand tool group"]')
   await page.click('#tail [aria-label="Expand tool group"]')
   await page.waitForSelector('#tail [data-tool-group-card] > [aria-label="Collapse tool group"]')
   assert.equal(await page.$eval('#tail [data-tool-group]', node => node === window.tailGroupNode), true)

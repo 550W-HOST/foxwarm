@@ -836,7 +836,13 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   )
 })
 
+type ExpandedTools = ReadonlyMap<string, ReadonlySet<string>>
+type ToolToggleHandler = (messageKey: string, toolKey: string, expanded: boolean, groupKey?: string) => void
+const EMPTY_TOOL_KEYS: ReadonlySet<string> = new Set()
+
 interface MessageRowProps {
+  expandedTools: ExpandedTools
+  onToolToggle: ToolToggleHandler
   row: TimelineRowView
   isMobile: boolean
   showUserMessageMetadata: boolean
@@ -862,6 +868,8 @@ const MessageRow = memo(function MessageRow({
   groupFirst = false,
   surface = 'all',
   searchTarget,
+  expandedTools,
+  onToolToggle,
 }: MessageRowProps) {
   const {
     key: messageKey,
@@ -879,6 +887,12 @@ const MessageRow = memo(function MessageRow({
     anchorKey,
     scrollbarAnchorKey,
   } = row
+  const toolDisclosure = {
+    expandedToolKeys: expandedTools.get(messageKey) || EMPTY_TOOL_KEYS,
+    onToolToggle: useCallback((toolKey: string, expanded: boolean) => {
+      onToolToggle(messageKey, toolKey, expanded, row.group?.key)
+    }, [messageKey, onToolToggle, row.group?.key]),
+  }
   const rowSearchTarget = searchTarget?.rowKey === messageKey ? searchTarget : null
   const reasoningRuns = useMemo(() => getReasoningRuns(msg.parts), [msg.parts])
   const reasoningTokens = msg.__meta?.usage?.reasoningTokens
@@ -990,8 +1004,8 @@ const MessageRow = memo(function MessageRow({
               return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
-            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
-            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock msg={msg} searchTarget={rowSearchTarget} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
+            {surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup ? null : <ToolResponsesBlock {...toolDisclosure} msg={msg} searchTarget={rowSearchTarget} />)}
             {surface !== 'ordinary' && usageBadge && <ModelUsageAnchor usage={usageBadge.usage} isMobile={isMobile} callCount={usageBadge.callCount} attribution={usageBadge.attribution} sessionId={sessionId} />}
           </div>
         )}
@@ -1000,6 +1014,8 @@ const MessageRow = memo(function MessageRow({
   )
 }, (prev, next) => (
   prev.row === next.row &&
+  prev.expandedTools.get(prev.row.key) === next.expandedTools.get(next.row.key) &&
+  prev.onToolToggle === next.onToolToggle &&
   prev.isMobile === next.isMobile &&
   (prev.row.msg.role !== 'user' || prev.row.systemLikeMessage || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.groupFirst === next.groupFirst &&
@@ -1068,8 +1084,9 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
+  const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -1130,7 +1147,22 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
     })
   }, [])
 
-  const rowProps = { isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
+  const handleToolToggle = useCallback<ToolToggleHandler>((messageKey, toolKey, expanded, groupKey) => {
+    setExpandedTools(previous => {
+      const keys = new Set(previous.get(messageKey))
+      if (expanded) keys.add(toolKey)
+      else keys.delete(toolKey)
+      const next = new Map(previous)
+      if (keys.size) next.set(messageKey, keys)
+      else next.delete(messageKey)
+      return next
+    })
+    // Only the user's open action opts the containing run into staying open.
+    // Later group collapse must win even while a member retains its own choice.
+    if (expanded && groupKey) handleGroupToggle(groupKey, true)
+  }, [handleGroupToggle])
+
+  const rowProps = { expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
@@ -1142,6 +1174,10 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       ])}
     </div>
   )
+})
+
+const ChatTimeline = memo(function ChatTimeline(props: ChatTimelineProps) {
+  return <SessionTimeline key={props.sessionId} {...props} />
 })
 
 export default ChatTimeline

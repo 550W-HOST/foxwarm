@@ -109,7 +109,7 @@ Chat, terminal, Agents, Setup, Search, Logs, and Code use one tab/pane workbench
 
 ### D-webui-session-stream-ownership
 
-Mounted Chat owns per-session state and one logical session subscription. List consumers own logical subscriptions for loaded/current/open/watch rows. One page transport multiplexes them without turning list updates into an all-Session payload or substituting list projections for Chat runtime state. Physical transport and ordering are canonical in [D-webui-multiplexed-realtime](../threads/streaming-pipeline.md#d-webui-multiplexed-realtime); browser cache/query completeness is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
+Mounted Chat owns per-session state and one logical session subscription. New input does not discard an active model draft ([send/draft contract](../units/webui-chat.md#d-webui-active-draft-send)); explicit Tool/group disclosure remains mounted-Session-local ([disclosure contract](../units/webui-tool-timeline.md#d-webui-tool-group-collapse)). List consumers own logical subscriptions for loaded/current/open/watch rows. One page transport multiplexes them without turning list updates into an all-Session payload or substituting list projections for Chat runtime state. Physical transport and ordering are canonical in [D-webui-multiplexed-realtime](../threads/streaming-pipeline.md#d-webui-multiplexed-realtime); browser cache/query completeness is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 
 ### D-webui-history-bootstrap
 
