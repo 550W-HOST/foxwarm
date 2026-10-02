@@ -3,7 +3,7 @@ using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
 
-internal enum SessionEventKind { MessageCommitted, StateChanged, ModelStream, RequestProgress, DraftChanged, ProcessingError }
+internal enum SessionEventKind { MessageCommitted, StateChanged, ModelStream, RequestProgress, DraftChanged, ProcessingError, CommandReply }
 internal sealed record SessionRuntimeEvent(string SessionId, SessionEventKind Kind, JsonNode? Data);
 internal sealed record SessionMetadata(string Id, string Agent, string? ParentSessionId, string? DisplayName,
     bool Busy, bool Stopping, long? BusyStartedAt, int QueueLength, int MessageCount, long NextMessageSeq,
@@ -28,6 +28,8 @@ internal sealed class SessionRuntime(SessionManager manager)
     public async Task ContinueAsync(string id) => await (await manager.RequiredAsync(id)).StartProcessing(retry: true);
     public async Task SubmitAndRunAsync(string id, QueueItem item) { var owner = await manager.RequiredAsync(id); await owner.Registry.Ingress.EnqueueAsync(owner.Id, item); }
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
+    internal PresentationChange ChangePresentation(Func<SessionCatalog, PresentationChange> action) => manager.ChangePresentation(action);
+    internal void ReplyToCommand(string id, string text) => manager.ReplyToCommand(id, text);
     public Task UpdateDisplayNameAsync(string id, string? name) => manager.RenameAsync(id, name);
     public async Task<string> RefreshSnapshotAsync(string id) => await manager.RefreshSnapshotAsync(await manager.RequiredAsync(id));
     public async Task<StopResult> StopAsync(string id)

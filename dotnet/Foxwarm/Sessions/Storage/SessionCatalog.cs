@@ -127,19 +127,23 @@ internal sealed partial class SessionCatalog : IDisposable
         EnsureInitialized(); Execute(db!, "BEGIN IMMEDIATE");
         try
         {
-            var references = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var row in records)
-            {
-                var id = Text(row["id"])!; references.Add(id);
-                if (Text(row["parentSessionId"]) is { } parentReference) references.Add(parentReference);
-                using (var command = Command(db!, "SELECT alias FROM session_alias WHERE session_id=$p0", id))
-                using (var reader = command.ExecuteReader()) while (reader.Read()) references.Add(reader.GetString(0));
-                Insert(db!, row);
-                foreach (var alias in row["aliases"]!.AsArray()) references.Add(Text(alias)!);
-            }
-            NormalizeParents(db!, references); Execute(db!, "COMMIT"); revision++;
+            WriteRowsLocked(records); Execute(db!, "COMMIT"); revision++;
         }
         catch { Execute(db!, "ROLLBACK"); throw; }
+    }
+    private void WriteRowsLocked(JsonObject[] records)
+    {
+        var references = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in records)
+        {
+            var id = Text(row["id"])!; references.Add(id);
+            if (Text(row["parentSessionId"]) is { } parentReference) references.Add(parentReference);
+            using (var command = Command(db!, "SELECT alias FROM session_alias WHERE session_id=$p0", id))
+            using (var reader = command.ExecuteReader()) while (reader.Read()) references.Add(reader.GetString(0));
+            Insert(db!, row);
+            foreach (var alias in row["aliases"]!.AsArray()) references.Add(Text(alias)!);
+        }
+        NormalizeParents(db!, references);
     }
     internal void PublishAuthority(JsonObject authority)
     {

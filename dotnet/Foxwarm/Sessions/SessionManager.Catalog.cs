@@ -156,6 +156,24 @@ internal sealed partial class SessionManager
         var ids = Catalog.List().Select(row => SessionCatalog.Text(row["id"])!).ToArray();
         return CatalogPresentations(ids, true);
     }
+    internal PresentationChange ChangePresentation(Func<SessionCatalog, PresentationChange> action)
+    {
+        var change = action(Catalog);
+        try { foreach (var id in change.ChangedIds) Find(id)?.PublishStateChanged(); }
+        catch (Exception error) { throw new PresentationCommittedException(change, error); }
+        return change;
+    }
+    internal void ReplyToCommand(string id, string text)
+    {
+        var data = new JsonObject
+        {
+            ["role"] = "assistant", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
+            ["__meta"] = new JsonObject { ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ["channelUserId"] = id,
+                ["username"] = "webui", ["platform"] = "webui", ["temporary"] = true, ["isCommandResponse"] = true }
+        };
+        if (Find(id) is { } owner) owner.Emit(SessionEventKind.CommandReply, data);
+        else Changed?.Invoke(new(id, SessionEventKind.CommandReply, data));
+    }
     internal Task RenameAsync(string id, string? name)
     {
         Catalog.Rename(id, name); Find(id)?.PublishStateChanged(); return Task.CompletedTask;

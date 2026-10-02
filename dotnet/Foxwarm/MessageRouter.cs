@@ -8,10 +8,16 @@ internal sealed record ChannelMessage(string Text, string? ClientMessageId);
 internal sealed record MessageRouteResult(int Status, object Value);
 
 /// <summary>Supported Main-local ingress. Channels validate their wire DTO, this owner handles commands and admission.</summary>
-internal sealed class MessageRouter(SessionRuntime runtime)
+internal sealed partial class MessageRouter(SessionRuntime runtime)
 {
     public async Task<MessageRouteResult> HandleMessageAsync(ChannelContext context, ChannelMessage message)
     {
+        if (IsPresentationCommand(message.Text))
+        {
+            var canonical = SessionCatalog.Text(runtime.Catalog.Resolve(context.SessionId)["sessionId"]);
+            if (canonical is null) return new(404, new { error = "Session not found" });
+            return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
+        }
         var owner = await runtime.GetOwnerAsync(context.SessionId) ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
         if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
