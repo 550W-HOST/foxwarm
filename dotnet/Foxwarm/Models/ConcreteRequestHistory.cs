@@ -48,9 +48,12 @@ internal static class ConcreteRequestHistory
         return prepared;
     }
 
+    internal static IReadOnlyList<JsonObject> PrepareRequest(IReadOnlyList<JsonObject> history, string destinationModelId) =>
+        Prepare(RequestHistoryRepair.SelectAndRepair(history), destinationModelId);
+
     internal sealed class ChatService(IChatService inner, string destinationModelId) : IChatService
     {
         public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken) =>
-            inner.ChatAsync(sessionId, Prepare(history, destinationModelId), cancellationToken);
+            inner.ChatAsync(sessionId, PrepareRequest(history, destinationModelId), cancellationToken);
     }
 }

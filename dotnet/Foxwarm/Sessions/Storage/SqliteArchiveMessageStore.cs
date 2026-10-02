@@ -130,6 +130,7 @@ public sealed partial class SqliteArchiveMessageStore
             """);
         ValidateSchema(connection);
         InitializeBlocks(connection);
+        InitializeBranches(connection);
         ValidateSupportedAncillaryState(connection);
     }
 
@@ -351,15 +352,6 @@ public sealed partial class SqliteArchiveMessageStore
 
     private void ValidateSupportedAncillaryState(SqliteConnection connection)
     {
-        if (TableExists(connection, "archive_branches"))
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT parent_session_id,fork_message_seq,fork_block_id FROM archive_branches WHERE session_id=$session";
-            command.Parameters.AddWithValue("$session", sessionId);
-            using var reader = command.ExecuteReader();
-            if (reader.Read() && (!reader.IsDBNull(0) || reader.GetInt64(1) != 0 || reader.GetInt64(2) != 0))
-                throw new UnsupportedSessionAuthorityException("Archive fork/parent lineage is unsupported.");
-        }
         RejectRows(connection, "archive_session_id_reservations", "session_id=$session OR canonical_session_id=$session", "Archive aliases/reservations are unsupported.");
     }
 

@@ -87,10 +87,11 @@ internal sealed partial class ContextPreviewRenderer
             messages.Count == 0 ? $"No messages found in session `{sessionId}` (total: {total} messages)." : $"No messages matched the requested filters in session `{sessionId}` (total: {total} messages).");
     }
     internal int Budget => budget;
-    internal PreviewItem ArchivedMessage(ArchiveMessageRecord record)
+    internal PreviewItem ArchivedMessage(ArchiveMessageRecord record, string? ownerId = null)
     {
         var item = Item(record.Message, record.Seq);
-        return item with { Heading = item.Heading.Replace($"[{record.Seq}]", $"[#{record.Seq} time {DateTimeOffset.FromUnixTimeMilliseconds((long)record.Timestamp):O}] [local]", StringComparison.Ordinal) };
+        var source = ownerId is not null && ownerId != record.SessionId ? "[inherited: " + record.SessionId + "]" : "[local]";
+        return item with { Heading = item.Heading.Replace($"[{record.Seq}]", $"[#{record.Seq} time {DateTimeOffset.FromUnixTimeMilliseconds((long)record.Timestamp):O}] " + source, StringComparison.Ordinal) };
     }
     internal string RenderItems(IReadOnlyList<PreviewItem> items, string context, Func<int, string> titleFor, string empty, IReadOnlyList<string>? extraNotices = null)
     {

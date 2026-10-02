@@ -66,7 +66,7 @@ export async function createHostFixture(name) {
   const sql = (statement, parameters = []) => JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
   async function cleanup() {
     if (browser) await browser.close().catch(() => {})
-    if (host && host.child.exitCode === null) { host.child.kill('SIGKILL'); await once(host.child, 'exit').catch(() => {}) }
+    if (host && host.child.exitCode === null && host.child.signalCode === null) { const exited = once(host.child, 'exit').catch(() => {}); host.child.kill('SIGKILL'); await exited }
     if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true }); else console.log('Retained owned root: ' + root)
   }
   return { root, data, work, modelPath, origin, api, start, openApp, save, stop, sql, cleanup, hostPids, get output() { return host?.output } }

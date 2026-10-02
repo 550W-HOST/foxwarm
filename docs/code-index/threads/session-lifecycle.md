@@ -50,7 +50,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - Same-Agent children replace an Agent `main` leaf or retain append-style IDs under a non-main parent. A fresh cross-Agent child uses the target Agent namespace as if named beneath its main leaf while retaining the actual caller as parent; cross-Agent forks are rejected before creation effects.
 - Fork and child allocators skip both live and archived IDs while incrementing their suffix counters.
 - `create_child_session` may supply a display name, recorded on the fresh or forked Session and persisted in the Main-owned catalog before initial message delivery; omission preserves prior unnamed-child behavior and does not turn the suffix into a display name. The new-child name does not affect its allocated ID. Creation accepts string display names verbatim (including empty or whitespace-padded strings), matching `create_session`; non-string values fail before allocation. The existing display-name update action separately trims or clears names.
-- Forks copy the model-visible active history/prompt snapshot and inherit prompt-cache/archive lineage only through the fork point.
+- Forks copy the entire canonical active history and prompt snapshot, including hidden rows and provenance; provider visibility is request-local. Prompt-cache and capped Archive lineage stop at the fork point.
 - Non-fork children start a fresh model-visible prefix and cache key.
 - Fresh cross-Agent children assemble the target Agent's default memory snapshot and do not copy the parent's custom prompt-file selection or cached snapshot. Their Node is the target Agent's isolation binding, then an explicit child Node, then the parent's current Node, then `master`.
 - Forked and non-fork children resolve one raw current model/effort pair. Effort resolution is explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; unset never freezes a concrete model default into the child. The parent's child policy is consumed for this creation only; the spawned child's future-child defaults stay unset so later children follow its current pair, even after a current-model change or creation override.
@@ -138,3 +138,7 @@ A model/tool source may delete another permitted local or Worker-owned target th
 ### D-lifecycle-identity-move-relations
 
 [2026-08-01] Session identity moves preserve the existing incoming parent when no parent option is supplied and rewrite direct child references to the new canonical ID, so individually moving every member of an existing tree preserves its topology independent of move order. An explicit `parentSessionId` is an intentional post-move override, not a requirement for ordinary tree migration. There is no recursive tree-move API. If that separate relation write fails after the journaled identity move commits, callers must report identity success plus the unconfirmed parent update instead of implying rollback.
+
+## Ordinary .NET lifecycle
+
+The Main-local .NET host supports the bounded fork/clear owner, caller-specific notices, selected prompt snapshots and pure cumulative-cap Archive reads described in [its lifecycle unit](../units/dotnet.md#session-fork-clear-and-capped-archive-reads). It retains fail-closed startup rather than porting catalog migration, busy recovery or coordinated deletion.

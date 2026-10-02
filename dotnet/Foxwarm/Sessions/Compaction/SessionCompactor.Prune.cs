@@ -95,7 +95,7 @@ internal sealed partial class SessionCompactor
     {
         var cutoff = CompactCandidateBuilder.Split(snapshot.History, keep);
         if (cutoff <= 0) return false;
-        var bySeq = store.Archive.ReadMessages().GroupBy(row => row.Seq).ToDictionary(group => group.Key, group => group.ToArray());
+        var bySeq = store.Archive.ReadEffectiveMessagesRange(1, 9007199254740991).GroupBy(row => row.Seq).ToDictionary(group => group.Key, group => group.ToArray());
         var counts = snapshot.History.Select(row => CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]))
             .Where(seq => seq is > 0).GroupBy(seq => seq!.Value).ToDictionary(group => group.Key, group => group.Count());
         var rewritten = snapshot.History.Select(row => (JsonObject)row.DeepClone()).ToArray();
@@ -127,7 +127,7 @@ internal sealed partial class SessionCompactor
         if (after > Math.Max(1, (int)Math.Floor(limit * .5))) return false;
         foreach (var seq in affected)
         {
-            var latest = store.Archive.ReadMessages().Where(row => row.Seq == seq).ToArray();
+            var latest = store.Archive.ReadEffectiveMessagesRange(1, 9007199254740991).Where(row => row.Seq == seq).ToArray();
             var originals = snapshot.History.Where(row => CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]) == seq).ToArray();
             if (latest.Length != 1 || originals.Length != 1
                 || !JsonNode.DeepEquals(NormalizeArchiveComparison(latest[0].Message), NormalizeArchiveComparison(originals[0]))) return false;

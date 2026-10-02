@@ -19,7 +19,7 @@ internal sealed class SessionChatService(
             var value = SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
             if (ConditionalMemory.ReadCurrentModelSnapshotId(value) != leaf.Key)
             {
-                value = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key);
+                value = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key, token, AgentMemory.Selection(hosted.Entry.Snapshot().AuthorityEnvelope));
                 await hosted.Entry.SaveLane.CommitMemorySnapshotAsync(value);
             }
             return baseOptions.Instructions.Length == 0 ? value : baseOptions.Instructions + "\n\n" + value;

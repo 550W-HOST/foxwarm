@@ -8,9 +8,12 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
 {
-    public async Task<string> BuildAsync(string agentName, string sessionId, string concreteModelId, CancellationToken cancellationToken = default)
+    public async Task<string> BuildAsync(string agentName, string sessionId, string concreteModelId, CancellationToken cancellationToken = default, IReadOnlyList<string>? selection = null)
     {
         var blocks = new StringBuilder();
+        if (selection is not null) await AppendSelectedAsync(blocks, agentName, sessionId, concreteModelId, selection, cancellationToken);
+        else
+        {
         var frameworkPath = File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
             : agents.MainFallbackSystemPath;
         if (File.Exists(frameworkPath))
@@ -33,6 +36,7 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
                     if (visible) AppendBlock(blocks, sourceAgent, sourceAgent == agentName ? "self" : "inherited", path,
                         ConditionalMemory.FilterConditionalMemorySource(body, concreteModelId));
                 }
+        }
         }
         var catalog = await skills.ListAsync(agentName);
         cancellationToken.ThrowIfCancellationRequested();

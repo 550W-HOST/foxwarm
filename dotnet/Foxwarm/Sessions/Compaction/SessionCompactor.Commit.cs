@@ -8,20 +8,21 @@ internal sealed class CompactionSnapshotIncompatibleException(string message) : 
 internal sealed partial class SessionCompactor
 {
     private CompactionPreparation PrepareCompact(SessionState live, SessionSnapshot original,
-        CompactCandidates candidates, CompactPlan plan)
+        CompactCandidates candidates, CompactPlan plan, long archiveMaximum)
     {
         if (live.HistoryVersion != original.HistoryVersion || live.History.Count < original.History.Count
             || original.History.Where((message, index) => !JsonNode.DeepEquals(message, live.History[index])).Any())
             throw new CompactionSnapshotIncompatibleException("Compaction snapshot changed incompatibly before authority commit.");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var nextBlockId = CompactCandidateBuilder.Number(live.AuthorityEnvelope["nextBlockId"]) ?? 1;
+        var nextBlockId = plan.Operations.Count > 0 ? SessionBlockCounter.Resolve(live.History, live.AuthorityEnvelope, archiveMaximum)
+            : CompactCandidateBuilder.Number(live.AuthorityEnvelope["nextBlockId"]) ?? 1;
         var operations = new List<(CompactOperation Operation, ArchiveBlockRecord Record)>();
         foreach (var op in plan.Operations)
         {
             var sourceIds = op.Kind == "block" ? new JsonArray(candidates.Items.Skip(op.CandidateStart)
                 .Take(op.CandidateEnd - op.CandidateStart + 1).Select(item => (JsonNode?)JsonValue.Create(item.Start)).ToArray()) : null;
             var summary = FormatSummary(op.Summary, op.MemoryFacts);
-            var record = new ArchiveBlockRecord(live.Id, "main", nextBlockId++, op.Level, op.Kind,
+            var record = new ArchiveBlockRecord(live.Id, hosted.Agent, nextBlockId++, op.Level, op.Kind,
                 op.First.Start, op.Last.End, sourceIds, op.RawStart, op.RawEnd,
                 op.First.StartTimestamp, op.Last.EndTimestamp, summary,
                 op.MemoryFacts is null ? null : (JsonArray)op.MemoryFacts.DeepClone(), now);

@@ -9,6 +9,7 @@ namespace Foxwarm.Sessions;
 public sealed class SessionEntry
 {
     private int processorClaim;
+    private int historyMutation;
     private int processorClaimCount;
     private readonly object stateGate = new();
     private CancellationHandle? activeCancellation;
@@ -53,11 +54,34 @@ public sealed class SessionEntry
     }
     public Task<Exception> WaitForBackgroundProcessorFailureAsync() => backgroundProcessorFailureSignal.Task;
 
+    internal bool HistoryMutation => Volatile.Read(ref historyMutation) != 0;
+    internal bool TryBeginHistoryMutation(out bool busy, out QueueItem[] captured)
+    {
+        lock (stateGate)
+        {
+            captured = State.Queue.ToArray(); busy = State.Busy || processorClaim != 0;
+            if (historyMutation != 0) return false;
+            historyMutation = 1;
+            if (!busy) processorClaim = 1;
+            return true;
+        }
+    }
+    internal void EndHistoryMutation(bool ownedProcessor)
+    {
+        lock (stateGate)
+        {
+            historyMutation = 0;
+            if (ownedProcessor) processorClaim = 0;
+        }
+    }
     public bool TryClaimProcessor()
     {
-        if (Interlocked.CompareExchange(ref processorClaim, 1, 0) != 0) return false;
-        Interlocked.Increment(ref processorClaimCount);
-        return true;
+        lock (stateGate)
+        {
+            if (historyMutation != 0 || Interlocked.CompareExchange(ref processorClaim, 1, 0) != 0) return false;
+            Interlocked.Increment(ref processorClaimCount);
+            return true;
+        }
     }
     public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
 

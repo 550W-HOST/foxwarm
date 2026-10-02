@@ -89,8 +89,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             if (!agents.Exists(agent)) throw new InvalidDataException("Session is bound to a missing Agent.");
             var store = MakeStore(id, agent);
             var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("An indexed authority file is missing.");
-            if (snapshot.AuthorityEnvelope.ContainsKey("systemPromptFiles"))
-                throw new InvalidDataException("Custom Session prompt files are unsupported by this Agent host.");
+            AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
             if (snapshot.Busy || snapshot.Stopping)
                 throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
             var hosted = MakeSession(id, agent, store);
@@ -147,13 +146,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public async Task<SessionOwner> CreateAsync()
     {
+        await identityGate.WaitAsync();
+        try
+        {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         var id = $"s_{Guid.NewGuid():N}";
+        if (await IdReservedAsync(id)) throw new InvalidOperationException("Session ID collision.");
         var store = MakeStore(id, "main");
         if (await store.LoadAsync(id) is not null) throw new InvalidOperationException("Session ID collision.");
         var hosted = MakeSession(id, "main", store);
         var entry = hosted.Registry.Add(id);
         entry.WithState(state => { state.AuthorityEnvelope["agent"] = "main"; state.Meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); });
+        var branch = store.Archive.EnsureBranch();
         try { await entry.SaveLane.SaveStrictAsync(); } // First authority JSON exists before publication/acknowledgement.
         catch (AuthorityCommittedException error)
         {
@@ -161,8 +165,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
             throw new CommittedSessionCreationException(id,
                 $"Session '{id}' was committed but a later durability step failed.", error);
         }
+        catch (Exception error)
+        {
+            try { CompensateCreatedBranch(store, branch); }
+            catch (Exception cleanup) { throw new AggregateException("Creation failed and owned branch compensation also failed.", error, cleanup); }
+            throw;
+        }
         PublishLegacy(hosted);
         return hosted;
+        }
+        finally { identityGate.Release(); }
     }
 
     private void PublishLegacy(SessionOwner hosted)
@@ -202,7 +214,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async Task ShutdownAsync()
     {
         SessionOwner[] current;
-        lock (lifecycle) { accepting = false; current = sessions.Values.ToArray(); }
+        await identityGate.WaitAsync();
+        try { lock (lifecycle) { accepting = false; current = sessions.Values.ToArray(); } }
+        finally { identityGate.Release(); }
         waitTimeouts.Stop(); waitLiveness.Stop();
         await waitTimeouts.DrainAsync(); await waitLiveness.DrainAsync();
         // Each Stop takes and cancels its own active handle synchronously before

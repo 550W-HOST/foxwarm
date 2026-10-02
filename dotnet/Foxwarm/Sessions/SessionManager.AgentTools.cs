@@ -47,15 +47,15 @@ internal sealed partial class SessionManager
                     }
                 case "create_child_session":
                     {
-                        Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel"], ["suffix"]);
+                        Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel", "fork"], ["suffix"]);
                         var forceModel = OptionalForceModel(args);
                         var after = AfterSend(args);
                         if (after == "wait" && string.IsNullOrWhiteSpace(OptionalString(args, "message")))
                             throw new InvalidDataException("create_child_session with afterSend=wait requires a nonempty initial message.");
                         var (child, delivered) = await CreateChildAsync(source, RequiredString(args, "suffix"),
                             OptionalString(args, "agentName"), OptionalString(args, "displayName"),
-                            OptionalString(args, "message"), forceModel);
-                        return (Output($"Created fresh child Session {child.Id} under Agent {child.Agent}; "
+                            OptionalString(args, "message"), forceModel, OptionalBool(args, "fork") ?? false);
+                        return (Output($"Created child Session {child.Id} under Agent {child.Agent}; "
                             + (delivered ? "initial message delivered to its queue." : "no initial message was supplied."), after == "wait" ? child.Id : null), after == "finish");
                     }
                 case "send_to_session":
@@ -81,6 +81,7 @@ internal sealed partial class SessionManager
             var detail = response["error"] as JsonObject;
             if (error.SessionId is not null) detail!["sessionId"] = error.SessionId;
             if (error.InitialDeliveryCommitted is not null) detail!["initialDeliveryCommitted"] = error.InitialDeliveryCommitted;
+            if (error.ParentNoticeCommitted is not null) detail!["parentNoticeCommitted"] = error.ParentNoticeCommitted;
             return (response, false);
         }
         catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException

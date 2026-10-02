@@ -19,7 +19,7 @@ internal sealed partial class SessionCompactor
         {
             token.ThrowIfCancellationRequested();
             if (ConditionalMemory.ReadCurrentModelSnapshotId(promptSnapshot) != leaf.Key)
-                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key, token);
+                promptSnapshot = await memory.BuildAsync(hosted.Agent, hosted.Id, leaf.Key, token, AgentMemory.Selection(snapshot.AuthorityEnvelope));
             return baseOptions.Instructions.Length == 0 ? promptSnapshot : baseOptions.Instructions + "\n\n" + promptSnapshot;
         }
         for (var round = 0; round < 15; round++)

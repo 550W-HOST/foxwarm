@@ -16,6 +16,22 @@ internal sealed class MessageRouter(SessionRuntime runtime)
         var command = message.Text.Trim();
         if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
         {
+            if (command == "/session clear")
+            {
+                try { var result = await runtime.ClearHistoryAsync(context.SessionId); return new(200, result); }
+                catch (AuthorityCommittedException error) { return new(500, new { error = error.Message, committed = true }); }
+                catch (InvalidOperationException error) { return new(409, new { error = error.Message }); }
+            }
+            if (System.Text.RegularExpressions.Regex.IsMatch(command, @"^/fork(?:\s|$)"))
+            {
+                var rest = message.Text[(message.Text.IndexOf("/fork", StringComparison.Ordinal) + 5)..].TrimStart();
+                var parsed = System.Text.RegularExpressions.Regex.Match(rest, @"^(\S+)(?:\s+([\s\S]*))?$");
+                var suffix = parsed.Success ? parsed.Groups[1].Value : "fork_" + Guid.NewGuid().ToString("N");
+                var initial = parsed.Groups[2].Success && parsed.Groups[2].Value.Length > 0 ? parsed.Groups[2].Value : null;
+                try { var child = await runtime.ForkCommandAsync(context.SessionId, suffix, initial); return new(200, new { success = true, newSessionId = child.Id }); }
+                catch (CommittedSessionCreationException error) { return new(500, new { error = error.Message, code = "partial_create", sessionId = error.SessionId, initialDeliveryCommitted = error.InitialDeliveryCommitted, parentNoticeCommitted = error.ParentNoticeCommitted }); }
+                catch (InvalidDataException error) { return new(400, new { error = error.Message }); }
+            }
             if (command == "/continue")
             {
                 try { await runtime.ContinueAsync(context.SessionId); return new(200, new { success = true }); }
@@ -24,6 +40,7 @@ internal sealed class MessageRouter(SessionRuntime runtime)
             }
             if (command == "/compact")
             {
+                if (owner.Entry.HistoryMutation) return new(409, new { error = "Session history change is in progress." });
                 var result = await owner.Compactor.StartManualAsync();
                 return result.Started || result.AlreadyPending
                     ? new(202, new { accepted = true, compacting = true, alreadyPending = result.AlreadyPending, runsInBackground = result.Background })

@@ -103,7 +103,7 @@ public sealed class PersistencePrimitiveTests
     }
 
     [Fact]
-    public void ArchiveStoreAllowsAnOrdinaryBranchButRejectsLineageAndBlocks()
+    public void ArchiveStoreUpgradesAndReadsSourceCompatibleBranchMetadata()
     {
         using var temp = new TempDirectory();
         var databasePath = Path.Combine(temp.Path, "archive-store.sqlite");
@@ -114,10 +114,6 @@ public sealed class PersistencePrimitiveTests
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                CREATE TABLE archive_branches(
-                  session_id TEXT PRIMARY KEY,parent_session_id TEXT,
-                  fork_message_seq INTEGER NOT NULL DEFAULT 0,fork_block_id INTEGER NOT NULL DEFAULT 0,
-                  created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
                 INSERT INTO archive_branches VALUES($session,NULL,0,0,1,1);
                 """;
             command.Parameters.AddWithValue("$session", Fixture.SessionId);
@@ -132,7 +128,11 @@ public sealed class PersistencePrimitiveTests
             command.Parameters.AddWithValue("$session", Fixture.SessionId);
             command.ExecuteNonQuery();
         }
-        Assert.Throws<UnsupportedSessionAuthorityException>(store.Initialize);
+        store.Initialize();
+        var branch = store.ReadBranch();
+        Assert.Equal("parent", branch!.ParentSessionId);
+        Assert.Equal(1, branch.MessageCap);
+        Assert.Equal(0, branch.BlockCap);
     }
 
     [Theory]

@@ -32,6 +32,20 @@ internal sealed class SessionRuntime(SessionManager manager)
         await owner.DrainForegroundAsync();
         return result;
     }
+    public Task<ClearHistoryResult> ClearHistoryAsync(string id) => manager.ClearAsync(Required(id));
+    public Task<SessionOwner> ForkAsync(string id, string? suffix = null) => manager.ForkAsync(Required(id), suffix);
+    public async Task<SessionOwner> ForkCommandAsync(string id, string suffix, string? message)
+    {
+        var parent = Required(id);
+        var (child, delivered) = await manager.CreateChildAsync(parent, suffix, null, null, message, null, fork: true);
+        try { await manager.NotifyManualForkAsync(parent, child, message); }
+        catch (Exception error)
+        {
+            throw new CommittedSessionCreationException(child.Id, $"Forked Session '{child.Id}' was committed but the parent notice failed.",
+                error, delivered, error is AuthorityCommittedException);
+        }
+        return child;
+    }
     public Task<DequeueResult> DequeueAsync(string id) => Required(id).Registry.Control.DequeueAsync(id);
     private SessionOwner Required(string id) => Owner(id) ?? throw new InvalidDataException("Session not found.");
 }

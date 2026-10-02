@@ -4,7 +4,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed record ArchiveStats(long Count, long? First, long? Last);
 internal sealed record ArchiveBlockTopology(long Id, int Level, string Kind, long First, long Last,
-    long[] Children, long RawFirst, long RawLast, double? StartTime);
+    long[] Children, long RawFirst, long RawLast, double? StartTime, string? SourceSessionId = null);
 
 public sealed partial class SqliteArchiveMessageStore
 {

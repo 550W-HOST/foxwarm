@@ -54,11 +54,12 @@ internal static class AgentToolDefinitions
                 ["forceModel"] = ForceModel()
             }, "agentName", "sessionName")),
         Tool("create_child_session",
-            "Create a fresh child session under the current or a specified agent. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
+            "Create a child session under the current or a specified agent. Supply an initial message to start its work. Ask the child to report back with send_to_session; creation alone does not deliver its eventual result.",
             Parameters(new JsonObject
             {
                 ["agentName"] = String("Existing agent that will own the child. Omit to use this session's agent."),
                 ["suffix"] = String("Name used to form the child's Session ID. A numeric suffix is added when needed to avoid an existing ID."),
+                ["fork"] = new JsonObject { ["type"] = "boolean", ["default"] = false, ["description"] = "Copy the parent's conversation history and prompt snapshot into the child. Defaults to false. Forks must remain in the same agent." },
                 ["displayName"] = String("Display name for the new child session. This does not change its session ID."),
                 ["message"] = String("Initial task or message to send immediately after creation. Omit to create the child without starting a turn."),
                 ["afterSend"] = Choice("What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. The wait option requires a nonempty initial message; other incoming activity can also resume the session.", "continue", "finish", "wait"),

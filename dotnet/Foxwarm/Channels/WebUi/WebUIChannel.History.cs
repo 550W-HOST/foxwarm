@@ -12,6 +12,19 @@ internal sealed partial class WebUIChannel
     private void RegisterHistoryRoutes(WebApplication app)
     {
         var models = sessions.Models;
+        app.MapPost("/api/sessions/{id}/fork", async (string id, HttpRequest request) =>
+        {
+            var parent = FindRoute(request, id);
+            if (parent is null) return Results.NotFound(new { error = "Session not found" });
+            JsonObject? body;
+            try { body = await request.ReadFromJsonAsync<JsonObject>() ?? new JsonObject(); }
+            catch (System.Text.Json.JsonException) { return Results.BadRequest(new { error = "Invalid fork request" }); }
+            if (body.Any(pair => pair.Key != "suffix") || body.ContainsKey("suffix") && body["suffix"] is not JsonValue)
+                return Results.BadRequest(new { error = "Invalid fork suffix" });
+            try { var child = await sessions.ForkAsync(parent, SessionWait.Text(body["suffix"])); return Results.Ok(new { success = true, newSessionId = child.Id }); }
+            catch (CommittedSessionCreationException error) { return Results.Json(new { error = error.Message, code = "partial_create", sessionId = error.SessionId }, statusCode: 500); }
+            catch (InvalidDataException error) { return Results.BadRequest(new { error = error.Message }); }
+        });
         app.MapGet("/api/sessions/{id}/state", (string id, HttpRequest request) =>
             FindRoute(request, id) is { } hosted ? Results.Ok(new { session = hosted.State() }) : Results.NotFound(new { error = "Session not found" }));
         app.MapGet("/api/sessions/{id}/history", (string id, HttpRequest request) =>
@@ -48,9 +61,9 @@ internal sealed partial class WebUIChannel
             if (!long.TryParse(seq, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
                 || index is <= 0 or > 9007199254740991L)
                 return Results.BadRequest(new { error = "seq must be a positive safe integer." });
-            var record = hosted.Archive.ReadMessageBySeq(index);
+            var record = hosted.Archive.ReadEffectiveMessagesRange(index, index).FirstOrDefault();
             return record is null ? Results.NotFound(new { error = "Archived message not found" })
-                : Results.Ok(new { seq = record.Seq, message = record.Message, messageJson = record.MessageJson });
+                : Results.Ok(new { seq = record.Seq, message = record.Message, messageJson = record.MessageJson, sourceSessionId = record.SessionId, inherited = record.SessionId != hosted.Id });
         });
         app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", (string id, string blockId, HttpRequest request) =>
         {

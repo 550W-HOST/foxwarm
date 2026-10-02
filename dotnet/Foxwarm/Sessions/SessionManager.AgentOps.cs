@@ -7,11 +7,12 @@ using Microsoft.Data.Sqlite;
 namespace Foxwarm.Sessions;
 
 internal sealed class CommittedSessionCreationException(string? sessionId, string message, Exception inner,
-    bool? initialDeliveryCommitted = null)
+    bool? initialDeliveryCommitted = null, bool? parentNoticeCommitted = null)
     : IOException(message, inner)
 {
     public string? SessionId { get; } = sessionId;
     public bool? InitialDeliveryCommitted { get; } = initialDeliveryCommitted;
+    public bool? ParentNoticeCommitted { get; } = parentNoticeCommitted;
 }
 
 internal sealed partial class SessionManager
@@ -59,68 +60,74 @@ internal sealed partial class SessionManager
     }
 
     public async Task<(SessionOwner Child, bool Delivered)> CreateChildAsync(SessionOwner parent, string suffix,
-        string? targetAgent, string? displayName, string? initialMessage, JsonObject? forceModel)
+        string? targetAgent, string? displayName, string? initialMessage, JsonObject? forceModel, bool fork = false)
     {
         if (string.IsNullOrEmpty(suffix) || !System.Text.RegularExpressions.Regex.IsMatch(suffix, "^[a-zA-Z0-9_-]+$"))
             throw new InvalidDataException("Child suffix must use only letters, numbers, hyphens and underscores.");
         targetAgent ??= parent.Agent;
         AgentCatalog.ValidateName(targetAgent);
         if (!agents.Exists(targetAgent)) throw new InvalidDataException("Target Agent does not exist.");
+        if (fork && targetAgent != parent.Agent) throw new InvalidDataException("create_child_session cannot fork across Agents.");
         await identityGate.WaitAsync();
         SessionOwner child;
         try
         {
-            var parentId = parent.Id;
-            var baseId = targetAgent != parent.Agent ? SessionIdentity.Build(targetAgent, suffix)
-                : parentId.Split('/').Last() == "main"
-                    ? SessionIdentity.Build(targetAgent, suffix)
-                    : parentId + "_" + suffix;
-            var candidate = baseId;
-            for (var serial = 2; await IdReservedAsync(candidate); serial++)
-                candidate = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
-            var parentEnvelope = parent.Entry.Snapshot().AuthorityEnvelope;
-            var childRawModel = forceModel?["modelId"]?.GetValue<string>()
-                ?? parentEnvelope["childModelDefault"]?.GetValue<string>()
-                ?? parentEnvelope["model"]?.GetValue<string>();
-            var childRawEffort = forceModel?["effort"]?.GetValue<string>()
-                ?? parentEnvelope["childEffortDefault"]?.GetValue<string>()
-                ?? parentEnvelope["effort"]?.GetValue<string>();
-            child = await CreateNamedLockedAsync(targetAgent, candidate[(candidate.IndexOf('/') + 1)..], parentId,
-                displayName, (childRawModel, childRawEffort), forceModel, candidate);
-            try
+            if (fork) child = await ForkLockedAsync(parent, suffix, true, displayName, forceModel);
+            else
             {
-                var time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var system = $"<foxwarm-system kind=\"session-boundary\" event=\"new-child\" parentSessionId=\"{Escape(parentId)}\" currentSessionId=\"{Escape(child.Id)}\" />\n"
-                    + "You are a child session (new, empty context). Report completed work to your parent using send_to_session({sessionId: \"<parent>\", message: \"...\", afterSend: \"finish\"}).";
-                await child.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
+                var parentId = parent.Id;
+                var baseId = targetAgent != parent.Agent ? SessionIdentity.Build(targetAgent, suffix)
+                    : parentId.Split('/').Last() == "main"
+                        ? SessionIdentity.Build(targetAgent, suffix)
+                        : parentId + "_" + suffix;
+                var candidate = baseId;
+                for (var serial = 2; await IdReservedAsync(candidate); serial++)
+                    candidate = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
+                var parentEnvelope = parent.Entry.Snapshot().AuthorityEnvelope;
+                var childRawModel = forceModel?["modelId"]?.GetValue<string>()
+                    ?? parentEnvelope["childModelDefault"]?.GetValue<string>()
+                    ?? parentEnvelope["model"]?.GetValue<string>();
+                var childRawEffort = forceModel?["effort"]?.GetValue<string>()
+                    ?? parentEnvelope["childEffortDefault"]?.GetValue<string>()
+                    ?? parentEnvelope["effort"]?.GetValue<string>();
+                child = await CreateNamedLockedAsync(targetAgent, candidate[(candidate.IndexOf('/') + 1)..], parentId,
+                    displayName, (childRawModel, childRawEffort), forceModel, candidate,
+                    targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null);
+                try
                 {
-                    var message = new JsonObject
+                    var time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var system = SessionBoundary.Identity(parentId, child.Id, inherited: false)
+                        + "\nYou are a child session (new, empty context). " + SessionBoundary.Completion(parentId);
+                    await child.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
                     {
-                        ["role"] = "user",
-                        ["parts"] = new JsonArray(new JsonObject { ["system"] = system }),
-                        ["__meta"] = new JsonObject { ["timestamp"] = time, ["seq"] = state.NextMessageSeq }
-                    };
-                    var snapshot = state.Snapshot();
-                    var meta = (JsonObject)snapshot.Meta.DeepClone();
-                    meta["messageCount"] = snapshot.History.Count + 1;
-                    return new CanonicalAppendPreparation(snapshot with
-                    {
-                        History = snapshot.History.Append(message).ToArray(),
-                        NextMessageSeq = snapshot.NextMessageSeq + 1,
-                        Meta = meta
-                    }, [message], live =>
-                    {
-                        live.History.Add((JsonObject)message.DeepClone());
-                        live.NextMessageSeq++;
-                        live.Meta["messageCount"] = live.History.Count;
+                        var message = new JsonObject
+                        {
+                            ["role"] = "user",
+                            ["parts"] = new JsonArray(new JsonObject { ["system"] = system }),
+                            ["__meta"] = new JsonObject { ["timestamp"] = time, ["seq"] = state.NextMessageSeq }
+                        };
+                        var snapshot = state.Snapshot();
+                        var meta = (JsonObject)snapshot.Meta.DeepClone();
+                        meta["messageCount"] = snapshot.History.Count + 1;
+                        return new CanonicalAppendPreparation(snapshot with
+                        {
+                            History = snapshot.History.Append(message).ToArray(),
+                            NextMessageSeq = snapshot.NextMessageSeq + 1,
+                            Meta = meta
+                        }, [message], live =>
+                        {
+                            live.History.Add((JsonObject)message.DeepClone());
+                            live.NextMessageSeq++;
+                            live.Meta["messageCount"] = live.History.Count;
+                        });
                     });
-                });
-                child.Entry.InvokeCommitted(child.Entry.Snapshot());
-            }
-            catch (Exception error)
-            {
-                throw new CommittedSessionCreationException(child.Id,
-                    $"Child Session '{child.Id}' was committed but its boundary message failed: {error.Message}", error);
+                    child.Entry.InvokeCommitted(child.Entry.Snapshot());
+                }
+                catch (Exception error)
+                {
+                    throw new CommittedSessionCreationException(child.Id,
+                        $"Child Session '{child.Id}' was committed but its boundary message failed: {error.Message}", error);
+                }
             }
         }
         finally { identityGate.Release(); }
@@ -178,13 +185,13 @@ internal sealed partial class SessionManager
         var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "")
             ?? models.Select(snapshot).Model.Key;
-        var value = await memory.BuildAsync(session.Agent, session.Id, modelId);
+        var value = await memory.BuildAsync(session.Agent, session.Id, modelId, selection: AgentMemory.Selection(snapshot.AuthorityEnvelope));
         await session.Entry.SaveLane.CommitMemorySnapshotAsync(value);
         return modelId;
     }
 
     private async Task<SessionOwner> CreateNamedLockedAsync(string agentName, string sessionName, string? parentId,
-        string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null)
+        string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null, IReadOnlyList<string>? selectedFiles = null)
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         if (!agents.Exists(agentName)) throw new InvalidDataException($"Agent '{agentName}' does not exist.");
@@ -196,7 +203,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("Parent Session does not exist.");
         var (model, effort) = ValidateModelSettings(inherited, forceModel);
         var concreteModel = models.Resolve(model);
-        var snapshotText = await memory.BuildAsync(agentName, id, concreteModel.Key);
+        var snapshotText = await memory.BuildAsync(agentName, id, concreteModel.Key, selection: selectedFiles);
         var store = MakeStore(id, agentName);
         var hosted = MakeSession(id, agentName, store);
         var entry = hosted.Registry.Add(id);
@@ -209,14 +216,22 @@ internal sealed partial class SessionManager
             if (model is not null) state.AuthorityEnvelope["model"] = model;
             if (effort is not null) state.AuthorityEnvelope["effort"] = effort;
             state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshotText;
+            if (selectedFiles is not null) state.AuthorityEnvelope["systemPromptFiles"] = new JsonArray(selectedFiles.Select(text => (JsonNode?)JsonValue.Create(text)).ToArray());
             state.AuthorityEnvelope["promptCacheKey"] = Guid.NewGuid().ToString("N");
         });
+        var branch = store.Archive.EnsureBranch();
         try { await entry.SaveLane.SaveStrictAsync(); }
         catch (AuthorityCommittedException error)
         {
             PublishCreated(hosted);
             throw new CommittedSessionCreationException(id,
                 $"Session '{id}' was committed but the final durability step failed.", error);
+        }
+        catch (Exception error)
+        {
+            try { CompensateCreatedBranch(store, branch); }
+            catch (Exception cleanup) { throw new AggregateException("Creation failed and owned branch compensation also failed.", error, cleanup); }
+            throw;
         }
         PublishCreated(hosted);
         return hosted;
@@ -260,7 +275,10 @@ internal sealed partial class SessionManager
         { DataSource = archive, Mode = SqliteOpenMode.ReadOnly }.ToString());
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM archive_messages WHERE session_id=$id UNION SELECT 1 FROM archive_blocks WHERE session_id=$id LIMIT 1";
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_branches'";
+        var hasBranches = await command.ExecuteScalarAsync() is not null;
+        command.CommandText = "SELECT 1 FROM archive_messages WHERE session_id=$id UNION SELECT 1 FROM archive_blocks WHERE session_id=$id"
+            + (hasBranches ? " UNION SELECT 1 FROM archive_branches WHERE session_id=$id" : "") + " LIMIT 1";
         command.Parameters.AddWithValue("$id", id);
         return await command.ExecuteScalarAsync() is not null;
     }
@@ -271,6 +289,26 @@ internal sealed partial class SessionManager
         var legacyCreateMarker = Path.Combine(root, "state", "experiment-faults", "legacy-create-after-rename");
         return new PersistentSessionAuthorityStore(root, id, agent, stage =>
         {
+            if (SessionSaveLane.IsClearCommit && stage == AtomicJsonWriteStage.BeforeRename)
+            {
+                var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".clear-hold-before-rename");
+                if (File.Exists(hold))
+                {
+                    File.WriteAllText(hold + ".reached", "reached"); var deadline = DateTime.UtcNow.AddSeconds(15);
+                    while (File.Exists(hold) && DateTime.UtcNow < deadline) Thread.Sleep(2);
+                    if (File.Exists(hold)) throw new TimeoutException("Experimental clear barrier expired.");
+                }
+            }
+            var lifecycleSuffix = stage == AtomicJsonWriteStage.BeforeRename ? "-before-rename" : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? "-after-rename" : null;
+            if (lifecycleSuffix is not null)
+            {
+                var action = SessionSaveLane.IsClearCommit ? "clear" : ManualForkNoticeCommitScope.Value ? "fork-notice" : Find(id) is null ? "create" : null;
+                if (action is not null)
+                {
+                    var fault = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + "." + action + lifecycleSuffix);
+                    if (File.Exists(fault)) { File.Delete(fault); throw new IOException("Injected experimental " + action + " commit failure."); }
+                }
+            }
             if (SessionSaveLane.IsSettingsCommit)
             {
                 var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".settings-before-rename" : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".settings-after-rename" : null;

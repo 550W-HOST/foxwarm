@@ -54,6 +54,7 @@ internal sealed partial class SessionCompactor
     {
         lock (gate)
         {
+            if (hosted.Entry.HistoryMutation) return null;
             if (active is not null) return null;
             var run = new CompactRun(snapshot, catalog, keep, background, standalone);
             active = run; lifetimes[run] = run.Completion.Task;
@@ -98,6 +99,7 @@ internal sealed partial class SessionCompactor
 
     public async Task<CompactAdmission> StartManualAsync(string? guidance = null, double? keepPercent = null)
     {
+        if (hosted.Entry.HistoryMutation) throw new InvalidOperationException("Session history change is in progress.");
         var snapshot = hosted.Entry.Snapshot(); var catalog = models.Capture();
         var background = SupportsBackground(snapshot, catalog);
         lock (gate) { if (active is not null) return new(true, false, background, false); }
@@ -280,8 +282,13 @@ internal sealed partial class SessionCompactor
         lock (gate) run.Phase = "committing";
         try
         {
-            await hosted.Entry.SaveLane.CommitCompactionAsync(state => PrepareCompact(state, run.Snapshot, run.Candidates!, run.Plan!),
-                run.Cancellation.Token, RefreshCommitMemoryAsync);
+            long archiveMaximum = 0;
+            await hosted.Entry.SaveLane.CommitCompactionAsync(state => PrepareCompact(state, run.Snapshot, run.Candidates!, run.Plan!, archiveMaximum),
+                run.Cancellation.Token, async (snapshot, token) =>
+                {
+                    archiveMaximum = store.Archive.EffectiveBlockHighWater();
+                    return await RefreshCommitMemoryAsync(snapshot, token);
+                });
             run.Committed = true; hosted.PublishStateChanged();
         }
         catch (AuthorityCommittedException) { run.Committed = true; hosted.PublishStateChanged(); throw; }
@@ -295,6 +302,6 @@ internal sealed partial class SessionCompactor
             if (model.IsVirtual) return null;
             modelId = model.Key;
         }
-        return await memory.BuildAsync(hosted.Agent, hosted.Id, modelId, token);
+        return await memory.BuildAsync(hosted.Agent, hosted.Id, modelId, token, AgentMemory.Selection(live.AuthorityEnvelope));
     }
 }
