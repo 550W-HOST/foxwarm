@@ -13,15 +13,17 @@ const sameLocalDay = (left: number, right: number): boolean => {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
-/** Compare adjacent committed history timestamps; tool and grouped event rows have no separate time line. */
+/** Compare the next request start with the preceding persisted end; grouped rows have no separate time line. */
 export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupedEvent: (message: Message) => boolean): Array<TimelineTimeMarker | null> => {
   let previous: number | null = null
   let showedClock = false
   return messages.map(message => {
     if (message.__meta?.temporary || message.__meta?.synthetic) return null
-    const current = validTimestamp(message.__meta?.contextBlock
+    const end = validTimestamp(message.__meta?.contextBlock
       ? message.__meta.contextBlock.rawStartTimestamp
       : message.__meta?.timestamp)
+    const current = message.__meta?.contextBlock ? end
+      : validTimestamp(message.__meta?.llmRequestTiming?.startedAt) ?? end
     const eligible = message.role !== 'tool' && !isGroupedEvent(message)
     let marker: TimelineTimeMarker | null = null
     if (eligible && current !== null) {
@@ -35,7 +37,7 @@ export const deriveTimelineTimeMarkers = (messages: readonly Message[], isGroupe
       }
       showedClock = true
     }
-    previous = current
+    previous = end
     return marker
   })
 }
