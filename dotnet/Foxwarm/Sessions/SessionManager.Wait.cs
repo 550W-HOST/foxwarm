@@ -23,8 +23,15 @@ internal sealed partial class SessionManager
         }
         if (all is null && any is null && exec is null && input != true && seconds is null)
             throw new InvalidDataException("wait requires at least one progress source or fallback; reason alone is not sufficient.");
-        foreach (var id in (all ?? []).Concat(any ?? []))
-            if (id == source.Id || Find(id) is null) throw new InvalidDataException($"Wait source '{id}' must be an existing other Session.");
+        string[]? ResolveTargets(string[]? ids)
+        {
+            if (ids is null) return null;
+            var targets = ids.Select(id => SessionCatalog.Text(Catalog.Resolve(ResolveSessionReference(source, id))["sessionId"]) ?? throw new InvalidDataException($"Wait source '{id}' must be an existing other Session.")).Distinct(StringComparer.Ordinal).ToArray();
+            if (targets.Contains(source.Id, StringComparer.Ordinal)) throw new InvalidDataException("A Session cannot wait for itself.");
+            return targets;
+        }
+        all = ResolveTargets(all); any = ResolveTargets(any);
+        if (all is { Length: < 2 }) throw new InvalidDataException("waitAllSessions must resolve to at least two distinct Sessions.");
         if (exec is not null)
         {
             var queued = source.Entry.WithState(state => state.Queue.Select(item => SessionWait.Text(item.OpenFields?["execId"])).OfType<string>().ToHashSet(StringComparer.Ordinal));
@@ -70,7 +77,7 @@ internal sealed partial class SessionManager
     internal async Task AdmitWaitEventAsync(string sessionId, QueueItem item)
     {
         if (!Accepting) return;
-        var owner = Find(sessionId); if (owner is null) return;
+        var owner = await GetExistingAsync(sessionId); if (owner is null) return;
         bool admitted;
         try { admitted = await owner.Entry.SaveLane.AdmitAsync(item, SaveKind.Strict); }
         catch (AuthorityCommittedException)

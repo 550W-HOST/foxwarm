@@ -74,7 +74,7 @@ internal static class ArchiveRecallTool
         }
         throw new InvalidDataException($"Could not parse recall target `{text}`. " + Help);
     }
-    public static JsonObject Execute(SessionManager manager, SessionOwner source, JsonObject? args)
+    public static async Task<JsonObject> ExecuteAsync(SessionManager manager, SessionOwner source, JsonObject? args, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -85,7 +85,7 @@ internal static class ArchiveRecallTool
                 + ". Use an exact target, contentFilter and previewLength/toolDetail to inspect selected context. " + Help);
             if (args["sessionId"] is not null && SessionWait.Text(args["sessionId"]) is null) throw new InvalidDataException("sessionId must be a string.");
             var id = SessionGoal.Trim(SessionWait.Text(args["sessionId"]) ?? source.Id); if (id.Length == 0) id = source.Id;
-            var owner = manager.Find(id);
+            var owner = await manager.GetExistingAsync(id, cancellationToken);
             if (owner is null) return Output($"Session `{id}` not found.");
             var target = Parse(args["target"]); var renderer = new ContextPreviewRenderer(args, 1000);
             var reader = new ArchiveContextReader(owner.Archive);

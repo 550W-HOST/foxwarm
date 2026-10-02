@@ -49,11 +49,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         skills = new Skills(agents, Path.GetFullPath(skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills")));
         memory = new AgentMemory(agents, skills);
         executor = new LocalExecManager(this.root,
-            sessionId => agents.AgentDirectory(Find(sessionId)?.Agent ?? throw new InvalidDataException("Exec Session owner is missing.")),
+            sessionId => agents.AgentDirectory(SessionCatalog.Text(Catalog.Get(sessionId)?["agent"]) ?? throw new InvalidDataException("Exec Session membership is missing.")),
             async (sessionId, execId, message) =>
         {
-            if (!accepting || Find(sessionId) is not { } current)
-                throw new InvalidOperationException("Exec completion owner is unavailable; retry after recovery.");
+            if (!accepting) throw new InvalidOperationException("Exec completion owner is unavailable; retry after recovery.");
+            var current = await RequiredAsync(sessionId);
             var detail = message.StartsWith("Background Process Finished\n", StringComparison.Ordinal)
                 ? message["Background Process Finished\n".Length..] : message;
             var eventPart = $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{detail}\n</foxwarm-system>";
@@ -91,18 +91,15 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             var id = SessionCatalog.Text(row["id"])!; var agent = SessionCatalog.Text(row["agent"])!;
             if (!SessionIdentity.IsValid(id) || !agents.Exists(agent)) throw new InvalidDataException("Catalog Session binding is unsupported or its Agent is missing.");
-            var store = MakeStore(id, agent);
-            var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("Cataloged Session authority is missing.");
-            AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
-            if (snapshot.Busy || snapshot.Stopping) throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
-            var hosted = MakeSession(id, agent, store); hosted.Registry.Add(id, snapshot); hosted.EnableCommittedNotifications();
-            if (!sessions.TryAdd(id, hosted)) throw new InvalidDataException("Duplicate Session ID in catalog.");
-            NotifyCreated(hosted);
         }
+        await executor.RegisterRecordsAsync(id => Catalog.Get(id) is not null);
+        var ids = Catalog.RestartIds().Concat(executor.OwnerIds).Distinct(StringComparer.Ordinal).ToArray();
+        await Task.WhenAll(ids.Select(id => RequiredAsync(id)));
+        servicesReady = true;
         foreach (var owner in sessions.Values) WaitTransition(owner.Id);
-        await executor.InitializeAsync(id => sessions.ContainsKey(id));
+        executor.StartReconciliation();
         foreach (var owner in sessions.Values)
-            if (owner.Entry.WithState(state => state.Queue.Count > 0)) _ = owner.StartProcessing();
+            if (owner.Entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary))) _ = owner.StartProcessing();
     }
 
     public IEnumerable<SessionOwner> Owners() => sessions.Values;
@@ -114,7 +111,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         owner.Changed += value =>
         {
             if (value.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted) CaptureLocalProjection(owner);
-            if (value.Kind == SessionEventKind.StateChanged) WaitTransition(owner.Id);
+            if (servicesReady && value.Kind == SessionEventKind.StateChanged) WaitTransition(owner.Id);
             Changed?.Invoke(value);
         };
         CaptureLocalProjection(owner);
@@ -135,12 +132,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public async Task<SessionOwner> CreateAsync()
     {
-        await identityGate.WaitAsync();
-        try
-        {
+        using var operation = TrackCreation();
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         var id = $"s_{Guid.NewGuid():N}";
         if (await IdReservedAsync(id)) throw new InvalidOperationException("Session ID collision.");
+        return await WithCreationIdentityAsync(id, async () =>
+        {
         var store = MakeStore(id, "main");
         if (await store.LoadAsync(id) is not null) throw new InvalidOperationException("Session ID collision.");
         var hosted = MakeSession(id, "main", store);
@@ -150,7 +147,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         try { await entry.SaveLane.SaveStrictAsync(); } // First authority JSON exists before publication/acknowledgement.
         catch (AuthorityCommittedException error)
         {
-            PublishLegacy(hosted);
+            await PublishCreatedAsync(hosted);
             throw new CommittedSessionCreationException(id,
                 $"Session '{id}' was committed but a later durability step failed.", error);
         }
@@ -160,21 +157,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             catch (Exception cleanup) { throw new AggregateException("Creation failed and owned branch compensation also failed.", error, cleanup); }
             throw;
         }
-        PublishLegacy(hosted);
+        await PublishCreatedAsync(hosted);
         return hosted;
-        }
-        finally { identityGate.Release(); }
-    }
-
-    private void PublishLegacy(SessionOwner hosted)
-    {
-        lock (lifecycle)
-        {
-            if (!accepting) throw new InvalidOperationException("Host is shutting down.");
-            if (!sessions.TryAdd(hosted.Id, hosted)) throw new InvalidOperationException("Session ID collision.");
-        }
-        hosted.EnableCommittedNotifications();
-        NotifyCreated(hosted);
+        });
     }
 
     private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
@@ -203,9 +188,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async Task ShutdownAsync()
     {
         SessionOwner[] current;
-        await identityGate.WaitAsync();
-        try { lock (lifecycle) { accepting = false; current = sessions.Values.ToArray(); } }
-        finally { identityGate.Release(); }
+        await DrainPublicationsAsync();
+        lock (lifecycle) current = sessions.Values.ToArray();
         waitTimeouts.Stop(); waitLiveness.Stop();
         await waitTimeouts.DrainAsync(); await waitLiveness.DrainAsync();
         // Each Stop takes and cancels its own active handle synchronously before
@@ -223,6 +207,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public void BeginShutdown()
     {
         lock (lifecycle) accepting = false;
+        admissionStop.Cancel();
         executor.BeginShutdown();
         mcp.BeginShutdown();
         websockets.BeginShutdown();
@@ -232,11 +217,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        BeginShutdown(); await DrainPublicationsAsync();
         await waitTimeouts.DisposeAsync();
         await waitLiveness.DisposeAsync();
         await executor.DisposeAsync();
         await mcp.DisposeAsync();
         await websockets.DisposeAsync();
+        admissionStop.Dispose();
         Catalog.Dispose();
         http.Dispose();
     }

@@ -72,6 +72,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             }
         }
         var pumping = Pump();
+        CancellationTokenSource? currentInitialization = null;
+        var initializationTasks = new HashSet<Task>();
         try
         {
             await Send(new JsonObject { ["type"] = "connected" });
@@ -95,17 +97,58 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     requestedList = SessionListQueries.Ids(input["sessionListIds"], MaxSubscriptions).Distinct(StringComparer.Ordinal).ToArray();
                 }
                 catch (SessionListQueryException error) { await ProtocolError(error.Message); break; }
-                var semantic = requestedSessions.ToDictionary(id => id, id => runtime.Owner(id)?.Id, StringComparer.Ordinal);
+                var resolvedSemantic = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+                foreach (var chunk in requestedSessions.Chunk(200)) foreach (var pair in runtime.Catalog.ResolveMany(chunk)) resolvedSemantic[pair.Key] = pair.Value;
                 var resolvedList = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
                 foreach (var chunk in requestedList.Chunk(200)) foreach (var pair in runtime.Catalog.ResolveMany(chunk)) resolvedList[pair.Key] = pair.Value;
-                var existing = semantic.Values.OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
                 var listCanonical = resolvedList.Values.Select(row => SessionCatalog.Text(row["sessionId"])).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
                 lock (gate)
                 {
                     revision = requested; initializing = true; pending.Clear();
-                    sessionIds = existing.ToHashSet(StringComparer.Ordinal);
+                    sessionIds = requestedSessions.Select(id => SessionCatalog.Text(resolvedSemantic.GetValueOrDefault(id)?["sessionId"]) ?? id).ToHashSet(StringComparer.Ordinal);
                     listIds = listCanonical.ToHashSet(StringComparer.Ordinal); listActive = active;
                 }
+                CancellationTokenSource? previous; lock (gate) { previous = currentInitialization; currentInitialization = null; }
+                try { previous?.Cancel(); } catch (ObjectDisposedException) { }
+                var attempt = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); lock (gate) currentInitialization = attempt;
+                var work = InitializeSubscriptions(requested, requestedSessions, requestedList, resolvedSemantic, resolvedList, listCanonical, active, attempt);
+                lock (gate) initializationTasks.Add(work);
+                _ = work.ContinueWith(done => { _ = done.Exception; lock (gate) initializationTasks.Remove(done); }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (WebSocketException) { }
+        finally
+        {
+            runtime.Changed -= Changed; runtime.TopologyChanged -= Invalidated;
+            lifetime.Cancel(); output.Writer.TryComplete();
+            Task[] work; lock (gate) work = initializationTasks.ToArray();
+            try { await Task.WhenAll(work); } catch (OperationCanceledException) { } catch (WebSocketException) { }
+            try { await pumping; } catch (OperationCanceledException) { } catch (WebSocketException) { }
+            if (socket.State == WebSocketState.Open)
+                try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Subscription closed", CancellationToken.None); }
+                catch (WebSocketException) { }
+        }
+        async Task InitializeSubscriptions(long requested, string[] requestedSessions, string[] requestedList, Dictionary<string, JsonObject> resolvedSemantic,
+            Dictionary<string, JsonObject> resolvedList, string[] listCanonical, bool active, CancellationTokenSource attempt)
+        {
+            try
+            {
+                Dictionary<string, string?> semantic;
+                try
+                {
+                    var admitted = await Task.WhenAll(requestedSessions.Select(async id => (Requested: id, Owner: await runtime.GetOwnerAsync(SessionCatalog.Text(resolvedSemantic.GetValueOrDefault(id)?["sessionId"]) ?? id, attempt.Token))));
+                    semantic = admitted.ToDictionary(pair => pair.Requested, pair => pair.Owner?.Id, StringComparer.Ordinal);
+                }
+                catch (OperationCanceledException) when (attempt.IsCancellationRequested) { return; }
+                catch (Exception error)
+                {
+                    await Send(new JsonObject { ["type"] = "error", ["code"] = "SESSION_STATE_UNAVAILABLE", ["message"] = error.Message, ["revision"] = requested }, requested);
+                    lock (gate) if (revision != requested) return;
+                    lifetime.Cancel(); return;
+                }
+                var existing = semantic.Values.OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
+                lock (gate) { if (revision != requested || attempt.IsCancellationRequested) return; sessionIds = existing.ToHashSet(StringComparer.Ordinal); }
                 var sessionMap = new JsonObject(); var listMap = new JsonObject();
                 foreach (var pair in semantic) if (pair.Value is not null) sessionMap[pair.Key] = pair.Value;
                 foreach (var pair in resolvedList) if (SessionCatalog.Text(pair.Value["sessionId"]) is { } canonical) listMap[pair.Key] = canonical;
@@ -115,7 +158,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     ["revision"] = requested,
                     ["sessionResolutions"] = sessionMap,
                     ["sessionListResolutions"] = listMap
-                });
+                }, requested);
                 if (active)
                 {
                     var view = new SessionListQueries(runtime);
@@ -124,36 +167,29 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                         ["type"] = "session-list-delta",
                         ["deletedIds"] = new JsonArray(requestedList.Where(id => !listMap.ContainsKey(id)).Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
                         ["sessions"] = view.ProjectionRows(listCanonical)
-                    });
+                    }, requested);
                 }
                 foreach (var id in requestedSessions.Where(id => semantic[id] is null))
-                    await Send(new JsonObject { ["type"] = "session-deleted", ["sessionId"] = id });
+                    await Send(new JsonObject { ["type"] = "session-deleted", ["sessionId"] = id }, requested);
                 foreach (var id in existing)
                 {
-                    await Send(new JsonObject { ["type"] = "session-state", ["sessionId"] = id, ["session"] = runtime.GetSession(id) });
-                    await Send(WebUiContract.Draft(runtime.Owner(id)!));
+                    await Send(new JsonObject { ["type"] = "session-state", ["sessionId"] = id, ["session"] = runtime.GetSession(id) }, requested);
+                    await Send(WebUiContract.Draft(runtime.Owner(id)!), requested);
                 }
                 // Queue buffered events and applied together under the initialization gate.
                 // No live pump can overtake the snapshots or the registration barrier.
                 lock (gate)
                 {
+                    if (revision != requested || attempt.IsCancellationRequested) return;
                     foreach (var data in pending) output.Writer.TryWrite((requested, data));
                     pending.Clear();
                     output.Writer.TryWrite((requested, new JsonObject { ["type"] = "subscriptions-applied", ["revision"] = requested }));
                     initializing = false;
                 }
             }
-        }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        catch (WebSocketException) { }
-        finally
-        {
-            runtime.Changed -= Changed; runtime.TopologyChanged -= Invalidated;
-            lifetime.Cancel(); output.Writer.TryComplete();
-            try { await pumping; } catch (OperationCanceledException) { } catch (WebSocketException) { }
-            if (socket.State == WebSocketState.Open)
-                try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Subscription closed", CancellationToken.None); }
-                catch (WebSocketException) { }
+            catch (OperationCanceledException) when (attempt.IsCancellationRequested || lifetime.IsCancellationRequested) { }
+            catch (WebSocketException) { lifetime.Cancel(); }
+            finally { lock (gate) { if (ReferenceEquals(currentInitialization, attempt)) currentInitialization = null; } attempt.Dispose(); }
         }
         async Task Send(JsonObject data, long? expectedRevision = null)
         {

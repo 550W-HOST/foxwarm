@@ -22,7 +22,7 @@ public sealed class SessionCatalogPublicationTests
         var root = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(data, "state", "sessions", owner.Id + ".json")))!; Assert.Equal("b", root["model"]!.GetValue<string>());
         // A separately instantiated real cold owner reads catalog membership + newer JSON.
         // The source Manager is deliberately kept unchanged: no copy or projection retry is used.
-        await using var cold = new SessionManager(data, work, options, models); await cold.LoadAsync();
+        await using var cold = new SessionManager(data, work, options, models); await cold.LoadAsync(); Assert.Empty(cold.Owners()); await cold.RequiredAsync(owner.Id);
         Assert.Equal("b", new SessionListQueries(new SessionRuntime(cold)).Projection(owner.Id)!["model"]!.GetValue<string>());
         Assert.Null(cold.Catalog.Get(owner.Id)!["model"]); Assert.Single(cold.LocalProjections());
         manager.Catalog.BeforeAuthorityProjection = null; await owner.Entry.SaveLane.SaveStrictAsync(); owner.PublishStateChanged();
@@ -50,7 +50,7 @@ public sealed class SessionCatalogPublicationTests
         var record = SessionCatalogTests.Row("one", 0); record["meta"]!["lastChannel"] = new JsonObject { ["channelId"] = "webui", ["channelUserId"] = "room" };
         var source = Path.Combine(data, "state", "sessions.json"); await File.WriteAllTextAsync(source, new JsonObject { ["sessions"] = new JsonObject { ["one"] = record } }.ToJsonString());
         var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713); await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
-        await manager.LoadAsync(); var owner = manager.Find("one")!; Assert.Null(owner.Entry.Snapshot().Meta["lastChannel"]);
+        await manager.LoadAsync(); var owner = await manager.RequiredAsync("one"); Assert.Null(owner.Entry.Snapshot().Meta["lastChannel"]);
         Assert.Equal("webui", manager.Catalog.Get("one")!["meta"]!["lastChannel"]!["channelId"]!.GetValue<string>());
         await owner.Entry.SaveLane.SaveStrictAsync(); Assert.Null(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(data, "state", "sessions", "one.json")))!["meta"]!["lastChannel"]);
         Assert.Equal("room", manager.Catalog.Get("one")!["meta"]!["lastChannel"]!["channelUserId"]!.GetValue<string>());
@@ -110,7 +110,7 @@ INSERT INTO archive_session_id_reservations VALUES('one','one',1,1),('gone','gon
         }
         var record = SessionCatalogTests.Row("one", 0); await File.WriteAllTextAsync(Path.Combine(data, "state", "sessions.json"), new JsonObject { ["sessions"] = new JsonObject { ["one"] = record } }.ToJsonString());
         var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713); await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options)); await manager.LoadAsync();
-        Assert.NotNull(manager.Find("one")); Assert.Null(manager.Find("gone"));
+        Assert.NotNull(await manager.GetExistingAsync("one")); Assert.Null(manager.Find("gone"));
         foreach (var id in new[] { "gone", "old", "new" }) await Assert.ThrowsAsync<InvalidDataException>(() => manager.CreateNamedAsync("main", id, null, null));
         var redirected = new SqliteArchiveMessageStore(database, "old"); Assert.Throws<UnsupportedSessionAuthorityException>(() => redirected.ReadMessages());
         var child = new SqliteArchiveMessageStore(database, "branch-child"); child.Initialize(); child.EnsureBranch("old", 100, 100); Assert.Throws<UnsupportedSessionAuthorityException>(() => child.ReadEffectiveMessagesRange(1, 100));

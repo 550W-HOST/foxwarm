@@ -9,7 +9,7 @@ internal sealed partial class SessionManager
         Keys(args, ["sessionId", "summary", "keepPercent"], []);
         var targetId = SessionWait.Text(args["sessionId"]);
         if (string.IsNullOrEmpty(targetId)) targetId = source.Id;
-        var target = Find(targetId) ?? throw new InvalidDataException($"Session `{targetId}` not found.");
+        var target = await RequiredAsync(targetId);
         var snapshot = target.Entry.Snapshot();
         if (target != source && (snapshot.Busy || snapshot.Queue.Any(SessionCompactor.Ordinary)))
             throw new InvalidOperationException($"Session `{targetId}` must be idle with an empty ordinary queue before another session can request compaction.");

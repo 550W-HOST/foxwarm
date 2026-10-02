@@ -80,7 +80,7 @@ internal sealed partial class SessionManager
         {
             Keys(args, ["sessionId", "start", "count", "previewLength", "contentFilter", "includeRegex", "excludeRegex", "toolDetail"], ["sessionId"]);
             var targetId = RequiredString(args, "sessionId");
-            var target = Find(targetId); if (target is null) return Output($"Session `{targetId}` not found.");
+            var target = await GetExistingAsync(targetId); if (target is null) return Output($"Session `{targetId}` not found.");
             var page = target.MessagePage(OptionalNumber(args, "start"), OptionalNumber(args, "count"));
             return Output(new ContextPreviewRenderer(args).Render(targetId, SessionStatus.Runtime(page.Runtime), page.Total, page.Start, page.Messages));
         }
@@ -89,10 +89,10 @@ internal sealed partial class SessionManager
         if (action == "update-display-name")
         {
             var targetId = OptionalString(args, "sessionId") ?? source.Id;
-            var target = Find(targetId) ?? throw new InvalidDataException($"Session `{targetId}` not found.");
+            var canonical = SessionCatalog.Text(Catalog.Resolve(targetId)["sessionId"]) ?? throw new InvalidDataException($"Session `{targetId}` not found.");
             if (SessionWait.Text(args["name"]) is not string rawName) throw new InvalidDataException("session.name is required for action=\"update-display-name\".");
-            var next = SessionGoal.Trim(rawName); var previous = SessionCatalog.Text(Catalog.Get(target.Id)?["displayName"]); var current = next.Length == 0 ? null : next;
-            if (previous != current) await RenameAsync(target.Id, current); var result = (Changed: previous != current, Previous: previous, Current: current);
+            var next = SessionGoal.Trim(rawName); var previous = SessionCatalog.Text(Catalog.Get(canonical)?["displayName"]); var current = next.Length == 0 ? null : next;
+            if (previous != current) await RenameAsync(canonical, current); var result = (Changed: previous != current, Previous: previous, Current: current);
             static string Format(string? value) => value is null ? "unset" : EcmaJson.Stringify(JsonValue.Create(value)!);
             return Output(result.Changed ? $"Session `{targetId}` display name changed from {Format(result.Previous)} to {Format(result.Current)}."
                 : $"Session `{targetId}` display name unchanged (from {Format(result.Previous)} to {Format(result.Current)}).");

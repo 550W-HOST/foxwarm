@@ -36,9 +36,11 @@ internal sealed partial class SessionManager
     {
         suffix = string.IsNullOrEmpty(suffix) ? "fork" : suffix;
         ValidateForkSuffix(suffix);
-        await identityGate.WaitAsync();
+        using var operation = TrackCreation();
+        var gate = CreationKey(parent.Id + "_" + suffix);
+        await gate.WaitAsync();
         try { return await ForkLockedAsync(parent, suffix, false, null, null); }
-        finally { identityGate.Release(); }
+        finally { gate.Release(); }
     }
     private static void ValidateForkSuffix(string suffix)
     {
@@ -54,6 +56,8 @@ internal sealed partial class SessionManager
             ? SessionIdentity.Build(parent.Agent, suffix) : parent.Id + "_" + suffix;
         var id = baseId;
         for (var serial = 2; await IdReservedAsync(id); serial++) id = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
+        return await WithCreationIdentityAsync(id, async () =>
+        {
         var inherited = (SessionWait.Text(original.AuthorityEnvelope["childModelDefault"]) ?? SessionWait.Text(original.AuthorityEnvelope["model"]),
             SessionWait.Text(original.AuthorityEnvelope["childEffortDefault"]) ?? SessionWait.Text(original.AuthorityEnvelope["effort"]));
         var settings = ValidateModelSettings(inherited, forceModel);
@@ -103,11 +107,11 @@ internal sealed partial class SessionManager
                 : $"Session forked from {parent.Id} by user command. Your current session ID is `{id}`."));
             if (childMode) suffixRows.Add(new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(new JsonObject { ["text"] = "Understood. I am a child session. Waiting for task from parent session." }) });
             await AppendOwnedRowsAsync(owner, suffixRows);
-            committed = true; PublishCreated(owner); return owner;
+            committed = true; await PublishCreatedAsync(owner); return owner;
         }
         catch (AuthorityCommittedException error)
         {
-            committed = true; PublishCreated(owner);
+            committed = true; await PublishCreatedAsync(owner);
             throw new CommittedSessionCreationException(id, $"Forked Session '{id}' was committed but a later durability step failed.", error);
         }
         catch (Exception error)
@@ -118,6 +122,7 @@ internal sealed partial class SessionManager
             catch (Exception cleanup) { throw new AggregateException("Fork creation failed and owned branch compensation also failed.", error, cleanup); }
             throw;
         }
+        });
     }
 
     private void CompensateCreatedBranch(PersistentSessionAuthorityStore store, ArchiveBranch? branch)

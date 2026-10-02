@@ -49,9 +49,9 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         { return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message); }
     }
     private Task<JsonObject> ExecuteWorkspaceAsync(string name, JsonObject args, CancellationToken token) => workspace.ExecuteAsync(new JsonObject { ["name"] = name, ["args"] = args.DeepClone() }, token);
-    private async Task<JsonObject> ExecuteAgentAsync(string name, JsonObject args)
+    private async Task<JsonObject> ExecuteAgentAsync(string name, JsonObject args, CancellationToken cancellationToken)
     {
-        var (response, finish) = await sessions.ExecuteAgentToolAsync(hosted, name, args);
+        var (response, finish) = await sessions.ExecuteAgentToolAsync(hosted, name, args, cancellationToken);
         if (response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id) handoffTargets.Add(id);
         if (finish) Interlocked.Exchange(ref finishPending, 1);
         return response;
@@ -77,11 +77,11 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
             handlers[name] = (owner, args, token) => owner.ExecuteWorkspaceAsync(name, args, token);
         handlers["exec"] = (owner, args, token) => owner.Hosted.Executor.ExecuteAsync(owner.Hosted.Id, args, token);
         handlers["read_exec"] = (owner, args, _) => owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args);
-        handlers["recall"] = (owner, args, _) => Task.FromResult(ArchiveRecallTool.Execute(owner.Manager, owner.Hosted, args));
+        handlers["recall"] = (owner, args, token) => ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
         handlers["submit_compact_plan"] = (_, _, _) => Task.FromResult(UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor."));
         foreach (var name in new[] { "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
-            handlers[name] = (owner, args, _) => owner.ExecuteAgentAsync(name, args);
+            handlers[name] = (owner, args, token) => owner.ExecuteAgentAsync(name, args, token);
         handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token);
         handlers["call_tool"] = (_, _, _) => throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
         handlers["mcp_config"] = (_, args, token) => mcp.ConfigureAsync(args, token);

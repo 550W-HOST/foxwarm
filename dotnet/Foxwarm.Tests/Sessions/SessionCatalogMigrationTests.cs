@@ -74,7 +74,7 @@ public sealed class SessionCatalogMigrationTests
         await Authority(root, "orphan"); Assert.Equal("missing", catalog.Resolve("orphan")["kind"]!.GetValue<string>());
         File.Delete(path);
         var options = new Foxwarm.Models.ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a/wire", "", "", 713);
-        await using var manager = new SessionManager(root, work, options, HostModels.ForTest(options)); await Assert.ThrowsAsync<InvalidDataException>(() => manager.LoadAsync());
+        await using var manager = new SessionManager(root, work, options, HostModels.ForTest(options)); await manager.LoadAsync(); Assert.Empty(manager.Owners()); await Assert.ThrowsAsync<InvalidDataException>(() => manager.RequiredAsync("one"));
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 namespace Foxwarm.Sessions;
 
 internal sealed record AgentMemoryFile(string Path, string AbsolutePath, long Size, double ModifiedAt);
@@ -34,10 +35,17 @@ internal sealed partial class SessionManager
     internal AgentMemoryManifest AgentManifest(string name) => memory.Manifest(name);
     internal object[] AgentRegistry()
     {
-        var rows = Owners().Select(owner => owner.Metadata()).ToArray();
+        var counts = Catalog.AgentActivityCounts(); var local = LocalProjections(); var persisted = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var chunk in local.Select(row => SessionCatalog.Text(row["id"])!).Chunk(200)) foreach (var row in Catalog.GetMany(chunk)) persisted[SessionCatalog.Text(row["id"])!] = row;
+        foreach (var row in local)
+        {
+            var current = Metadata(row); var previous = persisted.GetValueOrDefault(current.Id) is { } old ? Metadata(old) : null;
+            var count = counts.GetValueOrDefault(current.Agent);
+            counts[current.Agent] = (count.Total + (previous is null ? 1 : 0), count.Active + (current.Busy ? 1 : 0) - (previous?.Busy == true ? 1 : 0), count.Queued + (current.QueueLength > 0 ? 1 : 0) - (previous?.QueueLength > 0 ? 1 : 0));
+        }
         return Agents().Select(name =>
         {
-            var manifest = AgentManifest(name); var owned = rows.Where(row => row.Agent == name).ToArray();
+            var manifest = AgentManifest(name); var owned = counts.GetValueOrDefault(name);
             return (object)new
             {
                 id = name,
@@ -45,9 +53,9 @@ internal sealed partial class SessionManager
                 inheritanceChain = AgentChain(name),
                 isolated = false,
                 isolatedNode = (string?)null,
-                sessionCount = owned.Length,
-                activeSessionCount = owned.Count(row => row.Busy),
-                queuedSessionCount = owned.Count(row => row.QueueLength > 0),
+                sessionCount = owned.Total,
+                activeSessionCount = owned.Active,
+                queuedSessionCount = owned.Queued,
                 memoryRoot = manifest.MemoryRoot,
                 memoryFileCount = manifest.Files.Count,
                 memoryLastModified = manifest.Files.Count == 0 ? (double?)null : manifest.Files.Max(file => file.ModifiedAt)

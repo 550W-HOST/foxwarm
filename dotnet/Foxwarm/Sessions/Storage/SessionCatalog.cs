@@ -29,6 +29,7 @@ internal sealed partial class SessionCatalog : IDisposable
             if (version == 1) { Execute(connection, MigrateV1Sql); version = 2; }
             if (version != 2) throw new InvalidDataException($"Unsupported Session catalog schema version {version}.");
             Execute(connection, "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
+            Execute(connection, WaitPresenceIndexSql);
             db = connection;
         }
         catch { connection.Dispose(); throw; }

@@ -17,7 +17,6 @@ internal sealed class CommittedSessionCreationException(string? sessionId, strin
 
 internal sealed partial class SessionManager
 {
-    private readonly SemaphoreSlim identityGate = new(1, 1);
 
     public string[] Agents() => agents.List();
     public string AgentDirectory(string name) => agents.AgentDirectory(name);
@@ -27,7 +26,9 @@ internal sealed partial class SessionManager
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
-        await identityGate.WaitAsync();
+        using var operation = TrackCreation();
+        var gate = CreationKey(SessionIdentity.Build(agentName, "main"));
+        await gate.WaitAsync();
         try
         {
             try { await agents.CreateAsync(agentName, initialMemory, inherit); }
@@ -48,15 +49,17 @@ internal sealed partial class SessionManager
                     $"Agent '{agentName}' was created, but its main Session creation did not complete: {error.Message}", error);
             }
         }
-        finally { identityGate.Release(); }
+        finally { gate.Release(); }
     }
 
     public async Task<SessionOwner> CreateNamedAsync(string agentName, string sessionName, string? displayName,
         JsonObject? forceModel)
     {
-        await identityGate.WaitAsync();
+        using var operation = TrackCreation();
+        var gate = CreationKey(SessionIdentity.Build(agentName, sessionName));
+        await gate.WaitAsync();
         try { return await CreateNamedLockedAsync(agentName, sessionName, null, displayName, null, forceModel); }
-        finally { identityGate.Release(); }
+        finally { gate.Release(); }
     }
 
     public async Task<(SessionOwner Child, bool Delivered)> CreateChildAsync(SessionOwner parent, string suffix,
@@ -68,7 +71,11 @@ internal sealed partial class SessionManager
         AgentCatalog.ValidateName(targetAgent);
         if (!agents.Exists(targetAgent)) throw new InvalidDataException("Target Agent does not exist.");
         if (fork && targetAgent != parent.Agent) throw new InvalidDataException("create_child_session cannot fork across Agents.");
-        await identityGate.WaitAsync();
+        using var operation = TrackCreation();
+        var allocationBase = targetAgent != parent.Agent ? SessionIdentity.Build(targetAgent, suffix)
+            : parent.Id.Split('/').Last() == "main" ? SessionIdentity.Build(targetAgent, suffix) : parent.Id + "_" + suffix;
+        var gate = CreationKey(allocationBase);
+        await gate.WaitAsync();
         SessionOwner child;
         try
         {
@@ -130,7 +137,7 @@ internal sealed partial class SessionManager
                 }
             }
         }
-        finally { identityGate.Release(); }
+        finally { gate.Release(); }
         if (string.IsNullOrEmpty(initialMessage)) return (child, false);
         try { await SendAsync(parent, child.Id, initialMessage); }
         catch (Exception error)
@@ -147,14 +154,8 @@ internal sealed partial class SessionManager
 
     public async Task<string> SendAsync(SessionOwner source, string requestedTarget, string message)
     {
-        var targetId = requestedTarget switch
-        {
-            "<parent>" => source.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>()
-                is { Length: > 0 } parent ? parent : throw new InvalidDataException("This Session has no parent."),
-            "<main>" => SessionIdentity.Build(source.Agent, "main"),
-            _ => requestedTarget
-        };
-        var target = Find(targetId) ?? throw new InvalidDataException($"Target Session '{requestedTarget}' not found.");
+        var targetId = ResolveSessionReference(source, requestedTarget);
+        var target = await RequiredAsync(targetId);
         if (source.Id == target.Id) throw new InvalidDataException("A Session cannot send to itself.");
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         var relation = source.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>() == target.Id
@@ -201,6 +202,8 @@ internal sealed partial class SessionManager
         if (await IdReservedAsync(id)) throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
+        return await WithCreationIdentityAsync(id, async () =>
+        {
         var (model, effort) = ValidateModelSettings(inherited, forceModel);
         var concreteModel = models.Resolve(model);
         var snapshotText = await memory.BuildAsync(agentName, id, concreteModel.Key, selection: selectedFiles);
@@ -223,7 +226,7 @@ internal sealed partial class SessionManager
         try { await entry.SaveLane.SaveStrictAsync(); }
         catch (AuthorityCommittedException error)
         {
-            PublishCreated(hosted);
+            await PublishCreatedAsync(hosted);
             throw new CommittedSessionCreationException(id,
                 $"Session '{id}' was committed but the final durability step failed.", error);
         }
@@ -233,15 +236,19 @@ internal sealed partial class SessionManager
             catch (Exception cleanup) { throw new AggregateException("Creation failed and owned branch compensation also failed.", error, cleanup); }
             throw;
         }
-        PublishCreated(hosted);
+        await PublishCreatedAsync(hosted);
         return hosted;
+        });
     }
 
-    private void PublishCreated(SessionOwner session)
+    internal Func<string, Task>? BeforeCreationPublication { get; set; }
+    private async Task PublishCreatedAsync(SessionOwner session)
     {
-        if (!sessions.TryAdd(session.Id, session)) throw new InvalidOperationException("Session identity collision after persistence.");
-        session.EnableCommittedNotifications();
-        NotifyCreated(session);
+        if (BeforeCreationPublication is { } before) await before(session.Id);
+        await CreationPublicationBarrierAsync(session.Id);
+        IdentitySlot slot;
+        lock (lifecycle) slot = identities.GetValueOrDefault(session.Id) ?? throw new InvalidOperationException("Creation identity was not claimed.");
+        PublishOwner(session, slot);
     }
 
     private (string? Model, string? Effort) ValidateModelSettings((string? Model, string? Effort)? inherited,
@@ -266,10 +273,22 @@ internal sealed partial class SessionManager
         return (model, effort);
     }
 
+    private string ResolveSessionReference(SessionOwner source, string requested)
+    {
+        var metadata = Catalog.Get(source.Id) ?? throw new InvalidDataException($"Session `{source.Id}` not found.");
+        return requested switch
+        {
+            "<parent>" => SessionCatalog.Text(metadata["parentSessionId"]) is { Length: > 0 } parent ? parent : throw new InvalidDataException($"Cannot resolve `<parent>`: current Session `{source.Id}` has no parent Session."),
+            "<main>" => SessionIdentity.Build(SessionCatalog.Text(metadata["agent"]) ?? "main", "main"),
+            _ => requested
+        };
+    }
+
     private async Task<bool> IdReservedAsync(string id)
     {
         Catalog.Initialize();
-        if (Catalog.Get(id) is not null || sessions.ContainsKey(id) || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))) return true;
+        bool pending; lock (lifecycle) pending = identities.ContainsKey(id);
+        if (pending || Catalog.Get(id) is not null || sessions.ContainsKey(id) || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))) return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");
         if (!File.Exists(archive)) return false;
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder

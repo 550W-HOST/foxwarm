@@ -94,7 +94,7 @@ internal sealed partial class WebUIChannel
         });
         app.MapPost("/api/sessions/{id}/children", async (string id, HttpRequest request) =>
         {
-            var parent = FindRoute(request, id);
+            var parent = await FindRouteAsync(request, id);
             if (parent is null) return Results.NotFound(new { error = "Parent Session not found" });
             if (!sessions.Accepting) return Results.StatusCode(503);
             try
@@ -126,7 +126,7 @@ internal sealed partial class WebUIChannel
         });
         app.MapPost("/api/sessions/{id}/refresh-memory", async (string id, HttpRequest request) =>
         {
-            var session = FindRoute(request, id);
+            var session = await FindRouteAsync(request, id);
             if (session is null) return Results.NotFound(new { error = "Session not found" });
             if (!sessions.Accepting) return Results.StatusCode(503);
             try

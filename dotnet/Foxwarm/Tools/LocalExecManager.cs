@@ -37,6 +37,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     internal async Task InitializeAsync(Func<string, bool> hasSession)
     {
+        await RegisterRecordsAsync(hasSession); StartReconciliation();
+    }
+    internal string[] OwnerIds => pending.Values.Select(record => record.SessionId).Distinct(StringComparer.Ordinal).ToArray();
+    internal async Task RegisterRecordsAsync(Func<string, bool> hasSession)
+    {
         foreach (var file in Directory.EnumerateFiles(directory, "tracking.json", SearchOption.AllDirectories))
         {
             var path = Path.GetDirectoryName(file)!;
@@ -53,6 +58,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             pending[Key(record.SessionId, record.Id)] = record;
         }
+    }
+    internal void StartReconciliation()
+    {
         reconcileStop = new CancellationTokenSource();
         reconcileTask = ReconcileAsync(reconcileStop.Token);
     }

@@ -126,6 +126,10 @@ try {
   assert.equal(sql('SELECT session_count FROM catalog_count')[0].session_count, rows.length + 1); assert.deepEqual(errors, [])
   await fixture.stop()
   await rename(join(fixture.data, 'state/sessions/archived.json'), join(fixture.root, 'archived-missing.json'))
-  await assert.rejects(fixture.start(), /authority|Authority|missing|Missing/)
-  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, sourceMembers: rows.length, cleanHosts: 2, missingAuthorityRejected: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
+  await fixture.start()
+  assert.equal((await exact(['archived'])).results[0].resolution.kind, 'exact')
+  const unavailable = await fixture.api('GET', '/api/sessions/archived/history')
+  assert.equal(unavailable.status, 500); assert.match(unavailable.body.detail ?? unavailable.body.error ?? '', /authority|Authority|missing|Missing/)
+  assert.equal((await exact(['archived'])).results[0].resolution.kind, 'exact')
+  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, sourceMembers: rows.length, cleanHosts: 3, dormantMissingSemanticRejected: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
 } catch (error) { console.error(fixture.output); throw error } finally { releaseLock(); if (socket) socket.terminate(); for (const row of held.values()) row.response.destroy(); await new Promise(done => peer.close(done)); await fixture.cleanup() }

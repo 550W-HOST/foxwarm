@@ -7,6 +7,15 @@ internal sealed record CatalogPage(JsonObject[] Rows, bool HasMore);
 internal sealed record CatalogChildren(string Parent, JsonObject[] Rows, long Total, bool HasMore);
 internal sealed partial class SessionCatalog
 {
+    internal string[] RestartIds()
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            using var command = Command(db!, "SELECT session_id FROM session_catalog WHERE busy=1 UNION SELECT session_id FROM session_catalog WHERE queue_length>0 UNION SELECT session_id FROM session_catalog WHERE managed_pending_count>0 UNION SELECT session_id FROM session_catalog INDEXED BY idx_session_catalog_wait_presence WHERE json_type(metadata_json,'$.meta.wait.id')='text'");
+            using var reader = command.ExecuteReader(); var ids = new List<string>(); while (reader.Read()) ids.Add(reader.GetString(0)); return ids.ToArray();
+        }
+    }
     private static string[] OrderColumns(string mode, bool child = false) => child
         ? mode == "default" ? ["archived", "sidebar_order_missing", "sidebar_order_value", "recent_rank", "session_id"] : ["archived", "recent_rank", "session_id"]
         : mode == "default" ? ["pinned_rank", "archived", "sidebar_order_missing", "sidebar_order_value", "recent_rank", "session_id"] : ["pinned_rank", "archived", "recent_rank", "session_id"];
@@ -138,6 +147,21 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
             var result = new JsonObject(); var keys = new[] { "total", "busy", "queued", "managed", "cachedTokens", "inputTokens", "outputTokens" };
             for (var index = 0; index < keys.Length; index++) result[keys[index]] = reader.GetInt64(index);
             QueryObserved?.Invoke(sql, 1); return result;
+        }
+    }
+    internal Dictionary<string, (int Total, int Active, int Queued)> AgentActivityCounts()
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            var result = new Dictionary<string, (int Total, int Active, int Queued)>(StringComparer.Ordinal);
+            using (var command = Command(db!, "SELECT agent,session_count FROM catalog_agent_count"))
+            using (var reader = command.ExecuteReader()) while (reader.Read()) result[reader.GetString(0)] = (reader.GetInt32(1), 0, 0);
+            using (var command = Command(db!, "SELECT agent,COUNT(*) FROM session_catalog WHERE busy=1 GROUP BY agent"))
+            using (var reader = command.ExecuteReader()) while (reader.Read()) { var agent = reader.GetString(0); var value = result[agent]; result[agent] = (value.Total, reader.GetInt32(1), value.Queued); }
+            using (var command = Command(db!, "SELECT agent,COUNT(*) FROM session_catalog WHERE queue_length>0 GROUP BY agent"))
+            using (var reader = command.ExecuteReader()) while (reader.Read()) { var agent = reader.GetString(0); var value = result[agent]; result[agent] = (value.Total, value.Active, reader.GetInt32(1)); }
+            return result;
         }
     }
     internal JsonArray AgentCounts()

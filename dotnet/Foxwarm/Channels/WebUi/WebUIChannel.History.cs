@@ -14,7 +14,7 @@ internal sealed partial class WebUIChannel
         var models = sessions.Models;
         app.MapPost("/api/sessions/{id}/fork", async (string id, HttpRequest request) =>
         {
-            var parent = FindRoute(request, id);
+            var parent = await FindRouteAsync(request, id);
             if (parent is null) return Results.NotFound(new { error = "Session not found" });
             JsonObject? body;
             try { body = await request.ReadFromJsonAsync<JsonObject>() ?? new JsonObject(); }
@@ -25,11 +25,11 @@ internal sealed partial class WebUIChannel
             catch (CommittedSessionCreationException error) { return Results.Json(new { error = error.Message, code = "partial_create", sessionId = error.SessionId }, statusCode: 500); }
             catch (InvalidDataException error) { return Results.BadRequest(new { error = error.Message }); }
         });
-        app.MapGet("/api/sessions/{id}/state", (string id, HttpRequest request) =>
-            FindRoute(request, id) is { } hosted ? Results.Ok(new { session = hosted.State() }) : Results.NotFound(new { error = "Session not found" }));
-        app.MapGet("/api/sessions/{id}/history", (string id, HttpRequest request) =>
+        app.MapGet("/api/sessions/{id}/state", async (string id, HttpRequest request) =>
+            await FindRouteAsync(request, id) is { } hosted ? Results.Ok(new { session = hosted.State() }) : Results.NotFound(new { error = "Session not found" }));
+        app.MapGet("/api/sessions/{id}/history", async (string id, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             var query = request.Query;
             if (query.Keys.Any(key => key is not ("tail" or "prefixLength" or "afterSeq" or "historyVersion")))
@@ -54,9 +54,9 @@ internal sealed partial class WebUIChannel
             result["session"]!["childPolicyChain"] = hosted.BuildDto()["childPolicyChain"]?.DeepClone();
             return Results.Ok(result);
         });
-        app.MapGet("/api/sessions/{id}/archive/messages/{seq}", (string id, string seq, HttpRequest request) =>
+        app.MapGet("/api/sessions/{id}/archive/messages/{seq}", async (string id, string seq, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             if (!long.TryParse(seq, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
                 || index is <= 0 or > 9007199254740991L)
@@ -65,9 +65,9 @@ internal sealed partial class WebUIChannel
             return record is null ? Results.NotFound(new { error = "Archived message not found" })
                 : Results.Ok(new { seq = record.Seq, message = record.Message, messageJson = record.MessageJson, sourceSessionId = record.SessionId, inherited = record.SessionId != hosted.Id });
         });
-        app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", (string id, string blockId, HttpRequest request) =>
+        app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", async (string id, string blockId, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             if (!long.TryParse(blockId, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
                 || index is <= 0 or > 9007199254740991L)

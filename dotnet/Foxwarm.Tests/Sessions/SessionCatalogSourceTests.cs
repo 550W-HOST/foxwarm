@@ -24,9 +24,9 @@ public sealed class SessionCatalogSourceTests
         if (!process.WaitForExit(30000)) { process.Kill(entireProcessTree: true); throw new TimeoutException("Owned source catalog oracle timed out."); }
         var log = await stdout + await stderr; Assert.True(process.ExitCode == 0, log); var expected = JsonNode.Parse(await File.ReadAllTextAsync(output))!.AsObject();
         var root = Path.Combine(temp.Path, "current"); using var catalog = new SessionCatalog(root); catalog.Initialize(); catalog.Upsert(rows);
-        Equal(expected["expected"], Snapshot(catalog, rows), "current source queries"); Equal(expected["schema"], Schema(catalog.FilePath), "current source schema");
+        Equal(expected["expected"], Snapshot(catalog, rows), "current source queries"); Equal(expected["schema"], SourceCoreSchema(catalog.FilePath), "current source core plus one approved wait index");
         var oldRoot = Path.Combine(temp.Path, "old"); Directory.CreateDirectory(Path.Combine(oldRoot, "state")); File.Copy(Path.Combine(temp.Path, "dotnet-v1.sqlite"), Path.Combine(oldRoot, "state", "catalog.sqlite"));
-        using var old = new SessionCatalog(oldRoot); old.Initialize(); Equal(expected["upgraded"], Snapshot(old, rows), "source v1 upgrade queries"); Equal(expected["upgradedSchema"], Schema(old.FilePath), "source v1 upgrade schema");
+        using var old = new SessionCatalog(oldRoot); old.Initialize(); Equal(expected["upgraded"], Snapshot(old, rows), "source v1 upgrade queries"); Equal(expected["upgradedSchema"], SourceCoreSchema(old.FilePath), "source v1 upgrade core plus one approved wait index");
         old.Dispose(); using var again = new SessionCatalog(oldRoot); again.Initialize(); Equal(expected["upgraded"], Snapshot(again, rows), "reopened upgraded source schema");
         Assert.Equal(await File.ReadAllTextAsync(Path.Combine(temp.Path, "lower-expected.txt")), SourceStringLower.Lower(await File.ReadAllTextAsync(Path.Combine(temp.Path, "lower-input.txt"))));
     }
@@ -66,6 +66,13 @@ public sealed class SessionCatalogSourceTests
         return new JsonObject { ["records"] = Rows(catalog.GetMany(ids)), ["resolutions"] = resolutions, ["scopes"] = scopes, ["paths"] = paths, ["summary"] = catalog.Summary(), ["agents"] = catalog.AgentCounts(),
             ["counts"] = Counts(catalog.ChildCounts(parents)), ["agentCounts"] = Counts(catalog.ChildCounts(parents, "beta")), ["busy"] = Counts(catalog.BusyDescendants(parents, supplied.Where(row => SessionCatalog.Flag(row["busy"])).Select(Id).ToArray())),
             ["descendants"] = summary, ["pages"] = pages, ["children"] = children, ["forest"] = Page(catalog.Page("time", 3, null, true, "beta")) };
+    }
+    private static JsonArray SourceCoreSchema(string file)
+    {
+        var all = Schema(file); var index = Assert.Single(all.OfType<JsonObject>(), row => row["name"]?.GetValue<string>() == "idx_session_catalog_wait_presence");
+        Assert.Equal("index", index["type"]!.GetValue<string>());
+        Assert.Equal("createindexidx_session_catalog_wait_presenceonsession_catalog(session_id)wherejson_type(metadata_json,'$.meta.wait.id')='text'", index["sql"]!.GetValue<string>());
+        all.Remove(index); return all;
     }
     private static JsonArray Schema(string file)
     {

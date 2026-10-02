@@ -34,7 +34,7 @@ internal sealed partial class SessionManager
             T(row["model"]), T(row["effort"]), SessionCatalog.Number(row["stats"]?["totalCachedTokens"]) ?? 0, SessionCatalog.Number(row["stats"]?["totalInputTokens"]) ?? 0, SessionCatalog.Number(row["stats"]?["totalOutputTokens"]) ?? 0,
             SessionCatalog.WaitProjection(row["meta"]?["wait"]), T(row["childModelDefault"]), T(row["childEffortDefault"]), SessionCatalog.Number(row["compactThresholdTokens"]));
     }
-    private SessionMetadata? CatalogMetadata(string requested)
+    internal SessionMetadata? CatalogMetadata(string requested)
     {
         var resolution = Catalog.Resolve(requested);
         return SessionCatalog.Text(resolution["sessionId"]) is { } id && Catalog.Get(id) is { } row ? Metadata(row) : null;
@@ -79,6 +79,12 @@ internal sealed partial class SessionManager
         foreach (var field in new[] { "messageCount", "lastMessageTime" }) signature[field] = SessionCatalog.Number(row["meta"]?[field]) ?? 0;
         foreach (var field in new[] { "totalCachedTokens", "totalInputTokens", "totalOutputTokens" }) signature[field] = SessionCatalog.Number(row["stats"]?[field]) ?? 0;
         signature["wait"] = SessionCatalog.WaitProjection(row["meta"]?["wait"]); return signature;
+    }
+    private JsonObject[] MetadataRows()
+    {
+        var rows = Catalog.List().ToDictionary(row => SessionCatalog.Text(row["id"])!, StringComparer.Ordinal);
+        foreach (var local in LocalProjections()) rows[SessionCatalog.Text(local["id"])!] = local;
+        return rows.Values.ToArray();
     }
     internal JsonObject[] CatalogPresentations(string[] ids, bool includeLocal)
     {

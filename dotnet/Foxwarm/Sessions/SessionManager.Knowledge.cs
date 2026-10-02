@@ -16,9 +16,14 @@ internal sealed partial class SessionManager
         if (refresh)
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var selected = Owners().Where(owner => AgentChain(owner.Agent).Contains(name, StringComparer.Ordinal)
-                && !Stale(owner, now)).ToArray();
-            foreach (var owner in selected) { await RefreshSnapshotAsync(owner); affected.Add(owner.Id); }
+            var selected = MetadataRows().Select(Metadata).Where(row => AgentChain(row.Agent).Contains(name, StringComparer.Ordinal)
+                && Math.Max(0, now - row.LastMessageTime) <= 60 * 60 * 1000).Select(row => row.Id).ToArray();
+            foreach (var id in selected)
+            {
+                var owner = await RequiredAsync(id);
+                if (Stale(owner, now)) continue; // Catalog recency selects candidates; validated JSON can prove an older current state.
+                await RefreshSnapshotAsync(owner); affected.Add(owner.Id);
+            }
         }
         return new { affectedSessions = affected.ToArray(), inheritanceChain = AgentChain(name) };
     }

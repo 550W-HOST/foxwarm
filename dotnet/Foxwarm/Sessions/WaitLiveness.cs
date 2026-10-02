@@ -85,12 +85,12 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         {
             if (memo.TryGetValue(currentId, out var known)) return known;
             if (!visiting.Add(currentId)) return false;
-            var current = manager.Find(currentId); var metadata = current?.Metadata(); var state = current?.WaitSnapshot();
+            var current = manager.Find(currentId); var metadata = current?.Metadata() ?? manager.CatalogMetadata(currentId); var state = current?.WaitSnapshot() ?? metadata?.Wait;
             var sources = state is null ? [] : Sources(state);
             observed.Add(new JsonObject
             {
                 ["sessionId"] = currentId,
-                ["exists"] = current is not null,
+                ["exists"] = metadata is not null,
                 ["state"] = metadata?.Busy == true ? "active" : state is not null ? "waiting" : "idle",
                 ["queueLength"] = metadata?.QueueLength ?? 0,
                 ["timeoutSeconds"] = state?["timeoutSeconds"]?.DeepClone(),

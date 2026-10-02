@@ -6,7 +6,13 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionManager
 {
     internal async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolAsync(
-        SessionOwner source, string name, JsonObject? args)
+        SessionOwner source, string name, JsonObject? args, CancellationToken cancellationToken = default)
+    {
+        var previous = semanticCaller.Value; semanticCaller.Value = cancellationToken;
+        try { return await ExecuteAgentToolCoreAsync(source, name, args); }
+        finally { semanticCaller.Value = previous; }
+    }
+    private async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolCoreAsync(SessionOwner source, string name, JsonObject? args)
     {
         try
         {

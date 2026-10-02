@@ -88,6 +88,35 @@ public sealed class WebUiRealtimeRevisionTests
             Directory.Delete(root, recursive: true);
         }
     }
+    [Fact]
+    public async Task New_revision_and_disconnect_abandon_only_the_subscription_wait_not_shared_cold_admission()
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); await SessionCatalogMigrationTests.Authority(data, "one"); catalog.Upsert([SessionCatalogTests.Row("one", 0)]); }
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options)); await manager.LoadAsync(); var reached = Signal(); var release = Signal(); var attempts = 0;
+        manager.BeforeAdmissionRead = async (_, token) => { Interlocked.Increment(ref attempts); reached.TrySetResult(); await release.Task.WaitAsync(token); };
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10)); using var socket = new ProbeSocket(); var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(socket, stopped.Token);
+        socket.SetSubscriptions(1, "one"); await reached.Task.WaitAsync(stopped.Token); socket.SetSubscriptions(2, null, ["one"]);
+        await Until(() => socket.Frames.Any(frame => frame["type"]?.GetValue<string>() == "subscriptions-applied" && frame["revision"]?.GetValue<long>() == 2), stopped.Token);
+        Assert.Empty(manager.Owners()); Assert.DoesNotContain(socket.Frames, frame => frame["type"]?.GetValue<string>() is "session-state" or "model-stream-start");
+        Assert.DoesNotContain(socket.Frames, frame => frame["type"]?.GetValue<string>() == "subscriptions-applied" && frame["revision"]?.GetValue<long>() == 1);
+        stopped.Cancel(); await running; release.TrySetResult(); var owner = await manager.RequiredAsync("one").WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("one", owner.Id); Assert.Equal(1, attempts); Assert.Single(manager.Owners());
+    }
+
+    [Fact]
+    public async Task Cataloged_missing_authority_is_an_admission_error_frame_never_session_deleted()
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); catalog.Upsert([SessionCatalogTests.Row("known", 0)]); }
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options)); await manager.LoadAsync(); using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10)); using var socket = new ProbeSocket();
+        var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(socket, stopped.Token); socket.SetSubscriptions(1, "known"); await running.WaitAsync(stopped.Token);
+        Assert.Contains(socket.Frames, frame => frame["type"]?.GetValue<string>() == "error" && frame["code"]?.GetValue<string>() == "SESSION_STATE_UNAVAILABLE");
+        Assert.DoesNotContain(socket.Frames, frame => frame["type"]?.GetValue<string>() == "session-deleted"); Assert.Equal("exact", manager.Catalog.Resolve("known")["kind"]!.GetValue<string>()); Assert.Empty(manager.Owners());
+    }
+
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static async Task Until(Func<bool> condition, CancellationToken token)
     {
@@ -98,11 +127,11 @@ public sealed class WebUiRealtimeRevisionTests
         private readonly Channel<byte[]> incoming = Channel.CreateUnbounded<byte[]>();
         private WebSocketState state = WebSocketState.Open;
         public ConcurrentQueue<JsonObject> Frames { get; } = new();
-        public void SetSubscriptions(long revision, string id, string[]? list = null) => incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(new JsonObject
+        public void SetSubscriptions(long revision, string? id, string[]? list = null) => incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(new JsonObject
         {
             ["type"] = "set-subscriptions", ["revision"] = revision, ["sessionListActive"] = true,
-            ["sessionIds"] = new JsonArray(id),
-            ["sessionListIds"] = new JsonArray((list ?? [id]).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray())
+            ["sessionIds"] = id is null ? new JsonArray() : new JsonArray(id),
+            ["sessionListIds"] = new JsonArray((list ?? (id is null ? [] : [id])).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray())
         }.ToJsonString()));
         public override WebSocketCloseStatus? CloseStatus => state == WebSocketState.Closed ? WebSocketCloseStatus.NormalClosure : null;
         public override string? CloseStatusDescription => null;

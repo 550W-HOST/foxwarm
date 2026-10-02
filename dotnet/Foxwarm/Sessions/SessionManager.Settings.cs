@@ -10,7 +10,7 @@ internal sealed partial class SessionManager
         var child = name == "set_session_child_model";
         Keys(args, child ? ["sessionId", "model", "effort", "clear"] : ["sessionId", "thresholdTokens", "clear"], []);
         var id = OptionalString(args, "sessionId") ?? source.Id;
-        var owner = Find(id) ?? throw new InvalidDataException($"Session `{id}` not found.");
+        var owner = await RequiredAsync(id);
         var clear = OptionalBool(args, "clear") == true; var patch = new JsonObject(); var action = "status";
         if (child)
         {

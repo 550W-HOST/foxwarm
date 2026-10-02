@@ -13,12 +13,19 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
     public void Register(WebApplication app)
     {
         var models = sessions.Models;
+        app.Use(async (context, next) =>
+        {
+            try { await next(); }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+            catch (Exception error) when (!context.Response.HasStarted && error is IOException or InvalidDataException or InvalidOperationException or NotSupportedException)
+            { await Results.Problem(error.Message, statusCode: 500).ExecuteAsync(context); }
+        });
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
         app.MapGet("/api/models", (HttpRequest request) => Results.Ok(WebUiContract.Models(models, request.Query["current"])));
         RegisterSetupRoutes(app);
         app.MapPost("/api/sessions/{id}/model", async (string id, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             if (!sessions.Accepting) return Results.StatusCode(503);
             try
@@ -32,7 +39,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         });
         app.MapPost("/api/sessions/{id}/child-model", async (string id, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             if (!sessions.Accepting) return Results.StatusCode(503);
             try
@@ -61,7 +68,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         RegisterHistoryRoutes(app);
         app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             if (!sessions.Accepting) return Results.StatusCode(503);
             JsonObject? input;
@@ -96,7 +103,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         });
         app.MapPost("/api/sessions/{id}/stop", async (string id, HttpRequest request) =>
         {
-            var hosted = FindRoute(request, id);
+            var hosted = await FindRouteAsync(request, id);
             if (hosted is null) return Results.NotFound(new { error = "Session not found" });
             if (hosted.Compactor.Standalone) return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
             if (!hosted.Metadata().Busy) return Results.Ok(new { stoppedCurrent = false, abortedInFlight = false });
@@ -109,7 +116,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         });
         app.MapGet("/api/sessions/{id}/stream", async (string id, HttpContext context) =>
         {
-            var hosted = FindRoute(context.Request, id);
+            var hosted = await FindRouteAsync(context.Request, id);
             if (hosted is null) { context.Response.StatusCode = 404; return; }
             context.Response.Headers.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-cache";
@@ -132,13 +139,16 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         });
 
     }
-    private SessionOwner? FindRoute(HttpRequest request, string routeId)
+    private static string? RouteIdentity(HttpRequest request)
     {
         var parts = request.HttpContext.Features.Get<IHttpRequestFeature>()?.RawTarget?.Split('?', 2)[0].Split('/');
         if (parts is null || parts.Length < 5 || parts[1] != "api" || parts[2] != "sessions" || parts[3].Length == 0) return null;
-        try { return runtime.Owner(Uri.UnescapeDataString(parts[3])); }
-        catch (UriFormatException) { return null; }
+        try { return Uri.UnescapeDataString(parts[3]); } catch (UriFormatException) { return null; }
     }
+    private async Task<SessionOwner?> FindRouteAsync(HttpRequest request, string routeId)
+        => RouteIdentity(request) is { } id ? await runtime.GetOwnerAsync(id, request.HttpContext.RequestAborted) : null;
+    private string? CatalogRoute(HttpRequest request)
+        => RouteIdentity(request) is { } id ? SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]) : null;
     private static async Task SendSse(HttpContext context, JsonObject payload)
     {
         await context.Response.WriteAsync("data: " + payload.ToJsonString() + "\n\n", context.RequestAborted);

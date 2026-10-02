@@ -12,7 +12,7 @@ internal sealed class MessageRouter(SessionRuntime runtime)
 {
     public async Task<MessageRouteResult> HandleMessageAsync(ChannelContext context, ChannelMessage message)
     {
-        var owner = runtime.Owner(context.SessionId) ?? throw new InvalidDataException("Session not found.");
+        var owner = await runtime.GetOwnerAsync(context.SessionId) ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
         if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
         {

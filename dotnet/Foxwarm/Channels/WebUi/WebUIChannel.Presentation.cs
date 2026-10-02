@@ -40,14 +40,14 @@ internal sealed partial class WebUIChannel
         });
         app.MapPost("/api/sessions/{id}/name", async (string id, HttpRequest request) =>
         {
-            var owner = FindRoute(request, id); if (owner is null) return Results.NotFound(new { error = "Session not found" });
+            var canonical = CatalogRoute(request); if (canonical is null) return Results.NotFound(new { error = "Session not found" });
             try
             {
                 var body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new InvalidDataException("Name must be an object.");
                 if (body.Any(pair => pair.Key != "name")) throw new InvalidDataException("Unsupported name fields.");
                 var name = body["name"] is JsonValue value && value.TryGetValue<string>(out var text) && text.Trim().Length > 0 ? text.Trim() : null;
-                await runtime.UpdateDisplayNameAsync(owner.Id, name);
-                return Results.Ok(new { success = true, sessionId = owner.Id, displayName = name });
+                await runtime.UpdateDisplayNameAsync(canonical, name);
+                return Results.Ok(new { success = true, sessionId = canonical, displayName = name });
             }
             catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException)
             { return Results.BadRequest(new { error = error.Message }); }

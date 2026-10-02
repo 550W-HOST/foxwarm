@@ -15,6 +15,7 @@ internal sealed class SessionRuntime(SessionManager manager)
 {
     internal Action<string>? SemanticOwnerLookupObserved { get; set; }
     public SessionOwner? Owner(string id) { SemanticOwnerLookupObserved?.Invoke(id); return manager.Find(id); }
+    public Task<SessionOwner?> GetOwnerAsync(string id, CancellationToken cancellationToken = default) => manager.GetExistingAsync(id, cancellationToken);
     public JsonObject? GetSession(string id) => Owner(id)?.BuildDto();
     public JsonObject[] ListSessions() => manager.ListPresentations();
     internal SessionCatalog Catalog => manager.Catalog;
@@ -24,24 +25,23 @@ internal sealed class SessionRuntime(SessionManager manager)
     internal JsonObject? Projection(string id) => Projections([id]).FirstOrDefault();
     public event Action<SessionRuntimeEvent> Changed { add => manager.Changed += value; remove => manager.Changed -= value; }
     public event Action TopologyChanged { add => manager.TopologyChanged += value; remove => manager.TopologyChanged -= value; }
-    public Task ContinueAsync(string id) => Required(id).StartProcessing(retry: true);
-    public Task SubmitAndRunAsync(string id, QueueItem item) => Required(id).Registry.Ingress.EnqueueAsync(id, item);
-    public Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => Required(id).UpdateModelAsync(settings);
+    public async Task ContinueAsync(string id) => await (await manager.RequiredAsync(id)).StartProcessing(retry: true);
+    public async Task SubmitAndRunAsync(string id, QueueItem item) { var owner = await manager.RequiredAsync(id); await owner.Registry.Ingress.EnqueueAsync(owner.Id, item); }
+    public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
     public Task UpdateDisplayNameAsync(string id, string? name) => manager.RenameAsync(id, name);
-    public Task<string> RefreshSnapshotAsync(string id) => manager.RefreshSnapshotAsync(Required(id));
+    public async Task<string> RefreshSnapshotAsync(string id) => await manager.RefreshSnapshotAsync(await manager.RequiredAsync(id));
     public async Task<StopResult> StopAsync(string id)
     {
-        var owner = Required(id);
+        var owner = await manager.RequiredAsync(id);
         if (owner.Compactor.Standalone) return new(false, false);
-        var result = await owner.Registry.Control.StopAsync(id);
-        await owner.DrainForegroundAsync();
-        return result;
+        var result = await owner.Registry.Control.StopAsync(owner.Id);
+        await owner.DrainForegroundAsync(); return result;
     }
-    public Task<ClearHistoryResult> ClearHistoryAsync(string id) => manager.ClearAsync(Required(id));
-    public Task<SessionOwner> ForkAsync(string id, string? suffix = null) => manager.ForkAsync(Required(id), suffix);
+    public async Task<ClearHistoryResult> ClearHistoryAsync(string id) => await manager.ClearAsync(await manager.RequiredAsync(id));
+    public async Task<SessionOwner> ForkAsync(string id, string? suffix = null) => await manager.ForkAsync(await manager.RequiredAsync(id), suffix);
     public async Task<SessionOwner> ForkCommandAsync(string id, string suffix, string? message)
     {
-        var parent = Required(id);
+        var parent = await manager.RequiredAsync(id);
         var (child, delivered) = await manager.CreateChildAsync(parent, suffix, null, null, message, null, fork: true);
         try { await manager.NotifyManualForkAsync(parent, child, message); }
         catch (Exception error)
@@ -51,8 +51,8 @@ internal sealed class SessionRuntime(SessionManager manager)
         }
         return child;
     }
-    public Task<DequeueResult> DequeueAsync(string id) => Required(id).Registry.Control.DequeueAsync(id);
-    private SessionOwner Required(string id) => Owner(id) ?? throw new InvalidDataException("Session not found.");
+    public async Task<DequeueResult> DequeueAsync(string id) { var owner = await manager.RequiredAsync(id); return await owner.Registry.Control.DequeueAsync(owner.Id); }
+
 }
 
 internal sealed partial class SessionOwner
