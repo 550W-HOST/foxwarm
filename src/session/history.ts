@@ -42,7 +42,7 @@ import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { formatSessionGoalReminderText } from './goal';
-import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
+import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, resolveNextSessionBlockId, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
 import { isSessionAuthorityPostCommitError } from './stateFile';
@@ -1635,13 +1635,14 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
 
   discardPendingCompactWork(sessionId);
 
+  const nextBlockId = await resolveNextSessionBlockId(session);
   session.history = [];
   session.queue = [];
   session.stopping = false;
   session.busy = false;
   session.busyStartedAt = undefined;
   session.vectorIndexPosition = 0;
-  session.nextBlockId = 1;
+  session.nextBlockId = nextBlockId;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
   session.promptCacheKey = llm.generatePromptCacheKey();

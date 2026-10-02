@@ -853,6 +853,54 @@ test('Worker fenced turn-owned release failure restores authority and is not ret
   } finally { (llm as any).chat = originalChat; }
 });
 
+test('exact Worker clear retains block IDs and later compact never hydrates Main authority', async () => {
+  const initial = baseSession(`worker-clear-blocks-${Date.now()}`);
+  const archiveStore = await import('./session/archiveStore');
+  const originalChat = llm.chat;
+  const messages = (): Session['history'] => [
+    { role: 'user', parts: [{ text: `older user ${'alpha '.repeat(3000)}` }] },
+    { role: 'model', parts: [{ text: `older model ${'bravo '.repeat(3000)}` }] },
+    { role: 'user', parts: [{ text: 'recent user' }] },
+    { role: 'model', parts: [{ text: 'recent model' }] },
+  ];
+  (llm as any).chat = async (_parts: any, planner: Session, _iteration: number, options: any) => {
+    const raw = planner.history.filter(message => typeof message.__meta?.seq === 'number');
+    assert.equal(raw.length, 2);
+    const toolCall = { id: 'worker-clear-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+      level: 1, sourceKind: 'message', sourceStart: raw[0].__meta!.seq, sourceEnd: raw[1].__meta!.seq,
+      summary: `Worker summary ${raw[0].__meta!.seq}-${raw[1].__meta!.seq}.`,
+    }] } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, session, turnHost, readDurable }) => {
+      await turnHost.appendSessionMessages(session, messages());
+      assert.equal((await host.compactAwaited({ keepPercent: 0.5 })).compacted, true);
+      const first = await archiveStore.readLocalArchiveBlocks(session.id);
+      assert.deepEqual(first.map(block => block.id), [1]);
+      const nextMessageSeq = session.nextMessageSeq;
+      const cacheKey = session.promptCacheKey;
+      await turnHost.startSessionWait(session, { waitForInput: true });
+      const cleared = await host.clearHistory();
+      assert.equal(cleared.projection.messageCount, 0);
+      assert.deepEqual(readDurable().history, []);
+      assert.equal(readDurable().nextBlockId, 2);
+      assert.equal(readDurable().nextMessageSeq, nextMessageSeq);
+      assert.equal(session.meta.wait, undefined);
+      assert.notEqual(session.promptCacheKey, cacheKey);
+      await turnHost.appendSessionMessages(session, messages());
+      assert.equal((await host.compactAwaited({ keepPercent: 0.5 })).compacted, true);
+      const blocks = await archiveStore.readLocalArchiveBlocks(session.id);
+      assert.deepEqual(blocks.map(block => block.id), [1, 2]);
+      assert.deepEqual(blocks[0], first[0]);
+      assert.equal(readDurable().nextBlockId, 3);
+      assert.equal(readDurable().history[0].__meta.contextBlock.id, 2);
+      assert.equal(sessionManager.getAllSessions().has(session.id), false, 'only the exact Worker owns or persists semantic authority');
+    });
+  } finally { (llm as any).chat = originalChat; }
+});
+
 test('explicit awaited compact rejects busy or queued exact owners instead of waiting', async () => {
   const initial = baseSession('worker-explicit-compact-admission');
   await withLocalHost(initial, async ({ host, session }) => {

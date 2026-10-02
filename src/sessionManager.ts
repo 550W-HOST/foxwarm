@@ -23,7 +23,7 @@ import * as sessionAgentMetadata from './session/agentMetadata';
 import { normalizeAgentToolRules } from './permissions';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
-import { readArchiveBlocksByIdRange } from './session/layeredContext';
+import { readArchiveBlocksByIdRange, resolveNextSessionBlockId } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, initArchiveStore, rollbackUncommittedSessionArchive } from './session/archiveStore';
 import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
@@ -1733,6 +1733,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     await saveSession(sourceSession.id);
   }
   const spawnedSettings = resolveSpawnedSessionModelEffort(sourceSession, options?.model, options?.effort);
+  const nextBlockId = await resolveNextSessionBlockId(sourceSession);
 
   const forkedSession: Session = {
     id: newSessionId,
@@ -1752,7 +1753,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
     nextMessageSeq: sourceSession.nextMessageSeq,
-    nextBlockId: sourceSession.nextBlockId,
+    nextBlockId,
     parentSessionId: realSourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
@@ -1836,7 +1837,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     await ensureSessionBranch(newSessionId, {
       parentSessionId: realSourceSessionId,
       forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
-      forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+      forkBlockId: nextBlockId - 1,
     });
     await vector.copySessionArchiveIndexCheckpoint(realSourceSessionId, newSessionId).catch(error => {
       logger.warn({ code: (error as any)?.code || 'VECTOR_FORK_BASELINE_FAILED', sessionId: newSessionId }, 'Failed to initialize derived fork baseline');

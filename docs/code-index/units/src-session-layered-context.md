@@ -10,6 +10,7 @@ Owns immutable archive block construction, CTX-BLOCK rendering, structured `__me
 
 - `ArchiveBlockRecord` / `CreateArchiveBlockInput` — durable block shapes.
 - `appendBlocksToArchive` and block range readers — immutable block persistence and recall access.
+- `resolveNextSessionBlockId` — pure persisted/active/effective-Archive ID maximum for allocation, clear, and new fork targets.
 - `renderBlockMessage` / `buildContextBlockMessageMeta` — one newly created or recalled block to a model-visible message with structured provenance.
 - `formatArchiveBlockContextText`, time-range, summary, and memory-fact formatters.
 - `shouldIgnoreMessageInCompactCandidates` / `shouldRemoveOldCompactCompletionMessage` — lifecycle candidate and completion-retention policy.
@@ -18,7 +19,7 @@ Owns immutable archive block construction, CTX-BLOCK rendering, structured `__me
 
 - Active CTX-BLOCK messages are ordinary entries in authoritative Session `history` and carry `__meta.contextBlock`.
 - Exact preserved raw messages remain ordinary history entries carrying `__meta.seq` plus `__meta.preservedFromBlockId`.
-- New block IDs are allocated from `nextBlockId`, with current history block metadata as the fallback maximum.
+- Block allocation first resolves a nondecreasing counter from persisted state, active block metadata, and the effective capped Archive ID maximum. Empty block appends do not resolve or mutate the counter. Canonical contract: [block ID high-water marks](../threads/context-compaction-and-recall.md#d-context-block-id-high-water).
 - New block raw timestamp ranges are supplied from the layered compact job's active raw/block metadata. Block append does not read raw Archive rows to recover timestamps or source semantics.
 - Legacy standalone or embedded frontier handling belongs only to tolerant migration/authority readers and is not a runtime layered-context responsibility.
 

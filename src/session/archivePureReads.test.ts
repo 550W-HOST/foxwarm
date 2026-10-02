@@ -19,6 +19,7 @@ test('unknown archive readers remain pure and a later explicit write can claim t
     assert.deepEqual(await archiveStore.readEffectiveArchiveMessages(unknownId), []);
     assert.deepEqual(await archiveStore.readLocalArchiveBlocks(unknownId), []);
     assert.deepEqual(await archiveStore.readEffectiveArchiveBlocks(unknownId), []);
+    assert.equal(await archiveStore.getEffectiveArchiveBlockMaxId(unknownId), 0);
     assert.deepEqual(await archiveStore.getVectorSearchLineage(unknownId), [{
       sessionId: unknownId,
       inherited: false,
@@ -68,6 +69,7 @@ test('unknown archive readers remain pure and a later explicit write can claim t
     assert.equal(await archiveStore.hasArchivedSessionId(unknownId), true);
     assert.equal((await archiveStore.readEffectiveArchiveMessages(unknownId))[0]?.message.parts[0]?.text, 'explicit owner write');
     assert.equal((await archiveStore.readEffectiveArchiveBlocks(unknownId))[0]?.summary, 'explicit owner block');
+    assert.equal(await archiveStore.getEffectiveArchiveBlockMaxId(unknownId), 1);
   } finally {
     await fs.remove(tempRoot);
   }

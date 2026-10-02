@@ -85,6 +85,8 @@ Generated-image delivery uses the same bounded, source-fenced `session-turn-deli
 
 The bound runner reports no completed background compact job (`hasCompletedCompactJob:false`); explicit completed-job application remains unsupported. Awaited compaction and its exact-owner maintenance fences are unchanged. See [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
 
+`sessionWorkerHost.test.ts` covers exact-owner clear followed by awaited compaction, durable counter/history/wait state, and absence of Main hydration. `sessionWorkerDestructive.test.ts` verifies that a fenced fork derives its new counter/cap without changing detached source bytes or the Main stub. Shared numbering contract: [block ID high-water marks](../threads/context-compaction-and-recall.md#d-context-block-id-high-water).
+
 ## Canonical ownership
 
 The cross-module placement, durability, fencing, idle, and future worker-owned session decisions are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#design-decisions).

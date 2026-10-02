@@ -21,6 +21,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `rollbackUncommittedArchiveMessages`, `rollbackUncommittedArchiveBlocks` — exact-payload cleanup for rows newly inserted by a larger active-authority commit that then failed before publication; pre-existing replay rows are never eligible.
 - `readLocalArchiveMessages`, `readLocalArchiveBlocks` — current-branch rows only.
 - `readEffectiveArchiveMessages`, `readEffectiveArchiveBlocks` — lineage-bounded inherited plus local rows.
+- `getEffectiveArchiveBlockMaxId` — pure indexed `MAX(id)` across alias-resolved, cumulatively capped lineage; reads no block content and changes no branch or reservation.
 - `readEffectiveArchiveMessagePage` — bounded `ORDER BY seq LIMIT` pages with exclusive before/after anchors across effective inherited/local branches, alias resolution and cumulative fork caps; returns a one-row lookahead flag without hydrating a Session.
 - `getLocalArchiveMessageStats`, `getEffectiveArchiveMessageStats` — pure SQLite `count`/`minSeq`/`maxSeq` summaries with the same optional bounds, alias resolution, lineage walk, and cumulative fork caps as the corresponding readers.
 - `getSessionListSequenceMessageCounts` — pure bounded batch projection of local maximum message seq and actual archive fork point for Sidebar list counts.

@@ -1361,7 +1361,7 @@ test('compact authority persistence failure restores active state and removes un
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('conflicting required Archive block append fails closed before active history replacement', async () => {
+test('a legacy low block counter advances past immutable Archive without changing compact input', async () => {
   const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_block_append_conflict'));
   const seedSession = { ...session, history: [], nextBlockId: 1 } as Session;
@@ -1377,21 +1377,20 @@ test('conflicting required Archive block append fails closed before active histo
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
       const toolCall = { id: 'conflicting-block-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
-        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'different block content must conflict',
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'new block content uses a fresh identity',
       }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
-    await assert.rejects(
-      () => sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await'),
-      /Required archive block commit failed.*Immutable archive block conflict/,
-    );
-    assert.deepEqual(session.history, originalHistory);
-    assert.equal(session.nextBlockId, originalNextBlockId);
-    assert.equal(session.historyVersion, originalHistoryVersion);
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(session.nextBlockId, originalNextBlockId + 2);
+    assert.equal(session.historyVersion, originalHistoryVersion! + 1);
+    assert.equal(session.history[0].__meta?.contextBlock?.id, 2);
+    assert.deepEqual(session.history.slice(1, 3), originalHistory.slice(2));
     const blocks = await layeredContext.readLocalArchiveBlocks(session.id);
-    assert.equal(blocks.length, 1);
+    assert.deepEqual(blocks.map(block => block.id), [1, 2]);
     assert.equal(blocks[0].summary, 'preexisting immutable block identity');
+    assert.equal(blocks[1].summary, 'new block content uses a fresh identity');
   } finally { (llm as any).chat = originalChat; }
 });
 
@@ -1873,4 +1872,108 @@ test('manual pruning rewrites only active history while exact archive recall kee
   const recalled = await sessionHistory.getArchivedMessages(session.id, { startSeq: 2, endSeq: 2 });
   assert.equal(recalled.records.length, 1);
   assert.equal(recalled.records[0].message.parts[0].functionResponse?.response.output, originalOutput);
+});
+
+
+test('clear, reload and later compact keep block identities and new fork caps without rebuilding history', async () => {
+  const { llm, layeredContext } = await loadDeps();
+  const manager = await import('../sessionManager');
+  const store = await import('./archiveStore');
+  const { getSessionHistoryFilePath, serializeSessionHistoryPayload } = await import('./metadataStore');
+  const id = makeSessionId('compact_clear_reload');
+  const originalChat = llm.chat;
+  const createdIds = [id];
+  const messages = (): Message[] => [
+    { role: 'user', parts: [{ text: `older user ${'alpha '.repeat(3000)}` }] },
+    { role: 'model', parts: [{ text: `older model ${'bravo '.repeat(3000)}` }] },
+    { role: 'user', parts: [{ text: 'recent user' }] },
+    { role: 'model', parts: [{ text: 'recent model' }] },
+  ];
+  (llm as any).chat = async (_parts: MessagePart[] | null, planner: Session, _iteration: number, options: any): Promise<ChatResult> => {
+    const raw = planner.history.filter(message => typeof message.__meta?.seq === 'number');
+    assert.equal(raw.length, 2);
+    const toolCall = { id: 'clear-counter-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+      level: 1, sourceKind: 'message', sourceStart: raw[0].__meta!.seq, sourceEnd: raw[1].__meta!.seq,
+      summary: `Summary for ${raw[0].__meta!.seq}-${raw[1].__meta!.seq}.`,
+    }] } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  const compact = (sessionId: string) => manager.processSessionCompactionRequest(sessionId, { keepPercent: 0.5 }, 'await');
+  const reloadWithCounter = async (counter: number): Promise<Session> => {
+    // This is the valid persisted payload written by older clear operations.
+    const statePath = getSessionHistoryFilePath(id);
+    const state = await fs.readJson(statePath);
+    state.nextBlockId = counter;
+    await fs.writeJson(statePath, state);
+    await manager.loadSessions();
+    return manager.getSession(id);
+  };
+  try {
+    await manager.createEmptySession(id);
+    await manager.appendSessionMessages(id, messages());
+    await compact(id);
+    let owner = await manager.getSession(id);
+    const firstBlocks = await store.readLocalArchiveBlocks(id);
+    const firstRows = await store.readLocalArchiveMessages(id);
+    assert.deepEqual(firstBlocks.map(block => block.id), [1]);
+
+    const beforeClearFork = await manager.forkSession(id, 'before-clear');
+    createdIds.push(beforeClearFork);
+    const originalCap = await store.getSessionBranch(beforeClearFork);
+    await manager.clearSession(beforeClearFork);
+    await manager.appendSessionMessages(beforeClearFork, messages());
+    await compact(beforeClearFork);
+    assert.deepEqual((await store.readEffectiveArchiveBlocks(beforeClearFork)).map(block => block.id), [1, 2]);
+    assert.deepEqual(await store.getSessionBranch(beforeClearFork), originalCap, 'clear does not widen an existing fork cap');
+
+    const nextMessageSeq = owner.nextMessageSeq;
+    const cacheKey = owner.promptCacheKey;
+    await manager.startSessionWait(id, { waitForInput: true });
+    await manager.clearSession(id);
+    await manager.loadSessions();
+    owner = await manager.getSession(id);
+    assert.deepEqual(owner.history, []);
+    assert.equal(owner.meta.wait, undefined);
+    assert.equal(owner.nextMessageSeq, nextMessageSeq);
+    assert.equal(owner.nextBlockId, 2);
+    assert.notEqual(owner.promptCacheKey, cacheKey);
+    assert.deepEqual(await store.readLocalArchiveBlocks(id), firstBlocks);
+    assert.deepEqual(await store.readLocalArchiveMessages(id), firstRows);
+
+    owner = await reloadWithCounter(1);
+    assert.equal(owner.nextBlockId, 1, 'hydration is not a counter migration');
+    const sourceBefore = structuredClone(serializeSessionHistoryPayload(owner));
+    const bytesBefore = await fs.readFile(getSessionHistoryFilePath(id));
+    const afterClearFork = await manager.forkSession(id, 'legacy-after-clear');
+    createdIds.push(afterClearFork);
+    const forked = await manager.getSession(afterClearFork);
+    assert.equal(forked.nextBlockId, 2);
+    assert.equal((await store.getSessionBranch(afterClearFork))?.forkBlockId, 1);
+    assert.equal(forked.history.some(message => !!message.__meta?.contextBlock), false);
+    assert.deepEqual(await fs.readFile(getSessionHistoryFilePath(id)), bytesBefore);
+    assert.deepEqual(serializeSessionHistoryPayload(owner), sourceBefore, 'the pure source resolver does not mutate local authority');
+
+    await manager.clearSession(id);
+    assert.equal(owner.nextBlockId, 2, 'clear recovers an already persisted low counter');
+    owner = await reloadWithCounter(1);
+    const lowBefore = structuredClone(serializeSessionHistoryPayload(owner));
+    assert.deepEqual(await layeredContext.appendBlocksToArchive(owner, []), []);
+    assert.deepEqual(serializeSessionHistoryPayload(owner), lowBefore, 'empty block appends stay a true no-op');
+    await manager.appendSessionMessages(id, messages());
+    await compact(id);
+    assert.deepEqual((await store.readLocalArchiveBlocks(id)).map(block => block.id), [1, 2]);
+    assert.deepEqual((await store.readLocalArchiveBlocks(id))[0], firstBlocks[0]);
+    assert.deepEqual((await store.readLocalArchiveMessages(id)).slice(0, firstRows.length), firstRows);
+    assert.equal(owner.nextBlockId, 3);
+    assert.equal(owner.history[0].__meta?.contextBlock?.id, 2);
+    assert.deepEqual((await store.readEffectiveArchiveBlocks(afterClearFork)).map(block => block.id), [1], 'the new fork cannot see later parent blocks');
+
+    owner = await reloadWithCounter(50);
+    await manager.clearSession(id);
+    assert.equal(owner.nextBlockId, 50, 'a higher persisted counter never goes backwards');
+  } finally {
+    (llm as any).chat = originalChat;
+    for (const sessionId of createdIds.reverse()) await manager.deleteSession(sessionId).catch(() => {});
+  }
 });
