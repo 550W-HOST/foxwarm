@@ -171,7 +171,7 @@ export class WeixinChannel implements Channel {
         if ((response.ret && response.ret !== 0) || (response.errcode && response.errcode !== 0)) {
           if (response.errcode === SESSION_EXPIRED_ERRCODE || response.ret === SESSION_EXPIRED_ERRCODE) {
             logger.error({ errcode: response.errcode, ret: response.ret }, 'Weixin session expired');
-            throw new Error('Weixin session expired; re-run /weixin login and restart foxwarm.');
+            throw new Error('Weixin session expired; re-run /channel weixin login and restart foxwarm.');
           }
           throw new Error(`Weixin getUpdates failed: ret=${response.ret} errcode=${response.errcode} errmsg=${response.errmsg || ''}`);
         }

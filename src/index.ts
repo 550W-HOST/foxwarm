@@ -544,7 +544,7 @@ async function start() {
                     return result.status;
                 }, { retries: 1, delayMs: 3000 });
             } else if (config.baseUrl || config.enabled) {
-                logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
+                logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /channel weixin login and foxwarm will start it dynamically once config is ready');
             }
             continue;
         }

@@ -279,7 +279,7 @@ export async function startWeixinQrLogin(params: {
   return {
     sessionKey,
     qrcodeUrl: qr.qrcode_img_content,
-    message: '使用微信扫描二维码后，再执行 /weixin wait <sessionKey> 完成登录。',
+    message: '使用微信扫描二维码后，再执行 /channel weixin wait <sessionKey> 完成登录。',
   };
 }
 
@@ -293,11 +293,11 @@ export async function waitForWeixinQrLogin(params: {
   const timeoutMs = Math.max(params.timeoutMs ?? 60_000, 1_000);
   const login = activeLogins.get(params.sessionKey);
   if (!login) {
-    return { connected: false, message: '当前没有进行中的登录，请先执行 /weixin login。' };
+    return { connected: false, message: '当前没有进行中的登录，请先执行 /channel weixin login。' };
   }
   if (!isLoginFresh(login)) {
     activeLogins.delete(params.sessionKey);
-    return { connected: false, message: '二维码已过期，请重新执行 /weixin login。' };
+    return { connected: false, message: '二维码已过期，请重新执行 /channel weixin login。' };
   }
 
   const deadline = Date.now() + timeoutMs;
@@ -316,13 +316,13 @@ export async function waitForWeixinQrLogin(params: {
     }
     if (status.status === 'expired') {
       activeLogins.delete(params.sessionKey);
-      return { connected: false, message: '二维码已过期，请重新执行 /weixin login。' };
+      return { connected: false, message: '二维码已过期，请重新执行 /channel weixin login。' };
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
   return {
     connected: false,
-    message: '登录仍未完成，请稍后重试 /weixin wait <sessionKey>。',
+    message: '登录仍未完成，请稍后重试 /channel weixin wait <sessionKey>。',
   };
 }

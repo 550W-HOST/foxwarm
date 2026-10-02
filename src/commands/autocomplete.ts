@@ -216,6 +216,15 @@ export const VERBOSE_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 export const CHANNEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
+  literalNode('weixin', 'Manage Weixin login and status', {
+    children: [
+      literalNode('status', 'Show Weixin channel status'),
+      literalNode('login', 'Start Weixin QR login'),
+      literalNode('wait', 'Wait for Weixin QR login', {
+        children: [placeholderNode('<sessionKey>', 'Login session key')],
+      }),
+    ],
+  }),
   literalNode('info', 'Show current channel identifiers and attachment state'),
   literalNode('auth', 'Show current channel authorization diagnostics'),
   literalNode('status', 'Show runtime channel status', {
