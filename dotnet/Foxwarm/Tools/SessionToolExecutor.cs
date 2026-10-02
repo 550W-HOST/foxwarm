@@ -80,7 +80,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         handlers["recall"] = (owner, args, token) => ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
         handlers["submit_compact_plan"] = (_, _, _) => Task.FromResult(UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor."));
-        foreach (var name in new[] { "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
+        foreach (var name in new[] { "delete_session", "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
             handlers[name] = (owner, args, token) => owner.ExecuteAgentAsync(name, args, token);
         handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token);
         handlers["call_tool"] = (_, _, _) => throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
@@ -90,7 +90,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "apply_patch" or "exec" ? "node" : "builtin";
-            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers"), handlers[name]);
+            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session"), handlers[name]);
         }
         return registry;
     }

@@ -21,6 +21,9 @@ public sealed class SessionEntry
     private Exception? lastBackgroundProcessorFailure;
     private readonly TaskCompletionSource<Exception> backgroundProcessorFailureSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    internal bool Retired { get; set; }
+    internal Func<IDisposable>? MutationAdmission { get; set; }
+    internal IDisposable? AdmitMutation() { if (Retired) throw new InvalidOperationException("Session owner has retired."); return MutationAdmission?.Invoke(); }
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }
     public object StateGate => stateGate;
@@ -76,6 +79,7 @@ public sealed class SessionEntry
     }
     public bool TryClaimProcessor()
     {
+        using var admission = AdmitMutation();
         lock (stateGate)
         {
             if (historyMutation != 0 || Interlocked.CompareExchange(ref processorClaim, 1, 0) != 0) return false;

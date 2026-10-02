@@ -10,6 +10,7 @@ internal sealed partial class SessionManager
     public async Task<ClearHistoryResult> ClearAsync(SessionOwner owner)
     {
         if (!Accepting) throw new InvalidOperationException("Host is shutting down.");
+        using var mutation = BeginOwnerMutation(owner);
         if (!owner.Entry.TryBeginHistoryMutation(out var busy, out var captured))
             throw new InvalidOperationException("Session history change is already in progress.");
         try
@@ -37,6 +38,7 @@ internal sealed partial class SessionManager
         suffix = string.IsNullOrEmpty(suffix) ? "fork" : suffix;
         ValidateForkSuffix(suffix);
         using var operation = TrackCreation();
+        using var mutation = BeginOwnerMutation(parent);
         var gate = CreationKey(parent.Id + "_" + suffix);
         await gate.WaitAsync();
         try { return await ForkLockedAsync(parent, suffix, false, null, null); }
@@ -77,7 +79,7 @@ internal sealed partial class SessionManager
         var copied = new SessionSnapshot(id, original.History.Select(row => (JsonObject)row.DeepClone()).ToArray(), [], false, null, false,
             meta, original.NextMessageSeq, 0, envelope);
         var store = MakeStore(id, parent.Agent); var owner = MakeSession(id, parent.Agent, store);
-        owner.Registry.Add(id, copied);
+        owner.Registry.Add(id, copied); BindMutations(owner);
         var branch = store.Archive.EnsureBranch(parent.Id, Math.Max(0, original.NextMessageSeq - 1),
             Math.Max(0, (CompactCandidateBuilder.Number(envelope["nextBlockId"]) ?? 1) - 1));
         var committed = false;

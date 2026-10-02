@@ -40,9 +40,10 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             {
                 watchSession = sessionIds.Contains(entry.SessionId);
                 watchList = listActive && listIds.Contains(entry.SessionId);
-                invalidate = listActive && entry.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted;
+                invalidate = listActive && entry.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted or SessionEventKind.Deleted;
             }
             if (watchSession && entry.Kind != SessionEventKind.RequestProgress) Deliver(WebUiContract.Event(entry, runtime));
+            if (watchList && entry.Kind == SessionEventKind.Deleted) Deliver(new JsonObject { ["type"] = "session-list-delta", ["sessions"] = new JsonArray(), ["deletedIds"] = new JsonArray(entry.SessionId) });
             if (watchList && entry.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted)
             {
                 var row = new SessionListQueries(runtime).Projection(entry.SessionId);
@@ -134,11 +135,20 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
         {
             try
             {
-                Dictionary<string, string?> semantic;
+                Dictionary<string, string?> semantic; Dictionary<string, SessionOwner?> admittedOwners;
+                string? CurrentId(SessionOwner? owner)
+                {
+                    if (owner is null) return null;
+                    var current = runtime.Owner(owner.Id);
+                    if (ReferenceEquals(current, owner)) return owner.Id;
+                    if (current is null && runtime.Catalog.Get(owner.Id) is null) return null;
+                    throw new InvalidOperationException("Session changed while loading. Try again.");
+                }
                 try
                 {
                     var admitted = await Task.WhenAll(requestedSessions.Select(async id => (Requested: id, Owner: await runtime.GetOwnerAsync(SessionCatalog.Text(resolvedSemantic.GetValueOrDefault(id)?["sessionId"]) ?? id, attempt.Token))));
-                    semantic = admitted.ToDictionary(pair => pair.Requested, pair => pair.Owner?.Id, StringComparer.Ordinal);
+                    admittedOwners = admitted.ToDictionary(pair => pair.Requested, pair => pair.Owner, StringComparer.Ordinal);
+                    semantic = admitted.ToDictionary(pair => pair.Requested, pair => CurrentId(pair.Owner), StringComparer.Ordinal);
                 }
                 catch (OperationCanceledException) when (attempt.IsCancellationRequested) { return; }
                 catch (Exception error)
@@ -173,8 +183,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     await Send(new JsonObject { ["type"] = "session-deleted", ["sessionId"] = id }, requested);
                 foreach (var id in existing)
                 {
-                    await Send(new JsonObject { ["type"] = "session-state", ["sessionId"] = id, ["session"] = runtime.GetSession(id) }, requested);
-                    await Send(WebUiContract.Draft(runtime.Owner(id)!), requested);
+                    var owner = admittedOwners.Values.First(value => value?.Id == id)!;
+                    if (CurrentId(owner) is null) { await Send(new JsonObject { ["type"] = "session-deleted", ["sessionId"] = id }, requested); continue; }
+                    var state = owner.BuildDto(); var draft = WebUiContract.Draft(owner);
+                    if (CurrentId(owner) is null) { await Send(new JsonObject { ["type"] = "session-deleted", ["sessionId"] = id }, requested); continue; }
+                    await Send(new JsonObject { ["type"] = "session-state", ["sessionId"] = id, ["session"] = state }, requested);
+                    await Send(draft, requested);
                 }
                 // Queue buffered events and applied together under the initialization gate.
                 // No live pump can overtake the snapshots or the registration barrier.
@@ -189,6 +203,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             }
             catch (OperationCanceledException) when (attempt.IsCancellationRequested || lifetime.IsCancellationRequested) { }
             catch (WebSocketException) { lifetime.Cancel(); }
+            catch (Exception error)
+            {
+                await Send(new JsonObject { ["type"] = "error", ["code"] = "SESSION_STATE_UNAVAILABLE", ["message"] = error.Message, ["revision"] = requested }, requested);
+                lock (gate) if (revision != requested) return;
+                lifetime.Cancel();
+            }
             finally { lock (gate) { if (ReferenceEquals(currentInitialization, attempt)) currentInitialization = null; } attempt.Dispose(); }
         }
         async Task Send(JsonObject data, long? expectedRevision = null)

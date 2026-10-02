@@ -20,6 +20,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         }
         var owner = await runtime.GetOwnerAsync(context.SessionId) ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
+        if (IsDeleteCommand(message.Text)) return await HandleDeleteCommandAsync(context, message.Text, owner);
         if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
         {
             if (command == "/session clear")

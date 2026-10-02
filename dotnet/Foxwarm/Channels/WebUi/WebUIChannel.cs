@@ -66,11 +66,11 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         RegisterListRoutes(app);
         RegisterPresentationRoutes(app);
         RegisterRelationRoutes(app);
+        RegisterDeleteRoute(app);
         RegisterHistoryRoutes(app);
         app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
         {
             var canonical = CatalogRoute(request);
-            if (canonical is null) return Results.NotFound(new { error = "Session not found" });
             if (!sessions.Accepting) return Results.StatusCode(503);
             JsonObject? input;
             try { input = await JsonNode.ParseAsync(request.Body) as JsonObject; }
@@ -90,8 +90,16 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                 return Results.BadRequest(new { error = "Invalid clientMessageId" });
             try
             {
-                if (!MessageRouter.IsPresentationCommand(text) && await FindRouteAsync(request, id) is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                if (MessageRouter.IsPresentationCommand(text))
+                {
+                    if (canonical is null) return Results.NotFound(new { error = "Session not found" });
+                }
+                else
+                {
+                    var owner = await FindRouteAsync(request, id);
+                    if (owner is null) return Results.NotFound(new { error = "Session not found" });
+                    canonical = owner.Id;
+                }
                 var result = await router.HandleMessageAsync(new ChannelContext(canonical, "webui"), new ChannelMessage(text, clientId));
                 return Results.Json(result.Value, statusCode: result.Status);
             }

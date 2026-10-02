@@ -14,6 +14,17 @@ public sealed partial class SessionSaveLane
     private readonly ISessionAuthorityStore store;
     private readonly object laneGate = new();
     private Task tail = Task.CompletedTask;
+    private bool retired;
+    internal Task RetireAsync(Action closeStore)
+    {
+        var launch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously); Task current;
+        lock (laneGate)
+        {
+            if (retired) return tail; retired = true;
+            current = RunAfterAsync(launch.Task, tail, () => { closeStore(); entry.Retired = true; return Task.CompletedTask; }); tail = current;
+        }
+        launch.TrySetResult(true); return current;
+    }
 
     internal SessionSaveLane(SessionEntry entry, ISessionAuthorityStore store)
     {
@@ -178,6 +189,7 @@ public sealed partial class SessionSaveLane
         Task current;
         lock (laneGate)
         {
+            if (retired) return Task.FromException(new InvalidOperationException("Session persistence lane has retired."));
             var previous = tail;
             current = RunAfterAsync(launch.Task, previous, operation);
             tail = current;

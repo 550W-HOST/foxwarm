@@ -100,6 +100,7 @@ internal sealed partial class SessionCompactor
     public async Task<CompactAdmission> StartManualAsync(string? guidance = null, double? keepPercent = null)
     {
         if (hosted.Entry.HistoryMutation) throw new InvalidOperationException("Session history change is in progress.");
+        using var admission = hosted.Entry.AdmitMutation();
         var snapshot = hosted.Entry.Snapshot(); var catalog = models.Capture();
         var background = SupportsBackground(snapshot, catalog);
         lock (gate) { if (active is not null) return new(true, false, background, false); }

@@ -8,6 +8,8 @@ internal sealed partial class SessionManager
     private sealed class IdentitySlot(bool creating)
     {
         internal readonly bool Creating = creating;
+        internal bool CatalogCreated;
+        internal bool Retired, Retiring;
         internal readonly TaskCompletionSource<SessionOwner> Owner = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -20,7 +22,7 @@ internal sealed partial class SessionManager
     internal Func<string, CancellationToken, Task>? BeforeAdmissionRead { get; set; }
     internal Action<string>? AdmissionReadObserved { get; set; }
 
-    internal async Task<SessionOwner?> GetExistingAsync(string requestedId, CancellationToken cancellationToken = default)
+    internal async Task<SessionOwner?> GetExistingAsync(string requestedId, CancellationToken cancellationToken = default, bool forDeletion = false)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = semanticCaller.Value ?? default;
         IdentitySlot? slot;
@@ -29,7 +31,11 @@ internal sealed partial class SessionManager
             if (!accepting) throw new InvalidOperationException("Host is shutting down.");
             identities.TryGetValue(requestedId, out slot);
         }
-        if (slot is not null) return await slot.Owner.Task.WaitAsync(cancellationToken);
+        if (slot is not null)
+        {
+            if (slot.Retired || slot.Retiring) throw new SessionDeletionException("Session authority is retired pending deletion cleanup.", "SESSION_STATE_UNAVAILABLE");
+            return await slot.Owner.Task.WaitAsync(cancellationToken);
+        }
         // Main identity resolution may read SQLite. It never runs under the owner registry gate.
         var canonical = SessionCatalog.Text(Catalog.Resolve(requestedId)["sessionId"]);
         string id; bool start = false;
@@ -41,6 +47,7 @@ internal sealed partial class SessionManager
             {
                 if (canonical is null) return null;
                 id = canonical;
+                if (deletionClaims.ContainsKey(id) && !forDeletion) throw new SessionDeletionException("Session is being deleted.", "SESSION_DELETE_IN_PROGRESS");
                 if (!identities.TryGetValue(id, out slot)) { slot = new(false); identities.Add(id, slot); start = true; }
             }
         }
@@ -70,8 +77,9 @@ internal sealed partial class SessionManager
             if (snapshot.Busy || snapshot.Stopping) throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
             token.ThrowIfCancellationRequested();
             var owner = MakeSession(id, agent, store); owner.Registry.Add(id, snapshot);
+            BindMutations(owner);
             PublishOwner(owner, slot);
-            if (servicesReady) WaitTransition(owner.Id);
+            if (servicesReady && !IsDeletionClaimed(owner.Id)) WaitTransition(owner.Id);
         }
         catch (Exception error) { FailIdentity(id, slot, error); }
         finally { slot.Finished.TrySetResult(); }
@@ -154,6 +162,7 @@ internal sealed partial class SessionManager
         IdentitySlot slot;
         lock (lifecycle)
         {
+            if (deletionClaims.ContainsKey(id)) throw new SessionDeletionException("Session ID is claimed for deletion.", "SESSION_DELETE_IN_PROGRESS");
             if (sessions.ContainsKey(id) || identities.ContainsKey(id))
                 throw new InvalidDataException($"Session ID '{id}' is already reserved.");
             slot = new(true); identities.Add(id, slot);
@@ -183,7 +192,8 @@ internal sealed partial class SessionManager
         lock (lifecycle)
         {
             accepting = false;
-            pending = identities.Values.Select(slot => slot.Finished.Task).Concat(creations.Select(value => value.Task)).ToArray();
+            pending = identities.Values.Select(slot => slot.Finished.Task).Concat(creations.Select(value => value.Task))
+                .Concat(deletionOperations.Select(operation => operation.Finished.Task)).ToArray();
         }
         admissionStop.Cancel();
         await Task.WhenAll(pending);

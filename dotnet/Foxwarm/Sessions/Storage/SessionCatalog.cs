@@ -145,13 +145,14 @@ internal sealed partial class SessionCatalog : IDisposable
         }
         NormalizeParents(db!, references);
     }
-    internal void PublishAuthority(JsonObject authority)
+    internal void PublishAuthority(JsonObject authority, bool allowInsert = false)
     {
         var id = Text(authority["id"])!;
         BeforeAuthorityProjection?.Invoke(id);
         lock (gate)
         {
             if (Get(id) is { } main) OverlayMain(authority, main);
+            else if (!allowInsert) throw new InvalidOperationException("Session catalog membership is no longer current.");
             UpsertLocked([Project(authority)]);
         }
         Changed?.Invoke();

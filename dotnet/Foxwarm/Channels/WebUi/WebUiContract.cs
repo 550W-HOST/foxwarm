@@ -107,6 +107,7 @@ internal static class WebUiContract
     public static JsonObject Event(SessionRuntimeEvent entry, SessionRuntime runtime) => entry.Kind switch
     {
         SessionEventKind.MessageCommitted or SessionEventKind.CommandReply => new JsonObject { ["type"] = "message", ["sessionId"] = entry.SessionId, ["message"] = entry.Data?.DeepClone() },
+        SessionEventKind.Deleted => new JsonObject { ["type"] = "session-deleted", ["sessionId"] = entry.SessionId },
         SessionEventKind.StateChanged => new JsonObject { ["type"] = "session-state", ["sessionId"] = entry.SessionId, ["session"] = runtime.GetSession(entry.SessionId) },
         SessionEventKind.ModelStream => new JsonObject { ["type"] = "session-event", ["sessionId"] = entry.SessionId, ["event"] = entry.Data?.DeepClone() },
         SessionEventKind.DraftChanged => Draft(runtime.Owner(entry.SessionId)!),

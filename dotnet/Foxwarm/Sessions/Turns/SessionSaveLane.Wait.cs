@@ -17,9 +17,11 @@ public sealed partial class SessionSaveLane
     internal Task<bool> AdmitAsync(QueueItem item, SaveKind kind) => AdmitWithReceiptAsync(item, null, kind);
     private async Task<bool> AdmitWithReceiptAsync(QueueItem item, string? receipt, SaveKind kind = SaveKind.Strict)
     {
+        using var accepted = entry.AdmitMutation();
         var admitted = false;
         await EnqueueOperationAsync(async () =>
         {
+            using var admission = entry.AdmitMutation();
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();
@@ -58,7 +60,10 @@ public sealed partial class SessionSaveLane
         return admitted;
     }
 
-    internal Task<string?> StartWaitAsync(JsonObject declaration) => MutateWaitAsync((meta, queue, stopping) =>
+    internal async Task<string?> StartWaitAsync(JsonObject declaration)
+    {
+        using var admission = entry.AdmitMutation();
+        return await MutateWaitAsync((meta, queue, stopping) =>
     {
         if (stopping) return null;
         if (SessionWait.Current(meta)?["waitAll"]?["deferredQueue"] is JsonArray { Count: > 0 })
@@ -70,6 +75,7 @@ public sealed partial class SessionSaveLane
         foreach (var item in existing) queue.AddRange(SessionWait.Apply(meta, item));
         return SessionWait.Text(wait["id"]);
     });
+    }
 
     internal Task<string?> ClearWaitAsync(string? expectedId = null, bool flushDeferred = true) => MutateWaitAsync((meta, queue, _) =>
     {

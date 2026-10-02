@@ -117,6 +117,47 @@ public sealed class WebUiRealtimeRevisionTests
         Assert.DoesNotContain(socket.Frames, frame => frame["type"]?.GetValue<string>() == "session-deleted"); Assert.Equal("exact", manager.Catalog.Resolve("known")["kind"]!.GetValue<string>()); Assert.Empty(manager.Owners());
     }
 
+    [Theory]
+    [InlineData("deleted")]
+    [InlineData("retired")]
+    [InlineData("replaced")]
+    public async Task Actual_delete_during_a_second_cold_admission_does_not_mix_a_retired_or_replaced_owner(string outcome)
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); foreach (var id in new[] { "target", "other" }) await SessionCatalogMigrationTests.Authority(data, id); catalog.Upsert([SessionCatalogTests.Row("target", 0), SessionCatalogTests.Row("other", 0)]); }
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options)); await manager.LoadAsync(); var reached = Signal(); var release = Signal();
+        manager.BeforeAdmissionRead = async (id, token) => { if (id == "other") { reached.TrySetResult(); await release.Task.WaitAsync(token); } };
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10)); using var socket = new ProbeSocket(); var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(socket, stopped.Token);
+        try
+        {
+            socket.SetSessionUnion(1, ["target", "other"]); await reached.Task.WaitAsync(stopped.Token);
+            await Until(() => manager.Find("target") is not null, stopped.Token);
+            if (outcome == "retired")
+            {
+                var faults = Path.Combine(data, "state", "experiment-faults"); Directory.CreateDirectory(faults);
+                await File.WriteAllTextAsync(Path.Combine(faults, SessionIdentity.ExecDirectorySegment("target") + ".delete-json-unlink"), "owned unlink fault");
+                await Assert.ThrowsAsync<SessionDeletionException>(() => manager.DeleteAsync("target"));
+            }
+            else { await manager.DeleteAsync("target"); if (outcome == "replaced") await manager.CreateNamedAsync("main", "target", null, null); }
+            release.TrySetResult();
+            if (outcome == "deleted")
+            {
+                await Until(() => socket.Frames.Any(frame => frame["type"]?.GetValue<string>() == "subscriptions-applied"), stopped.Token);
+                Assert.Contains(socket.Frames, frame => frame["type"]?.GetValue<string>() == "session-deleted" && frame["sessionId"]?.GetValue<string>() == "target");
+                Assert.Contains(socket.Frames, frame => frame["type"]?.GetValue<string>() == "session-state" && frame["sessionId"]?.GetValue<string>() == "other");
+            }
+            else
+            {
+                await running.WaitAsync(stopped.Token);
+                Assert.Contains(socket.Frames, frame => frame["type"]?.GetValue<string>() == "error" && frame["code"]?.GetValue<string>() == "SESSION_STATE_UNAVAILABLE");
+                Assert.DoesNotContain(socket.Frames, frame => frame["type"]?.GetValue<string>() is "session-deleted" or "subscriptions-applied");
+            }
+            Assert.DoesNotContain(socket.Frames, frame => frame["type"]?.GetValue<string>() == "session-state" && frame["sessionId"]?.GetValue<string>() == "target");
+        }
+        finally { release.TrySetResult(); stopped.Cancel(); await running; }
+    }
+
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static async Task Until(Func<bool> condition, CancellationToken token)
     {
@@ -133,6 +174,9 @@ public sealed class WebUiRealtimeRevisionTests
             ["sessionIds"] = id is null ? new JsonArray() : new JsonArray(id),
             ["sessionListIds"] = new JsonArray((list ?? (id is null ? [] : [id])).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray())
         }.ToJsonString()));
+        public void SetSessionUnion(long revision, string[] ids) => incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(new JsonObject
+        { ["type"] = "set-subscriptions", ["revision"] = revision, ["sessionListActive"] = false,
+            ["sessionIds"] = new JsonArray(ids.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()), ["sessionListIds"] = new JsonArray() }.ToJsonString()));
         public override WebSocketCloseStatus? CloseStatus => state == WebSocketState.Closed ? WebSocketCloseStatus.NormalClosure : null;
         public override string? CloseStatusDescription => null;
         public override WebSocketState State => state;

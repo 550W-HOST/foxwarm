@@ -22,7 +22,11 @@ internal sealed partial class SessionManager
         raw["queueLength"] = snapshot.Queue.Count(SessionCompactor.Ordinary);
         return raw;
     }
-    private void PublishCatalogSnapshot(SessionSnapshot snapshot) => Catalog.PublishAuthority(SnapshotProjection(snapshot));
+    private void PublishCatalogSnapshot(SessionSnapshot snapshot, IdentitySlot slot)
+    {
+        lock (lifecycle) if (!identities.TryGetValue(snapshot.Id, out var current) || current != slot || slot.Retired) throw new InvalidOperationException("Session authority lifetime is no longer current.");
+        Catalog.PublishAuthority(SnapshotProjection(snapshot), slot.Creating && !slot.CatalogCreated); slot.CatalogCreated = true;
+    }
     private static SessionMetadata Metadata(JsonObject row)
     {
         static long N(JsonNode? node) => (long)(SessionCatalog.Number(node) ?? 0);
@@ -47,6 +51,7 @@ internal sealed partial class SessionManager
     }
     private void CaptureLocalProjection(SessionOwner owner)
     {
+        if (!IsCurrentOwner(owner)) return;
         var meta = owner.Metadata();
         var context = owner.Entry.WithState(state => (Node: SessionWait.Text(state.AuthorityEnvelope["currentNode"]), Cwd: SessionWait.Text(state.AuthorityEnvelope["cwd"])));
         var active = meta.Busy || meta.Stopping || meta.QueueLength > 0 || meta.Wait is not null || owner.ToolActive || owner.Compacting;

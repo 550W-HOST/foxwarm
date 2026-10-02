@@ -19,6 +19,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly AgentMemory memory;
     private readonly Skills skills;
     private readonly LocalExecManager executor;
+    private readonly SessionDeletionChannels deletionChannels;
     private readonly HttpClient http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private readonly Foxwarm.McpClient mcp;
     private readonly ModelRouting modelRouting = new();
@@ -38,8 +39,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             || this.root.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
         Directory.CreateDirectory(this.root);
+        deletionChannels = new(this.root);
         Catalog = new SessionCatalog(this.root);
         Catalog.Changed += () => TopologyChanged?.Invoke();
+        Catalog.BeforePresentationMutation = BeginCatalogMutation;
         Catalog.BeforeAuthorityProjection = id =>
         {
             var marker = Path.Combine(this.root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".catalog-projection");
@@ -110,14 +113,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         owner.Changed += value =>
         {
+            if (!IsCurrentOwner(owner)) return;
             if (value.Kind is SessionEventKind.StateChanged or SessionEventKind.MessageCommitted) CaptureLocalProjection(owner);
-            if (servicesReady && value.Kind == SessionEventKind.StateChanged) WaitTransition(owner.Id);
+            if (servicesReady && !IsDeletionClaimed(owner.Id) && value.Kind == SessionEventKind.StateChanged) WaitTransition(owner.Id);
             Changed?.Invoke(value);
         };
         CaptureLocalProjection(owner);
         TopologyChanged?.Invoke();
     }
-    private void WaitTransition(string id) { waitTimeouts.Transition(id); waitLiveness.Transition(id); }
+    private void WaitTransition(string id) { if (!IsDeletionClaimed(id)) { waitTimeouts.Transition(id); waitLiveness.Transition(id); } }
+    private void BindMutations(SessionOwner owner) => owner.Entry.MutationAdmission = () => BeginOwnerMutation(owner);
 
     public string DataRoot => root;
     public bool Accepting => accepting;
@@ -125,9 +130,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public SessionOwner? Find(string id)
     {
-        if (sessions.TryGetValue(id, out var exact)) return exact;
+        if (sessions.TryGetValue(id, out var exact)) return exact.Entry.Retired || IsRetiring(id) ? null : exact;
         var canonical = SessionCatalog.Text(Catalog.Resolve(id)["sessionId"]);
-        return canonical is not null && sessions.TryGetValue(canonical, out var value) ? value : null;
+        return canonical is not null && sessions.TryGetValue(canonical, out var value) && !value.Entry.Retired && !IsRetiring(canonical) ? value : null;
     }
 
     public async Task<SessionOwner> CreateAsync()
@@ -141,7 +146,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var store = MakeStore(id, "main");
         if (await store.LoadAsync(id) is not null) throw new InvalidOperationException("Session ID collision.");
         var hosted = MakeSession(id, "main", store);
-        var entry = hosted.Registry.Add(id);
+        var entry = hosted.Registry.Add(id); BindMutations(hosted);
         entry.WithState(state => { state.AuthorityEnvelope["agent"] = "main"; state.Meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); });
         var branch = store.Archive.EnsureBranch();
         try { await entry.SaveLane.SaveStrictAsync(); } // First authority JSON exists before publication/acknowledgement.
@@ -165,7 +170,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
     {
         var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = CatalogMetadata, MainMetadata = OverlayMainMetadata };
-        hosted.Archive = store.Archive;
+        hosted.Archive = store.Archive; hosted.AuthorityStore = store;
         hosted.Executor = executor;
         var requests = new ModelRequestOwner(http, clientOptions, modelRouting, websockets: websockets);
         var chat = new SessionChatService(requests, clientOptions, hosted, models, memory, (sessionId, update) =>
@@ -181,7 +186,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
-        registry.TriggerOverride = _ => Accepting ? hosted.StartProcessing() : Task.CompletedTask;
+        registry.TriggerOverride = _ => Accepting && !IsDeletionClaimed(id) && !hosted.Entry.Retired ? hosted.StartProcessing() : Task.CompletedTask;
         return hosted;
     }
 
@@ -201,7 +206,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await Task.WhenAll(compactStops.Select(task => (Task)task).Concat(stops));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
         foreach (var session in current)
-            await session.Entry.SaveLane.SaveStrictAsync();
+            if (!session.Entry.Retired) await session.Entry.SaveLane.SaveStrictAsync();
     }
 
     public void BeginShutdown()

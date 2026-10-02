@@ -51,6 +51,7 @@ internal sealed partial class SessionCatalog
             cursor = TreeParent(Get(canonical)!);
         }
     }
+    internal Func<JsonObject[], IDisposable>? BeforePresentationMutation { get; set; }
     private PresentationChange CommitPresentation(Func<(JsonObject Result, JsonObject[] Rows)> prepare)
     {
         PresentationChange result;
@@ -59,7 +60,7 @@ internal sealed partial class SessionCatalog
             EnsureInitialized(); Execute(db!, "BEGIN IMMEDIATE");
             try
             {
-                var operation = prepare(); WriteRowsLocked(operation.Rows);
+                var operation = prepare(); using var admission = BeforePresentationMutation?.Invoke(operation.Rows); WriteRowsLocked(operation.Rows);
                 Execute(db!, "COMMIT"); if (operation.Rows.Length > 0) revision++;
                 result = new(operation.Result, operation.Rows.Select(row => Text(row["id"])!).ToArray());
             }

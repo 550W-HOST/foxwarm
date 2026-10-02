@@ -37,6 +37,8 @@ internal static class AgentToolDefinitions
 
     public static IReadOnlyList<JsonObject> Definitions() =>
     [
+        Tool("delete_session", "Delete another session's live record, retaining its archived history. Surviving children are detached. A busy target receives a stop request; retry deletion after it becomes idle. The current session cannot delete itself.",
+            Parameters(new JsonObject { ["sessionId"] = String("Session to delete, identified by its ID or an unambiguous alias.") }, "sessionId")),
         Tool("create_agent",
             "Create an agent with its own workspace and memory directory. A main session is also created by default. Use create_session instead when you only need another conversation under an existing agent.",
             Parameters(new JsonObject

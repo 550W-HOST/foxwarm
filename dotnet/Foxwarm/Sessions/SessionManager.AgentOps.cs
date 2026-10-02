@@ -72,6 +72,7 @@ internal sealed partial class SessionManager
         if (!agents.Exists(targetAgent)) throw new InvalidDataException("Target Agent does not exist.");
         if (fork && targetAgent != parent.Agent) throw new InvalidDataException("create_child_session cannot fork across Agents.");
         using var operation = TrackCreation();
+        using var parentMutation = BeginOwnerMutation(parent);
         var allocationBase = targetAgent != parent.Agent ? SessionIdentity.Build(targetAgent, suffix)
             : parent.Id.Split('/').Last() == "main" ? SessionIdentity.Build(targetAgent, suffix) : parent.Id + "_" + suffix;
         var gate = CreationKey(allocationBase);
@@ -182,6 +183,7 @@ internal sealed partial class SessionManager
 
     public async Task<string> RefreshSnapshotAsync(SessionOwner session)
     {
+        using var admission = BeginOwnerMutation(session);
         var snapshot = session.Entry.Snapshot();
         var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "")
@@ -209,7 +211,7 @@ internal sealed partial class SessionManager
         var snapshotText = await memory.BuildAsync(agentName, id, concreteModel.Key, selection: selectedFiles);
         var store = MakeStore(id, agentName);
         var hosted = MakeSession(id, agentName, store);
-        var entry = hosted.Registry.Add(id);
+        var entry = hosted.Registry.Add(id); BindMutations(hosted);
         entry.WithState(state =>
         {
             state.Meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -307,6 +309,7 @@ internal sealed partial class SessionManager
 
     private PersistentSessionAuthorityStore MakeStore(string id, string agent)
     {
+        IdentitySlot slot; lock (lifecycle) slot = identities.GetValueOrDefault(id) ?? throw new InvalidOperationException("Session identity was not claimed.");
         var marker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".snapshot-before-rename");
         var legacyCreateMarker = Path.Combine(root, "state", "experiment-faults", "legacy-create-after-rename");
         return new PersistentSessionAuthorityStore(root, id, agent, stage =>
@@ -376,7 +379,10 @@ internal sealed partial class SessionManager
             await File.WriteAllTextAsync(hold + ".reached", "reached", cancellationToken); var deadline = DateTime.UtcNow.AddSeconds(15);
             while (File.Exists(hold) && DateTime.UtcNow < deadline) await Task.Delay(2, cancellationToken);
             if (File.Exists(hold)) throw new TimeoutException("Experimental canonical publication barrier expired.");
-        }, publishProjection: PublishCatalogSnapshot, mainFields: () => Catalog.Get(id));
+        }, publishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot), mainFields: () => Catalog.Get(id), checkLifetime: () =>
+        {
+            lock (lifecycle) if (!identities.TryGetValue(id, out var current) || current != slot || slot.Retired) throw new InvalidOperationException("Session authority lifetime has retired.");
+        });
     }
 
     private static string Escape(string text) => text.Replace("&", "&amp;", StringComparison.Ordinal)

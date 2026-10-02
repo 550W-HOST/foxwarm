@@ -3,7 +3,7 @@ using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
 
-internal enum SessionEventKind { MessageCommitted, StateChanged, ModelStream, RequestProgress, DraftChanged, ProcessingError, CommandReply }
+internal enum SessionEventKind { MessageCommitted, StateChanged, ModelStream, RequestProgress, DraftChanged, ProcessingError, CommandReply, Deleted }
 internal sealed record SessionRuntimeEvent(string SessionId, SessionEventKind Kind, JsonNode? Data);
 internal sealed record SessionMetadata(string Id, string Agent, string? ParentSessionId, string? DisplayName,
     bool Busy, bool Stopping, long? BusyStartedAt, int QueueLength, int MessageCount, long NextMessageSeq,
@@ -30,6 +30,7 @@ internal sealed class SessionRuntime(SessionManager manager)
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
     internal PresentationChange ChangePresentation(Func<SessionCatalog, PresentationChange> action) => manager.ChangePresentation(action);
     internal void ReplyToCommand(string id, string text) => manager.ReplyToCommand(id, text);
+    internal Task<JsonObject> DeleteAsync(string id, bool recursive = false, SessionOwner? source = null) => manager.DeleteAsync(id, recursive, source);
     public Task UpdateDisplayNameAsync(string id, string? name) => manager.RenameAsync(id, name);
     public async Task<string> RefreshSnapshotAsync(string id) => await manager.RefreshSnapshotAsync(await manager.RequiredAsync(id));
     public async Task<StopResult> StopAsync(string id)

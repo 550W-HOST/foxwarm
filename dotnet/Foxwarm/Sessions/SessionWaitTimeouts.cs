@@ -13,6 +13,7 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
     private readonly HashSet<Task> tasks = [];
     internal void Transition(string sessionId)
     {
+        if (!manager.CanRunCallbacks(sessionId)) return;
         var wait = manager.Find(sessionId)?.WaitSnapshot();
         var id = SessionWait.Text(wait?["id"]);
         var seconds = SessionWait.Number(wait?["timeoutSeconds"]);
@@ -59,6 +60,12 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
             _ = task.ContinueWith(completed => { lock (gate) tasks.Remove(completed); }, TaskScheduler.Default);
             jobs[sessionId] = (id, stop, task); ready.TrySetResult();
         }
+    }
+    internal async Task RetireAsync(string id)
+    {
+        (string WaitId, CancellationTokenSource Stop, Task Task)? job = null;
+        lock (gate) if (jobs.TryRemove(id, out var current)) job = current;
+        if (job is { } actual) { try { actual.Stop.Cancel(); } catch (ObjectDisposedException) { } await actual.Task; }
     }
     internal void Stop() { lock (gate) lifetime.Cancel(); }
     internal async Task DrainAsync()

@@ -21,6 +21,21 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     private CancellationTokenSource? reconcileStop;
     private Task? reconcileTask;
     private volatile bool closing;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> completionGates = new(StringComparer.Ordinal);
+    internal async Task RetireSessionAsync(string id)
+    {
+        var gate = completionGates.GetOrAdd(id, _ => new(1, 1)); await gate.WaitAsync();
+        try
+        {
+            foreach (var record in pending.Values.Where(record => record.SessionId == id))
+            {
+                File.Delete(Path.Combine(record.Directory, "tracking.json"));
+                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(record.Directory);
+                pending.TryRemove(Key(record.SessionId, record.Id), out _);
+            }
+        }
+        finally { gate.Release(); }
+    }
 
     private sealed record ExecRecord(string SessionId, string Id, string Command, string Cwd, int Pid, long StartedAt,
         string Directory, bool Notify, string? ProcessStartTicks = null);
@@ -363,8 +378,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 if (closing) continue;
                 foreach (var record in pending.Values.Where(value => value.Notify))
                 {
+                    var completion = completionGates.GetOrAdd(record.SessionId, _ => new(1, 1));
+                    await completion.WaitAsync(ct);
                     try
                     {
+                        if (!pending.TryGetValue(Key(record.SessionId, record.Id), out var current) || !ReferenceEquals(current, record)) continue;
                         if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt > TimeSpan.FromHours(24).TotalMilliseconds)
                         {
                             if (File.Exists(Path.Combine(record.Directory, "tracking.json"))) File.Delete(Path.Combine(record.Directory, "tracking.json"));
@@ -381,6 +399,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                         pending.TryRemove(Key(record.SessionId, record.Id), out _);
                     }
                     catch (Exception) { /* Keep tracking and retry after transient authority/host errors. */ }
+                    finally { completion.Release(); }
                 }
             }
         }

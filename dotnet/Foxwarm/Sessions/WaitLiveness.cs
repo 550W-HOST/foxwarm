@@ -17,6 +17,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     private readonly Queue<string> order = new();
     private readonly Dictionary<string, TaskCompletionSource> active = new(StringComparer.Ordinal);
     private readonly HashSet<Task> tasks = [];
+    private readonly Dictionary<string, HashSet<Task>> sessionTasks = new(StringComparer.Ordinal);
 
     private static string[] Sources(JsonObject wait)
     {
@@ -58,11 +59,11 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     {
         if (scheduled.Remove(id, out var prior)) prior.Cancel();
         var wait = manager.Find(id)?.WaitSnapshot();
-        if (!Candidate(wait)) return;
+        if (!manager.CanRunCallbacks(id) || !Candidate(wait)) return;
         var expected = SessionWait.Text(wait!["id"])!;
         var stop = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         scheduled[id] = stop;
-        Track(async () =>
+        Track(id, async () =>
         {
             try
             {
@@ -128,7 +129,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != wake.WaitId) continue;
             var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             active.Add(id, settled);
-            Track(async () =>
+            Track(id, async () =>
             {
                 try
                 {
@@ -157,13 +158,27 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         }
     }
     // Schedule asynchronous work without inheriting the coordination lock; record it for shutdown drain.
-    private void Track(Func<Task> work)
+    private void Track(string id, Func<Task> work)
     {
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var task = Task.Run(async () => { await ready.Task; await work(); });
         tasks.Add(task);
-        _ = task.ContinueWith(completed => { lock (gate) tasks.Remove(completed); }, TaskScheduler.Default);
+        if (!sessionTasks.TryGetValue(id, out var owned)) sessionTasks[id] = owned = []; owned.Add(task);
+        _ = task.ContinueWith(completed => { lock (gate) { tasks.Remove(completed); if (sessionTasks.TryGetValue(id, out var set)) { set.Remove(completed); if (set.Count == 0) sessionTasks.Remove(id); } } }, TaskScheduler.Default);
         ready.TrySetResult();
+    }
+    internal async Task RetireAsync(string id)
+    {
+        CancellationTokenSource? stop; Task[] remaining;
+        lock (gate)
+        {
+            scheduled.Remove(id, out stop); pending.Remove(id);
+            if (active.Remove(id, out var settled)) settled.TrySetResult();
+            if (dependencies.Remove(id, out var old)) foreach (var dependency in old) if (reverse.TryGetValue(dependency, out var waiters)) { waiters.Remove(id); if (waiters.Count == 0) reverse.Remove(dependency); }
+            remaining = sessionTasks.GetValueOrDefault(id)?.ToArray() ?? [];
+        }
+        try { stop?.Cancel(); } catch (ObjectDisposedException) { }
+        await Task.WhenAll(remaining);
     }
     internal void Stop() { lock (gate) lifetime.Cancel(); }
     internal async Task DrainAsync()

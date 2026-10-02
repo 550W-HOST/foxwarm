@@ -17,6 +17,10 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     private int canonicalCommitCount;
     private readonly Action<SessionSnapshot>? publishProjection;
     private readonly Func<JsonObject?>? mainFields;
+    private readonly Action? checkLifetime;
+    private volatile bool retired;
+    internal void Retire() => retired = true;
+    private void CheckWrite() { if (retired) throw new InvalidOperationException("Session authority owner has retired."); checkLifetime?.Invoke(); }
 
     public PersistentSessionAuthorityStore(
         string root,
@@ -24,7 +28,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         string agent = "main",
         Action<AtomicJsonWriteStage>? authorityStageHook = null,
         Func<int, CancellationToken, Task>? canonicalCommitBarrier = null,
-        Action<SessionSnapshot>? publishProjection = null, Func<JsonObject?>? mainFields = null)
+        Action<SessionSnapshot>? publishProjection = null, Func<JsonObject?>? mainFields = null, Action? checkLifetime = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -32,7 +36,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         this.sessionId = sessionId;
         this.agent = agent;
         this.canonicalCommitBarrier = canonicalCommitBarrier;
-        this.publishProjection = publishProjection; this.mainFields = mainFields;
+        this.publishProjection = publishProjection; this.mainFields = mainFields; this.checkLifetime = checkLifetime;
         authorityFile = new LinuxAtomicJsonFile(root, $"state/sessions/{sessionId}.json", authorityStageHook);
         archive = new SqliteArchiveMessageStore(Path.Combine(root, "state", "archive-store.sqlite"), sessionId);
         archive.Initialize();
@@ -140,6 +144,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
 
     private void ValidateBoundSnapshot(SessionSnapshot snapshot)
     {
+        CheckWrite();
         if (snapshot.Id != sessionId)
             throw new InvalidOperationException($"Persistent store is bound to Session '{sessionId}', not '{snapshot.Id}'.");
     }

@@ -9,6 +9,7 @@ public sealed partial class SessionSaveLane
     internal static bool IsSettingsCommit => SettingsCommitScope.Value;
     internal Task CommitSettingsAsync(JsonObject patch, HostModels models) => EnqueueOperationAsync(async () =>
     {
+        using var admission = entry.AdmitMutation();
         var prepared = entry.WithState(state =>
         {
             var snapshot = state.Snapshot(); var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();

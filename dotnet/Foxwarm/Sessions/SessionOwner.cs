@@ -26,6 +26,14 @@ internal sealed partial class SessionOwner
     public SessionCompactor Compactor { get; set; } = null!;
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public LocalExecManager Executor { get; set; } = null!;
+    internal PersistentSessionAuthorityStore AuthorityStore { get; set; } = null!;
+    internal bool Processing => !running.IsEmpty;
+    internal void NotifyDeleted()
+    {
+        var value = new SessionRuntimeEvent(Id, SessionEventKind.Deleted, null);
+        foreach (var channel in listeners.Values) { channel.Writer.TryWrite(value); channel.Writer.TryComplete(); }
+        listeners.Clear();
+    }
     public SessionEntry Entry => Registry.GetRequired(Id);
 
     public SessionOwner(string id, string agent, HostModels models)
@@ -79,6 +87,7 @@ internal sealed partial class SessionOwner
 
     public Task StartProcessing(bool retry = false)
     {
+        using var admission = Entry.AdmitMutation();
         var index = Interlocked.Increment(ref nextRun);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task ExecuteAsync()
@@ -147,6 +156,7 @@ internal sealed partial class SessionOwner
 
     public void Emit(SessionEventKind kind, JsonNode? data = null)
     {
+        if (Entry.Retired) return;
         var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone());
         Changed?.Invoke(value);
         foreach (var channel in listeners.Values) channel.Writer.TryWrite(value);

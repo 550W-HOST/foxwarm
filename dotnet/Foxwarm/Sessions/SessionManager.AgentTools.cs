@@ -19,6 +19,15 @@ internal sealed partial class SessionManager
             if (args is null) throw new InvalidDataException("Tool arguments must be an object.");
             switch (name)
             {
+                case "delete_session":
+                    {
+                        Keys(args, ["sessionId"], ["sessionId"]);
+                        if (!IsCurrentOwner(source)) throw new SessionDeletionException("Cannot delete a session without current session context.", "SESSION_DELETE_SOURCE_NOT_FOUND", 404);
+                        if (agents.MetadataSnapshot()[source.Agent] is JsonObject metadata && SessionCatalog.Flag(metadata["isolated"]))
+                            throw new SessionDeletionException("Isolated session cannot use delete_session tool.", "SESSION_DELETE_ISOLATED", 403);
+                        var result = await DeleteAsync(RequiredString(args, "sessionId"), source: source);
+                        return (Output(DeleteToolText(RequiredString(args, "sessionId"), result)), false);
+                    }
                 case "create_agent":
                     {
                         Keys(args, ["agentName", "createMainSession", "inherit"], ["agentName"]);
@@ -80,6 +89,11 @@ internal sealed partial class SessionManager
                     }
                 default: throw new InvalidDataException("Unsupported Agent tool.");
             }
+        }
+        catch (SessionDeletionException error)
+        {
+            var response = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
+            response["error"]!["details"] = error.Details.DeepClone(); return (response, false);
         }
         catch (CommittedSessionCreationException error)
         {
