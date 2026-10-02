@@ -32,7 +32,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - `checkAndCompactIfNeeded`, `processSessionCompactionRequest` — automatic/explicit orchestration.
 - `buildToolResponsePrunePlan`, `commitToolResponsePrunePlan` — pure dry-run and exact compatible-prefix commit for historical response-only pruning.
 - `compactToolMessages` — manual provider-free façade over the shared response-only pruning primitive.
-- `deleteMessages`, `clearSession` — destructive history operations with archive coordination.
+- `deleteMessages`, `clearSession` — destructive history operations with archive coordination. Clear retains or recovers the [block ID high-water mark](../threads/context-compaction-and-recall.md#d-context-block-id-high-water) before clearing active history, without reconstructing it from Archive.
 - `getArchivedMessages` — sequence-range archive query result.
 - `forceIndexSession`, `getUsageTotalTokens` — index and provider-usage helpers.
 

@@ -1610,6 +1610,22 @@ export async function readLocalArchiveBlockBatch(sessionId: string, afterId: num
   }));
 }
 
+export async function getEffectiveArchiveBlockMaxId(sessionId: string): Promise<number> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  let maxId = 0;
+  for (const entry of buildLineage(sessionId)) {
+    if (typeof entry.maxBlockId === 'number' && entry.maxBlockId <= 0) continue;
+    const capped = typeof entry.maxBlockId === 'number';
+    const row = getDb().prepare(`
+      SELECT MAX(id) AS max_id FROM archive_blocks WHERE session_id = ?
+      ${capped ? 'AND id <= ?' : ''}
+    `).get(...(capped ? [entry.sessionId, entry.maxBlockId!] : [entry.sessionId])) as { max_id: number | null };
+    maxId = Math.max(maxId, Number(row.max_id) || 0);
+  }
+  return maxId;
+}
+
 export async function readEffectiveArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<EffectiveArchiveBlockRecord[]> {
   initArchiveStoreSync();
   sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
