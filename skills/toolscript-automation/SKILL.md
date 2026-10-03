@@ -155,7 +155,7 @@ def main(args):
 
 Nested relative file paths and `exec.cwd` values resolve from the owner session's working directory. They do not resolve from the ToolScript file's directory. Pass explicit paths through `args` when the session working directory is not guaranteed.
 
-Nested calls execute normally and appear as ToolScript subcalls, but they are not appended as separate tool messages in the outer session history.
+Nested calls execute normally and appear as ToolScript activity in the UI and run diagnostics, but they are not appended as separate tool messages or included as diagnostic fields in the default execution response.
 
 ### `ask_agent(...)`
 
@@ -222,7 +222,7 @@ Each `run_script` or `continue_script` slice has a 30-second timeout budget unle
 
 - an in-progress tool or model call is not interrupted when the budget expires;
 - after that host call returns, the run pauses with `waitingReason: "timeout"`;
-- the returned `waitingFor` includes a new `continuationId` and `canContinue: true`;
+- the execution response includes `waitingReason: "timeout"` and a new `continuationId`;
 - `continue_script(...)` resumes from the saved snapshot rather than restarting the script.
 
 A long host call can therefore take longer than `timeoutSecs` before the timeout wait is reported.
@@ -237,23 +237,34 @@ Run management tools are discoverable rather than injected into the default tool
 
 Find them with `search_tools`, then invoke them through the outer `call_tool` tool. A run can be inspected or resumed only by its owner session.
 
-## Result fields and scopes
+## Execution results and diagnostics
 
-Important fields include `runId`, `mode`, `status`, `result`, `error`, `waitingReason`, `waitingFor`, `stdout`, `executedTools`, `subCalls`, `hostCallCount`, and `lastHostCall`.
+`run_script` and `continue_script` return:
 
-Their scopes differ:
+- `status` and `runId`;
+- `result` when the script completes, preserving false, zero, null, and empty values;
+- `stdout` only when that slice produced output;
+- `error` on failure, with the useful traceback and any partial stdout;
+- actionable waiting fields when paused.
 
-| Field | Scope |
+Agent-input waits return `waitingReason: "agent"`, `continuationId`, and `question`. Timeout waits return `waitingReason: "timeout"` and `continuationId`. Use `continue_script` for these waits.
+
+Managed-event waits return `waitingReason: "managed_event"` and `waitingFor` identifying the target session, supplied condition, and `autoResume`. Only background managed-event waits resume automatically; these are not `continue_script` waits. Use the managed-controller skill for this flow.
+
+The execution response does not include internal paths, owner/VM details, timestamps, or tool-activity diagnostics. Nested-call activity remains available in the UI, including after reloading history. Fields inside the script's own `result` are preserved.
+
+Use `get_toolscript_run` or `list_toolscript_runs` for full diagnostics:
+
+| Diagnostic field | Scope |
 | --- | --- |
-| persisted run `stdout` | cumulative across all slices |
-| `continue_script` response `stdout` | output produced by that continuation slice |
+| `stdout` | cumulative across all slices |
 | `executedTools` | cumulative tool names across the run |
 | `subCalls` | latest execution slice |
 | `hostCallCount` | latest execution slice |
 | `lastHostCall` | most recent host call |
 | `result` | explicit return value from a completed `main(args)` |
 
-Use `get_toolscript_run` when cumulative stdout is needed after one or more continuations.
+`continue_script` returns only newly produced stdout, omitting it when empty. Persisted records retain cumulative output and diagnostic context.
 
 Statuses are `completed`, `waiting`, `failed`, and `cancelled`.
 

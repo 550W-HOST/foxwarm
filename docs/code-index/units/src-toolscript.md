@@ -39,7 +39,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 | Monty runtime lifecycle | Lazy pool creation, checked-out session cleanup, and test-only restart simulation |
 | `advanceExecution` | Async complete, name lookup, host-call, OS rejection, agent-wait, managed-wait, and timeout-safe checkpoints |
 | `startRun` / `resumeRun` | Feed source into a checked-out worker or load a compatible snapshot into a fresh worker session |
-| tool handlers | Session ownership, mode, continuation, cancellation, and result shaping |
+| `projectExecutionResult` / tool handlers | Lean execution responses, presentation hook, and explicit diagnostic inspection |
 
 ## Behavior
 
@@ -55,11 +55,11 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - Run records live under the state data root and are accessible only from the owner session.
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
-- `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
+- `call_tool` subcalls publish live progress and remain in run diagnostics. `run_script` and `continue_script` expose only lean execution results; an in-process hook carries nested activity into model-invisible response metadata. See [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection). Nested calls do not append ordinary outer-session tool history.
 - In Session-worker placement, managed-session host functions and cleanup of persisted managed leases fail before importing/calling child managed-session state. ToolScript progress emission returns before any child `sessionManager.notifySessionEvent`; transient running/final/error progress may drop until committed publication, while persisted run/subcall state remains authoritative. Ordinary VM/model/ask-agent/timeout and nested already-closed tools remain available; a later fixed managed reverse service owns that deferred closure.
 - `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; it supplies the exact passed owner's prompt-cache key and raw effort so Worker placement never rehydrates or saves a second child-global Session merely to resolve request identity. Its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
-- `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
-- `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
+- `continue_script` returns stdout produced in that continuation slice, omitting the field when empty; persisted status retains cumulative stdout.
+- Diagnostic `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice. These are not fields of the default execution response.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.
 - Canonical image parts returned by a final result (for example the `parts` of a `request_model_without_context` result, whether the script returns the result object or an object carrying its `parts`) are promoted the same way, except that their bytes stay in the image Blob store and only the reference travels to the outer tool result. The promoted reference becomes the session-visible image under the tool-result image id convention, the textual result keeps a bounded placeholder in its place, and an unresolvable reference fails the tool result instead of leaving a dangling image. The rewrite is limited to the promoted image entries themselves: a `parts` list that contains no promoted image, and every other result field, stays byte-identical, while text that rode along on a promoted part remains visible next to the placeholder.
 - MCP image content returned through a nested unified `call_tool` is source-normalized into the same inline payload shape, then promoted through the outer ToolScript result and provider image serialization without copying base64 into textual output.

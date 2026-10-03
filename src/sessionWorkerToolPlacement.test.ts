@@ -49,6 +49,16 @@ test('worker direct, unified, and ToolScript node dispatch retain exact owner wi
     assert.match(String(await tool_call_tool({ source: 'node', name: 'read', args: { filePath } }, ctx)), /exact-owner/);
     const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="node", name="read", args={"filePath": args["path"]})', args: { path: filePath } }, ctx);
     assert.match(JSON.stringify(script.result), /exact-owner/);
+    const scriptMessage = await executeTools([{ id: 'worker-script', name: 'call_tool', args: {
+      toolId: 'builtin:run_script', args: {
+        code: 'def main(args):\n    value = call_tool("read", {"filePath": args["path"]})\n    return len(value)',
+        args: { path: filePath },
+      },
+    } }], { sessionId: session.id }, session, { currentSessionEffects: effects });
+    const scriptResponse = scriptMessage.parts[0].functionResponse!;
+    assert.equal(scriptResponse.response.status, 'completed');
+    assert.deepEqual(Object.keys(scriptResponse.response).sort(), ['result', 'runId', 'status']);
+    assert.deepEqual(scriptResponse.__meta?.toolScriptSubCalls?.map(call => call.name), ['read']);
     assert.match(String(await callTool('get_archived_messages', { sessionId: session.id }, ctx)), /No archived messages/);
     assert.match(String(await callTool('get_archived_blocks', { sessionId: session.id }, ctx)), /No archived blocks/);
     assert.deepEqual(await catalogBytes(), before);

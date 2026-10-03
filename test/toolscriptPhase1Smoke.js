@@ -4,7 +4,7 @@ const path = require('path');
 
 const sessionManager = require('../lib/sessionManager');
 const { executeTools } = require('../lib/llm');
-const { tool_run_script, tool_continue_script } = require('../lib/toolscript');
+const { tool_run_script, tool_continue_script, tool_get_toolscript_run } = require('../lib/toolscript');
 const { getAgentDir } = require('../lib/config');
 
 function makeId(prefix) {
@@ -71,7 +71,9 @@ async function main() {
   const completedResponse = toolMessage.parts[0].functionResponse.response;
   assert.equal(completedResponse.status, 'completed');
   assert.match(completedResponse.stdout, /^phase1-start\nShowing 3 of \d+ matching tools\.\n$/);
-  assert.deepEqual(completedResponse.executedTools, ['search_tools']);
+  const completedDiagnostics = await tool_get_toolscript_run({ runId: completedResponse.runId }, { sessionId, session });
+  assert.deepEqual(completedDiagnostics.executedTools, ['search_tools']);
+  assert.deepEqual(toolMessage.parts[0].functionResponse.__meta.toolScriptSubCalls.map(call => call.name), ['search_tools']);
 
   const persistedAfterCompleted = await sessionManager.getExistingSession(sessionId);
   const historyRoles = persistedAfterCompleted.history.map((m) => m.role);
@@ -101,7 +103,7 @@ async function main() {
     completed: {
       status: completedResponse.status,
       stdout: completedResponse.stdout,
-      executedTools: completedResponse.executedTools,
+      executedTools: completedDiagnostics.executedTools,
       result: completedResponse.result,
       persistedHistoryRoles: historyRoles,
     },

@@ -37,7 +37,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 
 `getOpenAIRequestApi()` returns null for other values; the current request branch then uses Anthropic-format handling. Custom provider types therefore need Anthropic-compatible behavior unless source routing is extended.
 
-- Successful native file calls store ordered path targets on each `FunctionResponse.__meta`, outside the tool response. Request-local history removes this display-only field before provider-neutral request journaling and serialization; ordinary model and ToolScript outputs remain unchanged. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+- Successful native file calls store ordered path targets on each `FunctionResponse.__meta`, outside the tool response. ToolScript execution stores nested activity there through an exact-target in-process hook; see [lean ToolScript execution results](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection). Request-local history removes this display-only field before provider-neutral request journaling and serialization. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Tool-response formatting
 

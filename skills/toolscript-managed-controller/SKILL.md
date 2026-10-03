@@ -92,6 +92,7 @@ When this happens in a background ToolScript run:
 
 - the run enters `status="waiting"`
 - `waitingReason="managed_event"`
+- `waitingFor` identifies the awaited session/condition and has `autoResume=true`, without exposing lease/controller IDs in the execution response
 - the system can resume that controller run when the managed inbox receives new work
 
 ### `session_step(...)`

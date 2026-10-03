@@ -7,7 +7,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
@@ -1496,7 +1496,7 @@ function getHistoricalConcreteModelId(message: Message): string | undefined {
         : undefined;
 }
 
-/** Keep UI-only response targets out of both canonical request journals and provider input. */
+/** Keep persisted presentation metadata out of canonical request journals and provider input. */
 function stripFunctionResponseDisplayMeta(contents: Message[]): Message[] {
     return contents.map(message => ({
         ...message,
@@ -1756,6 +1756,7 @@ type ExecutedToolCall = PreparedToolCall & {
     result: any;
     executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
     resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>;
+    toolScriptSubCalls?: ToolScriptSubCall[];
     imageParts: MessagePart[];
     stopCurrentTurn: boolean;
     waitForReply: boolean;
@@ -1926,6 +1927,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let result = prepared.result;
     let executionTiming: ExecutedToolCall['executionTiming'];
     let resolvedPaths: ExecutedToolCall['resolvedPaths'];
+    let toolScriptSubCalls: ToolScriptSubCall[] | undefined;
     let imageParts: MessagePart[] = [];
     let stopCurrentTurn = false;
     let waitForReply = false;
@@ -1950,8 +1952,13 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             const startedAt = Date.now();
             const monotonicStart = performance.now();
             try {
+                const isToolScriptExecution = prepared.resolved.source === 'builtin'
+                    && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
                 result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, {
                     ...localToolContext,
+                    ...(isToolScriptExecution ? { onToolScriptSubCalls: (subCalls: ToolScriptSubCall[]) => {
+                        toolScriptSubCalls = subCalls.map(subCall => ({ ...subCall }));
+                    } } : {}),
                     onResolvedPaths: (paths: Array<{ raw: string; resolved: string }>) => {
                         resolvedPaths = paths.map(path => ({ ...path, nodeId: prepared.resolved!.executionNode }));
                     },
@@ -2016,6 +2023,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         result: normalizeExecutedToolResult(result),
         ...(executionTiming ? { executionTiming } : {}),
         ...(resolvedPaths?.length ? { resolvedPaths } : {}),
+        ...(toolScriptSubCalls !== undefined ? { toolScriptSubCalls } : {}),
         imageParts,
         stopCurrentTurn,
         waitForReply,
@@ -2239,7 +2247,10 @@ export async function executeTools(
                 tool_use_id: execution.toolId,
                 name: execution.call.name,
                 ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
-                ...(resolvedPaths ? { __meta: { resolvedPaths } } : {}),
+                ...(resolvedPaths || execution.toolScriptSubCalls !== undefined ? { __meta: {
+                    ...(resolvedPaths ? { resolvedPaths } : {}),
+                    ...(execution.toolScriptSubCalls !== undefined ? { toolScriptSubCalls: execution.toolScriptSubCalls } : {}),
+                } } : {}),
                 ...(execution.index === 0 && toolContext.previousLlmRequest ? {
                     previousLlmRequest: {
                         time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),

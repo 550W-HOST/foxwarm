@@ -3630,32 +3630,47 @@ test('chat journals only historical concrete model provenance and strips all __m
   }
 });
 
-test('requestLlmOnce removes Code-only tool paths before provider send and canonical journal capture', async () => {
+test('requestLlmOnce excludes presentation paths and ToolScript activity from provider requests and journals', async () => {
   const originalPost = axios.post;
   let capturedBody: any;
-  const secretPath = '/display-only/agent-file.txt';
+  const displayPath = '/display-only/agent-file.txt';
+  const displayCall = 'display-only-nested-tool';
   const contents: Message[] = [
     { role: 'model', parts: [{ functionCall: { id: 'read-file', name: 'read', args: { filePath: 'file.txt' } } }] },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'read-file', name: 'read', response: { output: 'contents' },
-      __meta: { resolvedPaths: [{ raw: 'file.txt', resolved: secretPath, nodeId: 'master' }] } } }] },
+      __meta: { resolvedPaths: [{ raw: 'file.txt', resolved: displayPath, nodeId: 'master' }] } } }] },
+    { role: 'model', parts: [{ functionCall: { id: 'script', name: 'run_script', args: { code: 'def main(args):\n    return 0' } } }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'script', name: 'run_script',
+      response: { status: 'completed', runId: 'tsr_fixture', result: 0 },
+      __meta: { toolScriptSubCalls: [{ id: 'tss_1', name: displayCall, status: 'completed', startedAt: 1 }] } } }] },
     { role: 'user', parts: [{ text: 'next request' }] },
   ];
   const original = structuredClone(contents);
-  (axios as any).post = async (_url: string, body: any) => {
-    capturedBody = body;
-    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('ok') };
-  };
   try {
-    const result = await requestLlmOnce({ contents, systemPrompt: '',
-      model: 'fixture/chat', modelEntryOverride: { providerKey: 'fixture', providerType: 'openai-completions',
-        baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {} } as any,
-      toolDefinitions: [], maxRetries: 1, notifySessionEvents: false, registerAbortController: false,
-    });
-    assert.equal(JSON.stringify(capturedBody).includes(secretPath), false);
-    const journal = await reconstructLlmRequest(result.llmRequestId!);
-    assert.equal(journal.completeness, 'complete');
-    assert.equal(JSON.stringify(journal).includes(secretPath), false);
-    assert.deepEqual(contents, original, 'request preparation must not rewrite the persisted/UI history');
+    for (const providerType of ['openai-completions', 'openai-responses', 'anthropic']) {
+      (axios as any).post = async (_url: string, body: any) => {
+        capturedBody = body;
+        const data = providerType === 'openai-completions' ? makeChatCompletionStream('ok')
+          : providerType === 'openai-responses' ? makeResponsesStream('ok')
+          : { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } };
+        return { status: 200, statusText: 'OK', headers: {}, data };
+      };
+      const result = await requestLlmOnce({ contents, systemPrompt: '',
+        model: 'fixture/chat', modelEntryOverride: { providerKey: 'fixture', providerType,
+          baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {} } as any,
+        toolDefinitions: [], maxRetries: 1, notifySessionEvents: false, registerAbortController: false,
+      });
+      const request = JSON.stringify(capturedBody);
+      assert.equal(request.includes(displayPath), false, providerType);
+      assert.equal(request.includes(displayCall), false, providerType);
+      assert.equal(request.includes('toolScriptSubCalls'), false, providerType);
+      assert.ok(request.includes('tsr_fixture'), providerType);
+      const journal = await reconstructLlmRequest(result.llmRequestId!);
+      assert.equal(journal.completeness, 'complete');
+      assert.equal(JSON.stringify(journal).includes(displayPath), false, providerType);
+      assert.equal(JSON.stringify(journal).includes(displayCall), false, providerType);
+      assert.deepEqual(contents, original, 'request preparation must not rewrite persisted/UI history');
+    }
   } finally { (axios as any).post = originalPost; }
 });
 

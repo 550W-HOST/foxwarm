@@ -1,6 +1,6 @@
 # Unit: webui-tool-timeline
 
-Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolResolvedPathNavigation.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
+Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolResolvedPathNavigation.e2e.mjs, packages/webui/test/toolScriptActivity.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
 Secondary files: packages/webui/test/threadCardSurfaces.e2e.mjs, packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/keepExpandedGroupWebSearch.e2e.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs
 
 ## Purpose
@@ -31,6 +31,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
 | `truncateToolResultPreview(text)` | ~3 | Truncates a collapsed tool result to the shared 800-character sample |
 | `renderTextResult(text, expanded)` | ~3 | Renders a plain tool result line with the shared collapsed sample |
+| `isToolScriptCall(call)` | ~7 | Identifies direct and unified builtin ToolScript execution calls, including historical descriptors |
 | `ToolScriptSubCallTag({ subCall })` | ~10 | Shared running indicator plus counted tag for one tool script sub-call |
 | `isLegacyDiffToolName(name)` | ~1 | Checks if tool name is legacy edit/edit_memory |
 | `isPatchToolName(name)` | ~1 | Checks if tool name is apply_patch/apply_patch_memory |
@@ -87,7 +88,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `getGroupedToolEntries` correlates function calls with their responses and image parts by `toolUseId`, handling orphaned responses and unmatched images
 - `ExecCommandText` parses shell commands to detect heredoc blocks and applies per-language syntax highlighting to heredoc bodies
 - `ExecOutputText` infers output language from command context or content heuristics (JSON detection, import patterns, HTML tags)
-- Tool script sub-calls are rendered via `ToolScriptProgressContext`, showing nested progress for composite tool operations
+- ToolScript subcalls use live `ToolScriptProgressContext` events and persisted `FunctionResponse.__meta.toolScriptSubCalls` for completed/reloaded direct and unified executions. Older `response.subCalls` remains readable; script-owned nested result fields are not removed. See [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection).
 - Status-based theming (success/error/neutral) applies to thread lines, headers, and surface backgrounds. Standard treatment retains the established tone-specific opacity composition. Console treatment consumes the complete success/error surface pairs and uses its panel/hover pair for neutral cards and group summaries.
 - Tool tags carry the shared `data-tool-tag-tone` hook even when they are rendered through `ToolTagList` and have no `.foxwarm-tool-tag` class. Completed-tool tags consume the manifest V2 `tool*` family in both treatments; errors and system tags retain their distinct semantic families.
 - Tool cards and diff previews expose semantic CSS hooks (`foxwarm-tool-card`, `foxwarm-tool-tone-*`, `foxwarm-tool-header`, `foxwarm-tool-tag`, `foxwarm-tool-thread-line`, `foxwarm-tool-action-buttons-*`, `foxwarm-diff-*`) so opt-in UI style layers can map success/error/neutral and diff added/removed states to alternate palettes without changing tool grouping or response rendering logic.

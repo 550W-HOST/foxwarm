@@ -15,6 +15,7 @@ import {
     writeFileToolPath,
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
+import type { ToolScriptSubCall } from '../types';
 import type { ExecRuntime } from '../execManager';
 import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 import {
@@ -51,6 +52,8 @@ export interface ToolContext {
     sessionPlacement?: 'local' | 'session-worker';
     /** Per-invocation UI-only file paths, never included in model-visible tool results. */
     onResolvedPaths?: (paths: ResolvedToolPath[]) => void;
+    /** Per-invocation ToolScript activity for persisted UI metadata, never model-visible result data. */
+    onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
 }
 
 // Tool function type

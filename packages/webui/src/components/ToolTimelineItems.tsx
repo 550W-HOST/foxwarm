@@ -73,7 +73,7 @@ export const getToolResponseSearchText = (resp: FunctionResponse): string => {
   if (resp.name === 'exec' && typeof resp.response?.output === 'string') {
     return resp.response.output.replace(/\x1b\[[0-9;]+m/g, '')
   }
-  if (TOOLSCRIPT_TOOL_NAMES.has(resp.name)) return formatCompactObjectPreview(stripToolScriptSubCallsFromResponse(resp.response))
+  if (TOOLSCRIPT_TOOL_NAMES.has(resp.name) || resp.__meta?.toolScriptSubCalls !== undefined) return formatCompactObjectPreview(stripToolScriptSubCallsFromResponse(resp.response))
   return formatToolResponseText(resp)
 }
 
@@ -545,6 +545,14 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
 
 const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
 
+const isToolScriptCall = (call: FunctionCall): boolean => {
+  if (TOOLSCRIPT_TOOL_NAMES.has(call.name)) return true
+  if (call.name !== 'call_tool') return false
+  const args = call.args || {}
+  if (typeof args.toolId === 'string') return args.toolId.startsWith('builtin:') && TOOLSCRIPT_TOOL_NAMES.has(args.toolId.slice(8))
+  return args.source === 'builtin' && TOOLSCRIPT_TOOL_NAMES.has(args.name)
+}
+
 const ToolScriptSubCallTag = ({ subCall }: { subCall: ToolScriptSubCall }) => (
   <>
     {subCall.status === 'running' && (
@@ -665,11 +673,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   }, [])
 
   // ToolScript progress: show sub-calls when tool is still running (no response yet)
-  // or from response result when completed
+  // or persisted display metadata when completed (older results carry subCalls).
   const progressMap = useContext(ToolScriptProgressContext)
-  const isToolScriptTool = !!call && TOOLSCRIPT_TOOL_NAMES.has(call.name)
+  const persistedSubCalls = responses[0]?.__meta?.toolScriptSubCalls
+  const isToolScriptTool = !!call && (isToolScriptCall(call)
+    || (call.name === 'call_tool' && (persistedSubCalls !== undefined || !!(call.id && progressMap[call.id]))))
   const responseSubCalls = isToolScriptTool && responses.length > 0
-    ? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
+    ? persistedSubCalls ?? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
     : undefined
   const progressSubCalls = isToolScriptTool && call?.id ? progressMap[call.id] : undefined
   const toolScriptSubCalls = responseSubCalls || progressSubCalls

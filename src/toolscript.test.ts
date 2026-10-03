@@ -16,6 +16,7 @@ import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { ensureToolScriptMontyRuntimeForTests, tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests, setToolScriptMontyRuntimeFactoryForTests, shutdownToolScriptRuntime } from './toolscript';
 import type { Session } from './types';
+import { readSessionHistorySnapshot } from './session/metadataStore';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -110,10 +111,11 @@ test('run_script executes internal call_tool without surfacing nested tool histo
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
     assert.equal(response?.stdout, 'hello\n');
-    assert.deepEqual(response?.executedTools, ['search_tools']);
-    assert.equal(response?.hostCallCount, 1);
-    assert.equal(response?.lastHostCall?.functionName, 'call_tool');
-    assert.equal(response?.lastHostCall?.summaryName, 'search_tools');
+    assert.deepEqual(toolMessage.parts[0].functionResponse?.__meta?.toolScriptSubCalls?.map(call => call.name), ['search_tools']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['search_tools']);
+    assert.equal((await getToolScriptRunForTests(response?.runId))?.hostCallCount, 1);
+    assert.equal((await getToolScriptRunForTests(response?.runId))?.lastHostCall?.functionName, 'call_tool');
+    assert.equal((await getToolScriptRunForTests(response?.runId))?.lastHostCall?.summaryName, 'search_tools');
     assert.match(response?.result?.output || '', /^Showing 1 of \d+ matching tools\./);
   } finally {
     await resetToolScriptRunsForTests();
@@ -135,7 +137,8 @@ test('ToolScript nested native read returns file text without resolved Code path
       code: asMain(`return call_tool("read", {"filePath": "$fw_agentdir/${fileName}"})`),
     } }], { sessionId, session }, session);
     const response = toolMessage.parts[0].functionResponse!;
-    assert.equal(response.__meta, undefined);
+    assert.equal(response.__meta?.resolvedPaths, undefined);
+    assert.deepEqual(response.__meta?.toolScriptSubCalls?.map(call => call.name), ['read']);
     assert.equal(response.response?.status, 'completed');
     assert.match(JSON.stringify(response.response?.result), /nested read text/);
     assert.doesNotMatch(JSON.stringify(response.response), /resolvedPaths|__foxwarmResolvedToolPaths/);
@@ -163,7 +166,7 @@ test('canonical ToolScript automation example runs and resumes end to end', asyn
     assert.equal(waiting.waitingReason, 'agent');
     assert.equal(waiting.question, 'Reply with a short label');
     assert.ok(waiting.continuationId);
-    assert.deepEqual(waiting.executedTools, ['read', 'read']);
+    assert.deepEqual((await getToolScriptRunForTests(waiting.runId))?.executedTools, ['read', 'read']);
     assert.match(waiting.stdout, /starting automation example/);
     assert.match(waiting.stdout, /automation_basic\.py/);
 
@@ -174,7 +177,7 @@ test('canonical ToolScript automation example runs and resumes end to end', asyn
     }, { sessionId, session });
 
     assert.equal(completed.status, 'completed');
-    assert.equal(completed.stdout, '');
+    assert.equal(completed.stdout, undefined);
     assert.equal(completed.result?.label, 'EXAMPLE_OK');
     assert.match(completed.result?.listingPreview || '', /automation_basic\.py/);
     assert.match(completed.result?.documentationExcerpt || '', /ToolScript examples/);
@@ -252,6 +255,126 @@ test('run_script falls back to the actual WASM runtime when the native module im
   }
 });
 
+test('execution responses preserve falsy and author-owned results without diagnostic envelopes', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_lean_values');
+  const session = await sessionManager.getSession(sessionId);
+  const values = [false, 0, null, '', [], {}, {
+    status: 'author status', runId: 'author run', stdout: '', error: 'author error',
+    mode: 'author mode', ownerSessionId: 'author owner', vmRuntime: { value: 1 },
+    filePath: 'author path', subCalls: ['author calls'], waitingFor: { leaseId: 'author lease' },
+  }];
+  try {
+    for (const value of values) {
+      const response = await tool_run_script({ code: asMain('return args["value"]'), args: { value } }, { sessionId, session });
+      assert.deepEqual(response, { status: 'completed', runId: response.runId, result: value });
+      const inspected = await tool_get_toolscript_run({ runId: response.runId }, { sessionId, session });
+      assert.deepEqual(inspected.result, value);
+      assert.equal(inspected.ownerSessionId, sessionId);
+      assert.ok(inspected.vmRuntime);
+      assert.equal(inspected.stdout, '');
+      assert.equal(inspected.hostCallCount, 0);
+    }
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('unified script execution and continuation persist activity outside the model-visible result', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_lean_history');
+  const session = await sessionManager.getSession(sessionId);
+  const fileName = `${makeId('data')}.txt`;
+  const payload = 'discarded nested payload '.repeat(400);
+  await fs.writeFile(path.join(getAgentDir('main'), fileName), payload);
+  const ctx = { sessionId, session };
+  try {
+    const runCall = { id: 'unified-script', name: 'call_tool', args: { toolId: 'builtin:run_script', args: {
+      code: asMain(`data = call_tool("read", {"filePath": "${fileName}"})\nask_agent("Continue reducing?")\nprint("new output")\nreturn data.count("discarded nested payload")`),
+    } } };
+    const initial = await executeTools([runCall], ctx, session);
+    const response = initial.parts[0].functionResponse!;
+    assert.deepEqual(response.response, {
+      status: 'waiting', runId: response.response.runId, waitingReason: 'agent',
+      continuationId: response.response.continuationId, question: 'Continue reducing?',
+    });
+    assert.deepEqual(response.__meta?.toolScriptSubCalls?.map(call => call.name), ['read']);
+    assert.equal(JSON.stringify(initial).includes(payload), false);
+    await sessionManager.appendSessionMessage(session, { role: 'model', parts: [{ functionCall: runCall }] });
+    await sessionManager.appendSessionMessage(session, initial);
+    const resumed = await executeTools([{ id: 'unified-continue', name: 'call_tool', args: {
+      source: 'builtin', name: 'continue_script', args: {
+        runId: response.response.runId, continuationId: response.response.continuationId, input: 'yes',
+      },
+    } }], ctx, session);
+    assert.deepEqual(resumed.parts[0].functionResponse?.response, {
+      status: 'completed', runId: response.response.runId, stdout: 'new output\n', result: 400,
+    });
+    assert.deepEqual(resumed.parts[0].functionResponse?.__meta?.toolScriptSubCalls, []);
+    const snapshot = await readSessionHistorySnapshot(sessionId);
+    const saved = snapshot?.history.at(-1)?.parts[0].functionResponse;
+    assert.deepEqual(saved?.__meta, response.__meta);
+    assert.deepEqual(saved?.response, response.response);
+    const diagnostics = await tool_get_toolscript_run({ runId: response.response.runId }, ctx);
+    assert.deepEqual(diagnostics.executedTools, ['read']);
+    assert.equal(diagnostics.stdout, 'new output\n');
+  } finally {
+    await resetToolScriptRunsForTests();
+    await fs.remove(path.join(getAgentDir('main'), fileName));
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('nested script execution cannot replace its outer invocation activity metadata', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_nested_projection');
+  const session = await sessionManager.getSession(sessionId);
+  try {
+    const message = await executeTools([{ id: 'outer-script', name: 'run_script', args: {
+      code: asMain('child = call_tool("run_script", {"code": args["childCode"]})\nreturn child["result"]'),
+      args: { childCode: asMain('call_tool("search_tools", {"query": "read", "sources": ["builtin"], "limit": 1})\nreturn False') },
+    } }], { sessionId, session }, session);
+    const response = message.parts[0].functionResponse!;
+    assert.equal(response.response.result, false);
+    assert.deepEqual(response.__meta?.toolScriptSubCalls?.map(call => call.name), ['run_script']);
+    assert.deepEqual(Object.keys(response.response).sort(), ['result', 'runId', 'status']);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('failed execution and continuation retain traceback and partial stdout without internal context', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_lean_error');
+  const session = await sessionManager.getSession(sessionId);
+  const ctx = { sessionId, session };
+  try {
+    for (const pause of [false, true]) {
+      const initial = await tool_run_script({ code: asMain([
+        'print("before")', ...(pause ? ['ask_agent("Continue?")'] : []),
+        'print("partial")', 'raise ValueError("useful script failure")',
+      ].join('\n')) }, ctx);
+      const failed = pause ? await tool_continue_script({
+        runId: initial.runId, continuationId: initial.continuationId, input: 'yes',
+      }, ctx) : initial;
+      assert.equal(failed.status, 'failed');
+      assert.equal(failed.stdout, pause ? 'partial\n' : 'before\npartial\n');
+      assert.match(failed.error || '', /ValueError: useful script failure/);
+      assert.match(failed.error || '', /inline\.py/);
+      assert.doesNotMatch(failed.error || '', /ToolScript context:|hostCallCount|stdoutTail/);
+      assert.deepEqual(Object.keys(failed).sort(), ['error', 'runId', 'status', 'stdout']);
+      const diagnostics = await tool_get_toolscript_run({ runId: failed.runId }, ctx);
+      assert.equal(diagnostics.stdout, 'before\npartial\n');
+      assert.match(diagnostics.error || '', /ToolScript context:/);
+    }
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script rejects Monty OS functions without bypassing call_tool', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_os_boundary');
@@ -270,8 +393,8 @@ test('run_script rejects Monty OS functions without bypassing call_tool', async 
 
     assert.equal(result.status, 'completed');
     assert.equal(result.result, 'blocked');
-    assert.deepEqual(result.executedTools, []);
-    assert.equal(result.hostCallCount, 0);
+    assert.deepEqual((await getToolScriptRunForTests(result.runId))?.executedTools, []);
+    assert.equal((await getToolScriptRunForTests(result.runId))?.hostCallCount, 0);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -324,7 +447,7 @@ test('run_script and start_toolscript_run execute inline code as an alternative 
     }, { sessionId, session });
 
     assert.equal(result.status, 'completed');
-    assert.equal(result.filePath, '<inline>');
+    assert.equal((await getToolScriptRunForTests(result.runId))?.filePath, '<inline>');
     assert.equal(result.stdout, 'inline\n');
     assert.deepEqual(result.result, { value: 7, source: 'code' });
 
@@ -333,8 +456,8 @@ test('run_script and start_toolscript_run execute inline code as an alternative 
       args: { mode: 'background-inline' },
     }, { sessionId, session });
     assert.equal(backgroundResult.status, 'completed');
-    assert.equal(backgroundResult.mode, 'background');
-    assert.equal(backgroundResult.filePath, '<inline>');
+    assert.equal((await getToolScriptRunForTests(backgroundResult.runId))?.mode, 'background');
+    assert.equal((await getToolScriptRunForTests(backgroundResult.runId))?.filePath, '<inline>');
     assert.deepEqual(backgroundResult.result, { mode: 'background-inline' });
   } finally {
     await resetToolScriptRunsForTests();
@@ -422,7 +545,7 @@ test('run_script supports unified call_tool descriptor shape for builtin tools',
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
     assert.equal(response?.stdout, 'hello\n');
-    assert.deepEqual(response?.executedTools, ['search_tools']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['search_tools']);
     assert.match(response?.result?.output || '', /^Showing 1 of \d+ matching tools\./);
   } finally {
     await resetToolScriptRunsForTests();
@@ -452,7 +575,7 @@ test('run_script nested builtin calls use unified placement for session-owner to
 
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
-    assert.deepEqual(response?.executedTools, ['set_session_compact_threshold']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['set_session_compact_threshold']);
     assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 3456);
   } finally {
     await resetToolScriptRunsForTests();
@@ -495,7 +618,7 @@ test('run_script nested builtin calls use the local main-management service', as
     );
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
-    assert.deepEqual(response?.executedTools, ['list_agents']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['list_agents']);
     assert.match(String(response?.result), /agent/i);
   } finally {
     await resetToolScriptRunsForTests();
@@ -531,7 +654,7 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
   try {
     const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
     assert.equal(result.status, 'completed');
-    assert.deepEqual(result.executedTools, ['search_repos', 'android_screenshot']);
+    assert.deepEqual((await getToolScriptRunForTests(result.runId))?.executedTools, ['search_repos', 'android_screenshot']);
     assert.deepEqual(result.result, { mcp: { ok: 'mcp' }, node: { ok: 'node' } });
     assert.equal(captured.length, 2);
     assert.deepEqual(captured[0], {
@@ -580,7 +703,7 @@ test('run_script nested dynamic node call uses the Node execution service', asyn
     );
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
-    assert.deepEqual(response?.executedTools, ['dynamic_probe']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['dynamic_probe']);
     assert.equal(response?.result?.sourceId, sessionId);
   } finally {
     (nodesManager as any).getNode = originalGetNode;
@@ -616,7 +739,7 @@ test('run_script nested remote builtin uses the Node execution service', async (
     );
     const response = toolMessage.parts[0].functionResponse?.response;
     assert.equal(response?.status, 'completed');
-    assert.deepEqual(response?.executedTools, ['read']);
+    assert.deepEqual((await getToolScriptRunForTests(response?.runId))?.executedTools, ['read']);
     assert.equal(response?.result?.forwarded, true);
     assert.deepEqual(captured?.slice(0, 3), [sessionId, 'remote-script', 'read']);
   } finally {
@@ -643,7 +766,7 @@ test('run_script receives parsed MCP JSON text results through unified call_tool
     }, { sessionId, session });
 
     assert.equal(result.status, 'completed');
-    assert.deepEqual(result.executedTools, ['search_repos']);
+    assert.deepEqual((await getToolScriptRunForTests(result.runId))?.executedTools, ['search_repos']);
     assert.deepEqual(result.result, {
       ok: true,
       items: [{ name: 'foxwarm' }],
@@ -717,7 +840,7 @@ test('run_script keeps shorthand call_tool string form for backward compatibilit
     assert.equal(result.status, 'completed');
     assert.equal(typeof result.result, 'string');
     assert.match(result.result, /call_tool\("read"/i);
-    assert.deepEqual(result.executedTools, ['read']);
+    assert.deepEqual((await getToolScriptRunForTests(result.runId))?.executedTools, ['read']);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -743,10 +866,11 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
     assert.equal(paused.status, 'waiting');
     assert.equal(paused.waitingReason, 'agent');
     assert.equal(paused.question, 'What now?');
+    assert.equal(paused.waitingFor, undefined);
     assert.ok(paused.runId);
     assert.ok(paused.continuationId);
     assert.equal(paused.stdout, 'before\n');
-    assert.deepEqual(paused.executedTools, []);
+    assert.deepEqual((await getToolScriptRunForTests(paused.runId))?.executedTools, []);
 
     const persisted = await getToolScriptRunForTests(paused.runId);
     assert.equal(persisted?.status, 'waiting');
@@ -771,7 +895,7 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
     assert.equal(completed.status, 'completed');
     assert.equal(completed.result, 'Continue');
     assert.equal(completed.stdout, 'Continue\n');
-    assert.deepEqual(completed.executedTools, []);
+    assert.deepEqual((await getToolScriptRunForTests(completed.runId))?.executedTools, []);
 
     const finalRecord = await getToolScriptRunForTests(paused.runId);
     assert.equal(finalRecord?.status, 'completed');
@@ -847,14 +971,14 @@ test('run_script pauses on timeout checkpoints and continue_script can resume ex
     const paused = await tool_run_script({ filePath: scriptName, timeoutSecs: 0.5 }, { sessionId, session });
     assert.equal(paused.status, 'waiting');
     assert.equal(paused.waitingReason, 'timeout');
-    assert.equal(paused.timeoutSecs, 0.5);
+    assert.equal((await getToolScriptRunForTests(paused.runId))?.timeoutSecs, 0.5);
     assert.ok(paused.continuationId);
-    assert.equal(paused.waitingFor?.canContinue, true);
-    assert.match(paused.waitingFor?.hint || '', /continue_script/i);
-    assert.equal(paused.waitingFor?.pausedAtFunctionName, 'call_tool');
-    assert.equal(paused.waitingFor?.pausedAtSummaryName, 'exec');
+    assert.equal(paused.waitingFor, undefined);
+    const timeoutRecord = await tool_get_toolscript_run({ runId: paused.runId }, { sessionId, session });
+    assert.equal(timeoutRecord.waitingFor?.canContinue, true);
+    assert.equal(timeoutRecord.waitingFor?.pausedAtSummaryName, 'exec');
     assert.equal(paused.stdout, 'before timeout\n');
-    assert.deepEqual(paused.executedTools, ['exec']);
+    assert.deepEqual((await getToolScriptRunForTests(paused.runId))?.executedTools, ['exec']);
 
     await resetToolScriptMontyRuntimeForTests();
 
@@ -866,7 +990,7 @@ test('run_script pauses on timeout checkpoints and continue_script can resume ex
     assert.equal(completed.status, 'completed');
     assert.deepEqual(completed.result, { ok: true });
     assert.equal(completed.stdout, 'after timeout\n');
-    assert.deepEqual(completed.executedTools, ['exec']);
+    assert.deepEqual((await getToolScriptRunForTests(completed.runId))?.executedTools, ['exec']);
 
     const fetched = await tool_get_toolscript_run({ runId: paused.runId }, { sessionId, session });
     assert.equal(fetched.stdout, 'before timeout\nafter timeout\n');
@@ -1075,10 +1199,14 @@ test('background ToolScript controller run can wait for managed inbox events and
 
   try {
     const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
-    assert.equal(started.mode, 'background');
+    assert.equal((await getToolScriptRunForTests(started.runId))?.mode, 'background');
     assert.equal(started.status, 'waiting');
     assert.equal(started.waitingReason, 'managed_event');
-    assert.equal(started.relatedManagedSessions?.[0]?.sessionId, childId);
+    assert.equal(started.waitingFor?.sessionId, childId);
+    assert.equal(started.waitingFor?.autoResume, true);
+    assert.equal(started.waitingFor?.leaseId, undefined);
+    assert.equal(started.continuationId, undefined);
+    assert.equal((await getToolScriptRunForTests(started.runId))?.relatedManagedSessions?.[0]?.sessionId, childId);
 
     const managedState = await managedSessions.getManagedSessionStateForTests(childId);
     assert.equal(managedState?.controllerRunId, started.runId);
@@ -1103,6 +1231,41 @@ test('background ToolScript controller run can wait for managed inbox events and
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('managed-event execution responses identify the condition and distinguish automatic from nonautomatic waits', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_managed_projection');
+  const childId = makeId('toolscript_managed_target');
+  const session = await sessionManager.getSession(sessionId);
+  await sessionManager.getSession(childId);
+  const ctx = { sessionId, session };
+  try {
+    for (const mode of ['foreground', 'background']) {
+      const result = await tool_run_script({ mode, code: asMain([
+        `lease = open_managed_session("${childId}")`,
+        `wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"], run_mode="idle", inbox_order="before")`,
+        'return True',
+      ].join('\n')) }, ctx);
+      assert.equal(result.status, 'waiting');
+      assert.equal(result.waitingReason, 'managed_event');
+      assert.deepEqual(Object.keys(result).sort(), ['runId', 'status', 'waitingFor', 'waitingReason']);
+      assert.deepEqual(result.waitingFor, {
+        sessionId: childId, expectedRevision: result.waitingFor.expectedRevision,
+        runMode: 'idle', inboxOrder: 'before', autoResume: mode === 'background',
+      });
+      assert.equal(typeof result.waitingFor.expectedRevision, 'number');
+      await assert.rejects(() => tool_continue_script({ runId: result.runId, continuationId: 'not-a-manual-wait' }, ctx), /not waiting for continue_script/);
+      const diagnostic = await tool_get_toolscript_run({ runId: result.runId }, ctx);
+      assert.ok(diagnostic.waitingFor.leaseId);
+      assert.equal(diagnostic.relatedManagedSessions?.[0]?.sessionId, childId);
+      await tool_cancel_toolscript_run({ runId: result.runId }, ctx);
+    }
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 
@@ -1338,7 +1501,7 @@ test('list/get/cancel ToolScript run tools return structured run data', async ()
     const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId, session });
     assert.equal(started.status, 'waiting');
     assert.equal(started.waitingReason, 'agent');
-    assert.equal(started.mode, 'background');
+    assert.equal((await getToolScriptRunForTests(started.runId))?.mode, 'background');
 
     const listed = await tool_list_toolscript_runs({ limit: 10 }, { sessionId, session });
     assert.equal(listed.runs.length, 1);
@@ -1378,9 +1541,10 @@ test('ToolScript session_step rejects non-user message injection shapes', async 
     assert.match(result.error || '', /message\.role must be `user`/i);
     assert.match(result.error || '', new RegExp(scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(result.error || '', /<python-input-\d+>/);
-    assert.match(result.error || '', /ToolScript context:/);
-    assert.equal(result.hostCallCount, 1);
-    assert.equal(result.lastHostCall?.functionName, 'open_managed_session');
+    assert.doesNotMatch(result.error || '', /ToolScript context:/);
+    assert.match((await getToolScriptRunForTests(result.runId))?.error || '', /ToolScript context:/);
+    assert.equal((await getToolScriptRunForTests(result.runId))?.hostCallCount, 1);
+    assert.equal((await getToolScriptRunForTests(result.runId))?.lastHostCall?.functionName, 'open_managed_session');
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(childId).catch(() => false);
