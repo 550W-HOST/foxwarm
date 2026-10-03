@@ -23,15 +23,15 @@ internal static class CompletionsRequestSerializer
             {
                 foreach (var group in ProviderImageParts.ToolGroups(parts))
                 {
-                    var all = ProviderImageParts.GroupBlocks(group.Parts, "completions");
+                    var all = ProviderImageParts.GroupBlocks(group.Parts.Where(part => !ProviderImageParts.IsImage(part)), "completions");
                     var texts = new JsonArray(all.OfType<JsonObject>().Where(block => SessionWait.Text(block["type"]) == "text").Select(block => (JsonNode)block.DeepClone()).ToArray());
                     JsonNode toolContent = texts.Count == 0 ? JsonValue.Create("")! : texts.Count == 1 ? texts[0]!["text"]!.DeepClone() : texts;
                     result.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = group.Id, ["content"] = toolContent });
-                    var images = all.OfType<JsonObject>().Where(block => SessionWait.Text(block["type"]) == "image_url").ToArray();
-                    if (images.Length > 0)
+                    var images = ProviderImageParts.GroupBlocks(group.Parts.Where(ProviderImageParts.IsImage), "completions");
+                    if (images.Count > 0)
                     {
                         pendingToolImages.Add(new JsonObject { ["type"] = "text", ["text"] = "Images returned by tool_call_id=" + group.Id + ":" });
-                        foreach (var image in images) pendingToolImages.Add(image.DeepClone());
+                        foreach (var image in images) pendingToolImages.Add(image?.DeepClone());
                     }
                 }
                 continue;
@@ -46,7 +46,7 @@ internal static class CompletionsRequestSerializer
                 if (SessionWait.Text(part["thinking"]) is { Length: > 0 } thought) thinking = thought;
                 if (SessionWait.Text(part["system"]) is { Length: > 0 } system) content.Add(new JsonObject { ["type"] = "text", ["text"] = OpenAIRequestText.System(system) });
                 if (SessionWait.Text(part["text"]) is { Length: > 0 } text) content.Add(new JsonObject { ["type"] = "text", ["text"] = text });
-                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated" && ProviderImageParts.Block(part, "completions") is { } imageBlock) content.Add(imageBlock);
+                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated") ProviderImageParts.AddOccurrence(content, part, "completions");
                 if (part["functionCall"] is JsonObject call)
                 {
                     var id = SessionWait.Text(call["id"]);

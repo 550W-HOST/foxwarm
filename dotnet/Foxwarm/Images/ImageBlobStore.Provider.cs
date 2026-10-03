@@ -9,7 +9,6 @@ namespace Foxwarm.Images;
 internal sealed partial class ImageBlobStore
 {
     private static readonly ConcurrentDictionary<string, Lazy<Task<RasterCodec.Variant>>> Conversions = new();
-    internal const string DedupMarker = "[IMAGE: deduplicated=true] Identical image bytes were present earlier in this request and have already been read.";
     internal async Task<IReadOnlyList<JsonObject>> HydrateAsync(IReadOnlyList<JsonObject> history, string protocol, string outputFormat = "webp", CancellationToken token = default)
     {
         var result = new List<JsonObject>();

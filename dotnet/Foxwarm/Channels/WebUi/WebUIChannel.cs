@@ -79,6 +79,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         RegisterDeleteRoute(app);
         RegisterHistoryRoutes(app);
         RegisterImageRoutes(app);
+        RegisterFileRoutes(app);
         app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
         {
             var canonical = CatalogRoute(request);
@@ -98,6 +99,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                 return Results.BadRequest(new { error = "Invalid clientMessageId" });
             try
             {
+                SessionOwner? ingressOwner = null;
                 if (MessageRouter.IsPresentationCommand(text))
                 {
                     if (canonical is null) return Results.NotFound(new { error = "Session not found" });
@@ -106,10 +108,12 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                 {
                     var owner = await FindRouteAsync(request, id);
                     if (owner is null) return Results.NotFound(new { error = "Session not found" });
-                    canonical = owner.Id;
+                    canonical = owner.Id; ingressOwner = owner;
                 }
                 if (hasUploads && text.TrimStart().StartsWith("/", StringComparison.Ordinal)) return Results.BadRequest(new { error = "Send images as a message without a Session command." });
-                var parts = await PrepareUploadedPartsAsync(input, runtime.Owner(canonical!)!, request.HttpContext.RequestAborted);
+                var parts = await PrepareUploadedPartsAsync(input, ingressOwner ?? runtime.Owner(canonical!)!, request.HttpContext.RequestAborted);
+                sessions.AttachWebUi(canonical!, ingressOwner);
+                if (ingressOwner is not null) canonical = ingressOwner.Id;
                 var result = await router.HandleMessageAsync(new ChannelContext(canonical, "webui"), new ChannelMessage(text, clientId, parts));
                 return Results.Json(result.Value, statusCode: result.Status);
             }

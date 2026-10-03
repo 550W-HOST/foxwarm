@@ -50,7 +50,7 @@ internal sealed partial class SessionManager
         owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner)) throw new InvalidOperationException("Tool source is no longer the current Session owner.");
         var paths = resolved.Source == "node" && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
-            || resolved.Source == "builtin" && resolved.Name == "set_tool_rules"
+            || resolved.Source == "builtin" && resolved.Name is "set_tool_rules" or "send_file" or "image_write_to_file"
             ? (files ?? throw new NotSupportedException("This executor has no physical path resolver.")).AuthorizationFacts(resolved.Name, resolved.Args) : [];
         var request = AuthorizationRequest(owner, resolved.Source, resolved.Name, resolved.Server, resolved.Args, paths);
         var policy = await authorization.LoadAsync(token);

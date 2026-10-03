@@ -28,3 +28,7 @@ Coverage includes exact-source fencing before lookup, master-cwd and remote-node
 ## Design Decisions
 
 Cross-process placement and the trusted-local Session-worker boundary are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#d-process-topology-trusted-session-worker-boundary).
+
+## Main-only .NET port
+
+The bounded .NET host preserves WebUI readiness and authenticated human host downloads, with actual registered adapter/target checks and shared persisted bindings. Its owned image export, model permissions, original tool-row links and lifecycle boundaries are governed by [Main file delivery and owned image export](dotnet.md#main-file-delivery-and-owned-image-export); no external transport or generic input platform is implied.

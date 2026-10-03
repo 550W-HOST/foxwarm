@@ -97,14 +97,14 @@ public sealed class ImagePipelineTests
         var original = string.Join('\n', history.Select(message => message.ToJsonString())); var hydrated = await blobs.HydrateAsync(history, protocol);
         Assert.Equal(original, string.Join('\n', history.Select(message => message.ToJsonString()))); Assert.All(hydrated.Skip(2).Take(2), message => Assert.Null(message["parts"]![1]!["inlineData"]));
         JsonArray wire = protocol == "responses" ? ResponsesRequestSerializer.ConvertHistory(hydrated, "m") : protocol == "completions" ? CompletionsRequestSerializer.ConvertHistory(hydrated, "m", "reasoning_content") : AnthropicRequestSerializer.ConvertHistory(hydrated, new Uri("http://localhost"));
-        Assert.Contains(ImageBlobStore.DedupMarker, wire.ToJsonString()); Assert.Equal(1, wire.ToJsonString().Split(Convert.ToBase64String(bytes)).Length - 1);
+        Assert.Equal(3, wire.ToJsonString().Split("[IMAGE: id=").Length - 1); Assert.Equal(1, wire.ToJsonString().Split(Convert.ToBase64String(bytes)).Length - 1);
         var unique = await blobs.PutAsync(ImageCodecTests.Raster(SKEncodedImageFormat.Jpeg), "image/jpeg", "different");
         var tools = new[] { Message("tool", Tool("a", new JsonObject { ["output"] = "A" }), ToolImage("a", reference)), Message("tool", Tool("b", new JsonObject { ["output"] = "B" }), ToolImage("b", unique)) };
         var different = await blobs.HydrateAsync(tools, protocol);
         wire = protocol == "responses" ? ResponsesRequestSerializer.ConvertHistory(different, "m") : protocol == "completions" ? CompletionsRequestSerializer.ConvertHistory(different, "m", "reasoning_content") : AnthropicRequestSerializer.ConvertHistory(different, new Uri("http://localhost"));
-        if (protocol == "responses") Assert.All(wire, item => Assert.Equal("input_image", item!["output"]![1]!["type"]!.ToString()));
+        if (protocol == "responses") Assert.All(wire, item => Assert.Equal("input_image", item!["output"]!.AsArray().Last()!["type"]!.ToString()));
         if (protocol == "completions") { Assert.Equal(new[] { "tool", "tool", "user" }, wire.Select(item => item!["role"]!.ToString())); Assert.Equal(2, wire[2]!["content"]!.AsArray().Count(item => item?["type"]?.ToString() == "image_url")); }
-        if (protocol == "anthropic") { var results = wire[0]!["content"]!.AsArray(); Assert.Equal(2, results.Count); Assert.All(results, item => Assert.Equal("image", item!["content"]![1]!["type"]!.ToString())); }
+        if (protocol == "anthropic") { var results = wire[0]!["content"]!.AsArray(); Assert.Equal(2, results.Count); Assert.All(results, item => Assert.Equal("image", item!["content"]!.AsArray().Last()!["type"]!.ToString())); }
     }
 
     [Fact]

@@ -5,11 +5,12 @@ namespace Foxwarm.Tools;
 internal static partial class FileToolCore
 {
     internal static async Task<bool> WriteAtomic(string destination, string content, bool overwrite, Action validatePath, CancellationToken cancellationToken)
+        => await WriteBytesAtomic(destination, Encoding.UTF8.GetBytes(content), overwrite, validatePath, cancellationToken);
+    internal static async Task<bool> WriteBytesAtomic(string destination, ReadOnlyMemory<byte> bytes, bool overwrite, Action validatePath, CancellationToken cancellationToken)
     {
         // Overwriting follows the final symlink; replacing the link itself is not a content write.
         if (!overwrite && (File.Exists(destination) || Directory.Exists(destination) || new FileInfo(destination).LinkTarget is not null)) return false;
         destination = AuthorizationPaths.CanonicalPotential(destination);
-        var bytes = Encoding.UTF8.GetBytes(content);
         var temp = Path.Combine(Path.GetDirectoryName(destination)!, $".foxwarm-write-{Guid.NewGuid():N}");
         try
         {

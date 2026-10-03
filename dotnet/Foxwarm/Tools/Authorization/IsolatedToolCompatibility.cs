@@ -71,7 +71,7 @@ internal static class IsolatedToolCompatibility
             if (!allowed) throw new ToolAuthorizationDeniedException("Isolated Agent cannot use this capability without an exact allow rule.");
         }
         // Exact capability allow never bypasses handler-local physical/target/action boundaries.
-        if (request.Source == "node" && request.Name is "read" or "write" or "edit" or "apply_patch" || request.Source == "builtin" && request.Name == "set_tool_rules")
+        if (request.Source == "node" && request.Name is "read" or "write" or "edit" or "apply_patch" || request.Source == "builtin" && request.Name is "set_tool_rules" or "send_file" or "image_write_to_file")
             if (request.Paths.Any(path => !ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
                 || request.Agent == "main" && ToolAuthorizationEvaluation.Within(path.Resolved, AuthorizationPaths.CanonicalPotential(Path.Combine(request.AgentDirectory!, "agents"))))) throw new ToolAuthorizationDeniedException("Isolated Agent can only access its own tool directory on Main.");
         if (request.Source == "builtin" && request.Name == "session" && SessionGoal.Trim(SessionWait.Text(request.Args["action"]) ?? "status").ToLowerInvariant() == "list")

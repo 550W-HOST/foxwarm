@@ -94,10 +94,11 @@ public sealed partial class WorkspaceTools
             return WorkspacePatch.Parse(input).Select(operation => new AuthorizationPath("input", operation.Path,
                 AuthorizationPaths.CanonicalPotential(ResolvePatchPath(operation.Path, true)))).ToArray();
         }
+        if (name == "send_file" && raw is not null) raw = SessionGoal.Trim(raw);
         if (raw is null || raw.Length == 0) return [];
         var resolved = name switch
         {
-            "read" or "set_tool_rules" => ResolveReadWrite(raw, true), "write" => ResolveReadWrite(raw, false),
+            "read" or "set_tool_rules" or "send_file" => ResolveReadWrite(raw, true), "write" or "image_write_to_file" => ResolveReadWrite(raw, false),
             "edit" => ResolvePatchPath(raw, true), "exec" => Paths.ExecCwd(raw),
             _ => throw new InvalidDataException("No physical path resolver for this capability.")
         };
@@ -134,6 +135,6 @@ public sealed partial class WorkspaceTools
         catch (FileNotFoundException) { missing = true; return false; }
         catch (DirectoryNotFoundException) { missing = !File.Exists(Path.GetDirectoryName(path)); return false; }
     }
-    private static bool RegularFileHandle(FileStream stream, string path) => !OperatingSystem.IsLinux() ? RegularFile(path)
+    internal static bool RegularFileHandle(FileStream stream, string path) => !OperatingSystem.IsLinux() ? RegularFile(path)
         : Statx(stream.SafeFileHandle.DangerousGetHandle().ToInt32(), "", 0x1000, 1, out var info) == 0 && (info.Mode & 0xf000) == 0x8000;
 }

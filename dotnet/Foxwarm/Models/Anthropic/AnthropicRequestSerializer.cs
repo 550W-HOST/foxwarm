@@ -18,7 +18,7 @@ internal static class AnthropicRequestSerializer
             foreach (var part in parts)
             {
                 if (message.Role == "tool" && ProviderImageParts.IsImage(part) && SessionWait.Text(part["toolUseId"]) is { Length: > 0 }) continue;
-                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated" && ProviderImageParts.Block(part, "anthropic") is { } imageBlock) blocks.Add(imageBlock);
+                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated") ProviderImageParts.AddOccurrence(blocks, part, "anthropic");
                 if (CompletionsRequestSerializer.Truthy(part["thinking"]) && CompletionsRequestSerializer.Truthy(part["providerMeta"]?["signature"]))
                     blocks.Add(new JsonObject { ["type"] = "thinking", ["thinking"] = part["thinking"]!.DeepClone(), ["signature"] = part["providerMeta"]!["signature"]!.DeepClone() });
                 if (SessionWait.Text(part["system"]) is { Length: > 0 } system)
@@ -43,7 +43,7 @@ internal static class AnthropicRequestSerializer
                     foreach (var image in associated)
                     {
                         if (SessionWait.Text(image["text"]) is { Length: > 0 } label) resultContent.Add(Text(label));
-                        if (ProviderImageParts.Block(image, "anthropic") is { } imageResult) resultContent.Add(imageResult);
+                        ProviderImageParts.AddOccurrence(resultContent, image, "anthropic");
                     }
                     var result = new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id,
                         ["content"] = associated.Length > 0 ? resultContent : JsonValue.Create(textOutput) };

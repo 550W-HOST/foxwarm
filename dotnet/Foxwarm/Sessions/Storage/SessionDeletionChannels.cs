@@ -10,6 +10,18 @@ internal sealed class SessionDeletionChannels(string root)
     private string FilePath => Path.Combine(root, "state", "channels.json");
     private string EvidencePath => Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak");
     internal JsonObject Read(string? participant = null) { lock (gate) return ReadLocked(participant); }
+    internal JsonObject ReadForDelivery() { lock (gate) return ReadLocked(null, persistMigration: false); }
+    internal void Attach(string destination, string id)
+    {
+        lock (gate)
+        {
+            var payload = ReadLocked(id); var channels = payload["channels"]!.AsObject();
+            if (SessionCatalog.Text(channels[destination]?["sessionId"]) == id) return;
+            var config = channels[destination] as JsonObject ?? new JsonObject();
+            config["sessionId"] = id; if (config.Parent is null) channels[destination] = config;
+            Barrier(id, "attach-before-write"); Write(payload);
+        }
+    }
     private JsonObject ReadLocked(string? participant, bool normalize = true, bool persistMigration = true)
     {
         if (ReadOptional(FilePath) is { } current) return Validate(current, normalize);

@@ -22,6 +22,7 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
         if (invocation != "call_tool")
         {
             if (!entries.TryGetValue(invocation, out var direct)) throw new InvalidDataException("Unknown tool: " + invocation);
+            if (invocation is "send_file" or "image_write_to_file") LocalNode(Text(args, "node"));
             return new(invocation, direct.Source, invocation, (JsonObject)args.DeepClone());
         }
         Keys(args, ["toolId", "source", "name", "server", "nodeId", "args", "argsJson"]);
@@ -49,6 +50,7 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
         if (registration.Source != source) throw new InvalidDataException($"Tool `{name}` is a {registration.Source} capability, not {source}.");
         if (source == "node") LocalNode(node);
         else if (node is not null) throw new InvalidDataException("Builtin tools do not support Node selection.");
+        if (source == "builtin" && name is "send_file" or "image_write_to_file") LocalNode(Text(targetArgs, "node"));
         return new(invocation, source, name, targetArgs);
     }
     internal async Task<JsonObject> ExecuteAsync(ResolvedTool resolved, SessionToolExecutor owner, CancellationToken cancellationToken)

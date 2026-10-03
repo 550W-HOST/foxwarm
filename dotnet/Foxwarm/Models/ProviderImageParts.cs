@@ -24,6 +24,25 @@ internal static class ProviderImageParts
             _ => new JsonObject { ["type"] = "image", ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = mime, ["data"] = data } }
         };
     }
+    internal static void AddOccurrence(JsonArray blocks, JsonObject part, string protocol)
+    {
+        if (!IsImage(part)) return;
+        var image = Block(part, protocol); var duplicate = Foxwarm.Images.ProviderImageDedup.IsDeduplicated(part);
+        if (image is null && !duplicate) return;
+        var metadata = part["imageMeta"] as JsonObject; var reference = part["inlineDataRef"] as JsonObject;
+        var id = SessionWait.Text(metadata?["imageId"]) ?? SessionWait.Text(reference?["imageId"]);
+        var textType = protocol == "responses" ? "input_text" : "text";
+        if (!string.IsNullOrEmpty(id))
+        {
+            var width = SessionWait.Number(reference?["width"] ?? metadata?["width"]); var height = SessionWait.Number(reference?["height"] ?? metadata?["height"]);
+            var size = width is > 0 && height is > 0 && double.IsFinite(width.Value) && double.IsFinite(height.Value)
+                && Math.Truncate(width.Value) == width && Math.Truncate(height.Value) == height
+                ? ", size=" + width.Value.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "x" + height.Value.ToString("0", System.Globalization.CultureInfo.InvariantCulture) : "";
+            blocks.Add(new JsonObject { ["type"] = textType, ["text"] = "[IMAGE: id=" + JsonValue.Create(id)!.ToJsonString() + size + "]" });
+        }
+        if (duplicate) blocks.Add(new JsonObject { ["type"] = textType, ["text"] = "The same image data appears earlier in the context; it is not repeated here." });
+        else blocks.Add(image);
+    }
     internal static List<(string Id, List<JsonObject> Parts)> ToolGroups(IEnumerable<JsonObject> parts)
     {
         var groups = new List<(string Id, List<JsonObject> Parts)>(); var lookup = new Dictionary<string, List<JsonObject>>(StringComparer.Ordinal); var pending = new List<JsonObject>();
@@ -62,7 +81,7 @@ internal static class ProviderImageParts
             else
             {
                 if (SessionWait.Text(part["text"]) is { Length: > 0 } text) result.Add(new JsonObject { ["type"] = textType, ["text"] = text });
-                if (Block(part, protocol) is { } image) result.Add(image);
+                AddOccurrence(result, part, protocol);
             }
         }
         return result;

@@ -134,7 +134,7 @@ public static partial class ResponsesRequestSerializer
                     content.Add(textPart);
                 }
 
-                if (role != "assistant" && ProviderImageParts.Block(part, "responses") is { } imageBlock) content.Add(imageBlock);
+                if (role != "assistant") ProviderImageParts.AddOccurrence(content, part, "responses");
 
                 if (part["functionCall"] is JsonObject functionCall)
                 {

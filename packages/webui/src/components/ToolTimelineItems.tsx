@@ -49,20 +49,33 @@ const getToolInvocationDuration = (timing: FunctionResponse['executionTiming']):
 }
 
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
-  if (resp.name !== 'send_file') {
-    return null
-  }
+  let args = call?.args
+  if (resp.name === 'call_tool' && call?.name === 'call_tool' && args?.toolId === 'builtin:send_file') {
+    if (args.args && typeof args.args === 'object' && !Array.isArray(args.args)) args = args.args as Record<string, unknown>
+    else if (typeof args.argsJson === 'string') {
+      try { const parsed = JSON.parse(args.argsJson); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null; args = parsed }
+      catch { return null }
+    } else args = {}
+  } else if (resp.name !== 'send_file') return null
 
   const response = resp.response
   const fullPath = response && typeof response === 'object' && !Array.isArray(response)
     ? (response as { fullPath?: unknown }).fullPath
     : undefined
 
+  if (!response || typeof response !== 'object' || Array.isArray(response)
+    || ('error' in response && response.error) || ('canceled' in response && response.canceled)) return null
+
+  // Older successful Main results may have omitted fullPath, but a failed call is not a file delivery.
+  const node = args?.node
+  const mainFile = node == null || (typeof node === 'string' && (!node.trim() || (node.trim() === 'master' || node.trim().toLowerCase() === 'current')))
+  const output = 'output' in response && typeof response.output === 'string' ? response.output : ''
+  const oldSuccess = mainFile && /(?:Delivered:\s*[1-9]\d*|is ready for WebUI target)/.test(output)
   const resolvedPath = typeof fullPath === 'string' && fullPath.trim()
     ? fullPath.trim()
-    : (typeof call?.args?.filePath === 'string' && call.args.filePath.trim() ? call.args.filePath.trim() : null)
+    : (oldSuccess && typeof args?.filePath === 'string' ? args.filePath.trim() : null)
 
-  if (!resolvedPath) {
+  if (!mainFile || !resolvedPath || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(resolvedPath)) {
     return null
   }
 

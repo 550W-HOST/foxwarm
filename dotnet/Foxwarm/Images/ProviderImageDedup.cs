@@ -47,7 +47,7 @@ internal static class ProviderImageDedup
                 var identity = ImageBlobStore.Mime(inline) + "\0" + Convert.ToHexStringLower(SHA256.HashData(bytes));
                 if (seen.Add(identity)) continue;
                 part.Remove("inlineData"); Duplicates.GetValue(part, _ => new Marker());
-                if (!MarkDescriptor(parts, index)) part["text"] = (SessionWait.Text(part["text"]) is { Length: > 0 } text ? text + "\n" : "") + ImageBlobStore.DedupMarker;
+                _ = MarkDescriptor(parts, index);
             }
         }
     }
