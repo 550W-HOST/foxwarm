@@ -4,6 +4,22 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SqliteArchiveMessageStore
 {
+    internal static void InitializeReservations(SqliteConnection connection, SqliteTransaction? transaction = null)
+    {
+        using var command = connection.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS archive_session_id_reservations (
+              session_id TEXT PRIMARY KEY,
+              canonical_session_id TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_archive_session_id_reservations_canonical
+              ON archive_session_id_reservations(canonical_session_id);
+            """;
+        command.ExecuteNonQuery();
+        if (transaction is null) _ = HasReservationTable(connection);
+    }
     internal static bool HasReservationTable(SqliteConnection connection)
     {
         if (!TableExists(connection, "archive_session_id_reservations")) return false;
@@ -15,14 +31,32 @@ public sealed partial class SqliteArchiveMessageStore
         if (!actual.SequenceEqual(expected)) throw new InvalidDataException("Archive reservation schema does not match the source schema.");
         return true;
     }
-    private static void ValidateLookupReservation(SqliteConnection connection, string id)
+    internal static string ResolveReadOnly(SqliteConnection connection, string id)
     {
-        if (!HasReservationTable(connection)) return;
-        using var command = connection.CreateCommand(); command.CommandText = "SELECT session_id,canonical_session_id,created_at,updated_at FROM archive_session_id_reservations WHERE session_id=$id";
-        command.Parameters.AddWithValue("$id", id); using var reader = command.ExecuteReader();
-        if (!reader.Read()) return;
-        if (!SessionIdentity.IsValid(reader.GetString(0)) || !SessionIdentity.IsValid(reader.GetString(1)) || !double.IsFinite(reader.GetDouble(2)) || !double.IsFinite(reader.GetDouble(3)))
-            throw new InvalidDataException("Archive reservation row is invalid.");
-        if (reader.GetString(0) != reader.GetString(1)) throw new UnsupportedSessionAuthorityException("Archive canonical redirects are not supported.");
+        if (!HasReservationTable(connection)) return id;
+        using var command = connection.CreateCommand(); command.CommandText = "SELECT canonical_session_id FROM archive_session_id_reservations WHERE session_id=$id";
+        command.Parameters.Add("$id", SqliteType.Text);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (seen.Add(id))
+        {
+            command.Parameters["$id"].Value = id;
+            var value = command.ExecuteScalar();
+            if (value is null) return id;
+            if (value is not string next) throw new InvalidDataException("Archive committed identity must be an exact nonempty string.");
+            CommittedArchiveIdentity.ValidateIdentity(next);
+            if (next == id) return id;
+            id = next;
+        }
+        throw new InvalidDataException("Archive committed identity mappings contain a cycle.");
+    }
+    private static void RequireWriteIdentity(SqliteConnection connection, string id)
+    {
+        if (ResolveReadOnly(connection, id) != id)
+            throw new InvalidOperationException("Historical Archive aliases are not writable Session bindings.");
+    }
+    private string CanonicalReadIdentity()
+    {
+        if (!File.Exists(databasePath)) return sessionId;
+        using var connection = OpenExistingReadOnly(); return ResolveReadOnly(connection, sessionId);
     }
 }

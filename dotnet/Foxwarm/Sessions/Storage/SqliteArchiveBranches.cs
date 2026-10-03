@@ -38,14 +38,14 @@ public sealed partial class SqliteArchiveMessageStore
     internal ArchiveBranch? ReadBranch()
     {
         if (!File.Exists(databasePath)) return null;
-        using var connection = OpenExistingReadOnly();
+        using var connection = OpenExistingReadOnly(); var canonical = ResolveReadOnly(connection, sessionId);
         if (!TableExists(connection, "archive_branches")) return null;
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT parent_session_id,fork_message_seq,fork_block_id,created_at,updated_at FROM archive_branches WHERE session_id=$s";
-        command.Parameters.AddWithValue("$s", sessionId);
+        command.Parameters.AddWithValue("$s", canonical);
         using var row = command.ExecuteReader();
         if (!row.Read()) return null;
-        var branch = new ArchiveBranch(sessionId, row.IsDBNull(0) ? null : row.GetString(0), row.GetInt64(1), row.GetInt64(2), row.GetInt64(3), row.GetInt64(4));
+        var branch = new ArchiveBranch(canonical, row.IsDBNull(0) ? null : row.GetString(0), row.GetInt64(1), row.GetInt64(2), row.GetInt64(3), row.GetInt64(4));
         if (branch.MessageCap < 0 || branch.BlockCap < 0 || branch.MessageCap > 9007199254740991 || branch.BlockCap > 9007199254740991)
             throw new InvalidDataException("Archive branch has an invalid fork frontier.");
         return branch;
@@ -62,7 +62,7 @@ public sealed partial class SqliteArchiveMessageStore
             return null;
         }
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        using var connection = OpenConfigured(); using var command = connection.CreateCommand();
+        using var connection = OpenConfigured(); RequireWriteIdentity(connection, sessionId); using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO archive_branches(session_id,parent_session_id,fork_message_seq,fork_block_id,created_at,updated_at) VALUES($s,$p,$m,$b,$at,$at)";
         command.Parameters.AddWithValue("$s", sessionId); command.Parameters.AddWithValue("$p", (object?)parent ?? DBNull.Value);
         command.Parameters.AddWithValue("$m", messageCap); command.Parameters.AddWithValue("$b", blockCap); command.Parameters.AddWithValue("$at", now);
@@ -72,7 +72,7 @@ public sealed partial class SqliteArchiveMessageStore
     internal void RollbackInsertedBranch(ArchiveBranch? branch)
     {
         if (branch is null) return;
-        using var connection = OpenConfigured(); using var command = connection.CreateCommand();
+        using var connection = OpenConfigured(); RequireWriteIdentity(connection, sessionId); using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM archive_branches WHERE session_id=$s AND parent_session_id IS $p AND fork_message_seq=$m AND fork_block_id=$b AND created_at=$at AND updated_at=$updated";
         command.Parameters.AddWithValue("$s", branch.SessionId); command.Parameters.AddWithValue("$p", (object?)branch.ParentSessionId ?? DBNull.Value);
         command.Parameters.AddWithValue("$m", branch.MessageCap); command.Parameters.AddWithValue("$b", branch.BlockCap);
@@ -82,7 +82,7 @@ public sealed partial class SqliteArchiveMessageStore
 
     private IEnumerable<(SqliteArchiveMessageStore Store, long Messages, long Blocks)> Lineage()
     {
-        var current = this;
+        var current = new SqliteArchiveMessageStore(databasePath, CanonicalReadIdentity());
         var messages = 9007199254740991L; var blocks = messages;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         while (seen.Add(current.sessionId))
@@ -92,6 +92,7 @@ public sealed partial class SqliteArchiveMessageStore
             if (branch?.ParentSessionId is not string parent) yield break;
             messages = Math.Min(messages, branch.MessageCap); blocks = Math.Min(blocks, branch.BlockCap);
             current = new SqliteArchiveMessageStore(databasePath, parent);
+            current = new SqliteArchiveMessageStore(databasePath, current.CanonicalReadIdentity());
         }
     }
     internal IReadOnlyList<ArchiveMessageRecord> ReadEffectiveMessagesRange(long first, long last) =>

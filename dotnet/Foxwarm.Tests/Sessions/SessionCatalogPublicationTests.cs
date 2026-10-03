@@ -96,15 +96,15 @@ public sealed class SessionCatalogPublicationTests
     }
 
     [Fact]
-    public async Task Real_self_reservations_are_supported_and_ledger_only_ids_stay_nonlive_reserved_while_redirect_reads_fail_explicitly()
+    public async Task Self_and_committed_redirect_reservations_stay_nonlive_and_read_without_changing_ownership()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         await SessionCatalogMigrationTests.Authority(data, "one"); var database = Path.Combine(data, "state", "archive-store.sqlite");
         using (var connection = new SqliteConnection($"Data Source={database}"))
         {
             connection.Open(); using var command = connection.CreateCommand(); command.CommandText = """
-CREATE TABLE archive_session_id_reservations(session_id TEXT PRIMARY KEY,canonical_session_id TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
-CREATE INDEX idx_archive_session_id_reservations_canonical ON archive_session_id_reservations(canonical_session_id);
+CREATE TABLE IF NOT EXISTS archive_session_id_reservations(session_id TEXT PRIMARY KEY,canonical_session_id TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_archive_session_id_reservations_canonical ON archive_session_id_reservations(canonical_session_id);
 INSERT INTO archive_session_id_reservations VALUES('one','one',1,1),('gone','gone',2,2),('old','new',3,3);
 """; command.ExecuteNonQuery();
         }
@@ -112,8 +112,8 @@ INSERT INTO archive_session_id_reservations VALUES('one','one',1,1),('gone','gon
         var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713); await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options)); await manager.LoadAsync();
         Assert.NotNull(await manager.GetExistingAsync("one")); Assert.Null(manager.Find("gone"));
         foreach (var id in new[] { "gone", "old", "new" }) await Assert.ThrowsAsync<InvalidDataException>(() => manager.CreateNamedAsync("main", id, null, null));
-        var redirected = new SqliteArchiveMessageStore(database, "old"); Assert.Throws<UnsupportedSessionAuthorityException>(() => redirected.ReadMessages());
-        var child = new SqliteArchiveMessageStore(database, "branch-child"); child.Initialize(); child.EnsureBranch("old", 100, 100); Assert.Throws<UnsupportedSessionAuthorityException>(() => child.ReadEffectiveMessagesRange(1, 100));
+        var redirected = new SqliteArchiveMessageStore(database, "old"); Assert.Empty(redirected.ReadMessages());
+        var child = new SqliteArchiveMessageStore(database, "branch-child"); child.Initialize(); child.EnsureBranch("old", 100, 100); Assert.Empty(child.ReadEffectiveMessagesRange(1, 100));
         using var verify = new SqliteConnection($"Data Source={database};Mode=ReadOnly"); verify.Open(); using var select = verify.CreateCommand(); select.CommandText = "SELECT COUNT(*) FROM archive_session_id_reservations"; Assert.Equal(3L, select.ExecuteScalar());
     }
 }

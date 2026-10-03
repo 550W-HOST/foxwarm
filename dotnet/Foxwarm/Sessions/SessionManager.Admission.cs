@@ -24,6 +24,7 @@ internal sealed partial class SessionManager
 
     internal async Task<SessionOwner?> GetExistingAsync(string requestedId, CancellationToken cancellationToken = default, bool forDeletion = false)
     {
+        await archiveIdentities.InitializeAsync(Catalog);
         if (!cancellationToken.CanBeCanceled) cancellationToken = semanticCaller.Value ?? default;
         IdentitySlot? slot;
         lock (lifecycle)

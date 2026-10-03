@@ -115,6 +115,14 @@ Selective boot registers exec records, validates all mandatory owners, then enab
 
 Chat revision/buffer/target registration precedes async admission; replacement revisions/disconnect cancel only their subscription wait, and snapshot/draft/buffered/applied ordering remains intact. `experimentHostAdmission.e2e.mjs` exercises actual original-App concurrent callers, creation publication, selective two-host exec/queue continuation and readiness/error boundaries. The canonical contract is [lazy admission and selective restart](../docs/code-index/units/dotnet.md#lazy-semantic-admission-and-selective-restart). There is no unload/LRU, bounded-ever-hot semantic-memory, Worker execution, identity relocation or general crash-recovery claim. Main-local coordinated deletion is described above.
 
+### Committed Archive identity compatibility
+
+Startup reconciles the independent source `session-id-reservations.jsonl` and SQLite reservation rows, repairs missing/malformed ledger data from committed identity rows, and mirrors valid mappings into SQLite. Valid conflicts and cycles reject startup; ambiguous or exact-shadowed Main aliases are not backfill proof. Historical and canonical reservation IDs remain unavailable for new lifetimes even after deletion.
+
+Pure Archive readers follow committed old/intermediate/current identities and inherited branches without changing audit bytes, historical Agents, original caps (including zero), Main membership or live counts. Ordinary reads never repair identities or create owners. Writes remain bound to the actual canonical identity; historical redirects cannot become write targets. Existing model recall retains its hosted-target requirement.
+
+Pending identity-move journals reject unsupported recovery. Completed source SQLite-only migration evidence requires both protected Archive and LLM-journal databases and matching authority markers before any empty replacement can be created. Identity repair cannot recreate lost audit. This adds no move command/tool, deleted-owner recall, journal-serving or recovery platform. The [canonical contract](../docs/code-index/units/dotnet.md#committed-archive-identity) and `experimentHostArchiveIdentity.e2e.mjs` cover these boundaries.
+
 ### Main-owned presentation actions
 
 The original Sidebar archive dialog (including explicit descendants), unarchive, pin and parent/order operations use real Main-only catalog transactions. `POST /api/sessions/{id}/move` is parent/order, not identity relocation; promote supports an existing target parent or root. Whole old/new raw-parent groups are ranked, including hidden/pinned/archived members. Archive does not Stop, clear queued/waiting work or release IDs; unarchive affects only its target. Relevant recursive/new-relation cycles fail before mutation, while unrelated single flags remain usable on historical raw graphs.

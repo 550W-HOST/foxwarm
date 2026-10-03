@@ -20,6 +20,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly Skills skills;
     private readonly LocalExecManager executor;
     private readonly SessionDeletionChannels deletionChannels;
+    private readonly CommittedArchiveIdentity archiveIdentities;
     private readonly HttpClient http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private readonly Foxwarm.McpClient mcp;
     private readonly ModelRouting modelRouting = new();
@@ -42,8 +43,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (workspaceRoot == this.root || workspaceRoot.StartsWith(this.root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || this.root.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
+        CommittedArchiveIdentity.ValidateStartupEvidence(this.root);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root);
+        archiveIdentities = new(this.root);
         Catalog = new SessionCatalog(this.root);
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
@@ -95,7 +98,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public Task LoadAsync() => LoadOwnersAsync(ensureMain: false);
     private async Task LoadOwnersAsync(bool ensureMain)
     {
-        Catalog.Initialize();
+        await archiveIdentities.InitializeAsync(Catalog);
         foreach (var row in Catalog.List())
         {
             var id = SessionCatalog.Text(row["id"])!; var agent = SessionCatalog.Text(row["agent"])!;

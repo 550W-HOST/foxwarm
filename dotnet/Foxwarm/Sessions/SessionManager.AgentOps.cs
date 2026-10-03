@@ -24,6 +24,7 @@ internal sealed partial class SessionManager
     public async Task<(string AgentName, string? MainSessionId)> CreateAgentAsync(string agentName,
         bool createMainSession = true, string? initialMemory = null, string? inherit = null)
     {
+        await archiveIdentities.InitializeAsync(Catalog);
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
@@ -289,7 +290,8 @@ internal sealed partial class SessionManager
 
     private async Task<bool> IdReservedAsync(string id)
     {
-        Catalog.Initialize();
+        await archiveIdentities.InitializeAsync(Catalog);
+        if (archiveIdentities.IsReserved(id)) return true;
         bool pending; lock (lifecycle) pending = identities.ContainsKey(id);
         if (pending || Catalog.Get(id) is not null || sessions.ContainsKey(id) || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))) return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");

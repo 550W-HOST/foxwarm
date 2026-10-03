@@ -103,9 +103,9 @@ public sealed partial class SqliteArchiveMessageStore
         if (!actual.SequenceEqual(expected)) throw new InvalidDataException("archive_blocks does not match the current TypeScript schema.");
     }
 
-    private void ValidateBlock(ArchiveBlockRecord block)
+    private void ValidateBlock(ArchiveBlockRecord block, string? expectedIdentity = null)
     {
-        if (block.SessionId != sessionId || block.Agent.Length == 0 || block.Id <= 0 || block.Level <= 0
+        if (block.SessionId != (expectedIdentity ?? sessionId) || block.Agent.Length == 0 || block.Id <= 0 || block.Level <= 0
             || block.SourceStart <= 0 || block.SourceEnd <= 0 || block.RawStartSeq <= 0 || block.RawEndSeq < block.RawStartSeq
             || block.Summary.Trim().Length == 0 || block.CreatedAt <= 0
             || block.SourceKind is not ("message" or "block")
@@ -120,7 +120,7 @@ public sealed partial class SqliteArchiveMessageStore
     {
         if (records.Count == 0) return [];
         foreach (var block in records) ValidateBlock(block);
-        using var connection = OpenConfigured();
+        using var connection = OpenConfigured(); RequireWriteIdentity(connection, sessionId);
         using var tx = connection.BeginTransaction(deferred: false);
         var inserted = new List<ArchiveBlockRecord>();
         foreach (var block in records)
@@ -178,22 +178,22 @@ public sealed partial class SqliteArchiveMessageStore
     {
         if (first <= 0 || last < first || last > 9007199254740991L) throw new ArgumentOutOfRangeException(nameof(first));
         if (!File.Exists(databasePath)) return [];
-        using var connection = OpenExistingReadOnly();
+        using var connection = OpenExistingReadOnly(); var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$s AND id BETWEEN $first AND $last ORDER BY id";
-        command.Parameters.AddWithValue("$s", sessionId);
+        command.Parameters.AddWithValue("$s", canonical);
         command.Parameters.AddWithValue("$first", first); command.Parameters.AddWithValue("$last", last);
         using var reader = command.ExecuteReader();
         var blocks = new List<ArchiveBlockRecord>();
         while (reader.Read())
         {
-            var block = new ArchiveBlockRecord(sessionId, reader.GetString(0), reader.GetInt64(1), reader.GetInt32(2),
+            var block = new ArchiveBlockRecord(canonical, reader.GetString(0), reader.GetInt64(1), reader.GetInt32(2),
                 reader.GetString(3), reader.GetInt64(4), reader.GetInt64(5),
                 NullableText(reader, 6) is string ids ? JsonNode.Parse(ids) as JsonArray : null,
                 reader.GetInt64(7), reader.GetInt64(8), NullableNumber(reader, 9), NullableNumber(reader, 10),
                 reader.GetString(11), NullableText(reader, 12) is string facts ? JsonNode.Parse(facts) as JsonArray : null,
                 reader.GetInt64(13));
-            ValidateBlock(block);
+            ValidateBlock(block, canonical);
             blocks.Add(block);
         }
         return blocks;
@@ -202,7 +202,7 @@ public sealed partial class SqliteArchiveMessageStore
     public void RollbackInsertedBlocks(IReadOnlyList<ArchiveBlockRecord> blocks)
     {
         if (blocks.Count == 0) return;
-        using var connection = OpenConfigured();
+        using var connection = OpenConfigured(); RequireWriteIdentity(connection, sessionId);
         using var tx = connection.BeginTransaction(deferred: false);
         foreach (var block in blocks)
         {

@@ -102,7 +102,7 @@ public sealed partial class SqliteArchiveMessageStore
     public SqliteArchiveMessageStore(string databasePath, string sessionId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrEmpty(sessionId);
         this.databasePath = Path.GetFullPath(databasePath);
         this.sessionId = sessionId;
     }
@@ -113,6 +113,19 @@ public sealed partial class SqliteArchiveMessageStore
     {
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
         using var connection = Open();
+        RequireWriteIdentity(connection, sessionId);
+        InitializeSchema(connection);
+    }
+
+    internal static void InitializeDatabase(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        connection.Open(); InitializeSchema(connection);
+    }
+
+    private static void InitializeSchema(SqliteConnection connection)
+    {
         Execute(connection, "PRAGMA journal_mode=WAL");
         Execute(connection, "PRAGMA synchronous=FULL");
         Execute(connection, "PRAGMA busy_timeout=5000");
@@ -131,7 +144,7 @@ public sealed partial class SqliteArchiveMessageStore
         ValidateSchema(connection);
         InitializeBlocks(connection);
         InitializeBranches(connection);
-        ValidateSupportedAncillaryState(connection);
+        InitializeReservations(connection);
     }
 
     public IReadOnlyList<ArchiveMessageRecord> WriteMessages(IReadOnlyList<ArchiveMessageRecord> records)
@@ -140,6 +153,7 @@ public sealed partial class SqliteArchiveMessageStore
         if (records.Any(record => record.SessionId != sessionId))
             throw new InvalidOperationException("Archive message batches must contain the bound Session ID only.");
         using var connection = OpenConfigured();
+        RequireWriteIdentity(connection, sessionId);
         using var transaction = connection.BeginTransaction(deferred: false);
         using var select = connection.CreateCommand();
         select.Transaction = transaction;
@@ -190,6 +204,7 @@ public sealed partial class SqliteArchiveMessageStore
     {
         if (records.Count == 0) return;
         using var connection = OpenConfigured();
+        RequireWriteIdentity(connection, sessionId);
         using var transaction = connection.BeginTransaction(deferred: false);
         using var remove = connection.CreateCommand();
         remove.Transaction = transaction;
@@ -221,14 +236,16 @@ public sealed partial class SqliteArchiveMessageStore
 
     public IReadOnlyList<ArchiveMessageRecord> ReadMessages()
     {
+        if (!File.Exists(databasePath)) return [];
         using var connection = OpenExistingReadOnly();
+        var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session ORDER BY seq";
-        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$session", canonical);
         using var reader = command.ExecuteReader();
         var records = new List<ArchiveMessageRecord>();
         while (reader.Read())
-            records.Add(ArchiveMessageRecord.FromStored(sessionId, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
+            records.Add(ArchiveMessageRecord.FromStored(canonical, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
         return records;
     }
 
@@ -238,15 +255,16 @@ public sealed partial class SqliteArchiveMessageStore
         if (startSeq <= 0 || endSeq < startSeq || endSeq > 9007199254740991L)
             throw new ArgumentOutOfRangeException(nameof(startSeq), "Archive message range must be positive and ordered.");
         using var connection = OpenExistingReadOnly();
+        var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND seq BETWEEN $first AND $last ORDER BY seq";
-        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$session", canonical);
         command.Parameters.AddWithValue("$first", startSeq);
         command.Parameters.AddWithValue("$last", endSeq);
         using var reader = command.ExecuteReader();
         var records = new List<ArchiveMessageRecord>();
         while (reader.Read())
-            records.Add(ArchiveMessageRecord.FromStored(sessionId, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
+            records.Add(ArchiveMessageRecord.FromStored(canonical, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
         return records;
     }
 
@@ -256,12 +274,13 @@ public sealed partial class SqliteArchiveMessageStore
             throw new ArgumentOutOfRangeException(nameof(seq), "Archive message sequence must be a positive safe integer.");
         if (!File.Exists(databasePath)) return null;
         using var connection = OpenExistingReadOnly();
+        var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND seq=$seq";
-        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$session", canonical);
         command.Parameters.AddWithValue("$seq", seq);
         using var reader = command.ExecuteReader();
-        return reader.Read() ? ArchiveMessageRecord.FromStored(sessionId, reader.GetString(0), reader.GetInt64(1),
+        return reader.Read() ? ArchiveMessageRecord.FromStored(canonical, reader.GetString(0), reader.GetInt64(1),
             reader.GetDouble(2), reader.GetString(3), reader.GetString(4)) : null;
     }
 
@@ -288,7 +307,7 @@ public sealed partial class SqliteArchiveMessageStore
         {
             DataSource = databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 5
         }.ToString());
-        try { connection.Open(); ValidateLookupReservation(connection, sessionId); return connection; }
+        try { connection.Open(); return connection; }
         catch { connection.Dispose(); throw; }
     }
 
@@ -350,7 +369,6 @@ public sealed partial class SqliteArchiveMessageStore
         if (foreignReader.Read()) throw new InvalidDataException("archive_messages must not contain foreign-key constraints.");
     }
 
-    private void ValidateSupportedAncillaryState(SqliteConnection connection) => ValidateLookupReservation(connection, sessionId);
 
     private static bool TableExists(SqliteConnection connection, string table)
     {

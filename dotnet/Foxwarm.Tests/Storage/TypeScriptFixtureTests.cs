@@ -61,7 +61,7 @@ public sealed class TypeScriptFixtureTests
         Assert.Equal(4, archive.WriteMessages(records).Count);
         new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json").Write(document);
 
-        Assert.Equal(["archive_blocks", "archive_branches", "archive_messages"], UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite")));
+        Assert.Equal(["archive_blocks", "archive_branches", "archive_messages", "archive_session_id_reservations"], UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite")));
         var replayPath = Path.Combine(temp.Path, "ts-replay-result.json");
         TypeScriptOracle.Run("replay-ts", temp.Path, replayPath);
         Assert.Equal(0, JsonNode.Parse(File.ReadAllText(replayPath))!["insertedCount"]!.GetValue<int>());

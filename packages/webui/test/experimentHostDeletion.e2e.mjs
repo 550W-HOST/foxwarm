@@ -48,6 +48,8 @@ const peer = createServer(async (request, response) => {
   } catch (error) { errors.push(error.stack); response.destroy() }
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
+// This focused deletion probe owns no startup task; the producer is covered by experimentHostOnboot.
+await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
 await writeModelFixture(fixture.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000, asyncCompact: true } } })
 const state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), faults = join(state, 'experiment-faults'), rows = [], legacy = new Set()
 await mkdir(sessions, { recursive: true }); await mkdir(faults, { recursive: true }); await writeFile(join(faults, 'record-admissions'), '')
@@ -89,7 +91,7 @@ async function send(id, key, extra = '') { await message(id, 'CASE:' + key + ' '
 const fileFor = id => join(sessions, id + '.json'), marker = (id, suffix) => join(faults, 'id_' + Buffer.from(id).toString('base64url') + '.' + suffix)
 const observations = async () => (await readFile(join(faults, 'record-admissions.events'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
 const coldBytes = new Map(); for (const row of rows.filter(row => row.parentSessionId === 'root')) coldBytes.set(row.id, await readFile(fileFor(row.id), 'utf8'))
-const retainedBefore = audit(), independent = join(state, 'toolscript-runs', 'retained-run.json')
+let retainedBefore = audit(); const independent = join(state, 'toolscript-runs', 'retained-run.json')
 await mkdir(join(state, 'toolscript-runs'), { recursive: true }); await writeFile(independent, '{"status":"active","ownerSessionId":"root","relatedManagedSessions":["root"]}')
 try {
   await fixture.start()
@@ -97,7 +99,8 @@ try {
   socket.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(socket, 'open')
   socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: [], sessionListIds: ['root', 'source', 'tree'], sessionListActive: true }))
   await until(() => frames.some(frame => frame.type === 'subscriptions-applied'), 'metadata-only initial subscriptions')
-  assert.deepEqual(await observations(), []); assert.equal(records.length, 0)
+  assert.deepEqual(await observations(), ['created main']); assert.equal(records.length, 0)
+  assert(audit()[2].some(row => row.session_id === 'main')); retainedBefore = audit()
   const cursor = (await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2')).body.nextCursor
   const single = await remove('root-alias'); assert.deepEqual(single.deletedSessionIds, ['root']); assert.equal(single.detachedChildSessionIds.length, 1001)
   for (const [id, bytes] of coldBytes) { assert.equal(await readFile(fileFor(id), 'utf8'), bytes); assert.equal((await dto(id)).parentSessionId, null) }
