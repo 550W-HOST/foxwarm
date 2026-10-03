@@ -58,6 +58,8 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 
 ## Integration
 
+- Primitive/provider context preserves the trusted script producer hint without changing owner authority. Custom exec backends supply retained data themselves, never through Core display parsing; see [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 - `src/nodeExecutionService.ts` owns authorization, RPC validation/bounds, visibility filtering, and authoritative Main-side provider resolution.
 - `src/tools/resolvedTools.ts` carries the exact `executionNode`; it does not classify remote or sandbox implementations.
 - `src/nodes/manager.ts` remains the authenticated remote transport/runtime owner behind `AuthenticatedRemoteNodeProvider`.

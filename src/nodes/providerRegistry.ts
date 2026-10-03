@@ -55,13 +55,14 @@ export type NodeToolRequest = NodeToolRequestBase & ({
     currentNode?: string;
     cwd?: string;
     deferSessionCwdSync?: boolean;
+    programmatic?: true;
     externalExec?: never;
   };
 } | {
   owner: ExternalNodeOwner;
   sourceSessionId?: never;
   context: {
-    agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never;
+    agent?: never; currentNode?: string; cwd?: string; deferSessionCwdSync?: never; programmatic?: never;
     externalExec?: { execId: string; completionCapability: string };
   };
 });
@@ -426,6 +427,7 @@ export class NodeProviderRegistry {
       ...(request.owner
         ? { externalOwner: request.owner, externalCwd: request.context.cwd }
         : { sessionId: request.sourceSessionId, session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId } }),
+      ...(request.context.programmatic ? { programmatic: true as const } : {}),
       fileOperations: operations,
       resolveFilePath: (filePath: string) => filePath,
       dirnameFilePath: providerParent,
@@ -801,6 +803,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       request.args,
       request.sourceSessionId,
       routingSnapshot,
+      request.context.programmatic,
     );
   }
 

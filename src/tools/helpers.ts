@@ -38,6 +38,8 @@ export interface ToolContext {
     /** Resolved-target file primitives; local production uses the native backend. */
     fileOperations?: FileOperations;
     deferSessionCwdSync?: boolean;
+    /** Trusted producer hint for script data, never derived from tool arguments. */
+    programmatic?: true;
     /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
     persistCurrentSession?: () => Promise<void>;
     /** Main-local detached read marker; permits read helpers to trust ctx.session without hydration or persistence. */
@@ -177,8 +179,8 @@ export function resolveAgentMemoryPath(filePath: string, agentName: string = 'ma
     return resolved;
 }
 
-export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number, operations?: FileOperations) {
-    return readFileToolPath(fullPath, displayPath, startLine, endLine, operations);
+export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number, operations?: FileOperations, programmatic = false) {
+    return readFileToolPath(fullPath, displayPath, startLine, endLine, operations, programmatic);
 }
 
 export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }, operations?: FileOperations) {

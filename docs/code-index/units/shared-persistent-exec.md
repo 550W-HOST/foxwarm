@@ -8,6 +8,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 
 ## Key Exports
 
+- `buildProgrammaticExecResult` reads a retained, byte-budgeted log snapshot only for trusted script callers; ordinary display formatting and process lifecycle are unchanged. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 - `PersistentExecManager` — Main class orchestrating process spawning, tracking, reconciliation, and result formatting
 - `RunningExecEntry` — Interface describing a tracked running process, including its retained exact generated script path and either a Session/Agent or disjoint external owner
 - `ExecStatus` — Interface for process exit status

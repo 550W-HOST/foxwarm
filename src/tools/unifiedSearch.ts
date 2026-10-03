@@ -481,6 +481,7 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
                 description: item?.description || '',
                 server: serverName,
                 ...(includeSchema ? { inputSchema: item?.inputSchema || null } : {}),
+                ...(includeSchema && ctx?.programmatic && item?.outputSchema !== undefined ? { outputSchema: item.outputSchema } : {}),
                 ...(includeSchema && item?.annotations ? { annotations: item.annotations } : {}),
             });
         }
@@ -564,11 +565,14 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
             return tool;
         }
 
-        const { inputSchema, annotations, ...summaryTool } = tool;
+        const { inputSchema, outputSchema, annotations, ...summaryTool } = tool;
         return summaryTool;
     });
 
-    return { output: formatSearchToolsOutput(tools, collected.length, warnings, includeSchema) };
+    return {
+        output: formatSearchToolsOutput(tools, collected.length, warnings, includeSchema),
+        ...(ctx?.programmatic ? { tools, ...(warnings.length ? { warnings } : {}) } : {}),
+    };
 }
 
 export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {

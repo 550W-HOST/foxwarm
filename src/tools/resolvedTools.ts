@@ -174,7 +174,7 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
       const result = await executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
         resolved.routingSnapshot
           ? { ...resolved.routingSnapshot, ...(ctx.deferSessionCwdSync ? { deferSessionCwdSync: true } : {}) }
-          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined));
+          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic);
       if (!fileTool || !result || typeof result !== 'object' || Array.isArray(result)
         || !Object.prototype.hasOwnProperty.call(result, RESOLVED_PATH_SIDECAR)) return result;
       const { [RESOLVED_PATH_SIDECAR]: paths, ...visible } = result;

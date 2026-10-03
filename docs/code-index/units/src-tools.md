@@ -5,6 +5,8 @@ Secondary files: src/tools/toolAuthorizationTools.ts, src/handoffConfirmationEna
 
 ## Purpose
 
+- Trusted `ToolContext.programmatic` lets selected producers add script-only data; it is never sourced from tool arguments. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 Implements the core tool registry and execution layer for the agent system. Defines all built-in tool definitions (parameters, descriptions, permissions), dispatches tool calls to their implementations, and manages file I/O, command execution, memory operations, MCP integration, node management, and session/agent orchestration.
 
 ## Key Exports (from src/tools.ts facade)

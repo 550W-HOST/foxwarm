@@ -11,6 +11,7 @@ import {
   type ExecCompletionDispatcher,
   type ExecStatus,
   type RunningExecEntry,
+  type ProgrammaticExecResult,
   type StartPersistentExecOptions,
 } from '../packages/shared/dist/persistentExec';
 import { nativeProcessOperations, type ProcessOperations } from '../packages/shared/dist/processOperations';
@@ -46,6 +47,7 @@ export interface ExecRuntime {
   waitForExecCompletion(execId: string, timeoutMs: number): Promise<ExecStatus | null>;
   markExecForBackgroundNotification(execId: string): Promise<RunningExecEntry | null>;
   finalizeForegroundExec(execId: string): Promise<void>;
+  buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult>;
   buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string>;
   buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds?: number, warning?: string): Promise<string>;
   readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
@@ -84,6 +86,7 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     waitForExecCompletion: (execId, timeoutMs) => manager.waitForExecCompletion(execId, timeoutMs),
     markExecForBackgroundNotification: execId => manager.markExecForBackgroundNotification(execId),
     finalizeForegroundExec: execId => manager.finalizeForegroundExec(execId),
+    buildProgrammaticExecResult: (entry, status, output) => manager.buildProgrammaticExecResult(entry, status, output),
     buildForegroundExecResult: (entry, status, warning) => manager.buildForegroundExecResult(entry, status, warning),
     buildBackgroundTimeoutResult: (entry, timeoutSeconds = DEFAULT_EXEC_TIMEOUT_SECONDS, warning) => manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning),
     readFinishedExecWorkingDirectory: entry => manager.readFinishedExecWorkingDirectory(entry),
@@ -132,6 +135,10 @@ export async function markExecForBackgroundNotification(execId: string): Promise
 
 export async function finalizeForegroundExec(execId: string): Promise<void> {
   await defaultRuntime.finalizeForegroundExec(execId);
+}
+
+export async function buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult> {
+  return defaultRuntime.buildProgrammaticExecResult(entry, status, output);
 }
 
 export async function buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {

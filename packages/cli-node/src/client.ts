@@ -222,7 +222,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { remoteExecBackgroundRegistration: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
+      features: { remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -793,6 +793,7 @@ export class NodeClient {
       const resolvedPaths: ResolvedToolPath[] = [];
       const ctx = {
         sessionId,
+        ...(message.programmatic === true ? { programmatic: true as const } : {}),
         session: {
           id: sessionId,
           agent: agentName,

@@ -213,7 +213,11 @@ export function registerShellNodeHttpRoutes(server: HttpServer): () => void {
           if (task.state === 'foreground') {
             nodesManager.registerRemoteExecBackground(nodeId, identity);
             task.state = 'background';
-            nodesManager.handleToolResponse(request.callId, { execId: identity.execId, output: `${task.warning ? `${task.warning}\n` : ''}Command continues in background. Exec ID: ${identity.execId}. Completion will be reported to the originating session; full output is not retained.` }, nodeId);
+            nodesManager.handleToolResponse(request.callId, {
+              execId: identity.execId,
+              output: `${task.warning ? `${task.warning}\n` : ''}Command continues in background. Exec ID: ${identity.execId}. Completion will be reported to the originating session; full output is not retained.`,
+              ...(request.programmatic ? { status: 'running', truncated: true } : {}),
+            }, nodeId);
           }
         } else {
           const output = `${task.warning ? `${task.warning}\n` : ''}${outputText(sample, total, exitCode)}`;
@@ -224,7 +228,16 @@ export function registerShellNodeHttpRoutes(server: HttpServer): () => void {
                 completionCapability: identity.completionCapability, eventTimestamp: Date.now(),
               });
             } catch { res.status(503).end(); return; }
-          } else nodesManager.handleToolResponse(request.callId, { output, exitCode, totalBytes: total, truncated: total > OUTPUT_BYTES }, nodeId);
+          } else {
+            const fullText = request.programmatic && total <= OUTPUT_BYTES && !sample.includes(0) && Buffer.from(sample.toString('utf8')).equals(sample);
+            nodesManager.handleToolResponse(request.callId, {
+              output, exitCode, totalBytes: total, truncated: total > OUTPUT_BYTES,
+              ...(request.programmatic ? {
+                status: 'completed', execId: identity.execId, sizeBytes: total,
+                truncated: !fullText, ...(fullText ? { content: sample.toString('utf8') } : {}),
+              } : {}),
+            }, nodeId);
+          }
           task.state = 'finished';
           task.script = '';
           task.request = { ...request, args: {} };

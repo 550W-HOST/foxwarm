@@ -5,6 +5,8 @@ Secondary files: src/nodes/manager.ts, src/nodes/providerRegistry.ts, src/nodes/
 
 ## Purpose
 
+Trusted script callers can receive actual complete short text from the existing sample, not a new capture stream. Larger/binary output and immediate running replies remain explicitly incomplete; see [programmatic capability limits](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 Adds an exec-only authenticated remote Node without Node.js, JSON parsing, or WebSocket dependencies on the client. Main retains Node identity, tool routing, execution identity, and Session completion authority. The HTTP transport is process-local, not a durable task queue or crash-recovery system.
 
 ## Key exports

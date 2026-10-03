@@ -18,6 +18,8 @@ import { nativeProcessOperations } from './processOperations';
 
 export interface NodeToolContext {
   sessionId?: string;
+  /** Trusted caller context, not a tool argument or permission identity. */
+  programmatic?: true;
   session?: { agent?: string; cwd?: string; currentNode?: string };
   externalOwner?: ExternalNodeOwner;
   externalExecManager?: PersistentExecManager;
@@ -77,7 +79,7 @@ async function dirnameToolPath(filePath: string, ctx: NodeToolContext): Promise<
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {
   const { filePath, startLine, endLine } = args;
   const fullPath = resolveToolPath(filePath, ctx);
-  const result = await readFileToolPath(fullPath, filePath, startLine, endLine, ctx.fileOperations);
+  const result = await readFileToolPath(fullPath, filePath, startLine, endLine, ctx.fileOperations, ctx.programmatic === true);
   ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
   return result;
 }
@@ -274,7 +276,7 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
     try {
       const output = await manager.buildForegroundExecResult(entry, status, resolvedTimeout.warning);
       if (ctx.onExecForeground) ctx.onExecForeground(entry.id, output, await manager.getResolvedExecCwd(entry));
-      return output;
+      return ctx.programmatic ? await manager.buildProgrammaticExecResult(entry, status, output) : output;
     } finally {
       await manager.finalizeForegroundExec(entry.id);
     }
@@ -284,7 +286,8 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   }
   ctx.onExecBackground?.(entry.id);
   await manager.markExecForBackgroundNotification(entry.id);
-  return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
+  const output = await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);
+  return ctx.programmatic ? manager.buildProgrammaticExecResult(entry, null, output) : output;
 }
 
 class SharedBrowserManager {

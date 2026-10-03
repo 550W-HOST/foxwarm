@@ -26,6 +26,7 @@ type ToolContext = {
   toolUseId?: string;
   onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
   sessionPlacement?: 'local' | 'session-worker';
+  programmatic?: true;
 };
 
 function assertManagedPlacement(ctx: ToolContext): void {
@@ -210,10 +211,9 @@ function importNativeMonty(): Promise<MontyModule> {
 }
 
 function buildToolScriptSource(code: string): string {
-  if (!/^\s*def\s+main\s*\(\s*args\b/m.test(code)) {
-    throw new Error('ToolScript scripts must define `def main(args):` and return a result explicitly.');
-  }
-  return `${code.trimEnd()}\n\nmain(args)\n`;
+  return /^\s*def\s+main\s*\(\s*args\b/m.test(code)
+    ? `${code.trimEnd()}\n\nmain(args)\n`
+    : code;
 }
 
 function parseTimeoutSecs(value: any, fallback = DEFAULT_TOOLSCRIPT_TIMEOUT_SECS): number {
@@ -1143,7 +1143,7 @@ async function executeScriptHostCall(
     try {
       // Nested runs must not replace the outer invocation's presentation metadata.
       const { onToolScriptSubCalls: _outerSubCalls, ...nestedContext } = ctx;
-      const result = await toolsModule.call_tool(wrapperArgs, nestedContext);
+      const result = await toolsModule.call_tool(wrapperArgs, { ...nestedContext, programmatic: true });
       state.executedTools.push(summaryName);
       finishHostCall('completed');
 

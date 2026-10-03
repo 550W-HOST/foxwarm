@@ -41,7 +41,7 @@ interface ToolDefinition {
 interface NodeCapabilities {
   tools: ToolDefinition[];
   services?: Record<string, number>;
-  features?: { remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number };
+  features?: { remoteExecBackgroundRegistration?: boolean; externalToolOwner?: number; programmaticToolData?: boolean };
 }
 
 interface Node {
@@ -60,7 +60,7 @@ interface Node {
 export interface HttpExecTransport {
   dispatch(request: {
     callId: string; tool: string; args: Record<string, any>; sessionId: string;
-    backgroundExecId?: string; completionCapability?: string; sessionCwd?: string;
+    backgroundExecId?: string; completionCapability?: string; sessionCwd?: string; programmatic?: true;
   }): void;
   cancel(callId: string): void;
   disconnect(reason: string): void;
@@ -703,6 +703,7 @@ export class NodesManager {
     args: Record<string, any>,
     sessionId: string,
     routingSnapshot?: { currentNode: string; cwd?: string },
+    programmatic?: true,
   ): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!node) {
@@ -760,6 +761,7 @@ export class NodesManager {
           args: args,
           sessionId: sourceSessionId,
           agentName: session.agent || 'main',
+          ...(programmatic && (node.httpExec || node.capabilities?.features?.programmaticToolData === true) ? { programmatic: true as const } : {}),
           timeoutMs,
           ...(remoteExec ? { backgroundExecId: remoteExec.execId, completionCapability: remoteExec.completionCapability } : {}),
           ...(shouldSendCwd ? { sessionCwd: routedCwd } : {}),

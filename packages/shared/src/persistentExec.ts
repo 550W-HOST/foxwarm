@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { ExternalNodeOwner } from './nodeProtocol';
+import { nativeFileOperations } from './fileOperations';
 import path from 'path';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
 import { expandAgentPathVariable } from './agentPathVariables';
@@ -77,6 +78,17 @@ export interface ExecStatus {
   finishedAt: string;
   error?: string;
 }
+
+export type ProgrammaticExecResult = {
+  output: string;
+  content?: string;
+  truncated: boolean;
+  status: 'completed' | 'running';
+  exitCode?: number | null;
+  execId: string;
+  logPath: string;
+  sizeBytes?: number;
+};
 
 export interface RunningExecEntry {
   id: string;
@@ -995,6 +1007,23 @@ export class PersistentExecManager {
 
   async finalizeForegroundExec(execId: string): Promise<void> {
     await this.removeRunningExec(execId);
+  }
+
+  /** Read only the retained byte snapshot; display footers are never treated as capture data. */
+  async buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult> {
+    const metadata = {
+      output, status: status ? 'completed' as const : 'running' as const,
+      ...(status ? { exitCode: status.exitCode } : {}), execId: entry.id, logPath: entry.logPath,
+    };
+    try {
+      const stat = await nativeFileOperations.stat(entry.logPath);
+      if (stat.size > MAX_FULL_LOG_READ_BYTES) return { ...metadata, truncated: true, sizeBytes: stat.size };
+      const bytes = await nativeFileOperations.read(entry.logPath, 0, stat.size);
+      return { ...metadata, content: bytes.toString('utf8'), truncated: false, sizeBytes: bytes.length };
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+      return { ...metadata, truncated: true };
+    }
   }
 
   async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {

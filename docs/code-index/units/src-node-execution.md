@@ -11,8 +11,8 @@ Provides the versioned RPC boundary for canonical Node tool execution over provi
 
 - `plainJsonWithin(value, maxBytes)` — shared bounded plain-JSON copy for Node capability/schema disclosure; no Session authority is implied.
 
-- `nodeExecutionServiceDescriptor` — version 4 descriptor with fixed complete-capability execute, topology/provider list, selection validation, provider lifecycle, and compound copy methods; version 4 adds structured Node unavailability and core protocol compatibility to topology.
-- `createNodeExecutionServiceHandler()` — validates source identity, optional exact worker-source fence, non-master target, isolation binding, args, and optional routing snapshot before authoritative provider resolution.
+- `nodeExecutionServiceDescriptor` — version 5 descriptor with fixed complete-capability execute, topology/provider list, selection validation, provider lifecycle, and compound copy methods; topology retains structured Node unavailability and core protocol compatibility; version 5 adds the trusted optional programmatic producer hint to execute.
+- `createNodeExecutionServiceHandler()` — validates source identity, optional exact worker-source fence, non-master target, isolation binding, args, optional routing snapshot, and independently validated producer hint before authoritative provider resolution.
 - `executeNodeTool()` / `listNodeTopology()` / `validateNodeSelection()` / `listNodeLifecycleProviders()` / `executeNodeLifecycle()` / `copyBetweenNodes()` — placement-neutral callers for Node execution and operation-specific topology/lifecycle/copy behavior.
 - `initializeNodeExecution()` / `shutdownNodeExecution()` — owned-local or borrowed-reverse client lifecycle with one-way terminal fencing.
 - `resetNodeExecutionForTests()` — explicit test-only reset after terminal shutdown.
@@ -43,3 +43,5 @@ Production initialization is bound to one exact local/borrowed transport; a conf
 ## Tests
 
 Focused coverage proves shared direct/dynamic routing, master-local bypass with an RPC spy, isolated allow/deny, stale/offline/unadvertised rejection, parallel-exec and dynamic cwd snapshot behavior, result cloning, authenticated remote image/error handling, ToolScript nesting, terminal accepted-call drain/new-call fencing, lifecycle routing/confirmation/source fences/bounds, and deterministic sandbox-kind providers that list/select/invoke/manage Nodes without a WebSocket.
+
+Script data propagation and capability limits are canonical in [D-dispatch-programmatic-tool-data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).

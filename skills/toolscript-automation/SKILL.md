@@ -14,21 +14,20 @@ Read and adapt:
 - `examples/toolscript/automation_basic.py`
 - `examples/toolscript/README.md`
 
-Every ToolScript defines `main(args)` and returns its result explicitly:
+Write ordinary top-level code. The `args` input is available throughout the script:
 
 ```python
-def main(args):
-    base_dir = args.get("baseDir", "examples/toolscript").rstrip("/")
+base_dir = args.get("baseDir", "examples/toolscript").rstrip("/")
 
-    listing = call_tool({
-        "source": "node",
-        "name": "read",
-        "args": {"filePath": base_dir},
-    })
-    print(listing[:200])
+listing = call_tool({
+    "source": "node",
+    "name": "read",
+    "args": {"filePath": base_dir},
+})
+print(listing[:200])
 
-    label = ask_agent("Reply with a short label")
-    return {"label": label, "listingPreview": listing[:200]}
+label = ask_agent("Reply with a short label")
+return {"label": label, "listingPreview": listing[:200]}
 ```
 
 Run a file:
@@ -43,15 +42,15 @@ Or run a small inline script with the `code` argument. The default mode is `fore
 
 1. Discover and test the required tools in the normal agent loop.
 2. Confirm their input arguments and return values.
-3. Write one self-contained script with an explicit `main(args)` entrypoint.
+3. Write one self-contained script using top-level code and an explicit result.
 4. Run it with `run_script(...)`.
 5. Inspect `status`, `result`, `error`, and any waiting fields.
 6. Resume agent-input or timeout waits with `continue_script(...)`.
 
 ## Script contract
 
-- Top-level helpers may be defined before or after `main(args)`; Foxwarm invokes `main` only after the complete source has loaded.
-- Define a synchronous `main(args)`. Foxwarm calls it with one object and uses its explicit return value as `result`.
+- Top-level source runs directly in Monty. Use `args` as input and `return` to select the result; native final-expression behavior is also available.
+- Existing files defining `def main(args):` are called automatically after the source loads. Waiting runs continue from their stored snapshot, without reparsing or rewriting the source.
 - Keep the script self-contained. Imports of neighboring `.py` files are unavailable.
 - `print(...)` writes to the run's captured stdout; it does not emit a normal outer-session message.
 - Host-call failures enter the script as runtime exceptions. Catch `Exception` when a failure is recoverable.
@@ -65,9 +64,8 @@ def read_optional(path):
         return None
 
 
-def main(args):
-    content = read_optional(args["path"])
-    return {"content": content}
+content = read_optional(args["path"])
+return {"content": content}
 ```
 
 ## Python subset
@@ -93,28 +91,27 @@ Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", .
 Use one bridge for builtin, MCP, and node tools. Environment capabilities such as read/write/edit/apply_patch/exec/browse use `source: "node"`; omitting `nodeId` targets the session current node. The unified descriptor is the clearest form:
 
 ```python
-def main(args):
-    content = call_tool({
-        "source": "node",
-        "name": "read",
-        "args": {"filePath": args["path"]},
-    })
+content = call_tool({
+    "source": "node",
+    "name": "read",
+    "args": {"filePath": args["path"]},
+})
 
-    repos = call_tool({
-        "source": "mcp",
-        "server": "github",
-        "name": "search_repos",
-        "args": {"query": "foxwarm"},
-    })
+repos = call_tool({
+    "source": "mcp",
+    "server": "github",
+    "name": "search_repos",
+    "args": {"query": "foxwarm"},
+})
 
-    screenshot = call_tool({
-        "source": "node",
-        "nodeId": args["nodeId"],
-        "name": "android_screenshot",
-        "args": {"inline": True},
-    })
+screenshot = call_tool({
+    "source": "node",
+    "nodeId": args["nodeId"],
+    "name": "android_screenshot",
+    "args": {"inline": True},
+})
 
-    return {"content": content, "repos": repos, "screenshot": screenshot}
+return {"content": content, "repos": repos, "screenshot": screenshot}
 ```
 
 For a simple builtin call, the string form is supported:
@@ -129,29 +126,49 @@ Common shapes:
 
 | Call | Return value |
 | --- | --- |
-| `read` on a text file | string containing file text |
+| `read` on a text file | dictionary with `output`, exact selected `content` when available, `truncated`, source path and byte/range metadata |
 | `read` on a directory | string containing a formatted directory listing |
 | `read` on an image | dictionary with image metadata and inline data |
-| `exec` | string containing command output and any timeout/truncation notice |
+| `exec` | dictionary with `output`, captured `content` when available, `truncated`, `status`, completion `exitCode`, `execId` and log metadata |
 | `write` / `edit` | success string; failure raises an exception |
 | `apply_patch` | string summarizing changed files |
-| `search_tools` | dictionary containing one `output` string with bounded declarations, counts, and warnings |
+| `search_tools` | dictionary with readable `output`, source-qualified `tools` descriptors, requested schemas and actual warnings when present |
 | `request_model_without_context` | dictionary containing `text` and `parts` (text and stored-image references) |
 
 Use `search_tools` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
 
-When discovery belongs inside a script, consume the text directly rather than expecting a structured tool array:
+When discovery belongs inside a script, use the structured descriptors:
 
 ```python
-def main(args):
-    catalog = call_tool("search_tools", {
-        "query": args["query"],
-        "sources": ["builtin"],
-        "limit": 5,
-    })
-    print(catalog["output"])
-    return {"catalog": catalog["output"]}
+catalog = call_tool("search_tools", {
+    "query": args["query"],
+    "sources": ["builtin"],
+    "limit": 5,
+})
+print(catalog["output"])
+return {"toolIds": [tool["toolId"] for tool in catalog["tools"]]}
 ```
+
+### Script-only text data
+
+Nested `read`, `exec` and `search_tools` calls opt into data fields automatically. Their `output` remains the ordinary readable display; other tools and MCP values keep their native shapes. There is no format argument and no common result envelope. Ordinary agent calls do not add these fields.
+
+For retained text reads and command captures, full `content` is available up to **1,048,576 source bytes (1 MiB), inclusive**, without human-display line, character or token shortening. A small selected file range can fit even when its source is larger. `content` preserves existing UTF-8 decoding and recognized newlines, and excludes metadata footers, empty-output labels and synthetic separators. Empty content is `""`. Above the budget, `content` is omitted and `truncated` is true; use the real source path or log locator when supplied. Running exec content is a captured snapshot so far, not the command's future output. Nonzero exits remain results.
+
+```python
+import json
+
+data = call_tool("read", {"filePath": args["path"]})
+if data["truncated"]:
+    return {"needsRange": True, "filePath": data["filePath"]}
+return json.loads(data["content"])
+```
+
+Current CLI Nodes advertise programmatic data support. Older peers retain their native results and cannot promise these fields. Primitive file backends use the shared read producer; custom exec backends must supply retained data themselves. Shell HTTP retains only up to 8,192 head/tail bytes: it can supply complete short text, but longer output, binary samples and immediate running responses do not satisfy the 1 MiB full-content guarantee. Do not parse display output to reconstruct missing data.
+
+Discovery uses the existing ranking, visibility, result limit and first-ten schema cap. Available MCP `outputSchema` values are included only when schemas are requested; missing output contracts remain unknown.
+
+Explicitly returned or printed data still passes through the final outer model-output guard. Reduce large data inside the script and return only the selected result.
 
 Nested relative file paths and `exec.cwd` values resolve from the owner session's working directory. They do not resolve from the ToolScript file's directory. Pass explicit paths through `args` when the session working directory is not guaranteed.
 
@@ -162,9 +179,8 @@ Nested calls execute normally and appear as ToolScript activity in the UI and ru
 `ask_agent(question)` pauses the run and returns control to the owning agent:
 
 ```python
-def main(args):
-    answer = ask_agent("Continue? Reply yes or no.")
-    return {"answer": answer}
+answer = ask_agent("Continue? Reply yes or no.")
+return {"answer": answer}
 ```
 
 The run returns:
@@ -187,11 +203,10 @@ continue_script({runId: "...", continuationId: "...", input: "yes"})
 This performs one model request without the owner's conversation history and without tools:
 
 ```python
-def main(args):
-    summary = request_model_without_context(
-        "Summarize this in one sentence: " + args["text"]
-    )
-    return summary
+summary = request_model_without_context(
+    "Summarize this in one sentence: " + args["text"]
+)
+return summary
 ```
 
 Pass `model="provider/model"` to select a model. If omitted, the owner session's selected model is used.
@@ -199,9 +214,8 @@ Pass `model="provider/model"` to select a model. If omitted, the owner session's
 The result contains `text` and `parts`. Image parts reference stored bytes rather than containing base64. Reasoning, tool calls, and provider metadata are not included. To return images to the calling session, return the result object, or an object containing its `parts`:
 
 ```python
-def main(args):
-    result = request_model_without_context(args["prompt"])
-    return result
+result = request_model_without_context(args["prompt"])
+return result
 ```
 
 Returned images become tool-result images that the session can display and access with the image tools. Reading only `result["text"]` does not return the images.
@@ -262,7 +276,7 @@ Use `get_toolscript_run` or `list_toolscript_runs` for full diagnostics:
 | `subCalls` | latest execution slice |
 | `hostCallCount` | latest execution slice |
 | `lastHostCall` | most recent host call |
-| `result` | explicit return value from a completed `main(args)` |
+| `result` | completed script result |
 
 `continue_script` returns only newly produced stdout, omitting it when empty. Persisted records retain cumulative output and diagnostic context.
 

@@ -125,6 +125,14 @@ test('actual POSIX shell/curl Node uses Main dispatch, bounded output and scoped
     assert.match(short.output, new RegExp(startup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(short.output, /hello/);
     assert.equal(short.exitCode, 7);
+    assert.equal(short.content, undefined);
+    const scriptShort = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: "printf '{\"ok\":true}\\n'; exit 7" }, undefined, true);
+    assert.equal(scriptShort.content, '{"ok":true}\n'); assert.equal(scriptShort.exitCode, 7);
+    assert.equal(scriptShort.status, 'completed'); assert.equal(scriptShort.truncated, false);
+    const scriptLimited = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: "dd if=/dev/zero bs=16384 count=1 2>/dev/null | tr '\\000' x" }, undefined, true);
+    assert.equal(scriptLimited.sizeBytes, 16384); assert.equal(scriptLimited.truncated, true);
+    assert.equal(scriptLimited.content, undefined); assert.equal(scriptLimited.logPath, undefined);
+
     assert.equal(await fs.pathExists(path.join(root, 'error-effect')), false, 'an HTTP error page cannot become executable task content');
     const relative = await executeNodeTool(session.id, 'shell-fixture', 'exec', { command: 'pwd', cwd: 'relative' });
     assert.match(relative.output, /relative/);

@@ -1308,3 +1308,33 @@ test('list_files is removed from builtin tool definitions', () => {
   assert.equal(definitions.some(def => def.name === 'list_files'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'list_files'), false);
 });
+
+test('programmatic discovery shares ranking and schema caps while exposing available MCP output contracts', async () => {
+  const originalListServers = mcpClient.listServers;
+  const originalListTools = mcpClient.listTools;
+  try {
+    (mcpClient as any).listServers = async () => [{ name: 'fixture', enabled: true }, { name: 'broken', enabled: true }];
+    (mcpClient as any).listTools = async (server: string) => {
+      if (server === 'broken') throw new Error('fixture unavailable');
+      return { tools: Array.from({ length: 12 }, (_, index) => ({
+        name: `probe_${String(index).padStart(2, '0')}`, description: 'Synthetic descriptor for structured discovery',
+        inputSchema: { type: 'object', properties: { value: { type: 'string' } } },
+        ...(index === 0 ? {} : { outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } } }),
+      })) };
+    };
+    const ctx: any = { sessionId: 'main', session: { agent: 'main' } };
+    const args = { sources: ['mcp'], includeSchema: true, limit: 12 };
+    const ordinary: any = await search_tools(args, ctx);
+    const script: any = await search_tools(args, { ...ctx, programmatic: true });
+    assert.deepEqual(Object.keys(ordinary), ['output']); assert.equal(script.output, ordinary.output);
+    assert.equal(script.tools.length, 12); assert.equal(script.tools[0].toolId, 'mcp:fixture/probe_00');
+    assert.equal(script.tools[0].source, 'mcp'); assert.equal(script.tools[0].server, 'fixture');
+    assert.equal(Object.prototype.hasOwnProperty.call(script.tools[0], 'outputSchema'), false);
+    assert.deepEqual(script.tools[1].outputSchema, { type: 'object', properties: { ok: { type: 'boolean' } } });
+    assert.equal(script.tools.filter((tool: any) => tool.inputSchema !== undefined).length, 10);
+    assert.equal(script.tools[10].outputSchema, undefined); assert.equal(script.tools[11].inputSchema, undefined);
+    assert.deepEqual(script.warnings, ['MCP server broken: fixture unavailable']);
+    const summary: any = await search_tools({ ...args, includeSchema: false }, { ...ctx, programmatic: true });
+    assert.ok(summary.tools.every((tool: any) => tool.inputSchema === undefined && tool.outputSchema === undefined));
+  } finally { (mcpClient as any).listServers = originalListServers; (mcpClient as any).listTools = originalListTools; }
+});

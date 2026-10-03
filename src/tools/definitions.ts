@@ -723,12 +723,12 @@ Example:
         {
             name: 'run_script',
             defaultInject: true,
-            description: "Run ToolScript code to coordinate tool calls. Supply a script file or inline code defining main(args). Returns a runId for inspecting or resuming the run. A run that reaches its time budget at a safe pause point can be resumed with continue_script.",
+            description: "Run ToolScript code to coordinate tool calls. Supply a script file or inline code. Top-level code can read args and return a result; scripts defining main(args) are called automatically. Returns a runId for inspecting or resuming the run. A run paused at a safe time-budget checkpoint can be resumed with continue_script.",
             parameters: {
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: "Script path. Relative paths use the session working directory, or the agent directory if unset." },
-                    code: { type: 'string', description: "Inline ToolScript defining def main(args):. When supplied, a filePath is not required." },
+                    code: { type: 'string', description: "Inline ToolScript. Top-level code can read args and return a result; a defined main(args) is called automatically. When supplied, filePath is not required." },
                     args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
                     argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: "foreground (default) runs until a result or pause; background starts a run that can continue independently." },
@@ -744,7 +744,7 @@ Example:
                 type: 'object',
                 properties: {
                     filePath: { type: 'string', description: "Script path. Relative paths use the session working directory, or the agent directory if unset." },
-                    code: { type: 'string', description: "Inline ToolScript defining def main(args):. When supplied, a filePath is not required." },
+                    code: { type: 'string', description: "Inline ToolScript. Top-level code can read args and return a result; a defined main(args) is called automatically. When supplied, filePath is not required." },
                     args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
                     argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
                     mode: { type: 'string', enum: ['foreground', 'background'], description: "Run mode. Defaults to background for this compatibility entry point." },

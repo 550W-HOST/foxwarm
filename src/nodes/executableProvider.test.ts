@@ -212,11 +212,14 @@ test('configured executable provider derives canonical tools and preserves exact
 
     const primitives = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').map(entry => entry.request.request);
     assert.equal(primitives.length >= 8, true);
+    assert.equal(primitives.filter(primitive => primitive.context.programmatic === true).length, 2, 'only the script read prepares retained data');
     for (const primitive of primitives) {
       assert.equal(primitive.sourceSessionId, sourceId);
       assert.equal(primitive.nodeId, 'fixture-sandbox');
       assert.ok(['stat', 'read'].includes(primitive.operation));
-      assert.deepEqual(primitive.context, { agent, currentNode: 'fixture-sandbox', cwd: 'memfs://fixture/session' });
+      const { programmatic, ...routing } = primitive.context;
+      assert.ok(programmatic === undefined || programmatic === true);
+      assert.deepEqual(routing, { agent, currentNode: 'fixture-sandbox', cwd: 'memfs://fixture/session' });
       assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'toolName'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'args'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'command'), false);

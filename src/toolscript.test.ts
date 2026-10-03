@@ -187,7 +187,7 @@ test('canonical ToolScript automation example runs and resumes end to end', asyn
   }
 });
 
-test('run_script requires an explicit main(args) entrypoint', async () => {
+test('run_script executes top-level source and native final expressions from a file', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_no_main');
   const scriptName = `${makeId('script')}.py`;
@@ -197,8 +197,9 @@ test('run_script requires an explicit main(args) entrypoint', async () => {
 
   try {
     const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
-    assert.equal(result.status, 'failed');
-    assert.match(result.error || '', /def main\(args\):/i);
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(result.result, { ok: true });
+    assert.equal(result.stdout, 'legacy\n');
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -286,12 +287,12 @@ test('unified script execution and continuation persist activity outside the mod
   const sessionId = makeId('toolscript_lean_history');
   const session = await sessionManager.getSession(sessionId);
   const fileName = `${makeId('data')}.txt`;
-  const payload = 'discarded nested payload '.repeat(400);
+  const payload = 'discarded nested payload '.repeat(20_000);
   await fs.writeFile(path.join(getAgentDir('main'), fileName), payload);
   const ctx = { sessionId, session };
   try {
     const runCall = { id: 'unified-script', name: 'call_tool', args: { toolId: 'builtin:run_script', args: {
-      code: asMain(`data = call_tool("read", {"filePath": "${fileName}"})\nask_agent("Continue reducing?")\nprint("new output")\nreturn data.count("discarded nested payload")`),
+      code: asMain(`data = call_tool("read", {"filePath": "${fileName}"})\nask_agent("Continue reducing?")\nprint("new output")\nreturn data["content"].count("discarded nested payload")`),
     } } };
     const initial = await executeTools([runCall], ctx, session);
     const response = initial.parts[0].functionResponse!;
@@ -309,7 +310,7 @@ test('unified script execution and continuation persist activity outside the mod
       },
     } }], ctx, session);
     assert.deepEqual(resumed.parts[0].functionResponse?.response, {
-      status: 'completed', runId: response.response.runId, stdout: 'new output\n', result: 400,
+      status: 'completed', runId: response.response.runId, stdout: 'new output\n', result: 20_000,
     });
     assert.deepEqual(resumed.parts[0].functionResponse?.__meta?.toolScriptSubCalls, []);
     const snapshot = await readSessionHistorySnapshot(sessionId);
@@ -838,8 +839,8 @@ test('run_script keeps shorthand call_tool string form for backward compatibilit
   try {
     const result = await tool_run_script({ filePath: scriptName }, { sessionId, session });
     assert.equal(result.status, 'completed');
-    assert.equal(typeof result.result, 'string');
-    assert.match(result.result, /call_tool\("read"/i);
+    assert.equal(result.result.truncated, false);
+    assert.match(result.result.content, /call_tool\("read"/i);
     assert.deepEqual((await getToolScriptRunForTests(result.runId))?.executedTools, ['read']);
   } finally {
     await resetToolScriptRunsForTests();
@@ -1551,4 +1552,25 @@ test('ToolScript session_step rejects non-user message injection shapes', async 
     await sessionManager.deleteSession(parentId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
   }
+});
+
+test('top-level args and return survive a real host call and persisted agent continuation', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_top_level');
+  const session = await sessionManager.getSession(sessionId);
+  const text = '{"answer":42}\r\n';
+  const file = await writeScript(`${makeId('json')}.txt`, text);
+  const ctx = { sessionId, session };
+  try {
+    const ordinary: any = await tools.call_tool({ toolId: 'node:master/read', args: { filePath: file, programmatic: true } }, ctx);
+    assert.equal(typeof ordinary, 'string'); assert.match(ordinary, /File size:/);
+    const first = await tool_run_script({ code: 'import json\ndata = call_tool("read", {"filePath": args["path"]})\nparsed = json.loads(data["content"])\nreply = ask_agent("Ready?")\nreturn {"content": data["content"], "json": parsed, "reply": reply, "bytes": data["selectedBytes"]}', argsJson: JSON.stringify({ path: file }) }, ctx);
+    assert.equal(first.status, 'waiting'); assert.equal(first.waitingReason, 'agent');
+    await resetToolScriptMontyRuntimeForTests();
+    const resumed = await tool_continue_script({ runId: first.runId, continuationId: first.continuationId, input: 'yes' }, ctx);
+    assert.equal(resumed.status, 'completed'); assert.deepEqual(resumed.result, { content: text, json: { answer: 42 }, reply: 'yes', bytes: Buffer.byteLength(text) });
+    assert.deepEqual(JSON.parse(resumed.result.content), { answer: 42 });
+    const plain = await tool_run_script({ code: 'def helper(n):\n    return n + 1\nreturn helper(args["n"])', args: { n: 2 } }, ctx);
+    assert.equal(plain.result, 3);
+  } finally { await resetToolScriptRunsForTests(); await sessionManager.deleteSession(sessionId).catch(() => false); await fs.remove(file); }
 });

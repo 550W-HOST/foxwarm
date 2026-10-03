@@ -23,7 +23,7 @@ export async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    const result = await readResolvedPath(fullPath, filePath, startLine, endLine, ctx.fileOperations || nativeFileOperations);
+    const result = await readResolvedPath(fullPath, filePath, startLine, endLine, ctx.fileOperations || nativeFileOperations, ctx.programmatic === true);
     ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
     return result;
 }

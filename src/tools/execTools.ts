@@ -7,6 +7,7 @@ import * as sessionRuntime from '../sessionRuntime';
 import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
 import {
     buildBackgroundTimeoutResult,
+    buildProgrammaticExecResult,
     buildForegroundExecResult,
     finalizeForegroundExec,
     markExecForBackgroundNotification,
@@ -24,7 +25,7 @@ export interface DeferredExecCwdSync {
 type ExecToolRuntime = Pick<ExecRuntime,
     'startPersistentExec' | 'waitForExecCompletion' | 'markExecForBackgroundNotification'
     | 'finalizeForegroundExec' | 'buildForegroundExecResult' | 'buildBackgroundTimeoutResult'
-    | 'readFinishedExecWorkingDirectory' | 'readLiveExecWorkingDirectory'>;
+    | 'readFinishedExecWorkingDirectory' | 'readLiveExecWorkingDirectory' | 'buildProgrammaticExecResult'>;
 
 async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefined): Promise<string | null> {
     const normalizedNext = typeof nextCwd === 'string' && nextCwd.trim() ? nextCwd.trim() : null;
@@ -98,6 +99,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         finalizeForegroundExec,
         buildForegroundExecResult,
         buildBackgroundTimeoutResult,
+        buildProgrammaticExecResult,
         readFinishedExecWorkingDirectory,
         readLiveExecWorkingDirectory,
     };
@@ -119,10 +121,14 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
             const nextCwd = await runtime.readFinishedExecWorkingDirectory(execEntry);
             const result = await runtime.buildForegroundExecResult(execEntry, status, resolvedTimeout.warning);
             if (ctx.deferSessionCwdSync && typeof nextCwd === 'string' && nextCwd.trim()) {
-                return { output: result, __execBatchCwdSync: { nextCwd: nextCwd.trim() } };
+                return {
+                    ...(ctx.programmatic ? await runtime.buildProgrammaticExecResult(execEntry, status, result) : { output: result }),
+                    __execBatchCwdSync: { nextCwd: nextCwd.trim() },
+                };
             }
             const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, nextCwd);
-            return appendCwdNotice(result, cwdNotice);
+            const output = appendCwdNotice(result, cwdNotice);
+            return ctx.programmatic ? await runtime.buildProgrammaticExecResult(execEntry, status, output) : output;
         } finally {
             await runtime.finalizeForegroundExec(execEntry.id);
         }
@@ -132,8 +138,12 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     await runtime.markExecForBackgroundNotification(execEntry.id);
     const result = await runtime.buildBackgroundTimeoutResult(execEntry, timeoutSeconds, resolvedTimeout.warning);
     if (ctx.deferSessionCwdSync && typeof nextCwd === 'string' && nextCwd.trim()) {
-        return { output: result, __execBatchCwdSync: { nextCwd: nextCwd.trim() } };
+        return {
+            ...(ctx.programmatic ? await runtime.buildProgrammaticExecResult(execEntry, null, result) : { output: result }),
+            __execBatchCwdSync: { nextCwd: nextCwd.trim() },
+        };
     }
     const cwdNotice = await maybeSyncSessionCwdFromExec(ctx, execEntry, nextCwd);
-    return appendCwdNotice(result, cwdNotice);
+    const output = appendCwdNotice(result, cwdNotice);
+    return ctx.programmatic ? runtime.buildProgrammaticExecResult(execEntry, null, output) : output;
 }

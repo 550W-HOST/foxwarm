@@ -5,6 +5,8 @@ Secondary files: src/config.ts, packages/shared/src/configSchemas.ts, src/nodes/
 
 ## Purpose
 
+- Internal script exec forwards the programmatic hint into the existing generation-owned runtime; retained script content is separate from display and preserves deferred cwd effects. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 Implements the first resident concrete sandbox-kind provider: one provider-owned Linux Docker container for one already-existing allowlisted Git worktree or checkout. The provider owns exact lifecycle, Docker identity, and per-generation execution artifacts while reusing canonical shared file and persistent-exec semantics.
 
 ## Key exports

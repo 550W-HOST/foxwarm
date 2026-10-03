@@ -4,6 +4,8 @@ Files: packages/cli-node/src/client.ts, packages/cli-node/src/nodeProtocolCompat
 
 ## Purpose
 
+Current CLI capability negotiation advertises `programmaticToolData`; trusted call metadata reaches shared read/exec producers without widening ordinary results. Older peers keep native results. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 Implements the full remote Node.js client: pairing/authenticated WebSocket connection, shared-tool execution, service dispatch, bidirectional file transfer, protocol heartbeat/reconnect, localhost trigger, session RPC, and optional node-local Code PTYs.
 
 ## Key exports
