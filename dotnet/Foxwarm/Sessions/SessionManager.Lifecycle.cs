@@ -105,7 +105,7 @@ internal sealed partial class SessionManager
             }
             suffixRows.Add(SystemRow(SessionBoundary.Identity(parent.Id, id, inherited: true)));
             suffixRows.Add(SystemRow(childMode
-                ? $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. " + SessionBoundary.Completion(parent.Id)
+                ? $"You are a child session forked from parent session `{parent.Id}`. Your current session ID is `{id}`. " + SessionBoundary.Completion(parent.Id, HandoffConfirmationEnabled)
                 : $"Session forked from {parent.Id} by user command. Your current session ID is `{id}`."));
             if (childMode) suffixRows.Add(new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(new JsonObject { ["text"] = "Understood. I am a child session. Waiting for task from parent session." }) });
             await AppendOwnedRowsAsync(owner, suffixRows);

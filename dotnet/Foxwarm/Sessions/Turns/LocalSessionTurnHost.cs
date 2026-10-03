@@ -101,7 +101,7 @@ public sealed partial class LocalSessionTurnHost
                         continue;
                     }
 
-                    var toolParts = await ExecuteToolBatchAsync(ToolCallControls.Plan(calls), registered.Token).ConfigureAwait(false);
+                    var toolParts = await ExecuteToolBatchAsync(ToolCallControls.Plan(calls, tools is SessionToolExecutor mode && mode.HandoffConfirmationEnabled), registered.Token).ConfigureAwait(false);
 
                     if (toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse
                         && assistant["__meta"]?["llmRequestTiming"] is JsonObject timing

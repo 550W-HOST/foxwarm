@@ -105,7 +105,7 @@ internal sealed partial class SessionManager
                 {
                     var time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var system = SessionBoundary.Identity(parentId, child.Id, inherited: false)
-                        + "\nYou are a child session (new, empty context). " + SessionBoundary.Completion(parentId);
+                        + "\nYou are a child session (new, empty context). " + SessionBoundary.Completion(parentId, HandoffConfirmationEnabled);
                     await child.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
                     {
                         var message = new JsonObject

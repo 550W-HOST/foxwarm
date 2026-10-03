@@ -14,6 +14,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     private readonly List<string> explicitWaitIds = [];
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
+    internal bool HandoffConfirmationEnabled => sessions.HandoffConfirmationEnabled;
     private SessionManager Manager => sessions;
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
     private readonly AsyncLocal<string?> execWorkspace = new();

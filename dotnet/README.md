@@ -356,3 +356,5 @@ comparison ok: 16 actual TypeScript/C# Responses request-input cases
 ```
 
 Run the preserved Phase 2A differential oracle separately with `python3 dotnet/run-parity.py` after the repository JavaScript dependencies and shared generated package are available. The prototype remains outside normal Node CI and does not alter TypeScript runtime behavior, persistence, model routing, or Session ownership.
+
+The optional top-level app setting `handoffConfirmation` is a startup boolean, default false. Enabled mode adds the framed review checkpoint to model handoffs and child guidance; changing it requires a restart. It does not alter cancellation or authenticated human HTTP routes.

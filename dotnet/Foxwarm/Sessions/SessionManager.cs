@@ -31,8 +31,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private volatile bool accepting = true;
     private readonly object lifecycle = new();
 
+    internal bool HandoffConfirmationEnabled { get; }
     public SessionManager(string root, string workspace, ResponsesClientOptions options, HostModels models, string? skillsRoot = null)
     {
+        HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
@@ -74,7 +76,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
-        foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(definition.DeepClone());
+        foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled));
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);

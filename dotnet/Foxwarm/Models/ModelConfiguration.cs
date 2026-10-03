@@ -22,6 +22,7 @@ internal sealed partial class ModelConfiguration
             ["channelsYaml"] = configured.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) + "\n", ["channelCount"] = configured.Count };
     }
     public HostModels Models { get; }
+    internal bool HandoffConfirmationEnabled { get; }
     public int MaxOutput { get; }
     public double CompactKeep { get; }
     public double CompactThreshold { get; }
@@ -30,7 +31,7 @@ internal sealed partial class ModelConfiguration
         ActivePath = Path.Combine(dataRoot, "state", "models.yaml"); TemplatePath = Path.Combine(AppContext.BaseDirectory, "templates", "models.example.yaml");
         AppPath = Environment.GetEnvironmentVariable("FOXWARM_CONFIG_PATH") ?? Environment.GetEnvironmentVariable("CONFIG_PATH") ?? Path.Combine(dataRoot, "state", "config.yaml");
         AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
-        app = ConfigurationYaml.Parse(AppRaw, "app config"); var llm = app["llm"] as JsonObject;
+        app = ConfigurationYaml.Parse(AppRaw, "app config"); HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app); var llm = app["llm"] as JsonObject;
         MaxOutput = HostModels.Positive(llm?["maxOutput"], 32768, "llm.maxOutput");
         double Fraction(string key, double fallback)
         {

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
@@ -20,6 +21,7 @@ internal sealed partial class SessionManager
             if (name == "delete_session" && AgentIsolated(source.Agent))
                 throw new SessionDeletionException("Isolated session cannot use delete_session tool.", "SESSION_DELETE_ISOLATED", 403);
             await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, semanticCaller.Value ?? CancellationToken.None);
+            HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
             switch (name)
             {
                 case "delete_session":
@@ -65,7 +67,7 @@ internal sealed partial class SessionManager
                     }
                 case "create_child_session":
                     {
-                        Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel", "fork"], ["suffix"]);
+                        Keys(args, ["agentName", "suffix", "displayName", "message", "afterSend", "forceModel", "fork", "confirmation"], ["suffix"]);
                         var forceModel = OptionalForceModel(args);
                         var after = AfterSend(args);
                         if (after == "wait" && string.IsNullOrWhiteSpace(OptionalString(args, "message")))
@@ -78,7 +80,7 @@ internal sealed partial class SessionManager
                     }
                 case "send_to_session":
                     {
-                        Keys(args, ["sessionId", "message", "afterSend"], ["sessionId", "message"]);
+                        Keys(args, ["sessionId", "message", "afterSend", "confirmation"], ["sessionId", "message"]);
                         var after = AfterSend(args);
                         var requested = RequiredString(args, "sessionId");
                         var target = await SendAsync(source, requested, RequiredString(args, "message"));

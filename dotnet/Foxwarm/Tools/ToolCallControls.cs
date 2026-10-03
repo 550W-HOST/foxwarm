@@ -15,7 +15,7 @@ internal static class ToolCallControls
         properties[Names[1]] = new JsonObject { ["type"] = "boolean", ["enum"] = new JsonArray(true), ["description"] = "Set true to cancel every tool call in this model response before any of them runs." };
         return copy;
     }
-    internal static IReadOnlyList<(JsonObject Call, JsonObject? Preset)> Plan(IReadOnlyList<JsonObject> calls)
+    internal static IReadOnlyList<(JsonObject Call, JsonObject? Preset)> Plan(IReadOnlyList<JsonObject> calls, bool handoffConfirmation = false)
     {
         var all = calls.Any(call => !call.ContainsKey("argsParseError") && True(call["args"]?[Names[1]]));
         return calls.Select(call =>
@@ -29,6 +29,11 @@ internal static class ToolCallControls
                 var invalid = Names.FirstOrDefault(key => original?.ContainsKey(key) == true && !True(original[key]));
                 if (invalid is not null) preset = UnsupportedTurnToolExecutor.ToolError("invalid_tool_control_argument", invalid + " accepts only the boolean value true when provided.");
                 else if (True(original?[Names[0]])) preset = Cancelled();
+                else if (handoffConfirmation && HandoffConfirmation.Handoff(SessionWait.Text(copy["name"])))
+                {
+                    try { HandoffConfirmation.Validate(copy["args"] as JsonObject ?? new JsonObject()); }
+                    catch (InvalidDataException error) { preset = UnsupportedTurnToolExecutor.ToolError(HandoffConfirmation.ErrorCode, error.Message); }
+                }
             }
             return (Call: copy, Preset: preset);
         }).ToArray();

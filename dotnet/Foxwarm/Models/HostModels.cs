@@ -19,9 +19,10 @@ internal sealed partial class HostModels
     private readonly string defaultKey = "";
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
+    internal bool HandoffConfirmationEnabled { get; private init; }
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
-    internal HostModels(ModelConfiguration owner) { this.owner = owner; }
+    internal HostModels(ModelConfiguration owner) { this.owner = owner; HandoffConfirmationEnabled = owner.HandoffConfirmationEnabled; }
     private HostModels(string key, Dictionary<string, ConcreteHostModel> entries, string[] display)
     { defaultKey = key; this.entries = entries; displayKeys = display; }
     internal HostModels Capture() => owner?.Capture() ?? this;
@@ -114,6 +115,7 @@ internal sealed partial class HostModels
         var requested = SessionWait.Text(root["default"]); var selected = requested is not null && models.ContainsKey(requested) ? requested : ordered.FirstOrDefault() ?? requested ?? "";
         return new HostModels(selected, models, ordered)
         {
+            HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
             CompactKeepFraction = SessionWait.Number(llm["compactKeepPercent"] ?? llm["compactPercent"]) ?? .3,
             CompactThresholdFraction = SessionWait.Number(llm["compactThresholdPercent"]) ?? .85
         };
