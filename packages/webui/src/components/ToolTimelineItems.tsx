@@ -50,7 +50,8 @@ const getToolInvocationDuration = (timing: FunctionResponse['executionTiming']):
 
 const getSendFileDownload = (call: FunctionCall | undefined, resp: FunctionResponse): { url: string; fileName?: string } | null => {
   let args = call?.args
-  if (resp.name === 'call_tool' && call?.name === 'call_tool' && args?.toolId === 'builtin:send_file') {
+  if (resp.name === 'call_tool' && call?.name === 'call_tool'
+    && (args?.toolId === 'builtin:send_file' || (!args?.toolId && args?.source === 'builtin' && args?.name === 'send_file'))) {
     if (args.args && typeof args.args === 'object' && !Array.isArray(args.args)) args = args.args as Record<string, unknown>
     else if (typeof args.argsJson === 'string') {
       try { const parsed = JSON.parse(args.argsJson); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null; args = parsed }
