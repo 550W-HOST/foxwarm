@@ -212,7 +212,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         return record;
     }
 
-    private static string ResolveCwd(string workspace, string? value)
+    internal static string ResolveCwd(string workspace, string? value)
     {
         if (value is null) return workspace;
         if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value) || value.Contains('\\') || value.Contains(':') || value.Contains('\0'))

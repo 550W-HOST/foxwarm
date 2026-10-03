@@ -153,10 +153,11 @@ internal sealed partial class SessionManager
         return (child, true);
     }
 
-    public async Task<string> SendAsync(SessionOwner source, string requestedTarget, string message)
+    public async Task<string> SendAsync(SessionOwner source, string requestedTarget, string message, JsonObject? toolArgs = null)
     {
         var targetId = ResolveSessionReference(source, requestedTarget);
         var target = await RequiredAsync(targetId);
+        if (toolArgs is not null) await AuthorizeToolAsync(source, new("send_to_session", "builtin", "send_to_session", toolArgs), null, semanticCaller.Value ?? CancellationToken.None, target);
         if (source.Id == target.Id) throw new InvalidDataException("A Session cannot send to itself.");
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         var relation = source.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]?.GetValue<string>() == target.Id

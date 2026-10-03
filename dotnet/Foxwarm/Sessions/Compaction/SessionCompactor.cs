@@ -14,6 +14,7 @@ internal sealed partial class SessionCompactor
     private readonly ResponsesClientOptions baseOptions;
     private readonly ModelRequestOwner requests;
     private readonly AgentMemory memory;
+    private readonly Func<JsonArray>? definitions;
     private readonly object gate = new();
     private readonly ConcurrentDictionary<CompactRun, Task> lifetimes = new();
     private CompactRun? active;
@@ -37,10 +38,10 @@ internal sealed partial class SessionCompactor
     }
 
     public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
-        HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory)
+        HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory, Func<JsonArray>? definitions = null)
     {
         this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions;
-        this.requests = requests; this.memory = memory;
+        this.requests = requests; this.memory = memory; this.definitions = definitions;
     }
     public bool Active { get { lock (gate) return active is not null; } }
     public bool Standalone { get { lock (gate) return active is { Standalone: true, OwnsProcessor: true }; } }

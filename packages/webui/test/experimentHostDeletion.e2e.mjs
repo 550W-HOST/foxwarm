@@ -117,7 +117,7 @@ try {
   assert(records.filter(row => !row.planning).every(row => !row.body.tools.some(tool => tool.name === 'delete_session')))
   await send('child-source', 'source-child'); assert.equal(await dto('parent-model'), null); assert.equal((await dto('child-source')).parentSessionId, null)
   const childHistory = (await saved('child-source')).history; assert(childHistory.some(row => row.role === 'tool' && JSON.stringify(row).includes('deleted successfully'))); assert.equal(childHistory.at(-1).parts[0].text, 'DONE-source-child')
-  await send('locked/main', 'isolated'); assert(await dto('isolated-target')); assert((await saved('locked/main')).history.some(row => JSON.stringify(row).includes('SESSION_DELETE_ISOLATED')))
+  await send('locked/main', 'isolated'); assert(await dto('isolated-target')); assert((await saved('locked/main')).history.some(row => JSON.stringify(row).includes('tool_authorization_denied')))
   page = await fixture.openApp(); await page.setViewport({ width: 1440, height: 1200 }); await page.evaluate(() => window.foxwarmTest.switchToSession('source'))
   await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session source')); await sleep(350)
   const sourceBytes = await readFile(fileFor('source'), 'utf8'), commandAudit = audit(), providerCount = records.length

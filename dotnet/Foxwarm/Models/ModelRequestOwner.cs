@@ -25,14 +25,14 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
         string cacheKey, string turnId, IReadOnlyList<JsonObject> history,
         Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
         Func<ModelRetryEvent, Task<bool>>? retry, Action? beginAttempt,
-        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel) =>
-        RequestAsync(sessionId, Capture(catalog, routeKey, rawEffort), cacheKey, turnId, history, prompt, retry, beginAttempt, progress, warning, cancellationToken, scope);
+        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel, Func<JsonArray>? definitions = null) =>
+        RequestAsync(sessionId, Capture(catalog, routeKey, rawEffort), cacheKey, turnId, history, prompt, retry, beginAttempt, progress, warning, cancellationToken, scope, definitions);
 
     internal async Task<ChatResult> RequestAsync(string sessionId, CapturedRequest captured,
         string cacheKey, string turnId, IReadOnlyList<JsonObject> history,
         Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
         Func<ModelRetryEvent, Task<bool>>? retry, Action? beginAttempt,
-        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel)
+        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel, Func<JsonArray>? definitions = null)
     {
         var catalog = captured.Catalog; var route = captured.Route; var request = captured.Routing; var rawEffort = captured.RawEffort;
         const int maxAttempts = 6;
@@ -49,7 +49,8 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
             var instructions = await prompt(leaf, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var providerCache = ProviderPromptCache.Resolve(leaf.ProviderType, sessionId, cacheKey, scope);
-            var options = ConfiguredModelRequests.Plan(leaf, defaults, effort, instructions, providerCache, turnId);
+            var requestDefaults = definitions is null ? defaults : defaults with { Tools = definitions() };
+            var options = ConfiguredModelRequests.Plan(leaf, requestDefaults, effort, instructions, providerCache, turnId);
             var prepared = ConcreteRequestHistory.Prepare(history, leaf.Key);
             var service = ConfiguredModelRequests.CreatePreparedService(http, leaf, options, providerCache, progress, websockets, scope);
             beginAttempt?.Invoke();

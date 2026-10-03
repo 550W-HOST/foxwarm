@@ -40,6 +40,7 @@ internal sealed partial class AgentCatalog
                 if (name == "main" || !known.Add(name)) throw new InvalidDataException("Duplicate Agent catalog entry.");
             }
         }
+        foreach (var row in metadata) _ = Foxwarm.Tools.IsolatedToolCompatibility.Metadata(row.Value);
         foreach (var name in known.Where(name => name != "main"))
         {
             var directory = Path.Combine(agentRoot, name);

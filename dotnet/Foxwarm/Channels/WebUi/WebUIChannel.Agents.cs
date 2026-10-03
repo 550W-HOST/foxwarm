@@ -46,11 +46,11 @@ internal sealed partial class WebUIChannel
                 var body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new InvalidDataException("Agent update needs an object.");
                 if (body.Any(item => item.Key is not ("inheritAgent" or "isolatedNode")) || !body.ContainsKey("inheritAgent") && !body.ContainsKey("isolatedNode"))
                     throw new InvalidDataException("Provide inheritAgent and/or isolatedNode.");
-                if (body["isolatedNode"] is not null && !string.IsNullOrWhiteSpace(body["isolatedNode"]!.GetValue<string>()))
-                    return Results.Json(new { error = "Agent isolation has not been implemented." }, statusCode: 501);
+                if (body.ContainsKey("isolatedNode") && (sessions.AgentIsolated(agentId) || body["isolatedNode"] is not null && !string.IsNullOrWhiteSpace(body["isolatedNode"]!.GetValue<string>())))
+                    return Results.Json(new { error = "Changing Agent isolation has not been implemented." }, statusCode: 501);
                 if (!sessions.Agents().Contains(agentId)) return Results.NotFound(new { error = "Agent not found." });
                 if (body.ContainsKey("inheritAgent")) await sessions.SetAgentInheritAsync(agentId, body["inheritAgent"]?.GetValue<string>());
-                return Results.Ok(new { success = true, agent = new { id = agentId, inherit = sessions.AgentInherit(agentId), inheritanceChain = sessions.AgentChain(agentId), isolated = false, isolatedNode = (string?)null } });
+                return Results.Ok(new { success = true, agent = new { id = agentId, inherit = sessions.AgentInherit(agentId), inheritanceChain = sessions.AgentChain(agentId), isolated = sessions.AgentIsolated(agentId), isolatedNode = sessions.RecordedIsolationNode(agentId) } });
             }
             catch (Exception error) when (error is InvalidDataException or IOException or JsonException or InvalidOperationException)
             { return Results.BadRequest(new { error = error.Message }); }

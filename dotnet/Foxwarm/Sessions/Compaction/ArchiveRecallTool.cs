@@ -85,8 +85,10 @@ internal static class ArchiveRecallTool
                 + ". Use an exact target, contentFilter and previewLength/toolDetail to inspect selected context. " + Help);
             if (args["sessionId"] is not null && SessionWait.Text(args["sessionId"]) is null) throw new InvalidDataException("sessionId must be a string.");
             var id = SessionGoal.Trim(SessionWait.Text(args["sessionId"]) ?? source.Id); if (id.Length == 0) id = source.Id;
+            await manager.AuthorizeToolAsync(source, new("recall", "builtin", "recall", args), null, cancellationToken);
             var owner = await manager.GetExistingAsync(id, cancellationToken);
             if (owner is null) return Output($"Session `{id}` not found.");
+            await manager.AuthorizeToolAsync(source, new("recall", "builtin", "recall", args), null, cancellationToken, owner);
             var target = Parse(args["target"]); var renderer = new ContextPreviewRenderer(args, 1000);
             var reader = new ArchiveContextReader(owner.Archive);
             string Advice(params string[] targets) => "Drill down: " + string.Join("; ", targets.Select(item => "recall(" + EcmaJson.Stringify(new JsonObject { ["sessionId"] = id, ["target"] = item }) + ")"));

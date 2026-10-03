@@ -78,6 +78,12 @@ public sealed class SessionTurnRunner
                     claimed = false;
                     break;
                 }
+                catch (Foxwarm.Tools.ToolAuthorizationUnavailableException error)
+                {
+                    failed = true; // This terminal outcome must not immediately consume/retrigger queued work.
+                    entry.RecordBackgroundProcessorFailure(error);
+                    break;
+                }
                 catch (AuthorityCommittedException)
                 {
                     throw;

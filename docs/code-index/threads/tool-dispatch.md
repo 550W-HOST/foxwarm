@@ -2,7 +2,7 @@
 
 ## Overview
 
-The unified execution flow resolves model tool calls to builtin handlers, MCP servers, or generic Nodes. Generic ordered authorization and the current isolation compatibility layer are applied at the concrete execution boundary.
+The unified execution flow resolves model tool calls to builtin handlers, MCP servers, or generic Nodes. Generic ordered authorization and the current isolation compatibility layer are applied at the concrete execution boundary. The experimental Main-local .NET implementation and its narrower current file/effect scope are mapped in [the .NET authorization unit](../units/dotnet.md#main-tool-authorization-and-default-projection).
 
 ## Steps
 

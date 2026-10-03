@@ -9,7 +9,7 @@ namespace Foxwarm.Tools;
 internal sealed record SearchTool(string Source, string Name, string Description, JsonNode? Schema, string? Scope, bool Hidden, int Score);
 internal static partial class UnifiedTools
 {
-    internal static async Task<JsonObject> SearchAsync(ToolRegistry registry, JsonObject args, CancellationToken token)
+    internal static async Task<JsonObject> SearchAsync(ToolRegistry registry, JsonObject args, CancellationToken token, Func<string, string, string?, bool>? visible = null)
     {
         ToolRegistry.Keys(args, ["query", "sources", "server", "nodeId", "limit", "includeSchema"]);
         var query = ToolRegistry.Text(args, "query") ?? "";
@@ -30,6 +30,7 @@ internal static partial class UnifiedTools
         {
             if (entry.Source == "node") continue;
             var name = SessionWait.Text(entry.Definition["name"])!; var description = SessionWait.Text(entry.Definition["description"]) ?? "";
+            if (visible is not null && !visible(entry.Source, name, null)) continue;
             var score = Score(query, name, description);
             if (score >= 0) collected.Add(new(entry.Source, name, description, entry.Definition["parameters"], null, !entry.DefaultInject, score));
         }
@@ -41,6 +42,7 @@ internal static partial class UnifiedTools
                 foreach (var entry in registry.Entries.Where(entry => entry.Source == "node"))
                 {
                     var name = SessionWait.Text(entry.Definition["name"])!; var description = SessionWait.Text(entry.Definition["description"]) ?? "";
+                    if (visible is not null && !visible("node", name, null)) continue;
                     var score = Score(query, name, description, "master");
                     if (score >= 0) collected.Add(new("node", name, description, entry.Definition["parameters"], "master", !entry.DefaultInject, score));
                 }
@@ -61,11 +63,13 @@ internal static partial class UnifiedTools
                     foreach (var tool in await registry.Mcp.ListToolsAsync(server, token))
                     {
                         var name = SessionWait.Text(tool["name"]) ?? "unknown"; var description = SessionWait.Text(tool["description"]) ?? "";
+                        if (visible is not null && !visible("mcp", name, server)) continue;
                         var score = Score(query, name, description, server);
                         if (score >= 0) collected.Add(new("mcp", name, description, tool["inputSchema"], server, true, score));
                     }
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (ToolAuthorizationUnavailableException) { throw; }
                 catch (Exception error) { warnings.Add("MCP server " + server + ": " + error.Message); }
             }
         }

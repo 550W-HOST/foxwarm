@@ -35,6 +35,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         this.root = Path.GetFullPath(root);
         var workspaceRoot = Path.GetFullPath(workspace);
+        toolWorkspace = workspaceRoot;
+        authorization = new ToolAuthorizationAuthority(this.root);
         if (workspaceRoot == this.root || workspaceRoot.StartsWith(this.root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || this.root.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
@@ -71,6 +73,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
+        definitions.Add(ToolAuthorizationToolDefinition.Definition());
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(definition.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
@@ -177,11 +180,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             hosted.PublishDraftProgress(update);
             hosted.Emit(SessionEventKind.RequestProgress, new JsonObject { ["text"] = update.Text, ["reasoning"] = update.Reasoning });
-        });
+        }, () => ModelDefinitions(hosted));
         var registry = new SessionRegistry(store, new RequestChatService(chat, hosted),
             new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent), hosted, this, tools));
         hosted.Registry = registry;
-        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, requests, memory);
+        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, requests, memory, () => ModelDefinitions(hosted));
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();

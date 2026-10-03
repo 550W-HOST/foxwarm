@@ -29,8 +29,9 @@ internal sealed partial class SessionCompactor
             var catalog = models.Capture();
             ChatResult result;
             try { result = await requests.RequestAsync(hosted.Id, catalog, routeKey, rawEffort, cacheKey, turnId, detached,
-                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken, scope); }
+                ResolvePrompt, null, null, null, hosted.Entry.RecordBestEffortFailure, cancellationToken, scope, definitions); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Foxwarm.Tools.ToolAuthorizationUnavailableException) { throw; }
             catch (ModelRequestException) { throw; }
             catch (Exception error) { throw new ModelPreparationException(ConfiguredModelRequests.SafeError(error, catalog.Resolve(routeKey)), error); }
             var assistant = result.AssistantMessage;

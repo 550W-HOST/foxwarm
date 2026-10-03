@@ -53,6 +53,7 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
     }
     internal async Task<JsonObject> ExecuteAsync(ResolvedTool resolved, SessionToolExecutor owner, CancellationToken cancellationToken)
     {
+        await owner.AuthorizeAsync(resolved, cancellationToken);
         var result = resolved.Source == "mcp"
             ? await mcp.CallAsync(resolved.Server!, resolved.Name, resolved.Args, cancellationToken)
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);

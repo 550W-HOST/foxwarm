@@ -7,6 +7,10 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
+    private bool policyUnavailable;
+    public bool PolicyUnavailable => policyUnavailable;
+    internal WorkspaceTools? Files => workspace as WorkspaceTools;
+    internal Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token) => sessions.AuthorizeToolAsync(hosted, resolved, workspace as WorkspaceTools, token);
     private readonly List<string> explicitWaitIds = [];
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
@@ -15,6 +19,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     public void BeginTurn()
     {
         hosted.BeginLogicalTurn();
+        policyUnavailable = false;
         Interlocked.Exchange(ref finishPending, 0);
         explicitWaitIds.Clear(); handoffTargets.Clear();
     }
@@ -26,6 +31,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         if (errors || stopping) foreach (var id in explicitWaitIds) await hosted.Entry.SaveLane.ClearWaitAsync(id);
         explicitWaitIds.Clear();
         var finish = ConsumeFinishAfterBatch(); var handoff = handoffTargets.Count > 0;
+        if (policyUnavailable) { handoffTargets.Clear(); throw new ToolAuthorizationUnavailableException(); }
         if (!stopping && handoff && hosted.WaitSnapshot() is null) await sessions.StartHandoffWaitAsync(hosted, handoffTargets);
         handoffTargets.Clear();
         return finish || !stopping && (handoff || explicitStop && !errors);
@@ -38,11 +44,20 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
             var name = SessionWait.Text(functionCall["name"]) ?? "";
             var args = functionCall["args"] as JsonObject ?? throw new InvalidDataException("Tool arguments must be an object.");
             var resolved = registry.Resolve(name, args);
+            await AuthorizeAsync(resolved, cancellationToken);
             CurrentCallId = SessionWait.Text(functionCall["id"]) ?? "";
             hosted.SetToolActive(true);
             try { return await registry.ExecuteAsync(resolved, this, cancellationToken); }
             finally { hosted.SetToolActive(false); }
         }
+        catch (ToolAuthorizationUnavailableException error)
+        { policyUnavailable = true; return UnsupportedTurnToolExecutor.ToolError(ToolAuthorizationUnavailableException.Code, error.Message); }
+        catch (ToolAuthorizationDeniedException error)
+        { return UnsupportedTurnToolExecutor.ToolError("tool_authorization_denied", error.Message); }
+        catch (ArgumentException error)
+        { return UnsupportedTurnToolExecutor.ToolError("invalid_path", error.Message); }
+        catch (UnauthorizedAccessException error)
+        { return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         { return UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or IOException or System.Text.Json.JsonException or NotSupportedException or TimeoutException)
@@ -82,7 +97,8 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         handlers["submit_compact_plan"] = (_, _, _) => Task.FromResult(UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor."));
         foreach (var name in new[] { "delete_session", "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
             handlers[name] = (owner, args, token) => owner.ExecuteAgentAsync(name, args, token);
-        handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token);
+        handlers["set_tool_rules"] = (owner, args, token) => owner.Manager.InstallToolRulesAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file reader."), args, token);
+        handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token, (source, name, server) => owner.Manager.ToolVisible(owner.Hosted, source, name, server));
         handlers["call_tool"] = (_, _, _) => throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
         handlers["mcp_config"] = (_, args, token) => mcp.ConfigureAsync(args, token);
         handlers["list_mcp_servers"] = (_, args, token) => { ToolRegistry.Keys(args, []); return mcp.ListServersAsync(token); };
@@ -90,7 +106,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "apply_patch" or "exec" ? "node" : "builtin";
-            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session"), handlers[name]);
+            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules"), handlers[name]);
         }
         return registry;
     }

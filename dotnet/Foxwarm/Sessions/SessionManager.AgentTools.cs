@@ -17,6 +17,9 @@ internal sealed partial class SessionManager
         try
         {
             if (args is null) throw new InvalidDataException("Tool arguments must be an object.");
+            if (name == "delete_session" && AgentIsolated(source.Agent))
+                throw new SessionDeletionException("Isolated session cannot use delete_session tool.", "SESSION_DELETE_ISOLATED", 403);
+            await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, semanticCaller.Value ?? CancellationToken.None);
             switch (name)
             {
                 case "delete_session":

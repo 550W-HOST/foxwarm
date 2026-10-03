@@ -81,6 +81,7 @@ internal sealed partial class SessionManager
             Keys(args, ["sessionId", "start", "count", "previewLength", "contentFilter", "includeRegex", "excludeRegex", "toolDetail"], ["sessionId"]);
             var targetId = RequiredString(args, "sessionId");
             var target = await GetExistingAsync(targetId); if (target is null) return Output($"Session `{targetId}` not found.");
+            await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, semanticCaller.Value ?? CancellationToken.None, target);
             var page = target.MessagePage(OptionalNumber(args, "start"), OptionalNumber(args, "count"));
             return Output(new ContextPreviewRenderer(args).Render(targetId, SessionStatus.Runtime(page.Runtime), page.Total, page.Start, page.Messages));
         }

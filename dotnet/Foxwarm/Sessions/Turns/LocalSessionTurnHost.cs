@@ -112,6 +112,8 @@ public sealed class LocalSessionTurnHost
                         if (registered.Token.IsCancellationRequested)
                             response = new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." };
                         else if (planned.Preset is JsonObject preset) response = preset;
+                        else if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
+                            response = UnsupportedTurnToolExecutor.ToolError("tool_call_skipped", "Tool call was not started because tool authorization policy was unavailable.");
                         else if (call["argsParseError"] is JsonValue parseErrorValue
                             && parseErrorValue.TryGetValue<string>(out var parseError)
                             && parseError.Length > 0)

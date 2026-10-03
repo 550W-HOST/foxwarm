@@ -1,10 +1,11 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 namespace Foxwarm.Models;
 
 internal sealed class SessionChatService(
     ModelRequestOwner requests, ResponsesClientOptions baseOptions, SessionOwner hosted, HostModels models, AgentMemory memory,
-    Action<string, ResponsesStreamProgress> progress) : IChatService
+    Action<string, ResponsesStreamProgress> progress, Func<JsonArray>? definitions = null) : IChatService
 {
     public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
     {
@@ -28,9 +29,10 @@ internal sealed class SessionChatService(
         {
             return await requests.RequestAsync(sessionId, captured, cacheKey, turnId, history, Prompt,
                 notice.NotifyAsync, () => { if (++attempts > 1) hosted.RestartDraft(); }, progress,
-                hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.Canonical);
+                hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.Canonical, definitions);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (ToolAuthorizationUnavailableException) { throw; }
         catch (ModelRequestException) { throw; }
         catch (Exception error) { throw new ModelPreparationException(ConfiguredModelRequests.SafeError(error, selected.Model), error); }
     }
