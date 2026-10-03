@@ -33,6 +33,10 @@ const journalPath = value => join(value.data, 'state/session-id-move-pending.jso
 function mutate(value, sql) { execFileSync('python3', ['-c', 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.executescript(sys.argv[2]);c.commit()', join(value.data, 'state/archive-store.sqlite'), sql]) }
 async function fault(value, id, suffix) { const dir = join(value.data, 'state/experiment-faults'); await mkdir(dir, { recursive: true }); const path = join(dir, segment(id) + suffix); await writeFile(path, 'once'); return path }
 async function send(value, key) { assert.equal((await value.api('POST', route('main') + '/message', { text: 'RECOVERY-CASE:' + key })).status, 202) }
+async function crashWithData(value) {
+  const pending = await readFile(journalPath(value), 'utf8'); await value.crash(); await access(value.root)
+  assert.equal(await readFile(journalPath(value), 'utf8'), pending)
+}
 async function noProviderReplay(value, key) { const before = counts.get(key); await value.start().then(() => assert.fail('Actual busy unpaired Source turn must not be recovered as semantic ready.'), error => assert.match(error.message, /busy|non-idle|stopping/i)); assert.equal(counts.get(key), before); assert(!(await exists(journalPath(value)))) }
 try {
   for (const [key, stage, direction] of [['copy-before', 'before-agent-copy', 'rolling-back'], ['copy-after', 'after-agent-copy', 'rolling-back'], ['finishing', 'before-alias-commit', 'finishing']]) {
@@ -40,7 +44,7 @@ try {
     await until(() => exists(hold + '.reached'), 'actual ' + stage + ' crash boundary')
     const journal = JSON.parse(await readFile(journalPath(value), 'utf8')); assert.equal(journal.phase, direction); assert.equal(journal.ownsTargetAgentDirectory, true)
     if (key === 'copy-after') assert.equal(await readFile(join(value.work, 'agents/copied/memory/nested/notes.md'), 'utf8'), 'Source memory byte proof: 漢字\n')
-    await value.cleanup(); await noProviderReplay(value, key)
+    await crashWithData(value); await noProviderReplay(value, key)
     const target = direction === 'finishing' ? 'copied/main' : 'main'; assert.equal((await authority(value, target)).busy, true)
     assert.equal(await exists(join(value.work, 'agents/copied')), direction === 'finishing')
     assert.deepEqual(value.sql('SELECT DISTINCT session_id FROM archive_messages'), [[target]])
@@ -57,7 +61,7 @@ try {
   await send(strict, 'strict'); await until(async () => (await strict.api('GET', route('main') + '/state')).status === 500, 'self strict write and reverse authority unavailable')
   const rows = strict.sql('SELECT session_id,seq,role,message_json FROM archive_messages ORDER BY seq'); assert.equal(rows.length, 2); assert(rows.every(row => row[0] === 'failed-new')); assert(!(await exists(join(strict.work, 'independent-source-side.txt'))))
   assert.equal((await strict.api('POST', route('main') + '/message', { text: 'Rejected normal subsequent input.' })).status, 500); await sleep(100); assert.equal(counts.get('strict'), 1); assert.deepEqual(strict.sql('SELECT session_id,seq,role,message_json FROM archive_messages ORDER BY seq'), rows)
-  mutate(strict, 'DROP TRIGGER failed_reverse'); await strict.cleanup(); await noProviderReplay(strict, 'strict'); assert.deepEqual(strict.sql('SELECT DISTINCT session_id FROM archive_messages'), [['main']])
+  mutate(strict, 'DROP TRIGGER failed_reverse'); await crashWithData(strict); await noProviderReplay(strict, 'strict'); assert.deepEqual(strict.sql('SELECT DISTINCT session_id FROM archive_messages'), [['main']])
 
   const independent = await fixture('independent'); await independent.start(); assert.equal((await independent.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'target' })).status, 200)
   await fault(independent, 'target', '.identity-after-target-persistence'); mutate(independent, "CREATE TRIGGER failed_target_reverse BEFORE UPDATE OF session_id ON archive_branches WHEN OLD.session_id='target-new' AND NEW.session_id='target' BEGIN SELECT RAISE(ABORT,'Actual independent target reverse failure'); END")
@@ -65,9 +69,10 @@ try {
   assert.equal(await readFile(join(independent.work, 'independent-source-side.txt'), 'utf8'), 'Healthy independent caller can continue.')
   const result = (await authority(independent, 'main')).history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'actual-move').functionResponse.response; assert.equal(result.recoveryRequired, true)
   assert.equal((await independent.api('POST', route('target') + '/message', { text: 'Protected target ordinary append.' })).status, 500); assert.equal(independent.sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', ['target'])[0][0], 0)
-  mutate(independent, 'DROP TRIGGER failed_target_reverse'); await independent.cleanup(); const before = counts.get('independent'); await independent.start(); assert.equal(counts.get('independent'), before); assert(!(await exists(journalPath(independent)))); assert.equal((await independent.api('GET', route('target') + '/state')).status, 200); await independent.stop()
+  mutate(independent, 'DROP TRIGGER failed_target_reverse'); await crashWithData(independent); const before = counts.get('independent'); await independent.start(); assert.equal(counts.get('independent'), before); assert(!(await exists(journalPath(independent)))); assert.equal((await independent.api('GET', route('target') + '/state')).status, 200); await independent.stop()
   assert.equal(failures.length, 0, failures.join('\n')); console.log(JSON.stringify({ roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids), requests: requests.length, actualCopyCrash: true, finishing: true, committedPartial: true, strictReverse: true, independentCaller: true }))
 } finally {
   if (fixtures[0]) await writeFile(join(fixtures[0].root, 'identity-recovery-requests.json'), JSON.stringify({ requests, failures, roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids) }, null, 2)).catch(() => {})
-  for (const value of fixtures) await value.cleanup(); await new Promise(done => peer.close(done))
+  for (const value of fixtures) { await value.cleanup(); if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await assert.rejects(access(value.root), { code: 'ENOENT' }) }
+  console.log(JSON.stringify({ finalCleanup: true, rootsRemoved: process.env.FOXWARM_KEEP_E2E_ROOT !== '1', roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids) })); await new Promise(done => peer.close(done))
 }

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
@@ -77,11 +77,12 @@ try {
   assert(!audit.some(row => row[2] === 'tool')); assert(!broken.sql('SELECT session_id FROM archive_branches').some(([id]) => id === 'main'))
   const append = await broken.api('POST', route('main') + '/message', { text: 'Blocked normal input.' }); assert.equal(append.status, 500)
   assert.deepEqual(broken.sql('SELECT session_id,seq,role,message_json FROM archive_messages ORDER BY seq'), audit)
-  mutate(broken, 'DROP TRIGGER failed_reverse'); await broken.cleanup(); await broken.start().then(() => assert.fail('Recovered identity must still reject the actual durable busy turn.'), error => assert.match(error.message, /busy|non-idle|stopping/i))
+  mutate(broken, 'DROP TRIGGER failed_reverse'); await broken.crash(); await access(broken.root); assert.equal(JSON.parse(await readFile(join(broken.data, 'state/session-id-move-pending.json'), 'utf8')).phase, 'rolling-back'); await broken.start().then(() => assert.fail('Recovered identity must still reject the actual durable busy turn.'), error => assert.match(error.message, /busy|non-idle|stopping/i))
   assert.deepEqual(broken.sql('SELECT DISTINCT session_id FROM archive_messages'), [['main']]); assert.equal(counts.get('reverse'), 1)
   assert.equal(failures.length, 0, failures.join('\n'))
   console.log(JSON.stringify({ requests: requests.length, roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids), originalApp: true, sameOwner: true, failedReverseWriteBarrier: true }))
 } finally {
   if (fixtures[0]) await writeFile(join(fixtures[0].root, 'identity-requests.json'), JSON.stringify({ requests, failures, roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids) }, null, 2)).catch(() => {})
-  for (const owned of fixtures) await owned.cleanup(); await new Promise(done => peer.close(done))
+  for (const owned of fixtures) { await owned.cleanup(); if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await assert.rejects(access(owned.root), { code: 'ENOENT' }) }
+  console.log(JSON.stringify({ finalCleanup: true, rootsRemoved: process.env.FOXWARM_KEEP_E2E_ROOT !== '1', roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids) })); await new Promise(done => peer.close(done))
 }
