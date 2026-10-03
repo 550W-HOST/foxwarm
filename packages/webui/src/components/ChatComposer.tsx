@@ -46,7 +46,7 @@ export type ModelOption = {
 interface ChatComposerProps {
   sessionId: string
   experimentalTextOnly?: boolean
-  experimentalImagesOnly?: boolean
+  experimentalAttachments?: boolean
   sessionMissing: boolean
   loading: boolean
   asrAvailable: boolean
@@ -663,7 +663,7 @@ const ChatComposer = memo(function ChatComposer({
   loading,
   asrAvailable,
   experimentalTextOnly = false,
-  experimentalImagesOnly = false,
+  experimentalAttachments = false,
   modelOptions,
   currentModelKey,
   sessionModel,
@@ -694,17 +694,7 @@ const ChatComposer = memo(function ChatComposer({
   onSend,
   onCreateStreamingTranscriber,
 }: ChatComposerProps) {
-  const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const attachmentEnabled = !experimentalTextOnly || experimentalImagesOnly
-  const selectAttachmentFiles = (files: File[]) => {
-    if (!experimentalImagesOnly) return files
-    if (files.some(file => !file.type.startsWith('image/') && !/\.(?:png|jpe?g|gif|webp|heic|heif|bmp|svg)$/i.test(file.name))) {
-      setAttachmentError('Only images can be attached.')
-      return []
-    }
-    setAttachmentError(null)
-    return files
-  }
+  const attachmentEnabled = !experimentalTextOnly || experimentalAttachments
   const loadedDraft = useMemo(() => loadComposerDraft(sessionId), [sessionId])
   const [draftState, setDraftState] = useState<{ sessionId: string; draft: ComposerDraft }>(() => ({ sessionId, draft: loadedDraft }))
   const draft = draftState.sessionId === sessionId ? draftState.draft : loadedDraft
@@ -1326,7 +1316,7 @@ const ChatComposer = memo(function ChatComposer({
         <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">
           <div className="inline-flex items-center gap-2 rounded-lg border border-fw-accent-border dark:border-fw-accent-border bg-fw-surface/90 dark:bg-fw-canvas/80 px-4 py-3 text-fw-accent dark:text-fw-accent text-base font-semibold shadow-sm">
             <Paperclip size={18} />
-            <span>{experimentalImagesOnly ? 'Drop images here to upload' : 'Drop files here to upload'}</span>
+            <span>{'Drop files here to upload'}</span>
           </div>
         </div>
       )}
@@ -1419,7 +1409,6 @@ const ChatComposer = memo(function ChatComposer({
         {attachmentEnabled && <input
           type="file"
           id="file-upload"
-          accept={experimentalImagesOnly ? 'image/*,.heic,.heif' : undefined}
           multiple
           onChange={(e) => {
             if (!recordingLockRef.current && e.target.files) {
@@ -1442,7 +1431,7 @@ const ChatComposer = memo(function ChatComposer({
             setDismissedSlashQuery(null)
           }}
           onBlur={() => persistDraftSafely(sessionId, draftRef.current)}
-          onAttachFiles={(files) => !attachmentEnabled ? [] : createMessageAttachmentDrafts(sessionId, selectAttachmentFiles(files), draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
+          onAttachFiles={(files) => !attachmentEnabled ? [] : createMessageAttachmentDrafts(sessionId, files, draftRef.current.segments.flatMap(segment => segment.type === 'attachment' ? [segment.ref] : [])).map(({ ref, file }) => ({
             type: 'attachment',
             ref,
             name: file.name || 'attachment',
@@ -1453,7 +1442,6 @@ const ChatComposer = memo(function ChatComposer({
           onReattachFile={(ref, file) => setMessageAttachmentFile(sessionId, ref, file)}
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
-        {attachmentError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{attachmentError}</div>}
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -1462,8 +1450,8 @@ const ChatComposer = memo(function ChatComposer({
                 htmlFor="file-upload"
                 onClick={(event) => { if (recordingLockRef.current) event.preventDefault() }}
                 className={`inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse ${recordingLocked ? 'pointer-events-none opacity-50' : ''}`}
-                title={experimentalImagesOnly ? "Attach images" : "Attach files"}
-                aria-label={experimentalImagesOnly ? "Attach images" : "Attach files"}
+                title="Attach files"
+                aria-label="Attach files"
               >
                 <Plus size={18} />
               </label>}

@@ -10,7 +10,7 @@ internal sealed record MessageRouteResult(int Status, object Value);
 /// <summary>Supported Main-local ingress. Channels validate their wire DTO, this owner handles commands and admission.</summary>
 internal sealed partial class MessageRouter(SessionRuntime runtime)
 {
-    public async Task<MessageRouteResult> HandleMessageAsync(ChannelContext context, ChannelMessage message)
+    public async Task<MessageRouteResult> HandleMessageAsync(ChannelContext context, ChannelMessage message, SessionOwner? attachmentOwner = null)
     {
         if (IsPresentationCommand(message.Text))
         {
@@ -18,7 +18,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             if (canonical is null) return new(404, new { error = "Session not found" });
             return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
         }
-        var owner = await runtime.GetOwnerAsync(context.SessionId) ?? throw new InvalidDataException("Session not found.");
+        var owner = attachmentOwner ?? await runtime.GetOwnerAsync(context.SessionId) ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
         if (IsIdentityMoveCommand(message.Text)) return await HandleIdentityMoveCommandAsync(context, message.Text, owner);
         if (IsDeleteCommand(message.Text)) return await HandleDeleteCommandAsync(context, message.Text, owner);
@@ -72,7 +72,8 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         }
         var item = QueueItem.UserText(message.Text, clientMessageId: message.ClientMessageId);
         if (message.Parts is not null) item = item with { Parts = message.Parts.Select(part => (JsonObject)part.DeepClone()).ToArray() };
-        await runtime.SubmitAndRunAsync(context.SessionId, item);
+        if (attachmentOwner is null) await runtime.SubmitAndRunAsync(context.SessionId, item);
+        else await runtime.SubmitAndRunAsync(attachmentOwner, item);
         return new(202, new { accepted = true, note = "Queue save attempted; durable completion is not guaranteed." });
     }
 }

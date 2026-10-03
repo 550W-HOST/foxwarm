@@ -27,6 +27,11 @@ internal sealed class SessionRuntime(SessionManager manager)
     public event Action TopologyChanged { add => manager.TopologyChanged += value; remove => manager.TopologyChanged -= value; }
     public async Task ContinueAsync(string id) => await (await manager.RequiredAsync(id)).StartProcessing(retry: true);
     public async Task SubmitAndRunAsync(string id, QueueItem item) { var owner = await manager.RequiredAsync(id); await owner.Registry.Ingress.EnqueueAsync(owner.Id, item); }
+    internal async Task SubmitAndRunAsync(SessionOwner owner, QueueItem item)
+    {
+        await manager.WaitForIdentityMutationAsync(owner.Id); manager.RequireFileIngressOwner(owner);
+        await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
+    }
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
     internal PresentationChange ChangePresentation(Func<SessionCatalog, PresentationChange> action) => manager.ChangePresentation(action);
     internal void ReplyToCommand(string id, string text) => manager.ReplyToCommand(id, text);

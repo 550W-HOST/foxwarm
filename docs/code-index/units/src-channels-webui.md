@@ -129,3 +129,7 @@ Removed browser workspace routes stay removed. File downloads support explicit t
 ## Canonical ownership
 
 Per-session versus global stream ownership is canonical in [D-webui-session-stream-ownership](../modules/webui.md#d-webui-session-stream-ownership). History/debug bootstrap is canonical in [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap). Optimistic identity delivery is canonical in [D-streaming-optimistic-message-identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity). Cross-module delivery flow: [streaming pipeline](../threads/streaming-pipeline.md).
+
+## Main-only .NET inbound files
+
+The ordinary Main adapter’s generic/image staging, real Agent saved-file descriptors and exact-owner queue lifecycle are governed by [Main generic attachment ingress](dotnet.md#main-generic-attachment-ingress). Source’s general remote-node/channel platform is not ported by this slice.

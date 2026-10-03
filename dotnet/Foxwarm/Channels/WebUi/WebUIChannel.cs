@@ -78,7 +78,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         RegisterRelationRoutes(app);
         RegisterDeleteRoute(app);
         RegisterHistoryRoutes(app);
-        RegisterImageRoutes(app);
+        RegisterUploadAndImageRoutes(app);
         RegisterFileRoutes(app);
         app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
         {
@@ -97,6 +97,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                 && idText.Length is > 0 and <= 160 ? idText : null;
             if (input.ContainsKey("clientMessageId") && clientId is null)
                 return Results.BadRequest(new { error = "Invalid clientMessageId" });
+            IReadOnlyList<JsonObject> savedFiles = [];
             try
             {
                 SessionOwner? ingressOwner = null;
@@ -110,15 +111,22 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                     if (owner is null) return Results.NotFound(new { error = "Session not found" });
                     canonical = owner.Id; ingressOwner = owner;
                 }
-                if (hasUploads && text.TrimStart().StartsWith("/", StringComparison.Ordinal)) return Results.BadRequest(new { error = "Send images as a message without a Session command." });
-                var parts = await PrepareUploadedPartsAsync(input, ingressOwner ?? runtime.Owner(canonical!)!, request.HttpContext.RequestAborted);
+                if (hasUploads && text.TrimStart().StartsWith("/", StringComparison.Ordinal)) return Results.BadRequest(new { error = "Send attachments as a message without a Session command." });
+                using var ingress = hasUploads ? sessions.BeginFileIngress(ingressOwner!) : null;
+                var prepared = await new WebUiUploadedFiles(sessions).PrepareAsync(input, ingressOwner, request.HttpContext.RequestAborted);
+                savedFiles = prepared.SavedFiles;
                 sessions.AttachWebUi(canonical!, ingressOwner);
                 if (ingressOwner is not null) canonical = ingressOwner.Id;
-                var result = await router.HandleMessageAsync(new ChannelContext(canonical, "webui"), new ChannelMessage(text, clientId, parts));
+                var result = await router.HandleMessageAsync(new ChannelContext(canonical, "webui"), new ChannelMessage(text, clientId, prepared.Parts), hasUploads ? ingressOwner : null);
                 return Results.Json(result.Value, statusCode: result.Status);
             }
+            catch (UploadPreparationException error) { return Results.Json(new { error = error.Message, savedFiles = error.SavedFiles }, statusCode: error.InvalidInput ? 400 : 500); }
             catch (Foxwarm.Images.ImageInputException error) { return Results.BadRequest(new { error = error.Message }); }
-            catch (Exception error) { return Results.Problem(error.Message, statusCode: 500); }
+            catch (Exception error)
+            {
+                if (!hasUploads) return Results.Problem(error.Message, statusCode: 500);
+                return Results.Json(new { error = error.Message, savedFiles, note = savedFiles.Count > 0 ? "Saved attachment files were not removed; message admission did not complete." : null }, statusCode: 500);
+            }
         });
         app.MapGet("/api/webui/stream", async (HttpContext context) =>
         {

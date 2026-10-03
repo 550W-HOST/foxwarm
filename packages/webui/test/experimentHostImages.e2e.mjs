@@ -67,7 +67,7 @@ try {
   const blobUrl = fixture.origin + '/api/blobs/' + ref.blobId, blob = await fetch(blobUrl, { headers }); assert.equal(blob.status, 200); assert.equal(blob.headers.get('content-type'), 'image/png'); assert.equal(blob.headers.get('x-content-type-options'), 'nosniff'); assert.deepEqual(Buffer.from(await blob.arrayBuffer()), png)
   assert.equal((await fetch(blobUrl)).status, 401); assert.equal((await fetch(blobUrl, { headers: { ...headers, 'if-none-match': blob.headers.get('etag') } })).status, 304)
   assert.equal((await fetch(fixture.origin + '/api/blobs/not-a-blob', { headers })).status, 400)
-  assert.equal((await upload('not generic', 'document.txt', 'text/plain')).status, 400); assert.equal((await upload('not generic', 'document.txt', '')).status, 400)
+  assert.equal((await upload('generic file', 'document.txt', 'text/plain')).status, 200); assert.equal((await upload('generic file', 'document.txt', '')).status, 200)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'not sent', uploadedFiles: [{ path: imagePath, filename: 'host.png', mimeType: 'image/png' }] })).status, 400)
   const staged = await upload(png); assert.equal(staged.status, 200); const outside = join(fixture.root, 'outside.png'); await writeFile(outside, png); const alias = join(fixture.data, 'state/webui-uploads/escape.png'); await symlink(outside, alias)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'not sent', uploadedFiles: [{ path: alias, mimeType: 'image/png' }] })).status, 400)
