@@ -10,22 +10,24 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     private int policyUnavailable;
     public bool PolicyUnavailable => Volatile.Read(ref policyUnavailable) != 0;
     internal WorkspaceTools? Files => invocation.Value?.Files ?? (workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null);
-    internal Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token) => sessions.AuthorizeToolAsync(hosted, resolved, resolved.Name == "exec" && DirectExecWorkspace is { } captured ? sessions.IdentityWorkspace(hosted, captured) : Files, token);
+    internal Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token) => sessions.AuthorizeToolAsync(hosted, resolved, resolved.Name == "exec" ? ExecFiles : Files, token);
     private readonly List<string> explicitWaitIds = [];
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
     internal bool HandoffConfirmationEnabled => sessions.HandoffConfirmationEnabled;
     private SessionManager Manager => sessions;
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
-    private readonly AsyncLocal<string?> execWorkspace = new();
+    private sealed record ExecSnapshot(string? Cwd);
+    private readonly AsyncLocal<ExecSnapshot?> execSnapshot = new();
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
-    internal string? DirectExecWorkspace => execWorkspace.Value;
+    internal string? DirectExecWorkspace => execSnapshot.Value?.Cwd;
+    private WorkspaceTools ExecFiles => invocation.Value?.ExecFiles ?? sessions.IdentityWorkspace(hosted, execSnapshot.Value?.Cwd);
     internal IDisposable CaptureDirectExecSegment()
     {
-        var previous = execWorkspace.Value;
+        var previous = execSnapshot.Value;
         var raw = SessionWait.Text(hosted.Entry.Snapshot().AuthorityEnvelope["cwd"]);
-        execWorkspace.Value = raw is not null && SessionGoal.Trim(raw).Length > 0 ? Files?.ToolDirectory : null;
-        return new ExecSegmentScope(() => execWorkspace.Value = previous);
+        execSnapshot.Value = new(raw);
+        return new ExecSegmentScope(() => execSnapshot.Value = previous);
     }
     private sealed class ExecSegmentScope(Action restore) : IDisposable { public void Dispose() => restore(); }
     internal async Task<TurnToolPreparation?> PrepareDirectExecAsync(JsonObject call, CancellationToken token)
@@ -52,7 +54,8 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token); hosted.Entry.RequireIdentityAuthority();
         var previous = invocation.Value; var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "") { Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null }; invocation.Value = current;
-        try { return new(await ExecuteCoreAsync(call, token), current.Timing); }
+        try { var response = await ExecuteCoreAsync(call, token);
+            return new(response, current.Timing, response["error"] is null ? current.ResolvedPaths : null, current.DeferredCwd); }
         finally { invocation.Value = previous; }
     }
     public void BeginTurn()
@@ -88,7 +91,9 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, cancellationToken); hosted.Entry.RequireIdentityAuthority();
                 var identity = hosted.Id;
-                if (invocation.Value is { } current && workspace is WorkspaceTools) current.Files = sessions.IdentityWorkspace(hosted);
+                if (invocation.Value is { } current && workspace is WorkspaceTools)
+                { current.Files = sessions.IdentityWorkspace(hosted); current.ExecFiles = sessions.IdentityWorkspace(hosted, execSnapshot.Value?.Cwd); }
+                if (invocation.Value?.Files is { } files) files.ResolvedPaths = paths => invocation.Value!.ResolvedPaths = (JsonArray)paths.DeepClone();
                 await AuthorizeAsync(resolved, cancellationToken);
                 if (identity == hosted.Id) break;
             }
@@ -113,6 +118,35 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         { return UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or IOException or System.Text.Json.JsonException or NotSupportedException or TimeoutException or System.ComponentModel.Win32Exception)
         { return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message); }
+    }
+    private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)
+    {
+        string? initial = null; string? observed = null;
+        var response = await hosted.Executor.ExecuteAsync(hosted.Id, args, token, paths: ExecFiles.Paths,
+            observeCwd: (start, end) => { initial = start; observed = end; });
+        if (observed is null) return response;
+        if (execSnapshot.Value is not null)
+        {
+            if (invocation.Value is { } current) current.DeferredCwd = observed;
+            return response;
+        }
+        return observed == initial ? response : await ApplyCwdAsync(response, observed);
+    }
+    internal async Task<TurnToolExecution> ReplayCwdAsync(TurnToolExecution execution)
+    {
+        if (execution.DeferredCwd is not string cwd) return execution;
+        try { return execution with { Response = await ApplyCwdAsync(execution.Response, cwd), DeferredCwd = null }; }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException)
+        { return execution with { Response = UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message), DeferredCwd = null, ResolvedPaths = null }; }
+    }
+    private async Task<JsonObject> ApplyCwdAsync(JsonObject response, string cwd)
+    {
+        var change = await hosted.UpdateCwdAsync(cwd);
+        if (change["changed"]?.GetValue<bool>() != true) return response;
+        var copy = (JsonObject)response.DeepClone(); var previous = SessionWait.Text(change["previous"]);
+        var notice = previous is null ? $"SESSION CWD CHANGED: `{cwd}`." : $"SESSION CWD CHANGED: `{previous}` → `{cwd}`.";
+        copy["output"] = (SessionWait.Text(copy["output"]) ?? "(No output)") + "\n\n" + notice + " This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.";
+        return copy;
     }
     private Task<JsonObject> ExecuteWorkspaceAsync(string name, JsonObject args, CancellationToken token) => (Files as ITurnToolExecutor ?? workspace).ExecuteAsync(new JsonObject { ["name"] = name, ["args"] = args.DeepClone() }, token);
     private async Task<JsonObject> ExecuteAgentAsync(string name, JsonObject args, CancellationToken cancellationToken)
@@ -141,7 +175,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         var handlers = new Dictionary<string, Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>>>(StringComparer.Ordinal);
         foreach (var name in new[] { "read", "write", "edit", "apply_patch" })
             handlers[name] = (owner, args, token) => owner.ExecuteWorkspaceAsync(name, args, token);
-        handlers["exec"] = (owner, args, token) => owner.Hosted.Executor.ExecuteAsync(owner.Hosted.Id, args, token, owner.DirectExecWorkspace ?? owner.Files?.ToolDirectory);
+        handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["read_exec"] = (owner, args, _) => owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args);
         handlers["recall"] = (owner, args, token) => ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
@@ -164,5 +198,5 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
 }
 
 internal sealed record TurnToolPreparation(JsonObject Response, bool PolicyUnavailable = false);
-internal sealed record TurnToolExecution(JsonObject Response, JsonObject? Timing = null);
-internal sealed class TurnToolInvocation(string callId) { internal string CallId { get; } = callId; internal WorkspaceTools? Files { get; set; } internal JsonObject? Timing { get; set; } }
+internal sealed record TurnToolExecution(JsonObject Response, JsonObject? Timing = null, JsonArray? ResolvedPaths = null, string? DeferredCwd = null);
+internal sealed class TurnToolInvocation(string callId) { internal string CallId { get; } = callId; internal WorkspaceTools? Files { get; set; } internal WorkspaceTools? ExecFiles { get; set; } internal JsonObject? Timing { get; set; } internal JsonArray? ResolvedPaths { get; set; } internal string? DeferredCwd { get; set; } }

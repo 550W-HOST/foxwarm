@@ -5,7 +5,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-/// <summary>Only a path-level boundary within a dedicated experiment workspace, not an OS sandbox.</summary>
+/// <summary>Native Main file semantics; caller authorization owns physical path restrictions.</summary>
 public sealed partial class WorkspaceTools : ITurnToolExecutor
 {
     internal string ToolDirectory => root;
@@ -32,7 +32,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 ["additionalProperties"] = false,
                 ["properties"] = new JsonObject
                 {
-                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "File or directory path. Relative paths use this agent's workspace; absolute paths read an accessible local path. Symbolic links are not supported." },
+                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "File or directory path. Relative paths use the session working directory, or the agent directory when unset. Absolute paths and ~/ paths are accepted subject to permissions. A leading $fw_agentdir or $fw_tmp expands to the agent directory or its tmp directory. Other leading $ names are rejected." },
                     ["startLine"] = new JsonObject { ["type"] = "number", ["description"] = "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning." },
                     ["endLine"] = new JsonObject { ["type"] = "number", ["description"] = "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range." }
                 },
@@ -51,7 +51,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 ["additionalProperties"] = false,
                 ["properties"] = new JsonObject
                 {
-                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Destination path, relative to the tool workspace." },
+                    ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Destination path. Relative paths use the session working directory, or the agent directory when unset. Absolute paths and ~/ paths are accepted subject to permissions. A leading $fw_agentdir or $fw_tmp expands to the agent directory or its tmp directory. Other leading $ names are rejected." },
                     ["content"] = new JsonObject { ["type"] = "string", ["description"] = "Complete file contents. Use either content or contentRef, not both." },
                     ["overwrite"] = new JsonObject { ["type"] = "boolean", ["description"] = "Allow replacement of an existing file. Defaults to false." },
                     ["contentRef"] = new JsonObject { ["type"] = "string", ["description"] = "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same session and agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived." },
@@ -66,17 +66,21 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         return definitions;
     }
 
+    internal MainNativePaths Paths { get; private set; } = null!;
+    internal Action<JsonArray>? ResolvedPaths { get; set; }
+    private void ReportPaths(params (string Raw, string Path)[] paths) => ResolvedPaths?.Invoke(new JsonArray(paths.Select(pair => (JsonNode?)new JsonObject { ["raw"] = pair.Raw, ["resolved"] = pair.Path, ["nodeId"] = "master" }).ToArray()));
+
     public WorkspaceTools(string root)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         this.root = Path.GetFullPath(root);
-        Directory.CreateDirectory(this.root);
-        if ((File.GetAttributes(this.root) & FileAttributes.ReparsePoint) != 0)
+        Paths = MainNativePaths.Default(this.root);
+        if (Directory.Exists(this.root) && (File.GetAttributes(this.root) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidOperationException("Workspace root cannot be a symbolic link.");
     }
 
-    internal WorkspaceTools(string root, PendingWriteRefs pending, string sessionId, string agent, object? lifetime = null) : this(root)
-    { this.pending = pending; this.sessionId = sessionId; this.agent = agent; this.lifetime = lifetime; }
+    internal WorkspaceTools(string root, PendingWriteRefs pending, string sessionId, string agent, object? lifetime = null, string? cwd = null) : this(root)
+    { this.pending = pending; this.sessionId = sessionId; this.agent = agent; this.lifetime = lifetime; Paths = MainNativePaths.Default(this.root, cwd); }
 
     public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
     {
@@ -102,7 +106,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 var first = Bound("startLine"); var last = Bound("endLine");
                 var path = ResolveReadWrite(pathText, read: true);
                 if (!Directory.Exists(path) && !RegularFile(path)) return Error("not_file", "Regular file or directory not found.");
-                return new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken) };
+                var result = new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken) };
+                ReportPaths((pathText, path)); return result;
             }
             foreach (var key in new[] { "overwrite", "createDirs" })
                 if (args.ContainsKey(key) && (args[key] is not JsonValue flag || !flag.TryGetValue<bool>(out _))) throw new InvalidDataException(key + " must be boolean.");
@@ -140,78 +145,29 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             var written = await FileToolCore.WriteAtomic(destination, content, overwrite, () => _ = ResolveReadWrite(pathText, read: false), cancellationToken);
             if (!written) return Error("file_exists", $"File already exists: {pathText}." + Hint(false));
             if (reference.Length > 0) pending.Consume(reference);
+            ReportPaths((pathText, destination));
             return new JsonObject { ["output"] = "written" };
         }
         catch (OperationCanceledException) { throw; }
         catch (InvalidDataException error) { return Error("invalid_tool_arguments", error.Message); }
-        catch (ArgumentException) { return Error("invalid_path", "Invalid path or symbolic link."); }
+        catch (ArgumentException) { return Error("invalid_path", "Invalid path."); }
         catch (IOException error) { return Error("tool_io_error", error.Message); }
         catch (UnauthorizedAccessException) { return Error("tool_io_error", "Workspace access denied."); }
     }
 
-    private string ResolveReadWrite(string path, bool read)
-    {
-        if (read && Path.IsPathRooted(path)) return ResolveAbsoluteRead(path);
-        if (read && path == ".") return root;
-        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path) || path.Contains('\\') || path.Contains(':') || path.Contains('\0')) throw new ArgumentException("Invalid path.");
-        var segments = path.Split('/');
-        if (segments.Any(segment => segment.Length == 0 || segment is "." or "..")) throw new ArgumentException("Invalid segment.");
-        var current = root;
-        foreach (var segment in segments)
-        {
-            current = Path.Combine(current, segment);
-            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0 || new FileInfo(current).LinkTarget is not null) throw new ArgumentException("Symbolic link.");
-        }
-        return current;
-    }
+    private string ResolveReadWrite(string path, bool read) => Paths.FilePath(path);
 
     private static bool RegularFile(string path)
     {
         if (!File.Exists(path)) return false;
         if (!OperatingSystem.IsLinux()) return (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) == 0;
         // Linux statx has a fixed 256-byte ABI; only the mode/type field is needed.
-        return Statx(-100, path, 0x100, 1, out var info) == 0 && (info.Mode & 0xf000) == 0x8000;
+        return Statx(-100, path, 0, 1, out var info) == 0 && (info.Mode & 0xf000) == 0x8000;
     }
     [StructLayout(LayoutKind.Explicit, Size = 256)]
     private struct FileTypeInfo { [FieldOffset(28)] internal ushort Mode; }
     [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
     private static extern int Statx(int directory, string path, int flags, uint mask, out FileTypeInfo info);
-
-    private static string ResolveAbsoluteRead(string path)
-    {
-        if (path.Contains('\0')) throw new ArgumentException("Invalid path.");
-        var absolute = Path.GetFullPath(path);
-        var current = Path.GetPathRoot(absolute)!;
-        foreach (var segment in absolute[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, segment);
-            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0
-                || new FileInfo(current).LinkTarget is not null) throw new ArgumentException("Symbolic link.");
-        }
-        return absolute;
-    }
-
-    private string Resolve(string path, bool allowMissingLast)
-    {
-        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path) || path.Contains('\\') || path.Contains(':')
-            || path.Contains('\0')) throw new ArgumentException("Invalid path.");
-        var segments = path.Split('/');
-        if (segments.Any(segment => segment.Length == 0 || segment is "." or "..")) throw new ArgumentException("Invalid segment.");
-        var current = root;
-        for (var i = 0; i < segments.Length; i++)
-        {
-            current = Path.Combine(current, segments[i]);
-            if (File.Exists(current) || Directory.Exists(current))
-            {
-                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symbolic link.");
-                if (i < segments.Length - 1 && !Directory.Exists(current)) throw new ArgumentException("Non-directory component.");
-                if (i == segments.Length - 1 && !File.Exists(current)) throw new ArgumentException("Non-file target.");
-            }
-            else if (new FileInfo(current).LinkTarget is not null) throw new ArgumentException("Dangling symbolic link.");
-            else if (i < segments.Length - 1 || !allowMissingLast) throw new ArgumentException("Missing component.");
-        }
-        return current;
-    }
 
     private static JsonObject Error(string kind, string message) => UnsupportedTurnToolExecutor.ToolError(kind, message);
 }

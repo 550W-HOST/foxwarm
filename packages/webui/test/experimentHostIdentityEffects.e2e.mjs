@@ -52,9 +52,10 @@ try {
   assert.deepEqual(pairs.map(value => value.tool_use_id), ['exec-1', 'exec-2', 'exec-3', 'exec-4', 'exec-5', 'exec-6', 'new-file', 'new-segment'])
   if (deniedLate) assert(pairs.filter(value => ['exec-5', 'exec-6'].includes(value.tool_use_id)).every(value => value.response.error), 'Actual Source preparation denials must survive a later Agent change that would otherwise allow execution.')
   for (const value of pairs.filter(value => value.tool_use_id.startsWith('exec-') && !value.response.error)) { const index = Number(value.tool_use_id.slice(5)); assert(value.response.output.includes(index + ':' + (index <= 4 ? owned.work : join(owned.work, 'agents/destination')) + '\n'), JSON.stringify(value)) }
-  assert.equal(await readFile(join(owned.work, 'agents/destination/new-workspace.txt'), 'utf8'), 'Future file effect uses the actual destination Agent.')
-  assert.equal(await readFile(join(owned.work, 'agents/destination/new-segment.txt'), 'utf8'), 'once')
-  assert(pairs.find(value => value.tool_use_id === 'new-segment').response.output.includes(join(owned.work, 'agents/destination')))
+  const replayedCwd = deniedLate ? owned.work : join(owned.work, 'agents/destination'); assert.equal(saved.cwd, replayedCwd)
+  assert.equal(await readFile(join(replayedCwd, 'new-workspace.txt'), 'utf8'), 'Future file effect uses the actual destination Agent.')
+  assert.equal(await readFile(join(replayedCwd, 'new-segment.txt'), 'utf8'), 'once')
+  assert(pairs.find(value => value.tool_use_id === 'new-segment').response.output.includes(replayedCwd))
   assert.deepEqual((await readFile(join(owned.work, 'segment-launches'), 'utf8')).trim().split('\n').sort(), deniedLate ? ['1', '2', '3', '4'] : ['1', '2', '3', '4', '5', '6'])
   await until(async () => (await page.evaluate(() => document.body.textContent)).includes('DONE-EFFECT-busy'), 'original Chat follows actual busy owner')
 

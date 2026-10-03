@@ -23,6 +23,16 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
         app.MapGet("/api/models", (HttpRequest request) => Results.Ok(WebUiContract.Models(models, request.Query["current"])));
         RegisterSetupRoutes(app);
+        app.MapPost("/api/sessions/{id}/cwd", async (string id, HttpRequest request) =>
+        {
+            var hosted = await FindRouteAsync(request, id);
+            if (hosted is null) return Results.NotFound(new { error = "Session not found" });
+            if (!sessions.Accepting) return Results.StatusCode(503);
+            JsonObject body;
+            try { body = await JsonNode.ParseAsync(request.Body) as JsonObject ?? throw new JsonException("Cwd settings must be an object."); }
+            catch (JsonException error) { return Results.BadRequest(new { error = error.Message }); }
+            return Results.Ok(await hosted.UpdateCwdAsync(SessionWait.Text(body["cwd"])));
+        });
         app.MapPost("/api/sessions/{id}/model", async (string id, HttpRequest request) =>
         {
             var hosted = await FindRouteAsync(request, id);

@@ -44,9 +44,9 @@ try {
       const before = records.length; await send(launch, 'launch-failure', [call('launch-success-one', 'touch launch-success-one; printf success-one'), call('launch-error', 'printf forbidden', { cwd: 'no-search' }), call('launch-success-two', 'touch launch-success-two; printf success-two')])
       await until(async () => !(await history(launch)).session.busy, 'real launch failure and successful siblings settle')
       assert(await exists(join(own, 'launch-success-one'))); assert(await exists(join(own, 'launch-success-two')))
-      const snapshot = await history(launch); console.log(JSON.stringify({ realLaunchFailureProbe: true, responseCount: snapshot.messages.flatMap(row => row.parts || []).filter(part => part.functionResponse).length, providerRequests: records.length - before, state: (await fixture.api('GET', route(launch) + '/state')).body.session }))
+      const snapshot = await history(launch); console.log(JSON.stringify({ realCwdFailureProbe: true, responseCount: snapshot.messages.flatMap(row => row.parts || []).filter(part => part.functionResponse).length, providerRequests: records.length - before, state: (await fixture.api('GET', route(launch) + '/state')).body.session }))
       assert(await pair(launch, 'launch-error'), 'ordinary launch failure must retain its own paired response')
-      assert.equal((await pair(launch, 'launch-error')).response.error.type, 'tool_error'); assert((await pair(launch, 'launch-error')).executionTiming); assert((await pair(launch, 'launch-success-one')).response.output.includes('success-one')); assert((await pair(launch, 'launch-success-two')).response.output.includes('success-two'))
+      assert.equal((await pair(launch, 'launch-error')).response.error.type, 'tool_io_error'); assert((await pair(launch, 'launch-error')).executionTiming); assert((await pair(launch, 'launch-success-one')).response.output.includes('success-one')); assert((await pair(launch, 'launch-success-two')).response.output.includes('success-two'))
     } finally { await chmod(deniedCwd, 0o700) }
   if (process.env.FOXWARM_EXEC_PARALLEL_LAUNCH_ONLY === '1') {
     await fixture.stop(); stopped = true; console.log(JSON.stringify({ ok: true, launchOnly: true, root: fixture.root, hostPids, requests: records.length }))

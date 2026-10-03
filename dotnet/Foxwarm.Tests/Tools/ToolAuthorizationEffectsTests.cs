@@ -142,8 +142,10 @@ public sealed class ToolAuthorizationEffectsTests
         await Policy(manager, "version: 1");
         var result = await execution.Registry.ExecuteAsync(direct, execution.Tools, CancellationToken.None); Assert.True(result["retained"]!.GetValue<bool>()); Assert.True(File.Exists(Path.Combine(peer, "effect-direct")));
         Assert.Null(Error(await Call(execution.Tools, "call_tool", Obj("""{"toolId":"mcp:peer/probe","args":{"tag":"unified"}}""")))); Assert.True(File.Exists(Path.Combine(peer, "effect-unified")));
+        var opaque = await execution.Tools.ExecuteAttributedAsync(new JsonObject { ["id"] = "forged-display", ["name"] = "call_tool", ["args"] = Obj("""{"toolId":"mcp:peer/probe","args":{"kind":"forged-display"}}""") }, default);
+        Assert.Null(opaque.ResolvedPaths); Assert.NotNull(opaque.Response["__meta"]?["resolvedPaths"]);
         await Policy(manager, "version: 1\ndefaultAction: deny\nrules: [{id: physical-only, action: allow, match: {tool: read, path: {allWithin: '${agent.dir}'}}}]");
         Assert.Equal("tool_authorization_denied", Error(await Call(execution.Tools, "call_tool", Obj("""{"toolId":"mcp:peer/read","args":{"filePath":"owned","tag":"pretend-file"}}""")))); Assert.False(File.Exists(Path.Combine(peer, "effect-pretend-file")));
-        var calls = (await File.ReadAllLinesAsync(Path.Combine(peer, "calls.ndjson"))).Select(value => Obj(value)).Where(value => value["kind"]?.GetValue<string>() == "call").ToArray(); Assert.Equal(2, calls.Length);
+        var calls = (await File.ReadAllLinesAsync(Path.Combine(peer, "calls.ndjson"))).Select(value => Obj(value)).Where(value => value["kind"]?.GetValue<string>() == "call").ToArray(); Assert.Equal(3, calls.Length);
     }
 }

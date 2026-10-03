@@ -20,11 +20,11 @@ public sealed class ToolAuthorizationPathTests
         Assert.True(ToolAuthorizationEvaluation.Evaluate(Policy("${workspace}/policy-base"), request).Allowed);
         Assert.False(ToolAuthorizationEvaluation.Evaluate(Policy(data), request).Allowed);
         var literal = files.AuthorizationFacts("write", new JsonObject { ["filePath"] = "~/literal", ["createDirs"] = true });
-        Assert.Equal(Path.Combine(own, "~", "literal"), Assert.Single(literal).Resolved);
-        Assert.True(ToolAuthorizationEvaluation.Evaluate(Policy("${agent.dir}/~"), request with { Paths = literal }).Allowed);
+        Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "literal"), Assert.Single(literal).Resolved);
+        Assert.False(ToolAuthorizationEvaluation.Evaluate(Policy("${agent.dir}/~"), request with { Paths = literal }).Allowed);
         Assert.False(ToolAuthorizationEvaluation.Evaluate(Policy("${agent.memoryDir}"), request with { Paths = literal }).Allowed);
         Directory.CreateSymbolicLink(Path.Combine(own, "effect-link"), Path.Combine(own, "allowed"));
-        Assert.Throws<ArgumentException>(() => files.AuthorizationFacts("write", new JsonObject { ["filePath"] = "effect-link/new" }));
+        Assert.Equal(Path.Combine(own, "allowed", "new"), Assert.Single(files.AuthorizationFacts("write", new JsonObject { ["filePath"] = "effect-link/new" })).Resolved);
         Assert.False(ToolAuthorizationEvaluation.Evaluate(Policy("${agent.dir}"), request with { Source = "mcp", Server = "peer", Name = "read", Paths = [] }).Allowed);
     }
     [Fact]
@@ -37,13 +37,13 @@ public sealed class ToolAuthorizationPathTests
         Assert.Throws<IOException>(() => AuthorizationPaths.CanonicalPotential(Path.Combine(temp.Path, "one")));
     }
     [Fact]
-    public async Task Candidate_regular_file_bound_from_one_open_handle_rejects_directories_oversize_and_literal_symlink_without_opening_devices()
+    public async Task Candidate_regular_file_bound_from_one_open_handle_follows_an_authorized_symlink_and_rejects_nonfiles_and_oversize()
     {
         using var temp = new TempDirectory(); var files = new WorkspaceTools(temp.Path);
         var regular = Path.Combine(temp.Path, "candidate"); var bytes = System.Text.Encoding.UTF8.GetBytes("# exact bytes\r\nversion: 1\r\n"); await File.WriteAllBytesAsync(regular, bytes);
         Assert.Equal(bytes, await files.CapturePolicyCandidateAsync("candidate", CancellationToken.None));
         Directory.CreateDirectory(Path.Combine(temp.Path, "directory")); await Assert.ThrowsAsync<InvalidDataException>(() => files.CapturePolicyCandidateAsync("directory", CancellationToken.None));
         await File.WriteAllBytesAsync(regular, new byte[ToolAuthorizationPolicy.MaxBytes + 1]); await Assert.ThrowsAsync<InvalidDataException>(() => files.CapturePolicyCandidateAsync("candidate", CancellationToken.None));
-        File.CreateSymbolicLink(Path.Combine(temp.Path, "link"), regular); await Assert.ThrowsAsync<ArgumentException>(() => files.CapturePolicyCandidateAsync("link", CancellationToken.None));
+        await File.WriteAllBytesAsync(regular, bytes); File.CreateSymbolicLink(Path.Combine(temp.Path, "link"), regular); Assert.Equal(bytes, await files.CapturePolicyCandidateAsync("link", CancellationToken.None));
     }
 }

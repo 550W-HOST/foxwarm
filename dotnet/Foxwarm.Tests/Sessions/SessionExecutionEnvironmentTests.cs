@@ -26,12 +26,12 @@ public sealed class SessionExecutionEnvironmentTests
     [InlineData("\ufeff \tmaster\n", "\ufeff \t", true)]
     [InlineData("master", "/owned/process/workspace/.", true)]
     [InlineData("master", "/owned/process/workspace/../workspace/", true)]
-    [InlineData("master", "workspace", false)]
-    [InlineData("master", "/different", false)]
+    [InlineData("master", "workspace", true)]
+    [InlineData("master", "/different", true)]
     [InlineData("remote", null, false)]
     [InlineData("Master", null, false)]
     [InlineData("\u0085master", null, false)]
-    public void Default_equivalence_uses_source_node_trim_and_both_file_and_exec_cwd_defaults(string? node, string? cwd, bool supported)
+    public void Master_admission_keeps_raw_cwd_for_effect_resolution_and_retains_exact_source_node_boundary(string? node, string? cwd, bool supported)
     {
         var context = new JsonObject { ["currentNode"] = node, ["cwd"] = cwd };
         Action validate = () => SessionManager.ValidateExecutionEnvironment(context, "/owned/process/workspace", "/owned/process");
@@ -39,13 +39,13 @@ public sealed class SessionExecutionEnvironmentTests
     }
 
     [Fact]
-    public void Relative_and_home_defaults_are_checked_without_inventing_an_Agent_relative_base()
+    public void Relative_and_home_values_do_not_require_admission_time_filesystem_validation()
     {
         SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = "." }, "/owned/process", "/owned/process");
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         foreach (var cwd in new[] { "~", "~/.", "~\\." })
             SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = cwd }, home, "/owned/process");
-        Assert.Throws<UnsupportedSessionExecutionEnvironmentException>(() => SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = "workspace" }, "/owned/process/workspace", "/owned/process"));
+        SessionManager.ValidateExecutionEnvironment(new JsonObject { ["cwd"] = "workspace" }, "/owned/process/workspace", "/owned/process");
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public sealed class SessionExecutionEnvironmentTests
     }
 
     [Fact]
-    public async Task Source_migration_keeps_valid_foreign_intent_for_exact_admission_rejection()
+    public async Task Source_migration_keeps_raw_master_cwd_without_creating_or_repairing_that_directory()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         await SessionCatalogMigrationTests.Authority(data, "foreign"); var file = Path.Combine(data, "state", "sessions", "foreign.json");
@@ -96,6 +96,6 @@ public sealed class SessionExecutionEnvironmentTests
         await File.WriteAllTextAsync(Path.Combine(data, "state", "sessions.json"), new JsonObject { ["sessions"] = new JsonObject { ["foreign"] = SessionCatalogTests.Row("foreign", 0) } }.ToJsonString());
         await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadAsync(); Assert.Empty(manager.Owners());
         Assert.Equal(raw["cwd"]!.GetValue<string>(), manager.Catalog.Get("foreign")!["cwd"]!.GetValue<string>());
-        await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() => manager.RequiredAsync("foreign")); Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
+        var owner = await manager.RequiredAsync("foreign"); Assert.Equal(raw["cwd"]!.GetValue<string>(), owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()); Assert.False(Directory.Exists(raw["cwd"]!.GetValue<string>())); Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
     }
 }

@@ -90,7 +90,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     internal void BeginShutdown() => closing = true;
 
-    internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct, string? capturedWorkspace = null)
+    internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct, MainNativePaths? paths = null, Action<string, string>? observeCwd = null)
     {
         if (closing) return Error("exec_unavailable", "Host is shutting down.");
         if (args is null || args.Count is < 1 or > 3 || !String(args, "command", out var command)
@@ -105,11 +105,14 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
         var warning = seconds > 60 ? $"WARNING: Requested timeout {seconds.ToString(CultureInfo.InvariantCulture)}s exceeds the 60s maximum; using 60s.\n" : "";
         var waitSeconds = Math.Min(seconds, 60);
+        paths ??= MainNativePaths.Default(workspaceForSession(sessionId));
+        ct.ThrowIfCancellationRequested();
+        Directory.CreateDirectory(Path.Combine(paths.AgentDirectory, "tmp"));
         string cwd;
-        try { cwd = ResolveCwd(capturedWorkspace ?? workspaceForSession(sessionId), args["cwd"]?.GetValue<string>()); }
+        try { cwd = paths.ExecCwd(args["cwd"]?.GetValue<string>()); ValidateCwd(cwd); }
         catch (ArgumentException error) { return Error("invalid_path", error.Message); }
         ct.ThrowIfCancellationRequested();
-        var record = await StartAsync(sessionId, command, cwd, ct);
+        var record = await StartAsync(sessionId, command, cwd, paths.AgentDirectory, ct);
         JsonObject? status = null;
         try
         {
@@ -129,12 +132,15 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             var preview = await PageAsync(record, 0, PageBytes);
             var trailer = preview["nextOffset"] is not null ? $"\nCommand output saved under execId: {record.Id}. Use read_exec for the complete log." : "";
             var exit = status["exitCode"]?.GetValue<int?>()?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+            var finishedCwd = await ReadFinishedCwdAsync(record);
+            if (finishedCwd is not null) observeCwd?.Invoke(record.Cwd, finishedCwd);
             return new JsonObject { ["output"] = $"{preview["output"]?.GetValue<string>()}{trailer}\n---\nExit code: {exit}\nexecId: {record.Id}{(warning.Length > 0 ? "\n" + warning.TrimEnd() : "")}" };
         }
         record = record with { Notify = true };
         await AtomicWriteAsync(Path.Combine(record.Directory, "tracking.json"), "{\"notify\":true}\n");
         pending[Key(sessionId, record.Id)] = record;
         var partial = await PageAsync(record, 0, 4096);
+        var liveCwd = ReadLiveCwd(record); if (liveCwd is not null) observeCwd?.Invoke(record.Cwd, liveCwd);
         return new JsonObject { ["output"] = $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nRead complete output with read_exec({{execId: \"{record.Id}\"}})." };
     }
 
@@ -164,7 +170,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         catch (JsonException) { return Error("exec_io_error", "Execution metadata is invalid."); }
     }
 
-    private async Task<ExecRecord> StartAsync(string sessionId, string command, string cwd, CancellationToken ct)
+    private async Task<ExecRecord> StartAsync(string sessionId, string command, string cwd, string agentDirectory, CancellationToken ct)
     {
         var sessionDir = Path.Combine(directory, SessionIdentity.ExecDirectorySegment(sessionId));
         Directory.CreateDirectory(sessionDir);
@@ -189,17 +195,17 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             catch (IOException) { continue; }
             if (reserved) return await LaunchAsync(new ExecRecord(sessionId, id, command, cwd, 0,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), path, false), ct);
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), path, false), agentDirectory, ct);
         }
         throw new IOException("Persistent exec ID allocation exhausted.");
     }
 
-    private async Task<ExecRecord> LaunchAsync(ExecRecord allocated, CancellationToken ct)
+    private async Task<ExecRecord> LaunchAsync(ExecRecord allocated, string agentDirectory, CancellationToken ct)
     {
         var scriptPath = Path.Combine(allocated.Directory, "command.sh");
         // The wrapper owns its log/status descriptors and survives the ASP.NET host process.
         var wrapper = "#!/usr/bin/env bash\nset +e\nexec >> \"$FOXWARM_EXEC_LOG_PATH\" 2>&1\n"
-            + "foxwarm_finalize() { code=$?; tmp=\"$FOXWARM_EXEC_STATUS_PATH.tmp.$$\"; "
+            + "foxwarm_finalize() { code=$?; cwdtmp=\"$FOXWARM_EXEC_CWD_PATH.tmp.$$\"; pwd > \"$cwdtmp\"; mv \"$cwdtmp\" \"$FOXWARM_EXEC_CWD_PATH\"; tmp=\"$FOXWARM_EXEC_STATUS_PATH.tmp.$$\"; "
             + "printf '{\"exitCode\":%d,\"finishedAt\":\"%s\"}\\n' \"$code\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" > \"$tmp\"; "
             + "mv \"$tmp\" \"$FOXWARM_EXEC_STATUS_PATH\"; }\ntrap foxwarm_finalize EXIT\n"
             + allocated.Command + (allocated.Command.EndsWith('\n') ? "" : "\n");
@@ -207,12 +213,16 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         SetPrivateMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         var start = new ProcessStartInfo("/bin/bash") { UseShellExecute = false, WorkingDirectory = allocated.Cwd };
         start.ArgumentList.Add(scriptPath);
+        // Retain the Main adapter's finite base before adding native reserved values.
         start.Environment.Clear();
         foreach (var key in new[] { "PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER" })
             if (Environment.GetEnvironmentVariable(key) is { Length: > 0 } value) start.Environment[key] = value;
+        start.Environment["fw_agentdir"] = agentDirectory;
+        start.Environment["fw_tmp"] = Path.Combine(agentDirectory, "tmp");
         if (!start.Environment.ContainsKey("PATH")) start.Environment["PATH"] = "/usr/bin:/bin";
         start.Environment["FOXWARM_EXEC_LOG_PATH"] = Path.Combine(allocated.Directory, "output.log");
         start.Environment["FOXWARM_EXEC_STATUS_PATH"] = Path.Combine(allocated.Directory, "status.json");
+        start.Environment["FOXWARM_EXEC_CWD_PATH"] = Path.Combine(allocated.Directory, "cwd.txt");
         ct.ThrowIfCancellationRequested();
         using var process = Process.Start(start) ?? throw new IOException("Failed to launch shell.");
         var record = allocated with { Pid = process.Id, ProcessStartTicks = ReadProcessIdentity(process.Id).Ticks };
@@ -222,20 +232,27 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         return record;
     }
 
-    internal static string ResolveCwd(string workspace, string? value)
+    private static void ValidateCwd(string path)
     {
-        if (value is null) return workspace;
-        if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value) || value.Contains('\\') || value.Contains(':') || value.Contains('\0'))
-            throw new ArgumentException("cwd must be an existing directory relative to the tool workspace.");
-        var path = workspace;
-        foreach (var segment in value.Split('/'))
-        {
-            if (segment.Length == 0 || segment is "." or "..") throw new ArgumentException("cwd must stay in the tool workspace.");
-            path = Path.Combine(path, segment);
-            if (!Directory.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                throw new ArgumentException("cwd must be an existing directory without symbolic links.");
-        }
-        return path;
+        if (!Directory.Exists(path)) throw new ArgumentException($"Cannot start exec: working directory is invalid (not an accessible directory). Resolved cwd: `{path}`.");
+        if (Access(path, 5) != 0) throw new UnauthorizedAccessException($"Cannot start exec: working directory is not readable/searchable: `{path}`.");
+    }
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "access", SetLastError = true)]
+    private static extern int Access(string path, int mode);
+    private static async Task<string?> ReadFinishedCwdAsync(ExecRecord record)
+    {
+        var path = Path.Combine(record.Directory, "cwd.txt");
+        if (!File.Exists(path)) return null;
+        var value = MainNativePaths.SessionGoalTrim(await File.ReadAllTextAsync(path));
+        return value.Length > 0 ? value : null;
+    }
+    private static string? ReadLiveCwd(ExecRecord record)
+    {
+        var identity = ReadProcessIdentity(record.Pid);
+        if (identity.Ticks is null || record.ProcessStartTicks is not null && identity.Ticks != record.ProcessStartTicks) return null;
+        try { return new DirectoryInfo($"/proc/{record.Pid}/cwd").LinkTarget; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     private static bool String(JsonObject args, string key, out string result)

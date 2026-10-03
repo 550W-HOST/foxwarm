@@ -29,15 +29,17 @@ public sealed class SessionIdentityBoundaryTests
         Assert.Same(owner, await manager.GetExistingAsync("main/alias")); Assert.Same(owner, await manager.GetExistingAsync("flat"));
     }
     [Fact]
-    public async Task Unsupported_preserved_meaningful_cwd_is_rejected_before_new_agent_or_identity_intent()
+    public async Task Meaningful_master_cwd_survives_cross_agent_move_without_replacing_cache_or_the_cwd_value()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         using (var initial = new SessionCatalog(data)) initial.Initialize();
         await SessionCatalogMigrationTests.Authority(data, "old"); var path = Path.Combine(data, "state", "sessions", "old.json"); var raw = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject(); raw["cwd"] = work; await File.WriteAllTextAsync(path, raw.ToJsonString());
         using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); catalog.Upsert([SessionCatalogTests.Row("old", 0)]); }
         await using var manager = Manager(data, work); await manager.LoadAsync(); var owner = await manager.RequiredAsync("old"); var bytes = await File.ReadAllTextAsync(path);
-        await Assert.ThrowsAsync<UnsupportedSessionExecutionEnvironmentException>(() => manager.MoveIdentityAsync(owner, new JsonObject { ["createAgent"] = true, ["newAgentName"] = "unsupported" }));
-        Assert.Equal(bytes, await File.ReadAllTextAsync(path)); Assert.False(Directory.Exists(Path.Combine(work, "agents", "unsupported"))); Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
+        var before = owner.Entry.Snapshot();
+        await manager.MoveIdentityAsync(owner, new JsonObject { ["createAgent"] = true, ["newAgentName"] = "destination" });
+        Assert.Equal(work, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()); Assert.Equal("destination/main", owner.Id);
+        Assert.True(JsonNode.DeepEquals(before.AuthorityEnvelope["promptCacheKey"], owner.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"])); Assert.False(File.Exists(path)); Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
     }
     [Fact]
     public async Task All_cold_direct_children_and_exact_nonWebUi_channel_binding_move_without_hydration_or_unrelated_changes()

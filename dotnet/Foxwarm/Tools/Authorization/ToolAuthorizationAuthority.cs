@@ -98,7 +98,7 @@ public sealed partial class WorkspaceTools
         var resolved = name switch
         {
             "read" or "set_tool_rules" => ResolveReadWrite(raw, true), "write" => ResolveReadWrite(raw, false),
-            "edit" => ResolvePatchPath(raw, true), "exec" => LocalExecManager.ResolveCwd(root, raw),
+            "edit" => ResolvePatchPath(raw, true), "exec" => Paths.ExecCwd(raw),
             _ => throw new InvalidDataException("No physical path resolver for this capability.")
         };
         return [new(name == "exec" ? "cwd" : "filePath", raw, AuthorizationPaths.CanonicalPotential(resolved))];

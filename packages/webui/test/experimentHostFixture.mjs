@@ -27,7 +27,7 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Close')?.click())
   await page.waitForSelector('.foxwarm-model-selector-trigger')
 }
-export async function createHostFixture(name) {
+export async function createHostFixture(name, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(root, 'work')
   await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work)
   await writeFile(join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
@@ -41,7 +41,7 @@ export async function createHostFixture(name) {
   }
   async function start() {
     const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
-      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
+      stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: { ...process.env, ...(options.env || {}), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
     })
     let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) })
     host = { child, get output() { return output } }; hostPids.push(child.pid)

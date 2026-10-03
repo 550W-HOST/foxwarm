@@ -29,6 +29,12 @@ internal sealed partial class SessionOwner
         PublishStateChanged();
     }
 
+    internal async Task<JsonObject> UpdateCwdAsync(string? value)
+    {
+        var change = await Entry.SaveLane.CommitCwdAsync(value);
+        return new JsonObject { ["success"] = true, ["changed"] = change.Changed, ["previous"] = change.Previous, ["cwd"] = change.Current };
+    }
+
     public Task<JsonObject> UpdateModelAsync(JsonObject patch) => UpdateSettingsAsync(patch, child: false);
     public async Task<JsonObject> UpdateSettingsAsync(JsonObject patch, bool child)
     {

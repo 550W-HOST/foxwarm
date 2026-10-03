@@ -26,7 +26,7 @@ internal static class ObservationToolDefinitions
     };
     internal static JsonObject[] Definitions() =>
     [
-        Definition("session", "Inspect this session's status, list sessions in the current Agent by default, or change a session's display name. Status includes the local workspace, model and effort settings, context usage, and recent children.", new JsonObject
+        Definition("session", "Inspect this session's status, list sessions in the current Agent by default, or change a session's display name. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.", new JsonObject
         {
             ["action"] = Field("string", "status (default) inspects this session; list returns a page of sessions; update-display-name sets or clears a session's display name.", "status", "list", "update-display-name"),
             ["start"] = Field("number", "Zero-based offset for list, ordered by most recent activity. Defaults to 0."),

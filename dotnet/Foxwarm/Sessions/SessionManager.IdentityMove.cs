@@ -22,7 +22,8 @@ internal sealed partial class SessionManager
     internal Func<string, string, Task>? BeforeIdentityStage { get; set; }
     private string ArchiveDatabase => Path.Combine(root, "state", "archive-store.sqlite");
     private SessionIdentityMoveJournal IdentityJournal => new(root);
-    internal WorkspaceTools IdentityWorkspace(SessionOwner owner, string? capturedRoot = null) => new(capturedRoot ?? agents.AgentDirectory(owner.Agent), pendingWrites, owner.Id, owner.Agent, owner);
+    internal WorkspaceTools IdentityWorkspace(SessionOwner owner, string? capturedCwd = null) => new(agents.AgentDirectory(owner.Agent), pendingWrites, owner.Id, owner.Agent, owner,
+        capturedCwd ?? SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["cwd"]));
 
     internal bool SameAdmittedLifetime(string first, string second)
     {

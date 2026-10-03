@@ -38,6 +38,8 @@ public sealed partial class LocalSessionTurnHost
             }
             var workers = Enumerable.Range(0, Math.Min(4, end - start)).Select(_ => WorkAsync()).ToArray();
             await Task.WhenAll(workers).ConfigureAwait(false);
+            if (tools is SessionToolExecutor replay)
+                for (var index = start; index < end; index++) results[index] = await replay.ReplayCwdAsync(results[index]!);
         }
         var parts = new JsonArray();
         for (var index = 0; index < planned.Count; index++)
@@ -45,6 +47,7 @@ public sealed partial class LocalSessionTurnHost
             var call = planned[index].Call; var result = results[index] ?? throw new InvalidOperationException("Tool segment did not settle its call.");
             var response = new JsonObject { ["tool_use_id"] = SessionWait.Text(call["id"]) ?? throw new InvalidOperationException("Canonical function call is missing its stable ID."), ["name"] = SessionWait.Text(call["name"]) ?? "", ["response"] = result.Response.DeepClone() };
             if (result.Timing is not null) response["executionTiming"] = result.Timing.DeepClone();
+            if (result.Response["error"] is null && result.ResolvedPaths is { Count: > 0 } paths) response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
             parts.Add(new JsonObject { ["functionResponse"] = response });
         }
         return parts;

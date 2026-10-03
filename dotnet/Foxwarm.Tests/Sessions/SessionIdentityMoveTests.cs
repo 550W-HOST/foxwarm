@@ -78,6 +78,7 @@ public sealed class SessionIdentityMoveTests
         var error = await Assert.ThrowsAsync<SessionIdentityMoveException>(() => manager.MoveIdentityAsync(independent, new JsonObject { ["sessionId"] = "old", ["newSessionId"] = "new" }));
         Assert.True(error.Details["recoveryRequired"]!.GetValue<bool>());
         await Assert.ThrowsAsync<SessionIdentityUnavailableException>(() => ForkClearLifecycleTests.AppendAsync(target, Text("Must not create an old branch.")));
+        await Assert.ThrowsAsync<SessionIdentityUnavailableException>(() => target.UpdateCwdAsync(Path.Combine(temp.Path, "blocked-cwd")));
         await Assert.ThrowsAsync<SessionIdentityUnavailableException>(() => target.Registry.Ingress.EnqueueAsync(target.Id, new QueueItem(QueueItemType.User, [new JsonObject { ["text"] = "Blocked normal input." }])));
         await Assert.ThrowsAsync<SessionIdentityUnavailableException>(() => manager.GetExistingAsync("old"));
         await ForkClearLifecycleTests.AppendAsync(independent, Text("Independent caller can persist its partial result."));

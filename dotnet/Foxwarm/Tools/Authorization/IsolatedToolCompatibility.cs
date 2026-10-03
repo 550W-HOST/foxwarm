@@ -72,7 +72,8 @@ internal static class IsolatedToolCompatibility
         }
         // Exact capability allow never bypasses handler-local physical/target/action boundaries.
         if (request.Source == "node" && request.Name is "read" or "write" or "edit" or "apply_patch" || request.Source == "builtin" && request.Name == "set_tool_rules")
-            if (request.Paths.Any(path => !ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory))) throw new ToolAuthorizationDeniedException("Isolated Agent can only access its own tool directory on Main.");
+            if (request.Paths.Any(path => !ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
+                || request.Agent == "main" && ToolAuthorizationEvaluation.Within(path.Resolved, AuthorizationPaths.CanonicalPotential(Path.Combine(request.AgentDirectory!, "agents"))))) throw new ToolAuthorizationDeniedException("Isolated Agent can only access its own tool directory on Main.");
         if (request.Source == "builtin" && request.Name == "session" && SessionGoal.Trim(SessionWait.Text(request.Args["action"]) ?? "status").ToLowerInvariant() == "list")
             throw new ToolAuthorizationDeniedException("Isolated Agent cannot list sessions.");
         if (request.Source == "builtin" && request.Name == "skill" && SessionWait.Text(request.Args["agentName"]) is string skillAgent

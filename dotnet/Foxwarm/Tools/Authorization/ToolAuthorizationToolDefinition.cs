@@ -13,7 +13,7 @@ internal static class ToolAuthorizationToolDefinition
             ["type"] = "object", ["additionalProperties"] = false,
             ["properties"] = new JsonObject
             {
-                ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Path to the candidate file. Relative paths use this agent's tool directory; absolute paths are accepted. Symbolic links are not supported." }
+                ["filePath"] = new JsonObject { ["type"] = "string", ["description"] = "Path to the candidate policy file. Relative paths use the session working directory, or the agent directory when unset. Absolute paths and ~/ paths are accepted subject to permissions. A leading $fw_agentdir or $fw_tmp expands to the agent directory or its tmp directory. Other leading $ names are rejected." }
             },
             ["required"] = new JsonArray("filePath")
         },

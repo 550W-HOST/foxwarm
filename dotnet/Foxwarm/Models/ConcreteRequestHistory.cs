@@ -18,6 +18,8 @@ internal static class ConcreteRequestHistory
             if (source is not null && (source.Length == 0 || source != OpenAIRequestText.Trim(source))) source = null;
             var message = (JsonObject)original.DeepClone();
             message.Remove("__meta");
+            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+                if (part["functionResponse"] is JsonObject response) response.Remove("__meta");
             if (source is null || source == destinationModelId)
             {
                 prepared.Add(message);

@@ -352,6 +352,16 @@ internal sealed partial class SessionManager
             }
             if (SessionSaveLane.IsSettingsCommit)
             {
+                if (stage == AtomicJsonWriteStage.BeforeRename)
+                {
+                    var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + ".settings-hold-before-rename");
+                    if (File.Exists(hold))
+                    {
+                        File.WriteAllText(hold + ".reached", "reached"); var deadline = DateTime.UtcNow.AddSeconds(15);
+                        while (File.Exists(hold) && DateTime.UtcNow < deadline) Thread.Sleep(2);
+                        if (File.Exists(hold)) throw new TimeoutException("Experimental settings publication barrier expired.");
+                    }
+                }
                 var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".settings-before-rename" : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".settings-after-rename" : null;
                 if (suffix is not null)
                 {
