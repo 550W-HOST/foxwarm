@@ -82,6 +82,12 @@ public sealed class SessionRegistry
         return entry;
     }
 
+    internal void BindIdentity(string id, SessionEntry entry)
+    {
+        if (!entries.TryAdd(id, entry) && !ReferenceEquals(entries[id], entry))
+            throw new InvalidOperationException("Session registry identity belongs to another lifetime.");
+    }
+
     public async Task<SessionEntry> LoadOrAddAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         if (entries.TryGetValue(sessionId, out var existing)) return existing;

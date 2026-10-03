@@ -7,7 +7,8 @@ internal sealed partial class SessionManager
     private SessionOnbootProducer? onboot;
     internal async Task LoadMainHostAsync()
     {
-        CommittedArchiveIdentity.ValidateStartupEvidence(root);
+        CommittedArchiveIdentity.ValidateStartupEvidence(root, allowPendingIdentityRecovery: true);
+        await EnsureIdentityStartupAsync();
         await agents.BootstrapMainMemoryAsync(AppContext.BaseDirectory);
         await LoadOwnersAsync(ensureMain: true);
         onboot = new(Path.Combine(agents.MemoryDirectory("main"), "ONBOOT.md"), QueueOnbootAsync,

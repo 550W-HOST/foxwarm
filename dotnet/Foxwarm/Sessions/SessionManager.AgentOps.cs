@@ -24,8 +24,9 @@ internal sealed partial class SessionManager
     public async Task<(string AgentName, string? MainSessionId)> CreateAgentAsync(string agentName,
         bool createMainSession = true, string? initialMemory = null, string? inherit = null)
     {
-        await archiveIdentities.InitializeAsync(Catalog);
+        await EnsureIdentityStartupAsync();
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
+        RequireAgentCreation(agentName);
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
         var gate = CreationKey(SessionIdentity.Build(agentName, "main"));
@@ -290,8 +291,9 @@ internal sealed partial class SessionManager
 
     private async Task<bool> IdReservedAsync(string id)
     {
-        await archiveIdentities.InitializeAsync(Catalog);
+        await EnsureIdentityStartupAsync();
         if (archiveIdentities.IsReserved(id)) return true;
+        lock (lifecycle) if (identityMoveClaims.ContainsKey(id) || pendingIdentityReservations.Contains(id) || unresolvedIdentityMove is { } pendingMove && (id == pendingMove.OldId || id == pendingMove.NewId)) return true;
         bool pending; lock (lifecycle) pending = identities.ContainsKey(id);
         if (pending || Catalog.Get(id) is not null || sessions.ContainsKey(id) || File.Exists(Path.Combine(root, "state", "sessions", id + ".json"))) return true;
         var archive = Path.Combine(root, "state", "archive-store.sqlite");
@@ -313,13 +315,14 @@ internal sealed partial class SessionManager
     private PersistentSessionAuthorityStore MakeStore(string id, string agent)
     {
         IdentitySlot slot; lock (lifecycle) slot = identities.GetValueOrDefault(id) ?? throw new InvalidOperationException("Session identity was not claimed.");
-        var marker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".snapshot-before-rename");
+
         var legacyCreateMarker = Path.Combine(root, "state", "experiment-faults", "legacy-create-after-rename");
-        return new PersistentSessionAuthorityStore(root, id, agent, stage =>
+        PersistentSessionAuthorityStore store = null!;
+        store = new PersistentSessionAuthorityStore(root, id, agent, stage =>
         {
             if (SessionSaveLane.IsClearCommit && stage == AtomicJsonWriteStage.BeforeRename)
             {
-                var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".clear-hold-before-rename");
+                var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + ".clear-hold-before-rename");
                 if (File.Exists(hold))
                 {
                     File.WriteAllText(hold + ".reached", "reached"); var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -330,11 +333,21 @@ internal sealed partial class SessionManager
             var lifecycleSuffix = stage == AtomicJsonWriteStage.BeforeRename ? "-before-rename" : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? "-after-rename" : null;
             if (lifecycleSuffix is not null)
             {
-                var action = SessionSaveLane.IsClearCommit ? "clear" : ManualForkNoticeCommitScope.Value ? "fork-notice" : Find(id) is null ? "create" : null;
+                var action = SessionSaveLane.IsClearCommit ? "clear" : ManualForkNoticeCommitScope.Value ? "fork-notice" : Find(store?.SessionId ?? id) is null ? "create" : null;
                 if (action is not null)
                 {
-                    var fault = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + "." + action + lifecycleSuffix);
+                    var fault = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + "." + action + lifecycleSuffix);
                     if (File.Exists(fault)) { File.Delete(fault); throw new IOException("Injected experimental " + action + " commit failure."); }
+                }
+            }
+            if (store is { IsIdentitySnapshotCommit: true })
+            {
+                var identitySuffix = stage == AtomicJsonWriteStage.BeforeRename ? ".identity-authority-before-rename"
+                    : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".identity-authority-after-rename" : null;
+                if (identitySuffix is not null)
+                {
+                    var identityMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store.SessionId) + identitySuffix);
+                    if (File.Exists(identityMarker)) { File.Delete(identityMarker); throw new IOException("Injected experimental identity authority write failure."); }
                 }
             }
             if (SessionSaveLane.IsSettingsCommit)
@@ -342,7 +355,7 @@ internal sealed partial class SessionManager
                 var suffix = stage == AtomicJsonWriteStage.BeforeRename ? ".settings-before-rename" : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".settings-after-rename" : null;
                 if (suffix is not null)
                 {
-                    var settingsMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + suffix);
+                    var settingsMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + suffix);
                     if (File.Exists(settingsMarker)) { File.Delete(settingsMarker); throw new IOException("Injected experimental settings commit failure."); }
                 }
             }
@@ -352,7 +365,7 @@ internal sealed partial class SessionManager
                     : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".goal-after-rename" : null;
                 if (suffix is not null)
                 {
-                    var goalMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + suffix);
+                    var goalMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + suffix);
                     if (File.Exists(goalMarker)) { File.Delete(goalMarker); throw new IOException("Injected experimental goal commit failure."); }
                 }
             }
@@ -362,30 +375,31 @@ internal sealed partial class SessionManager
                     : stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? ".wait-after-rename" : null;
                 if (suffix is not null)
                 {
-                    var waitMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + suffix);
+                    var waitMarker = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + suffix);
                     if (File.Exists(waitMarker)) { File.Delete(waitMarker); throw new IOException("Injected experimental wait commit failure."); }
                 }
             }
             if (stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync && SessionIdentity.IsLegacyGenerated(id)
-                && Find(id) is null && File.Exists(legacyCreateMarker))
+                && Find(store?.SessionId ?? id) is null && File.Exists(legacyCreateMarker))
             {
                 File.Delete(legacyCreateMarker);
                 throw new IOException("Injected experimental legacy Session post-rename failure.");
             }
-            if (stage != AtomicJsonWriteStage.BeforeRename || !SessionSaveLane.IsSnapshotCommit || !File.Exists(marker)) return;
-            File.Delete(marker);
+            if (stage != AtomicJsonWriteStage.BeforeRename || !SessionSaveLane.IsSnapshotCommit || !File.Exists(Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store!.SessionId) + ".snapshot-before-rename"))) return;
+            File.Delete(Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store!.SessionId) + ".snapshot-before-rename"));
             throw new IOException("Injected experimental memory snapshot pre-rename failure.");
         }, canonicalCommitBarrier: async (_, cancellationToken) =>
         {
-            var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".canonical-hold-before-rename");
+            var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + ".canonical-hold-before-rename");
             if (!File.Exists(hold)) return;
             await File.WriteAllTextAsync(hold + ".reached", "reached", cancellationToken); var deadline = DateTime.UtcNow.AddSeconds(15);
             while (File.Exists(hold) && DateTime.UtcNow < deadline) await Task.Delay(2, cancellationToken);
             if (File.Exists(hold)) throw new TimeoutException("Experimental canonical publication barrier expired.");
-        }, publishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot), mainFields: () => Catalog.Get(id), checkLifetime: () =>
+        }, publishProjection: snapshot => PublishCatalogSnapshot(snapshot, slot), mainFields: () => Catalog.Get(store.SessionId), checkLifetime: () =>
         {
-            lock (lifecycle) if (!identities.TryGetValue(id, out var current) || current != slot || slot.Retired) throw new InvalidOperationException("Session authority lifetime has retired.");
+            lock (lifecycle) if (!identities.TryGetValue(store.SessionId, out var current) || current != slot || slot.Retired) throw new InvalidOperationException("Session authority lifetime has retired.");
         });
+        return store;
     }
 
     private static string Escape(string text) => text.Replace("&", "&amp;", StringComparison.Ordinal)

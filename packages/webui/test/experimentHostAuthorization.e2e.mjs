@@ -7,6 +7,7 @@ import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('authorization'), records = [], failures = [], scripts = new Map(), held = new Map()
 const policy = join(fixture.data, 'state/tool-authorization.yaml'), peerRoot = join(fixture.root, 'peer')
+await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const exists = file => access(file).then(() => true, () => false)
 const textOf = item => (item.content || []).map(part => part.text || '').join('')

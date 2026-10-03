@@ -14,6 +14,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
     private readonly PendingWriteRefs pending = new();
     private readonly string sessionId = "standalone";
     private readonly string agent = "main";
+    private readonly object? lifetime;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     // The caller-approved model-facing definitions are intentionally kept verbatim.
@@ -74,8 +75,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             throw new InvalidOperationException("Workspace root cannot be a symbolic link.");
     }
 
-    internal WorkspaceTools(string root, PendingWriteRefs pending, string sessionId, string agent) : this(root)
-    { this.pending = pending; this.sessionId = sessionId; this.agent = agent; }
+    internal WorkspaceTools(string root, PendingWriteRefs pending, string sessionId, string agent, object? lifetime = null) : this(root)
+    { this.pending = pending; this.sessionId = sessionId; this.agent = agent; this.lifetime = lifetime; }
 
     public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
     {
@@ -113,12 +114,12 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             {
                 if (args.ContainsKey("content")) throw new InvalidDataException("write accepts either content or contentRef, not both.");
                 if (!overwrite) throw new InvalidDataException("write with contentRef requires overwrite=true.");
-                content = pending.Peek(reference, sessionId, agent);
+                content = pending.Peek(reference, sessionId, agent, lifetime);
             }
             else content = SessionWait.Text(args["content"]) ?? throw new InvalidDataException("write requires content, or contentRef with overwrite=true from a previous write attempt.");
             string Hint(bool parents)
             {
-                var id = reference.Length > 0 ? reference : pending.Register(sessionId, agent, content);
+                var id = reference.Length > 0 ? reference : pending.Register(sessionId, agent, content, lifetime);
                 if (id is null) return " The attempted content was too large to cache for contentRef retry; call write again with content and " + (parents ? "createDirs=true." : "overwrite=true.");
                 return $" The attempted content is cached. Retry write({{ filePath: {System.Text.Json.JsonSerializer.Serialize(pathText)}, contentRef: {System.Text.Json.JsonSerializer.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
             }

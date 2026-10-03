@@ -39,7 +39,7 @@ internal sealed partial class SessionManager
     private readonly AsyncLocal<MutationAdmission?> mutationContext = new();
     internal Func<string, string, Task>? BeforeDeleteStage { get; set; }
     private bool IsRetiring(string id) { lock (lifecycle) return identities.TryGetValue(id, out var slot) && slot.Retiring; }
-    internal bool CanRunCallbacks(string id) => !IsDeletionClaimed(id) && Find(id) is not null;
+    internal bool CanRunCallbacks(string id) => !IsDeletionClaimed(id) && Find(id) is { } owner && owner.Entry.IdentityAvailable;
     private bool IsDeletionClaimed(string id) { lock (lifecycle) return deletionClaims.ContainsKey(id); }
     private bool IsCurrentOwner(SessionOwner owner) => sessions.TryGetValue(owner.Id, out var current) && ReferenceEquals(current, owner) && !owner.Entry.Retired;
     private sealed class MutationAdmission(SessionManager manager, string[] ids, TaskCompletionSource finished, MutationAdmission? prior) : IDisposable
@@ -64,6 +64,11 @@ internal sealed partial class SessionManager
         lock (lifecycle)
         {
             if (!accepting && owning is null) throw new InvalidOperationException("Host is shutting down.");
+            foreach (var id in ids)
+            {
+                if (identityMoveClaims.TryGetValue(id, out var moving) && moving != owningIdentityMove.Value) throw new InvalidOperationException("Session identity is changing. Retry after it finishes.");
+                if (sessions.TryGetValue(id, out var affected)) affected.Entry.RequireIdentityAuthority();
+            }
             foreach (var id in ids)
                 if (deletionClaims.TryGetValue(id, out var claim) && claim != owning && mutationContext.Value?.AlreadyAccepted(id) != true)
                     throw new SessionDeletionException($"Session '{id}' is being deleted. Retry after the operation finishes.", "SESSION_DELETE_IN_PROGRESS");
@@ -99,7 +104,7 @@ internal sealed partial class SessionManager
             foreach (var id in ids)
                 if (deletionClaims.TryGetValue(id, out var claim) && claim != operation) throw new SessionDeletionException("Another deletion claim overlaps this selection.", "SESSION_DELETE_IN_PROGRESS");
             foreach (var id in ids) deletionClaims[id] = operation;
-            pending = ids.SelectMany(id => mutationAdmissions.GetValueOrDefault(id) ?? []).Select(done => done.Task)
+            pending = mutationAdmissions.Where(pair => ids.Any(id => id == pair.Key || SameAdmittedLifetime(id, pair.Key))).SelectMany(pair => pair.Value).Select(done => done.Task)
                 .Concat(ids.Where(identities.ContainsKey).Select(id => identities[id].Finished.Task)).Distinct().ToArray();
         }
         await Task.WhenAll(pending);

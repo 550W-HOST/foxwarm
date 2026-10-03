@@ -32,6 +32,9 @@ public sealed partial class SessionSaveLane
         this.store = store;
     }
 
+    // Identity IO joins the existing ordered save lane, never the short state or registry gate.
+    internal Task MutateIdentityAsync(Func<Task> operation) => EnqueueOperationAsync(operation);
+
     public Task SaveStrictAsync(CancellationToken cancellationToken = default) => EnqueueAsync(SaveKind.Strict, cancellationToken);
     public async Task<DisplayNameChange> CommitDisplayNameAsync(string? name)
     {

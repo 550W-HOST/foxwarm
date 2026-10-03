@@ -20,6 +20,8 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
         lock (gate)
         {
             if (lifetime.IsCancellationRequested) return;
+            var existing = jobs.FirstOrDefault(pair => manager.SameAdmittedLifetime(pair.Key, sessionId));
+            if (existing.Value.Stop is not null && existing.Value.WaitId == id) return;
             if (jobs.TryGetValue(sessionId, out var prior))
             {
                 if (prior.WaitId == id) return;
@@ -64,7 +66,11 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
     internal async Task RetireAsync(string id)
     {
         (string WaitId, CancellationTokenSource Stop, Task Task)? job = null;
-        lock (gate) if (jobs.TryRemove(id, out var current)) job = current;
+        lock (gate)
+        {
+            var key = jobs.Keys.FirstOrDefault(key => key == id || manager.SameAdmittedLifetime(key, id));
+            if (key is not null && jobs.TryRemove(key, out var current)) job = current;
+        }
         if (job is { } actual) { try { actual.Stop.Cancel(); } catch (ObjectDisposedException) { } await actual.Task; }
     }
     internal void Stop() { lock (gate) lifetime.Cancel(); }

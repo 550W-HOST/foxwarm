@@ -24,6 +24,8 @@ internal sealed partial class SessionManager
             HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
             switch (name)
             {
+                case "move_session":
+                    return (await MoveIdentityAsync(source, args, semanticCaller.Value ?? default), false);
                 case "delete_session":
                     {
                         Keys(args, ["sessionId"], ["sessionId"]);
@@ -95,6 +97,7 @@ internal sealed partial class SessionManager
                 default: throw new InvalidDataException("Unsupported Agent tool.");
             }
         }
+        catch (SessionIdentityMoveException error) { var detail = (JsonObject)error.Details.DeepClone(); detail["error"] = error.Message; return (detail, false); }
         catch (SessionDeletionException error)
         {
             var response = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);

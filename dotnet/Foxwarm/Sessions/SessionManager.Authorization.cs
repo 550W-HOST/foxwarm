@@ -47,6 +47,7 @@ internal sealed partial class SessionManager
     }
     internal async Task AuthorizeToolAsync(SessionOwner owner, ResolvedTool resolved, WorkspaceTools? files, CancellationToken token, SessionOwner? concreteTarget = null)
     {
+        owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner)) throw new InvalidOperationException("Tool source is no longer the current Session owner.");
         var paths = resolved.Source == "node" && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin" && resolved.Name == "set_tool_rules"

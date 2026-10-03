@@ -16,6 +16,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     private const int DisplayChars = 16 * 1024;
     private readonly string directory;
     private readonly Func<string, string> workspaceForSession;
+    private readonly Func<string, string> resolveLifetime;
+    private readonly Func<string, string[]> historicalOwners;
+    internal void RebindIdentity(string oldId, string newId)
+    {
+        var gate = completionGates.GetOrAdd(oldId, _ => new(1, 1)); completionGates[newId] = gate;
+    }
     private readonly ConcurrentDictionary<string, ExecRecord> pending = new(StringComparer.Ordinal);
     private readonly Func<string, string, string, Task> notify;
     private CancellationTokenSource? reconcileStop;
@@ -27,7 +33,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var gate = completionGates.GetOrAdd(id, _ => new(1, 1)); await gate.WaitAsync();
         try
         {
-            foreach (var record in pending.Values.Where(record => record.SessionId == id))
+            foreach (var record in pending.Values.Where(record => resolveLifetime(record.SessionId) == id))
             {
                 File.Delete(Path.Combine(record.Directory, "tracking.json"));
                 LinuxAtomicJsonFile.LinuxDirectorySync.Sync(record.Directory);
@@ -40,12 +46,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     private sealed record ExecRecord(string SessionId, string Id, string Command, string Cwd, int Pid, long StartedAt,
         string Directory, bool Notify, string? ProcessStartTicks = null);
 
-    internal LocalExecManager(string dataRoot, Func<string, string> workspaceForSession, Func<string, string, string, Task> notify)
+    internal LocalExecManager(string dataRoot, Func<string, string> workspaceForSession, Func<string, string, string, Task> notify, Func<string, string>? resolveLifetime = null, Func<string, string[]>? historicalOwners = null)
     {
         if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Experimental persistent exec requires Linux.");
         directory = Path.Combine(Path.GetFullPath(dataRoot), "state", "exec");
         this.workspaceForSession = workspaceForSession;
-        this.notify = notify;
+        this.notify = notify; this.resolveLifetime = resolveLifetime ?? (id => id); this.historicalOwners = historicalOwners ?? (id => [id]);
         Directory.CreateDirectory(directory);
         SetPrivateMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
@@ -54,14 +60,14 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     {
         await RegisterRecordsAsync(hasSession); StartReconciliation();
     }
-    internal string[] OwnerIds => pending.Values.Select(record => record.SessionId).Distinct(StringComparer.Ordinal).ToArray();
+    internal string[] OwnerIds => pending.Values.Select(record => resolveLifetime(record.SessionId)).Distinct(StringComparer.Ordinal).ToArray();
     internal async Task RegisterRecordsAsync(Func<string, bool> hasSession)
     {
         foreach (var file in Directory.EnumerateFiles(directory, "tracking.json", SearchOption.AllDirectories))
         {
             var path = Path.GetDirectoryName(file)!;
             var record = await ReadRecordAsync(path);
-            if (!hasSession(record.SessionId) || !string.Equals(record.Id, Path.GetFileName(path), StringComparison.Ordinal)
+            if (!hasSession(resolveLifetime(record.SessionId)) || !string.Equals(record.Id, Path.GetFileName(path), StringComparison.Ordinal)
                 || !string.Equals(SessionIdentity.ExecDirectorySegment(record.SessionId),
                     Path.GetFileName(Path.GetDirectoryName(path)), StringComparison.Ordinal))
                 throw new InvalidDataException("Exec tracking references a missing or foreign Session authority.");
@@ -80,7 +86,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         reconcileTask = ReconcileAsync(reconcileStop.Token);
     }
 
-    internal bool IsOwnedActive(string sessionId, string execId) => pending.TryGetValue(Key(sessionId, execId), out _);
+    internal bool IsOwnedActive(string sessionId, string execId) => pending.Values.Any(record => record.Id == execId && resolveLifetime(record.SessionId) == sessionId);
 
     internal void BeginShutdown() => closing = true;
 
@@ -142,12 +148,15 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             if (args["offset"] is not JsonValue value || !value.TryGetValue<long>(out offset) || offset < 0)
                 return Error("invalid_tool_arguments", "offset must be a nonnegative integer.");
         }
-        var path = Path.Combine(directory, SessionIdentity.ExecDirectorySegment(sessionId), id);
+        var candidates = historicalOwners(sessionId).Select(owner => Path.Combine(directory, SessionIdentity.ExecDirectorySegment(owner), id))
+            .Where(candidate => File.Exists(Path.Combine(candidate, "meta.json"))).ToArray();
+        if (candidates.Length > 1) return Error("exec_io_error", "Execution ID is ambiguous within this retained lifetime.");
+        var path = candidates.FirstOrDefault() ?? Path.Combine(directory, SessionIdentity.ExecDirectorySegment(sessionId), id);
         if (!File.Exists(Path.Combine(path, "meta.json"))) return Error("exec_not_found", "Execution was not found in this Session.");
         try
         {
             var record = await ReadRecordAsync(path);
-            if (record.Id != id || record.SessionId != sessionId) return Error("exec_not_found", "Execution was not found in this Session.");
+            if (record.Id != id || resolveLifetime(record.SessionId) != sessionId) return Error("exec_not_found", "Execution was not found in this Session.");
             return await PageAsync(record, offset, PageBytes);
         }
         catch (IOException) { return Error("exec_io_error", "Execution log could not be read."); }
@@ -167,6 +176,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         {
             id = ExecPetnames.Adjectives[RandomNumberGenerator.GetInt32(ExecPetnames.Adjectives.Length)] + "-"
                 + ExecPetnames.Nouns[RandomNumberGenerator.GetInt32(ExecPetnames.Nouns.Length)];
+            if (historicalOwners(sessionId).Any(owner => Directory.Exists(Path.Combine(directory, SessionIdentity.ExecDirectorySegment(owner), id)))) continue;
             path = Path.Combine(sessionDir, id);
             try { Directory.CreateDirectory(path); }
             catch (IOException) { continue; }
@@ -378,7 +388,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 if (closing) continue;
                 foreach (var record in pending.Values.Where(value => value.Notify))
                 {
-                    var completion = completionGates.GetOrAdd(record.SessionId, _ => new(1, 1));
+                    var completion = completionGates.GetOrAdd(resolveLifetime(record.SessionId), _ => new(1, 1));
                     await completion.WaitAsync(ct);
                     try
                     {

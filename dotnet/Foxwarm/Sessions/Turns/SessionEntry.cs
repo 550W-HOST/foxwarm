@@ -21,9 +21,13 @@ public sealed class SessionEntry
     private Exception? lastBackgroundProcessorFailure;
     private readonly TaskCompletionSource<Exception> backgroundProcessorFailureSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    private Exception? identityUnavailable;
+    internal void RequireIdentityAuthority() { if (Volatile.Read(ref identityUnavailable) is { } error) throw error; }
+    internal bool IdentityAvailable => Volatile.Read(ref identityUnavailable) is null;
+    internal void MarkIdentityUnavailable(Exception error) => Volatile.Write(ref identityUnavailable, error);
     internal bool Retired { get; set; }
     internal Func<IDisposable>? MutationAdmission { get; set; }
-    internal IDisposable? AdmitMutation() { if (Retired) throw new InvalidOperationException("Session owner has retired."); return MutationAdmission?.Invoke(); }
+    internal IDisposable? AdmitMutation() { RequireIdentityAuthority(); if (Retired) throw new InvalidOperationException("Session owner has retired."); return MutationAdmission?.Invoke(); }
     public SessionState State { get; }
     public SessionSaveLane SaveLane { get; }
     public object StateGate => stateGate;

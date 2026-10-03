@@ -37,6 +37,9 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         lock (gate)
         {
             if (lifetime.IsCancellationRequested) return;
+            var priorIdentity = dependencies.Keys.Concat(scheduled.Keys).Concat(active.Keys).Concat(pending.Keys)
+                .FirstOrDefault(key => key != sessionId && manager.SameAdmittedLifetime(key, sessionId));
+            if (priorIdentity is not null) sessionId = priorIdentity;
             if ((meta is null || !meta.Busy && meta.QueueLength == 0) && active.Remove(sessionId, out var released)) released.TrySetResult();
             if (dependencies.Remove(sessionId, out var old))
                 foreach (var dependency in old)
@@ -51,7 +54,8 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                 }
             }
             Schedule(sessionId);
-            if (reverse.TryGetValue(sessionId, out var affected)) foreach (var waiter in affected.ToArray()) Schedule(waiter);
+            foreach (var affected in reverse.Where(pair => pair.Key == sessionId || manager.SameAdmittedLifetime(pair.Key, sessionId)).Select(pair => pair.Value).ToArray())
+                foreach (var waiter in affected.ToArray()) Schedule(waiter);
             Pump();
         }
     }
@@ -168,6 +172,13 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         ready.TrySetResult();
     }
     internal async Task RetireAsync(string id)
+    {
+        string[] keys;
+        lock (gate) keys = sessionTasks.Keys.Concat(scheduled.Keys).Concat(dependencies.Keys).Concat(pending.Keys).Concat(active.Keys).Append(id)
+            .Where(key => key == id || manager.SameAdmittedLifetime(key, id)).Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var key in keys) await RetireExactAsync(key);
+    }
+    private async Task RetireExactAsync(string id)
     {
         CancellationTokenSource? stop; Task[] remaining;
         lock (gate)

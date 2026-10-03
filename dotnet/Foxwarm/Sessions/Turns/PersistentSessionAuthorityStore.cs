@@ -9,18 +9,22 @@ namespace Foxwarm.Sessions;
 /// </summary>
 public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, ICanonicalAppendAuthorityStore, ICompactionAuthorityStore
 {
-    private readonly string sessionId;
-    private readonly string agent;
-    private readonly LinuxAtomicJsonFile authorityFile;
-    private readonly SqliteArchiveMessageStore archive;
+    private string sessionId;
+    private string agent;
+    private LinuxAtomicJsonFile authorityFile;
+    private SqliteArchiveMessageStore archive;
+    private readonly string root;
+    private readonly Action<AtomicJsonWriteStage>? authorityStageHook;
     private readonly Func<int, CancellationToken, Task>? canonicalCommitBarrier;
     private int canonicalCommitCount;
     private readonly Action<SessionSnapshot>? publishProjection;
     private readonly Func<JsonObject?>? mainFields;
     private readonly Action? checkLifetime;
     private volatile bool retired;
+    private Exception? identityUnavailable;
+    internal void MarkIdentityUnavailable(Exception error) => Volatile.Write(ref identityUnavailable, error);
     internal void Retire() => retired = true;
-    private void CheckWrite() { if (retired) throw new InvalidOperationException("Session authority owner has retired."); checkLifetime?.Invoke(); }
+    private void CheckWrite() { if (Volatile.Read(ref identityUnavailable) is { } error) throw error; if (retired) throw new InvalidOperationException("Session authority owner has retired."); checkLifetime?.Invoke(); }
 
     public PersistentSessionAuthorityStore(
         string root,
@@ -33,6 +37,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        this.root = root; this.authorityStageHook = authorityStageHook;
         this.sessionId = sessionId;
         this.agent = agent;
         this.canonicalCommitBarrier = canonicalCommitBarrier;
@@ -42,10 +47,27 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         archive.Initialize();
     }
 
+    internal string SessionId => sessionId;
+    internal string Agent => agent;
+    internal void RebindIdentity(string id, string targetAgent)
+    {
+        // Caller owns the ordered lane; no old-bound commit can overlap replacement.
+        var next = new SqliteArchiveMessageStore(ArchivePath, id); next.Initialize();
+        sessionId = id; agent = targetAgent; archive = next;
+        authorityFile = new LinuxAtomicJsonFile(root, $"state/sessions/{id}.json", authorityStageHook);
+    }
     public string AuthorityPath => authorityFile.FilePath;
     public string ArchivePath => archive.DatabasePath;
     public DirectorySyncResult LastDirectorySyncResult => authorityFile.LastDirectorySyncResult;
     public SqliteArchiveMessageStore Archive => archive;
+
+    internal bool IsIdentitySnapshotCommit { get; private set; }
+    internal Task PersistIdentitySnapshotAsync(SessionSnapshot snapshot)
+    {
+        ValidateBoundSnapshot(snapshot); IsIdentitySnapshotCommit = true;
+        try { authorityFile.Write(ToAuthority(snapshot)); return Task.CompletedTask; }
+        finally { IsIdentitySnapshotCommit = false; }
+    }
 
     public Task CommitAsync(SessionSnapshot snapshot, SaveKind kind, CancellationToken cancellationToken = default)
     {

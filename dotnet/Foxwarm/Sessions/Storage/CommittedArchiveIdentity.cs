@@ -90,7 +90,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         return result;
     }
 
-    private void WriteLedger(Dictionary<string, string> mappings)
+    private void WriteLedger(Dictionary<string, string> mappings, Action? afterRename = null)
     {
         if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Durable Main authority writes require Linux.");
         Directory.CreateDirectory(Path.GetDirectoryName(LedgerPath)!);
@@ -108,7 +108,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                 }
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temp, LedgerPath, overwrite: true);
+            File.Move(temp, LedgerPath, overwrite: true); afterRename?.Invoke();
             LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(LedgerPath)!);
         }
         finally { File.Delete(temp); }

@@ -43,7 +43,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (workspaceRoot == this.root || workspaceRoot.StartsWith(this.root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || this.root.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException("Tool workspace and authority root must not overlap.");
-        CommittedArchiveIdentity.ValidateStartupEvidence(this.root);
+        CommittedArchiveIdentity.ValidateStartupEvidence(this.root, allowPendingIdentityRecovery: true);
         Directory.CreateDirectory(this.root);
         deletionChannels = new(this.root);
         archiveIdentities = new(this.root);
@@ -55,7 +55,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             var marker = Path.Combine(this.root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(id) + ".catalog-projection");
             if (File.Exists(marker)) { File.Delete(marker); throw new IOException("Injected experimental catalog projection failure."); }
         };
-        agents = new AgentCatalog(this.root, workspaceRoot);
+        var recoveringMove = IdentityJournal.Read();
+        agents = new AgentCatalog(this.root, workspaceRoot, recoveringMove is { OwnsAgent: true, Phase: "rolling-back" } ? recoveringMove.OwnedAgent : null);
         skills = new Skills(agents, Path.GetFullPath(skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills")));
         memory = new AgentMemory(agents, skills);
         executor = new LocalExecManager(this.root,
@@ -74,7 +75,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 throw;
             }
             if (Accepting && current.Entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Count > 0)) current.Registry.Trigger(sessionId);
-        });
+        }, ResolveExecLifetime, HistoricalExecOwners);
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
@@ -98,7 +99,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public Task LoadAsync() => LoadOwnersAsync(ensureMain: false);
     private async Task LoadOwnersAsync(bool ensureMain)
     {
-        await archiveIdentities.InitializeAsync(Catalog);
+        await EnsureIdentityStartupAsync();
         foreach (var row in Catalog.List())
         {
             var id = SessionCatalog.Text(row["id"])!; var agent = SessionCatalog.Text(row["agent"])!;
@@ -197,7 +198,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
-        registry.TriggerOverride = _ => Accepting && !IsDeletionClaimed(id) && !hosted.Entry.Retired ? hosted.StartProcessing() : Task.CompletedTask;
+        registry.TriggerOverride = _ => Accepting && !IsDeletionClaimed(hosted.Id) && !hosted.Entry.Retired ? hosted.StartProcessing() : Task.CompletedTask;
         return hosted;
     }
 

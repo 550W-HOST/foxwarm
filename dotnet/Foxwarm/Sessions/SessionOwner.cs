@@ -20,8 +20,18 @@ internal sealed partial class SessionOwner
     private readonly HostModels models;
     internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
     internal string? SnapshotRefreshWarning { get; set; }
-    public string Id { get; }
-    public string Agent { get; }
+    private sealed record OwnerIdentity(string Id, string Agent);
+    private OwnerIdentity identity;
+    private SessionEntry? entry;
+    public string Id => Volatile.Read(ref identity).Id;
+    public string Agent => Volatile.Read(ref identity).Agent;
+    internal void RebindIdentity(string id, string agent)
+    {
+        var current = Entry;
+        Registry.BindIdentity(id, current);
+        current.WithState(state => { state.Id = id; state.AuthorityEnvelope["agent"] = agent; if (state.AuthorityEnvelope.ContainsKey("id")) state.AuthorityEnvelope["id"] = id; });
+        Volatile.Write(ref identity, new(id, agent));
+    }
     public SessionRegistry Registry { get; set; } = null!;
     public SessionCompactor Compactor { get; set; } = null!;
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
@@ -34,12 +44,11 @@ internal sealed partial class SessionOwner
         foreach (var channel in listeners.Values) { channel.Writer.TryWrite(value); channel.Writer.TryComplete(); }
         listeners.Clear();
     }
-    public SessionEntry Entry => Registry.GetRequired(Id);
+    public SessionEntry Entry => entry ??= Registry.GetRequired(Id);
 
     public SessionOwner(string id, string agent, HostModels models)
     {
-        Id = id;
-        Agent = agent;
+        identity = new(id, agent);
         this.models = models;
     }
 

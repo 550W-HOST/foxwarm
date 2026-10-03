@@ -44,7 +44,9 @@ public sealed class LinuxAtomicJsonFile
     public string FilePath => filePath;
     public DirectorySyncResult LastDirectorySyncResult { get; private set; }
 
-    public void Write(SessionAuthorityDocument document, CancellationToken cancellationToken = default)
+    public void Write(SessionAuthorityDocument document, CancellationToken cancellationToken = default) => WriteText(document.ToJson(indented: true), cancellationToken);
+    internal void WritePayload(System.Text.Json.Nodes.JsonObject payload) => WriteText(payload.ToJsonString(), default);
+    private void WriteText(string text, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         var tempPath = Path.Combine(Path.GetDirectoryName(filePath)!, $"{Path.GetFileName(filePath)}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}");
@@ -52,7 +54,7 @@ public sealed class LinuxAtomicJsonFile
         try
         {
             stageHook?.Invoke(AtomicJsonWriteStage.BeforeTempWrite);
-            var bytes = new UTF8Encoding(false).GetBytes(document.ToJson(indented: true));
+            var bytes = new UTF8Encoding(false).GetBytes(text);
             using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             {
                 stream.Write(bytes);

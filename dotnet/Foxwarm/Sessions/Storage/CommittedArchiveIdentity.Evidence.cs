@@ -6,13 +6,13 @@ namespace Foxwarm.Sessions;
 internal sealed partial class CommittedArchiveIdentity
 {
     private const string MigrationId = "sqlite-only-large-archives-v1";
-    internal static void ValidateStartupEvidence(string root)
+    internal static void ValidateStartupEvidence(string root, bool allowPendingIdentityRecovery = false)
     {
         var state = Path.Combine(root, "state");
         try
         {
             _ = File.GetAttributes(Path.Combine(state, "session-id-move-pending.json"));
-            throw new UnsupportedSessionAuthorityException("Pending Session identity move recovery is not supported by this host.");
+            if (!allowPendingIdentityRecovery) throw new UnsupportedSessionAuthorityException("Pending Session identity move recovery is not supported by this host.");
         }
         catch (FileNotFoundException) { }
         catch (DirectoryNotFoundException) { }

@@ -10,9 +10,9 @@ internal sealed class SessionDeletionChannels(string root)
     private string FilePath => Path.Combine(root, "state", "channels.json");
     private string EvidencePath => Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak");
     internal JsonObject Read(string? participant = null) { lock (gate) return ReadLocked(participant); }
-    private JsonObject ReadLocked(string? participant)
+    private JsonObject ReadLocked(string? participant, bool normalize = true, bool persistMigration = true)
     {
-        if (ReadOptional(FilePath) is { } current) return Validate(current);
+        if (ReadOptional(FilePath) is { } current) return Validate(current, normalize);
         if (ReadOptional(EvidencePath) is not { } evidence) return new JsonObject { ["channels"] = new JsonObject() };
         if (!evidence.ContainsKey("channelAttachments")) return new JsonObject { ["channels"] = new JsonObject() };
         if (evidence["channelAttachments"] is not JsonObject old) throw new InvalidDataException("Invalid selected legacy channel attachments.");
@@ -20,15 +20,15 @@ internal sealed class SessionDeletionChannels(string root)
         foreach (var (key, value) in old)
             channels[key] = value is JsonValue text && text.TryGetValue<string>(out var id)
                 ? new JsonObject { ["sessionId"] = id } : value?.DeepClone();
-        var result = Validate(new JsonObject { ["channels"] = channels });
-        Barrier(participant, "migration-before-write"); Write(result); return result;
+        var result = Validate(new JsonObject { ["channels"] = channels }, normalize);
+        if (persistMigration) { Barrier(participant, "migration-before-write"); Write(result); } return result;
     }
     private static JsonObject? ReadOptional(string file)
     {
         try { return JsonNode.Parse(File.ReadAllText(file)) as JsonObject ?? throw new InvalidDataException("Channel authority must be an object."); }
         catch (FileNotFoundException) { return null; } catch (DirectoryNotFoundException) { return null; }
     }
-    private static JsonObject Validate(JsonObject payload)
+    private static JsonObject Validate(JsonObject payload, bool normalize = true)
     {
         if (payload["channels"] is not JsonObject channels) throw new InvalidDataException("Channel authority requires a channels map.");
         foreach (var (key, value) in channels)
@@ -38,8 +38,8 @@ internal sealed class SessionDeletionChannels(string root)
                 throw new InvalidDataException("Channel authority contains an invalid binding.");
             if (config["mode"] is not null && SessionCatalog.Text(config["mode"]) is not ("send-only" or "push-only"))
                 throw new InvalidDataException("Channel authority contains an unsupported mode.");
-            if (SessionCatalog.Text(config["mode"]) == "push-only") config["mode"] = "send-only";
-            if (!config.ContainsKey("dangerouslyAllowAllUsers") && config.ContainsKey("dangerouslyAllowAllGroupMembers"))
+            if (normalize && SessionCatalog.Text(config["mode"]) == "push-only") config["mode"] = "send-only";
+            if (normalize && !config.ContainsKey("dangerouslyAllowAllUsers") && config.ContainsKey("dangerouslyAllowAllGroupMembers"))
                 config["dangerouslyAllowAllUsers"] = config["dangerouslyAllowAllGroupMembers"]?.DeepClone();
             foreach (var flag in new[] { "dangerouslyAllowAllUsers", "dangerouslyAllowAllGroupMembers" })
                 if (config[flag] is not null && (config[flag] is not JsonValue scalar || !scalar.TryGetValue<bool>(out _)))
@@ -57,6 +57,17 @@ internal sealed class SessionDeletionChannels(string root)
             { ["sessionId"] = id, ["channelId"] = key[..colon], ["conversationId"] = key[(colon + 1)..] });
         }
         return result;
+    }
+    internal void ValidateIdentityAuthority() { lock (gate) _ = ReadLocked("identity", normalize: false, persistMigration: false); }
+    internal void RewriteIdentity(string from, string to)
+    {
+        lock (gate)
+        {
+            var payload = ReadLocked(from, normalize: false); Barrier(from, "identity-after-read"); var changed = false;
+            foreach (var (_, value) in payload["channels"]!.AsObject())
+                if (SessionCatalog.Text(value?["sessionId"]) == from) { value!["sessionId"] = to; changed = true; }
+            if (changed) Write(payload);
+        }
     }
     internal void Detach(string id) { lock (gate) DetachLocked(id); }
     private void DetachLocked(string id)

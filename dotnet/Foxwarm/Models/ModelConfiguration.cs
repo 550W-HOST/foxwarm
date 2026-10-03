@@ -22,6 +22,7 @@ internal sealed partial class ModelConfiguration
             ["channelsYaml"] = configured.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) + "\n", ["channelCount"] = configured.Count };
     }
     public HostModels Models { get; }
+    internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
     internal bool HandoffConfirmationEnabled { get; }
     public int MaxOutput { get; }
     public double CompactKeep { get; }

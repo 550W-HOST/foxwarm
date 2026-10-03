@@ -16,7 +16,7 @@ internal sealed partial class AgentCatalog
     private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
 
-    public AgentCatalog(string dataRoot, string workspaceRoot)
+    public AgentCatalog(string dataRoot, string workspaceRoot, string? recoveringOwnedAgent = null)
     {
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
         agentRoot = Path.Combine(this.workspaceRoot, "agents");
@@ -46,13 +46,18 @@ internal sealed partial class AgentCatalog
             var directory = Path.Combine(agentRoot, name);
             if (!Directory.Exists(directory) || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0
                 || !Directory.Exists(Path.Combine(directory, "memory")))
-                throw new InvalidDataException($"Agent '{name}' directory or memory folder is missing or invalid.");
+                if (name != recoveringOwnedAgent || Directory.Exists(directory) && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"Agent '{name}' directory or memory folder is missing or invalid.");
         }
         // A crash before catalog rename may leave a new directory. Do not silently adopt
         // or delete it: operator inspection is safer than merging Agent lifetimes.
         foreach (var directory in Directory.EnumerateDirectories(agentRoot))
-            if (!known.Contains(Path.GetFileName(directory)))
+        {
+            if (Path.GetFileName(directory) == recoveringOwnedAgent && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Owned identity destination cannot be a symbolic link.");
+            if (!known.Contains(Path.GetFileName(directory)) && Path.GetFileName(directory) != recoveringOwnedAgent)
                 throw new InvalidDataException("Unindexed Agent directory; creation may have been interrupted.");
+        }
     }
 
     public static void ValidateName(string name)

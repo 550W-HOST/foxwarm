@@ -35,8 +35,9 @@ internal sealed partial class SessionManager
             throw new SessionDeletionException("Retry must use the original deletion source and recursive selection.", "SESSION_DELETE_RETRY_MISMATCH");
         lock (lifecycle)
         {
+            RequireIdentityAction(RemainingDeleteClaims(operation).Concat(operation.SourceOwner is null ? [] : new[] { operation.SourceOwner.Id }));
             if (operation.Running) throw new SessionDeletionException("This deletion is already running.", "SESSION_DELETE_CONFLICT");
-            var involved = operation.Source is null ? [] : operation.Selection.Targets.Except(operation.Deleted, StringComparer.Ordinal).Append(operation.Source).Distinct(StringComparer.Ordinal).ToArray();
+            var involved = operation.SourceOwner is null ? [] : operation.Selection.Targets.Except(operation.Deleted, StringComparer.Ordinal).Append(operation.SourceOwner.Id).Distinct(StringComparer.Ordinal).ToArray();
             if (involved.Any(crossDeletes.ContainsKey)) throw new SessionDeletionException("Another deletion involving the source or target is in progress. Retry after it finishes.", "SESSION_DELETE_CONFLICT");
             foreach (var id in involved) crossDeletes[id] = operation;
             operation.Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);

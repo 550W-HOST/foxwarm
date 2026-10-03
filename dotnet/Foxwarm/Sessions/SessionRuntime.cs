@@ -30,6 +30,7 @@ internal sealed class SessionRuntime(SessionManager manager)
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) => await (await manager.RequiredAsync(id)).UpdateModelAsync(settings);
     internal PresentationChange ChangePresentation(Func<SessionCatalog, PresentationChange> action) => manager.ChangePresentation(action);
     internal void ReplyToCommand(string id, string text) => manager.ReplyToCommand(id, text);
+    internal Task<JsonObject> MoveIdentityAsync(SessionOwner caller, JsonObject args) => manager.MoveIdentityAsync(caller, args);
     internal Task<JsonObject> DeleteAsync(string id, bool recursive = false, SessionOwner? source = null) => manager.DeleteAsync(id, recursive, source);
     public Task UpdateDisplayNameAsync(string id, string? name) => manager.RenameAsync(id, name);
     public async Task<string> RefreshSnapshotAsync(string id) => await manager.RefreshSnapshotAsync(await manager.RequiredAsync(id));

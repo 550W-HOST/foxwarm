@@ -4,11 +4,12 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-    internal Task PublishCompactWakeAsync(object owner, CancellationToken token) => EnqueueOperationAsync(async () =>
+    internal Task PublishCompactWakeAsync(object owner, CancellationToken token, string? plannedIdentity = null) => EnqueueOperationAsync(async () =>
     {
         token.ThrowIfCancellationRequested();
         var item = new QueueItem(QueueItemType.CompactCommit) { CompactOwner = owner };
         var staged = entry.Snapshot();
+        if (plannedIdentity is not null && staged.Id != plannedIdentity) throw new CompactionSnapshotIncompatibleException("Compaction was planned for a previous Session identity.");
         staged = staged with { Queue = staged.Queue.Append(item).ToArray() };
         void Publish(SessionState state) => state.Queue.Add(item);
         try { await store.CommitAsync(staged, SaveKind.Strict, token); }

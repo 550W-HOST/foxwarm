@@ -17,15 +17,23 @@ public sealed partial class LocalSessionTurnHost
             var start = cursor;
             while (cursor < planned.Count && SessionWait.Text(planned[cursor].Call["name"]) == "exec") cursor++;
             var end = cursor; var next = start - 1;
-            // Only the current finite Main workspace is captured. Explicit cwd remains per-call;
-            // no Session cwd producer or deferred-cwd replay exists in this executor.
+            // Preserve declared execution context. An absent/blank cwd leaves Agent defaults
+            // to each call's current binding; already-started effects retain their resolved environment.
             using var environment = tools is SessionToolExecutor current ? current.CaptureDirectExecSegment() : null;
+            var preparation = new TurnToolPreparation?[end - start];
+            if (tools is SessionToolExecutor preparing)
+                for (var index = start; index < end; index++)
+                {
+                    var value = planned[index];
+                    if (value.Preset is not null || value.Call["argsParseError"] is not null || token.IsCancellationRequested) continue;
+                    preparation[index - start] = await preparing.PrepareDirectExecAsync(value.Call, token).ConfigureAwait(false);
+                }
             async Task WorkAsync()
             {
                 while (true)
                 {
                     var index = Interlocked.Increment(ref next); if (index >= end) return;
-                    results[index] = await ExecutePlannedToolAsync(planned[index], token).ConfigureAwait(false);
+                    results[index] = await ExecutePlannedToolAsync(planned[index], token, preparation[index - start]).ConfigureAwait(false);
                 }
             }
             var workers = Enumerable.Range(0, Math.Min(4, end - start)).Select(_ => WorkAsync()).ToArray();
@@ -41,13 +49,14 @@ public sealed partial class LocalSessionTurnHost
         }
         return parts;
     }
-    private async Task<TurnToolExecution> ExecutePlannedToolAsync((JsonObject Call, JsonObject? Preset) planned, CancellationToken token)
+    private async Task<TurnToolExecution> ExecutePlannedToolAsync((JsonObject Call, JsonObject? Preset) planned, CancellationToken token, TurnToolPreparation? prepared = null)
     {
         var call = planned.Call;
         if (token.IsCancellationRequested) return new(new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." });
         if (planned.Preset is JsonObject preset) return new((JsonObject)preset.DeepClone());
         if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable) return new(UnsupportedTurnToolExecutor.ToolError("tool_call_skipped", "Tool call was not started because tool authorization policy was unavailable."));
         if (call["argsParseError"] is JsonValue parse && parse.TryGetValue<string>(out var error) && error.Length > 0) return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
+        if (prepared is not null && tools is SessionToolExecutor executor) return executor.PreparedFailure(prepared);
         try
         {
             var owned = (JsonObject)call.DeepClone();

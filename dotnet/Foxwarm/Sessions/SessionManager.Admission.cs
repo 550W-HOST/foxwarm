@@ -24,36 +24,49 @@ internal sealed partial class SessionManager
 
     internal async Task<SessionOwner?> GetExistingAsync(string requestedId, CancellationToken cancellationToken = default, bool forDeletion = false)
     {
-        await archiveIdentities.InitializeAsync(Catalog);
         if (!cancellationToken.CanBeCanceled) cancellationToken = semanticCaller.Value ?? default;
-        IdentitySlot? slot;
-        lock (lifecycle)
+        await EnsureIdentityStartupAsync();
+        while (true)
         {
-            if (!accepting) throw new InvalidOperationException("Host is shutting down.");
-            identities.TryGetValue(requestedId, out slot);
-        }
-        if (slot is not null)
-        {
-            if (slot.Retired || slot.Retiring) throw new SessionDeletionException("Session authority is retired pending deletion cleanup.", "SESSION_STATE_UNAVAILABLE");
-            return await slot.Owner.Task.WaitAsync(cancellationToken);
-        }
-        // Main identity resolution may read SQLite. It never runs under the owner registry gate.
-        var canonical = SessionCatalog.Text(Catalog.Resolve(requestedId)["sessionId"]);
-        string id; bool start = false;
-        lock (lifecycle)
-        {
-            if (!accepting) throw new InvalidOperationException("Host is shutting down.");
-            if (identities.TryGetValue(requestedId, out slot)) id = requestedId;
-            else
+            await WaitForIdentityMutationAsync(requestedId, cancellationToken);
+            IdentitySlot? slot; IdentityMoveOperation? moving;
+            lock (lifecycle)
             {
-                if (canonical is null) return null;
-                id = canonical;
-                if (deletionClaims.ContainsKey(id) && !forDeletion) throw new SessionDeletionException("Session is being deleted.", "SESSION_DELETE_IN_PROGRESS");
-                if (!identities.TryGetValue(id, out slot)) { slot = new(false); identities.Add(id, slot); start = true; }
+                if (!accepting) throw new InvalidOperationException("Host is shutting down.");
+                identityMoveClaims.TryGetValue(requestedId, out moving); identities.TryGetValue(requestedId, out slot);
             }
+            if (moving is not null && moving != owningIdentityMove.Value) { await moving.Finished.Task.WaitAsync(cancellationToken); continue; }
+            if (slot is not null)
+            {
+                if (slot.Retired || slot.Retiring) throw new SessionDeletionException("Session authority is retired pending deletion cleanup.", "SESSION_STATE_UNAVAILABLE");
+                var owner = await slot.Owner.Task.WaitAsync(cancellationToken);
+                await WaitForIdentityMutationAsync(owner.Id, cancellationToken); owner.Entry.RequireIdentityAuthority(); return owner;
+            }
+            // Main identity resolution may read SQLite. It never runs under the owner registry gate.
+            var canonical = SessionCatalog.Text(Catalog.Resolve(requestedId)["sessionId"]);
+            string? id = null; bool start = false;
+            lock (lifecycle)
+            {
+                if (!accepting) throw new InvalidOperationException("Host is shutting down.");
+                identityMoveClaims.TryGetValue(requestedId, out moving);
+                if (moving is null && canonical is not null) identityMoveClaims.TryGetValue(canonical, out moving);
+                if (moving is null || moving == owningIdentityMove.Value)
+                {
+                    if (identities.TryGetValue(requestedId, out slot)) id = requestedId;
+                    else if (canonical is not null)
+                    {
+                        id = canonical;
+                        if (deletionClaims.ContainsKey(id) && !forDeletion) throw new SessionDeletionException("Session is being deleted.", "SESSION_DELETE_IN_PROGRESS");
+                        if (!identities.TryGetValue(id, out slot)) { slot = new(false); identities.Add(id, slot); start = true; }
+                    }
+                }
+            }
+            if (moving is not null && moving != owningIdentityMove.Value) { await moving.Finished.Task.WaitAsync(cancellationToken); continue; }
+            if (id is null) return null;
+            if (start) _ = LoadOwnerAsync(id, slot!);
+            var admitted = await slot!.Owner.Task.WaitAsync(cancellationToken);
+            await WaitForIdentityMutationAsync(admitted.Id, cancellationToken); admitted.Entry.RequireIdentityAuthority(); return admitted;
         }
-        if (start) _ = LoadOwnerAsync(id, slot);
-        return await slot.Owner.Task.WaitAsync(cancellationToken);
     }
 
     internal async Task<SessionOwner> RequiredAsync(string id, CancellationToken cancellationToken = default)
@@ -163,6 +176,7 @@ internal sealed partial class SessionManager
         IdentitySlot slot;
         lock (lifecycle)
         {
+            RequireIdentityAction([id]); RequireAgentCreation(SessionIdentity.Agent(id));
             if (deletionClaims.ContainsKey(id)) throw new SessionDeletionException("Session ID is claimed for deletion.", "SESSION_DELETE_IN_PROGRESS");
             if (sessions.ContainsKey(id) || identities.ContainsKey(id))
                 throw new InvalidDataException($"Session ID '{id}' is already reserved.");

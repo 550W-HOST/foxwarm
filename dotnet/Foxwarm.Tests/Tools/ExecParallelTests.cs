@@ -20,7 +20,7 @@ public sealed class ExecParallelTests
         foreach (var id in new[] { "first", "second" }) { releases[id] = Signal(); starts[id] = Signal(); }
         registry.Register(new JsonObject { ["name"] = "exec" }, "node", true, async (current, args, _) =>
         {
-            var expected = args["command"]!.GetValue<string>(); Assert.Equal(expected, current.CurrentCallId); Assert.Equal(work, current.DirectExecWorkspace); starts[expected].SetResult();
+            var expected = args["command"]!.GetValue<string>(); Assert.Equal(expected, current.CurrentCallId); Assert.Null(current.DirectExecWorkspace); Assert.Equal(work, current.Files!.ToolDirectory); starts[expected].SetResult();
             await releases[expected].Task; Assert.Equal(expected, current.CurrentCallId); return new JsonObject { ["output"] = expected };
         });
         var tools = new SessionToolExecutor(new WorkspaceTools(work), owner, manager, registry); tools.BeginTurn();

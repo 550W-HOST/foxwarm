@@ -226,11 +226,12 @@ internal sealed partial class SessionCompactor
                 if (!ReferenceEquals(active, run)) return;
                 run.Ready = true; run.Phase = "enqueueing";
             }
-            await hosted.Entry.SaveLane.PublishCompactWakeAsync(run, run.Cancellation.Token);
+            await hosted.Entry.SaveLane.PublishCompactWakeAsync(run, run.Cancellation.Token, run.Snapshot.Id);
             lock (gate)
                 if (ReferenceEquals(active, run) && !run.Applying) run.Phase = "ready";
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
+        catch (CompactionSnapshotIncompatibleException) { run.Ready = false; }
         catch (Exception error) { Report(error); run.Ready = false; }
         finally
         {
@@ -285,7 +286,7 @@ internal sealed partial class SessionCompactor
         try
         {
             long archiveMaximum = 0;
-            await hosted.Entry.SaveLane.CommitCompactionAsync(state => PrepareCompact(state, run.Snapshot, run.Candidates!, run.Plan!, archiveMaximum),
+            await hosted.Entry.SaveLane.CommitCompactionAsync(state => state.Id != run.Snapshot.Id ? throw new CompactionSnapshotIncompatibleException("Compaction was planned for a previous Session identity.") : PrepareCompact(state, run.Snapshot, run.Candidates!, run.Plan!, archiveMaximum),
                 run.Cancellation.Token, async (snapshot, token) =>
                 {
                     archiveMaximum = store.Archive.EffectiveBlockHighWater();

@@ -37,6 +37,16 @@ internal static class AgentToolDefinitions
 
     public static IReadOnlyList<JsonObject> Definitions() =>
     [
+        Tool("move_session", "Rename a session or move it to another agent, optionally creating the destination agent. The old session ID remains an alias.",
+            new JsonObject { ["type"] = "object", ["additionalProperties"] = false, ["properties"] = new JsonObject
+            {
+                ["sessionId"] = String("Session to move, identified by its ID or an unambiguous alias. Defaults to this session."),
+                ["newSessionId"] = String("New session name without an agent prefix or /. Required unless creating an agent, when it defaults to main."),
+                ["createAgent"] = Boolean("Create the destination agent. Defaults to false."),
+                ["newAgentName"] = String("Destination agent. Required when creating an agent or moving to another agent; omit to rename within the source agent."),
+                ["createAgentInheritMemory"] = Boolean("Copy the source agent's memory when creating the destination agent. Defaults to false."),
+                ["parentSessionId"] = String("Existing parent session to assign after the move. Omit to keep the current parent.")
+            } }),
         Tool("delete_session", "Delete another session's live record, retaining its archived history. Surviving children are detached. A busy target receives a stop request; retry deletion after it becomes idle. The current session cannot delete itself.",
             Parameters(new JsonObject { ["sessionId"] = String("Session to delete, identified by its ID or an unambiguous alias.") }, "sessionId")),
         Tool("create_agent",

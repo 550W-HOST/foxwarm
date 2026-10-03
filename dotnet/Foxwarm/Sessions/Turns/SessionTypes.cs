@@ -60,7 +60,7 @@ public sealed record QueueItem(
 
 public sealed class SessionState
 {
-    public string Id { get; }
+    public string Id { get; internal set; }
     public List<JsonObject> History { get; } = new();
     public List<QueueItem> Queue { get; } = new();
     public bool Busy { get; internal set; }
