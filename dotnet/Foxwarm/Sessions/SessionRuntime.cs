@@ -81,5 +81,5 @@ internal sealed partial class SessionOwner
     }
 
     public JsonObject BuildDto() => BuildDto(Metadata());
-    public JsonObject BuildDto(SessionMetadata meta) => SessionPresentation.Build(meta, models, ResolveAncestry, toolActive, Compacting);
+    public JsonObject BuildDto(SessionMetadata meta) => SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
 }

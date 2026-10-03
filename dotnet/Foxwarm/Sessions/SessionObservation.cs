@@ -16,7 +16,7 @@ internal sealed partial class SessionOwner
         var end = (int)Math.Truncate(rawEnd < 0 ? Math.Max(0, total + rawEnd) : Math.Min(total, rawEnd));
         var rows = state.History.Skip(begin).Take(Math.Max(0, end - begin)).Select(row => (JsonObject)row.DeepClone()).ToArray();
         var metadata = Metadata();
-        return new SessionMessagePage(actualStart, total, state.HistoryVersion, SessionRuntimeState.Build(metadata, toolActive, Compacting), rows);
+        return new SessionMessagePage(actualStart, total, state.HistoryVersion, SessionRuntimeState.Build(metadata, ToolActive, Compacting), rows);
     });
     internal (int Estimate, JsonObject? Usage, long? Threshold) ContextSummary() => Entry.WithState(state =>
     {

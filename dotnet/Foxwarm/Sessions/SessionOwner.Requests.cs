@@ -10,8 +10,8 @@ internal sealed partial class SessionOwner
     internal void BeginLogicalTurn() => LogicalTurnId = Guid.NewGuid().ToString();
     private readonly object draftGate = new();
     private JsonObject? draft;
-    private volatile bool toolActive;
-    public bool ToolActive => toolActive;
+    private int activeTools;
+    public bool ToolActive => Volatile.Read(ref activeTools) > 0;
     private object? compactPhase;
     public bool Compacting => Volatile.Read(ref compactPhase) is not null;
 
@@ -185,10 +185,15 @@ internal sealed partial class SessionOwner
         Emit(SessionEventKind.DraftChanged);
     }
 
-    public void SetToolActive(bool active)
+    internal void BeginTool()
     {
-        toolActive = active;
-        Emit(SessionEventKind.StateChanged);
+        if (Interlocked.Increment(ref activeTools) != 1) return;
+        try { Emit(SessionEventKind.StateChanged); }
+        catch { Interlocked.Decrement(ref activeTools); throw; }
+    }
+    internal void EndTool()
+    {
+        if (Interlocked.Decrement(ref activeTools) == 0) Emit(SessionEventKind.StateChanged);
     }
 }
 

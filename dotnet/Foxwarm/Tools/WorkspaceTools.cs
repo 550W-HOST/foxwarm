@@ -8,6 +8,7 @@ namespace Foxwarm.Tools;
 /// <summary>Only a path-level boundary within a dedicated experiment workspace, not an OS sandbox.</summary>
 public sealed partial class WorkspaceTools : ITurnToolExecutor
 {
+    internal string ToolDirectory => root;
     private const int MaxBytes = 1024 * 1024;
     private readonly string root;
     private readonly PendingWriteRefs pending = new();

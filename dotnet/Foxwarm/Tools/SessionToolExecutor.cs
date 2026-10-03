@@ -7,19 +7,35 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
     : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
-    private bool policyUnavailable;
-    public bool PolicyUnavailable => policyUnavailable;
+    private int policyUnavailable;
+    public bool PolicyUnavailable => Volatile.Read(ref policyUnavailable) != 0;
     internal WorkspaceTools? Files => workspace as WorkspaceTools;
     internal Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token) => sessions.AuthorizeToolAsync(hosted, resolved, workspace as WorkspaceTools, token);
     private readonly List<string> explicitWaitIds = [];
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
     private SessionManager Manager => sessions;
-    internal string CurrentCallId { get; private set; } = "";
+    private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
+    private readonly AsyncLocal<string?> execWorkspace = new();
+    internal string CurrentCallId => invocation.Value?.CallId ?? "";
+    internal string? DirectExecWorkspace => execWorkspace.Value;
+    internal IDisposable CaptureDirectExecSegment()
+    {
+        var previous = execWorkspace.Value;
+        execWorkspace.Value = Files?.ToolDirectory;
+        return new ExecSegmentScope(() => execWorkspace.Value = previous);
+    }
+    private sealed class ExecSegmentScope(Action restore) : IDisposable { public void Dispose() => restore(); }
+    internal async Task<TurnToolExecution> ExecuteAttributedAsync(JsonObject call, CancellationToken token)
+    {
+        var previous = invocation.Value; var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? ""); invocation.Value = current;
+        try { return new(await ExecuteCoreAsync(call, token), current.Timing); }
+        finally { invocation.Value = previous; }
+    }
     public void BeginTurn()
     {
         hosted.BeginLogicalTurn();
-        policyUnavailable = false;
+        Volatile.Write(ref policyUnavailable, 0);
         Interlocked.Exchange(ref finishPending, 0);
         explicitWaitIds.Clear(); handoffTargets.Clear();
     }
@@ -31,12 +47,13 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         if (errors || stopping) foreach (var id in explicitWaitIds) await hosted.Entry.SaveLane.ClearWaitAsync(id);
         explicitWaitIds.Clear();
         var finish = ConsumeFinishAfterBatch(); var handoff = handoffTargets.Count > 0;
-        if (policyUnavailable) { handoffTargets.Clear(); throw new ToolAuthorizationUnavailableException(); }
+        if (PolicyUnavailable) { handoffTargets.Clear(); throw new ToolAuthorizationUnavailableException(); }
         if (!stopping && handoff && hosted.WaitSnapshot() is null) await sessions.StartHandoffWaitAsync(hosted, handoffTargets);
         handoffTargets.Clear();
         return finish || !stopping && (handoff || explicitStop && !errors);
     }
-    public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken)
+    public async Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken) => (await ExecuteAttributedAsync(functionCall, cancellationToken)).Response;
+    private async Task<JsonObject> ExecuteCoreAsync(JsonObject functionCall, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
@@ -45,13 +62,17 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
             var args = functionCall["args"] as JsonObject ?? throw new InvalidDataException("Tool arguments must be an object.");
             var resolved = registry.Resolve(name, args);
             await AuthorizeAsync(resolved, cancellationToken);
-            CurrentCallId = SessionWait.Text(functionCall["id"]) ?? "";
-            hosted.SetToolActive(true);
+            hosted.BeginTool();
+            var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try { return await registry.ExecuteAsync(resolved, this, cancellationToken); }
-            finally { hosted.SetToolActive(false); }
+            finally
+            {
+                if (invocation.Value is { } current) current.Timing = new JsonObject { ["startedAt"] = startedAt, ["completedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ["durationMs"] = System.Diagnostics.Stopwatch.GetElapsedTime(monotonic).TotalMilliseconds };
+                hosted.EndTool();
+            }
         }
         catch (ToolAuthorizationUnavailableException error)
-        { policyUnavailable = true; return UnsupportedTurnToolExecutor.ToolError(ToolAuthorizationUnavailableException.Code, error.Message); }
+        { Interlocked.Exchange(ref policyUnavailable, 1); return UnsupportedTurnToolExecutor.ToolError(ToolAuthorizationUnavailableException.Code, error.Message); }
         catch (ToolAuthorizationDeniedException error)
         { return UnsupportedTurnToolExecutor.ToolError("tool_authorization_denied", error.Message); }
         catch (ArgumentException error)
@@ -60,7 +81,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         { return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         { return UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
-        catch (Exception error) when (error is InvalidDataException or InvalidOperationException or IOException or System.Text.Json.JsonException or NotSupportedException or TimeoutException)
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException or IOException or System.Text.Json.JsonException or NotSupportedException or TimeoutException or System.ComponentModel.Win32Exception)
         { return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message); }
     }
     private Task<JsonObject> ExecuteWorkspaceAsync(string name, JsonObject args, CancellationToken token) => workspace.ExecuteAsync(new JsonObject { ["name"] = name, ["args"] = args.DeepClone() }, token);
@@ -90,7 +111,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         var handlers = new Dictionary<string, Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>>>(StringComparer.Ordinal);
         foreach (var name in new[] { "read", "write", "edit", "apply_patch" })
             handlers[name] = (owner, args, token) => owner.ExecuteWorkspaceAsync(name, args, token);
-        handlers["exec"] = (owner, args, token) => owner.Hosted.Executor.ExecuteAsync(owner.Hosted.Id, args, token);
+        handlers["exec"] = (owner, args, token) => owner.Hosted.Executor.ExecuteAsync(owner.Hosted.Id, args, token, owner.DirectExecWorkspace);
         handlers["read_exec"] = (owner, args, _) => owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args);
         handlers["recall"] = (owner, args, token) => ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
@@ -111,3 +132,6 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         return registry;
     }
 }
+
+internal sealed record TurnToolExecution(JsonObject Response, JsonObject? Timing = null);
+internal sealed class TurnToolInvocation(string callId) { internal string CallId { get; } = callId; internal JsonObject? Timing { get; set; } }

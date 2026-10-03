@@ -12,6 +12,8 @@ Main-local model tools use ordered `state/tool-authorization.yaml` v1 rules for 
 
 The non-default `set_tool_rules` builtin requires current setter and node-master/read permissions, captures a bounded regular YAML file through the current read resolver and atomically publishes its exact validated bytes. The accepted file primitives remain intentionally finite: read supports relative/accessible absolute paths, writes are workspace-relative, and neither setter nor ordinary files gain new symlink/home/environment expansion. See the [canonical authorization contract](../docs/code-index/units/dotnet.md#main-tool-authorization-and-default-projection) for physical/target facts, cache/retry, special compact proposal handling and unsupported future execution paths.
 
+Adjacent exact direct `exec` calls run in bounded segments of at most four. All other calls, including neutral exec dispatch, remain serial barriers. Each segment captures the current finite Main workspace, honors each explicit cwd and emits one model-order complete paired response row only after started invocations settle. Tool activity is aggregate and attribution/timing is per call. Stop/unavailable do not kill launched shells; no post-exec Session cwd producer, deferred-cwd shim or remote platform is added. See [the canonical direct-exec contract](../docs/code-index/units/dotnet.md#adjacent-direct-exec-segments).
+
 ## Interactive experimental HTTP host
 
 Build `dotnet/Foxwarm/Foxwarm.csproj`, choose **new separate** data/workspace directories, and set explicit environment variables. Do not point the data root at a Foxwarm production/test installation. The host binds only to `127.0.0.1`; use a local scripted Responses or Chat Completions server when validating without provider spend:

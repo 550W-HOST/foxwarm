@@ -84,7 +84,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     internal void BeginShutdown() => closing = true;
 
-    internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct)
+    internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct, string? capturedWorkspace = null)
     {
         if (closing) return Error("exec_unavailable", "Host is shutting down.");
         if (args is null || args.Count is < 1 or > 3 || !String(args, "command", out var command)
@@ -100,7 +100,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         var warning = seconds > 60 ? $"WARNING: Requested timeout {seconds.ToString(CultureInfo.InvariantCulture)}s exceeds the 60s maximum; using 60s.\n" : "";
         var waitSeconds = Math.Min(seconds, 60);
         string cwd;
-        try { cwd = ResolveCwd(workspaceForSession(sessionId), args["cwd"]?.GetValue<string>()); }
+        try { cwd = ResolveCwd(capturedWorkspace ?? workspaceForSession(sessionId), args["cwd"]?.GetValue<string>()); }
         catch (ArgumentException error) { return Error("invalid_path", error.Message); }
         ct.ThrowIfCancellationRequested();
         var record = await StartAsync(sessionId, command, cwd, ct);

@@ -1,0 +1,60 @@
+using System.Text.Json.Nodes;
+using Foxwarm.Tools;
+
+namespace Foxwarm.Sessions;
+
+public sealed partial class LocalSessionTurnHost
+{
+    private async Task<JsonArray> ExecuteToolBatchAsync(IReadOnlyList<(JsonObject Call, JsonObject? Preset)> planned, CancellationToken token)
+    {
+        var results = new TurnToolExecution?[planned.Count]; var cursor = 0;
+        while (cursor < planned.Count)
+        {
+            if (SessionWait.Text(planned[cursor].Call["name"]) != "exec")
+            {
+                results[cursor] = await ExecutePlannedToolAsync(planned[cursor], token).ConfigureAwait(false); cursor++; continue;
+            }
+            var start = cursor;
+            while (cursor < planned.Count && SessionWait.Text(planned[cursor].Call["name"]) == "exec") cursor++;
+            var end = cursor; var next = start - 1;
+            // Only the current finite Main workspace is captured. Explicit cwd remains per-call;
+            // no Session cwd producer or deferred-cwd replay exists in this executor.
+            using var environment = tools is SessionToolExecutor current ? current.CaptureDirectExecSegment() : null;
+            async Task WorkAsync()
+            {
+                while (true)
+                {
+                    var index = Interlocked.Increment(ref next); if (index >= end) return;
+                    results[index] = await ExecutePlannedToolAsync(planned[index], token).ConfigureAwait(false);
+                }
+            }
+            var workers = Enumerable.Range(0, Math.Min(4, end - start)).Select(_ => WorkAsync()).ToArray();
+            await Task.WhenAll(workers).ConfigureAwait(false);
+        }
+        var parts = new JsonArray();
+        for (var index = 0; index < planned.Count; index++)
+        {
+            var call = planned[index].Call; var result = results[index] ?? throw new InvalidOperationException("Tool segment did not settle its call.");
+            var response = new JsonObject { ["tool_use_id"] = SessionWait.Text(call["id"]) ?? throw new InvalidOperationException("Canonical function call is missing its stable ID."), ["name"] = SessionWait.Text(call["name"]) ?? "", ["response"] = result.Response.DeepClone() };
+            if (result.Timing is not null) response["executionTiming"] = result.Timing.DeepClone();
+            parts.Add(new JsonObject { ["functionResponse"] = response });
+        }
+        return parts;
+    }
+    private async Task<TurnToolExecution> ExecutePlannedToolAsync((JsonObject Call, JsonObject? Preset) planned, CancellationToken token)
+    {
+        var call = planned.Call;
+        if (token.IsCancellationRequested) return new(new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." });
+        if (planned.Preset is JsonObject preset) return new((JsonObject)preset.DeepClone());
+        if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable) return new(UnsupportedTurnToolExecutor.ToolError("tool_call_skipped", "Tool call was not started because tool authorization policy was unavailable."));
+        if (call["argsParseError"] is JsonValue parse && parse.TryGetValue<string>(out var error) && error.Length > 0) return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
+        try
+        {
+            var owned = (JsonObject)call.DeepClone();
+            return tools is SessionToolExecutor current ? await current.ExecuteAttributedAsync(owned, token).ConfigureAwait(false) : new(await tools.ExecuteAsync(owned, token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) { return new(UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed.")); }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or ArgumentException)
+        { return new(UnsupportedTurnToolExecutor.ToolError("tool_error", exception.Message)); }
+    }
+}

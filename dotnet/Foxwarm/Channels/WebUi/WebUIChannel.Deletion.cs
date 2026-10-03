@@ -21,7 +21,9 @@ internal sealed partial class WebUIChannel
                     if (input is null) return Results.BadRequest(new { error = "Deletion request must be an object." });
                 }
                 var recursive = SessionCatalog.Flag(input?["includeDescendants"]);
-                var result = await runtime.DeleteAsync(id, recursive);
+                var identity = RouteIdentity(request, sessionOnly: true);
+                if (identity is null) return Results.BadRequest(new { error = "Invalid Session path" });
+                var result = await runtime.DeleteAsync(identity, recursive);
                 if (SessionCatalog.Text(result["status"]) == "not-found") return Results.NotFound(new { error = "Session not found" });
                 if (SessionCatalog.Text(result["status"]) == "busy")
                 { result["error"] = result["message"]?.DeepClone(); result["code"] = "SESSION_DELETE_BUSY"; return Results.Json(result, statusCode: 409); }

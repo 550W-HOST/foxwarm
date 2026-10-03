@@ -150,10 +150,10 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         });
 
     }
-    private static string? RouteIdentity(HttpRequest request)
+    private static string? RouteIdentity(HttpRequest request, bool sessionOnly = false)
     {
         var parts = request.HttpContext.Features.Get<IHttpRequestFeature>()?.RawTarget?.Split('?', 2)[0].Split('/');
-        if (parts is null || parts.Length < 5 || parts[1] != "api" || parts[2] != "sessions" || parts[3].Length == 0) return null;
+        if (parts is null || parts.Length < (sessionOnly ? 4 : 5) || parts[1] != "api" || parts[2] != "sessions" || parts[3].Length == 0) return null;
         try { return Uri.UnescapeDataString(parts[3]); } catch (UriFormatException) { return null; }
     }
     private async Task<SessionOwner?> FindRouteAsync(HttpRequest request, string routeId)

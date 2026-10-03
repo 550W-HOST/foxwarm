@@ -7,7 +7,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
-public sealed class LocalSessionTurnHost
+public sealed partial class LocalSessionTurnHost
 {
     private readonly SessionEntry entry;
     private readonly IChatService chat;
@@ -101,41 +101,7 @@ public sealed class LocalSessionTurnHost
                         continue;
                     }
 
-                    var toolParts = new JsonArray();
-                    foreach (var planned in ToolCallControls.Plan(calls))
-                    {
-                        var call = planned.Call;
-                        var callId = call["id"]?.GetValue<string>()
-                            ?? throw new InvalidOperationException("Canonical function call is missing its stable ID.");
-                        var name = call["name"]?.GetValue<string>() ?? "";
-                        JsonObject response;
-                        if (registered.Token.IsCancellationRequested)
-                            response = new JsonObject { ["canceled"] = true, ["message"] = "Tool call canceled before execution." };
-                        else if (planned.Preset is JsonObject preset) response = preset;
-                        else if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
-                            response = UnsupportedTurnToolExecutor.ToolError("tool_call_skipped", "Tool call was not started because tool authorization policy was unavailable.");
-                        else if (call["argsParseError"] is JsonValue parseErrorValue
-                            && parseErrorValue.TryGetValue<string>(out var parseError)
-                            && parseError.Length > 0)
-                        {
-                            response = UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", parseError);
-                        }
-                        else
-                        {
-                            try { response = await tools.ExecuteAsync((JsonObject)call.DeepClone(), registered.Token).ConfigureAwait(false); }
-                            catch (OperationCanceledException)
-                            { response = UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
-                        }
-                        toolParts.Add(new JsonObject
-                        {
-                            ["functionResponse"] = new JsonObject
-                            {
-                                ["tool_use_id"] = callId,
-                                ["name"] = name,
-                                ["response"] = response.DeepClone()
-                            }
-                        });
-                    }
+                    var toolParts = await ExecuteToolBatchAsync(ToolCallControls.Plan(calls), registered.Token).ConfigureAwait(false);
 
                     if (toolParts.FirstOrDefault()?["functionResponse"] is JsonObject firstResponse
                         && assistant["__meta"]?["llmRequestTiming"] is JsonObject timing
