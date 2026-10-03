@@ -37,24 +37,25 @@ internal static class SessionModelSettings
     {
         var raw = SessionWait.Number(envelope["compactThresholdTokens"]);
         models = models.Capture();
-        return raw is > 0 && double.IsFinite(raw.Value) ? Math.Floor(raw.Value) : Math.Max(1, Math.Floor(models.Resolve(SessionWait.Text(envelope["model"])).ContextLimit * models.CompactThresholdFraction));
+        return raw is > 0 && double.IsFinite(raw.Value) ? Math.Floor(raw.Value) : Math.Max(1, Math.Floor((models.All.Count == 0 ? models.PresentationContextLimit : models.Resolve(SessionWait.Text(envelope["model"])).ContextLimit) * models.CompactThresholdFraction));
     }
     internal static JsonObject Presentation(JsonObject envelope, HostModels models, string id)
     {
         models = models.Capture();
         var model = SessionWait.Text(envelope["childModelDefault"]); var effort = SessionWait.Text(envelope["childEffortDefault"]);
-        var leaf = models.Resolve(model ?? SessionWait.Text(envelope["model"]));
+        var leaf = models.All.Count == 0 ? null : models.Resolve(model ?? SessionWait.Text(envelope["model"]));
+        var allowed = leaf?.AllowedEfforts ?? HostModels.Efforts; var defaultEffort = leaf is null ? "high" : leaf.DefaultEffort;
         var inherited = effort ?? SessionWait.Text(envelope["effort"]);
-        var effective = inherited is not null && leaf.AllowedEfforts.Contains(inherited) ? inherited : leaf.DefaultEffort;
+        var effective = inherited is not null && allowed.Contains(inherited) ? inherited : defaultEffort;
         return new JsonObject
         {
             ["childModelDefault"] = model,
             ["childModelPolicySource"] = model is null ? "follow-parent" : "explicit",
-            ["effectiveChildModelKey"] = leaf.Key,
+            ["effectiveChildModelKey"] = leaf?.Key ?? models.DefaultKey,
             ["childEffortDefault"] = effort,
             ["effectiveChildEffort"] = effective,
-            ["childEffortAllowed"] = new JsonArray(leaf.AllowedEfforts.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
-            ["childModelEffortDefault"] = leaf.DefaultEffort,
+            ["childEffortAllowed"] = new JsonArray(allowed.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
+            ["childModelEffortDefault"] = defaultEffort,
             ["compactThresholdTokens"] = envelope["compactThresholdTokens"]?.DeepClone(),
             ["effectiveCompactThresholdTokens"] = EffectiveThreshold(envelope, models),
             ["childPolicyChain"] = new JsonArray(new JsonObject

@@ -9,7 +9,11 @@ internal static class WebUiContract
     public static JsonObject Session(SessionSnapshot snapshot, HostModels models, bool toolActive, bool compacting)
     {
         models = models.Capture();
-        var selected = models.Select(snapshot);
+        var rawModel = SessionWait.Text(snapshot.AuthorityEnvelope["model"]); var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
+        var model = models.All.Count == 0 ? null : models.Resolve(rawModel);
+        var allowed = model?.AllowedEfforts ?? HostModels.Efforts;
+        var defaultEffort = model is null ? "high" : model.DefaultEffort;
+        var effectiveEffort = rawEffort is not null && allowed.Contains(rawEffort) ? rawEffort : defaultEffort;
         var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
         var runtime = new JsonObject
         {
@@ -31,13 +35,13 @@ internal static class WebUiContract
             ["messageCount"] = snapshot.History.Count,
             ["historyVersion"] = snapshot.HistoryVersion,
             ["runtimeState"] = runtime,
-            ["model"] = selected.RawModel,
-            ["modelKey"] = selected.RawModel is not null && models.Contains(selected.RawModel) ? selected.RawModel : models.DefaultKey,
+            ["model"] = rawModel,
+            ["modelKey"] = rawModel is not null && models.Contains(rawModel) ? rawModel : models.DefaultKey,
             ["defaultModelKey"] = models.DefaultKey,
-            ["effort"] = selected.RawEffort,
-            ["effectiveEffort"] = selected.EffectiveEffort,
-            ["effortAllowed"] = new JsonArray(selected.Model.AllowedEfforts.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
-            ["effortDefault"] = selected.Model.DefaultEffort
+            ["effort"] = rawEffort,
+            ["effectiveEffort"] = effectiveEffort,
+            ["effortAllowed"] = new JsonArray(allowed.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()),
+            ["effortDefault"] = defaultEffort
         };
         foreach (var (key, value) in SessionModelSettings.Presentation(snapshot.AuthorityEnvelope, models, snapshot.Id)) result[key] = value?.DeepClone();
         return result;

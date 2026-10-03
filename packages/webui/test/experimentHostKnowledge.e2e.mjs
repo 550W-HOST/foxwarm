@@ -82,7 +82,7 @@ async function stopHost() {
 }
 try {
   await mkdir(dataRoot); await mkdir(workRoot); await mkdir(globalRoot)
-  await mkdir(join(workRoot, 'memory')); await mkdir(join(workRoot, 'agents'))
+  await mkdir(join(workRoot, 'memory')); await mkdir(join(workRoot, 'agents')); await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
   await mkdir(join(dataRoot, 'state')); await mkdir(join(workRoot, 'agents', 'legacy', 'memory'), { recursive: true })
   await writeFile(join(dataRoot, 'state', 'agents.json'), JSON.stringify({ version: 1, agents: ['legacy'] }))
   await writeFile(join(workRoot, 'agents', '00_SYSTEM.md'), 'FRAMEWORK-FIRST')
@@ -312,5 +312,6 @@ try {
   await browser?.close().catch(() => {})
   if (host?.child.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(5000)]) }
   if (provider) { provider.closeAllConnections(); await new Promise(done => provider.close(done)) }
+  console.log(JSON.stringify({ root, firstPid, secondPid: host?.child.pid }))
   await rm(root, { recursive: true, force: true })
 }

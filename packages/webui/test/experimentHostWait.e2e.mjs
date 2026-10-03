@@ -80,6 +80,7 @@ async function stopHost() {
 }
 try {
   await mkdir(dataRoot); await mkdir(workRoot)
+  await mkdir(join(workRoot, 'memory')); await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
   provider = createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
@@ -276,6 +277,7 @@ try {
     unrelatedWake: true, staleTimerQuiet: true, quiescenceDedupRestart: true, archiveRows: archive.reduce((sum, row) => sum + row[1], 0) }))
 } finally {
   for (const hold of holds) hold.release()
+  console.log(JSON.stringify({ root, firstPid, secondPid }))
   await browser?.close().catch(() => {})
   if (host?.child.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(5000)]) }
   if (provider) { provider.closeAllConnections(); await new Promise(done => provider.close(done)) }

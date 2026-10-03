@@ -92,7 +92,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitLiveness = new WaitLiveness(this);
     }
 
-    public async Task LoadAsync()
+    public Task LoadAsync() => LoadOwnersAsync(ensureMain: false);
+    private async Task LoadOwnersAsync(bool ensureMain)
     {
         Catalog.Initialize();
         foreach (var row in Catalog.List())
@@ -102,7 +103,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         await executor.RegisterRecordsAsync(id => Catalog.Get(id) is not null);
         var ids = Catalog.RestartIds().Concat(executor.OwnerIds).Distinct(StringComparer.Ordinal).ToArray();
-        await Task.WhenAll(ids.Select(id => RequiredAsync(id)));
+        var mandatory = ids.Select(id => RequiredAsync(id)).ToList();
+        if (ensureMain) mandatory.Add(EnsureStartupMainAsync());
+        await Task.WhenAll(mandatory);
         servicesReady = true;
         foreach (var owner in sessions.Values) WaitTransition(owner.Id);
         executor.StartReconciliation();
@@ -198,6 +201,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async Task ShutdownAsync()
     {
         SessionOwner[] current;
+        onboot?.Close();
+        if (onboot is not null) await onboot.DrainAsync();
         await DrainPublicationsAsync();
         lock (lifecycle) current = sessions.Values.ToArray();
         waitTimeouts.Stop(); waitLiveness.Stop();
@@ -217,6 +222,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public void BeginShutdown()
     {
         lock (lifecycle) accepting = false;
+        onboot?.Close();
         admissionStop.Cancel();
         executor.BeginShutdown();
         mcp.BeginShutdown();
@@ -227,7 +233,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        BeginShutdown(); await DrainPublicationsAsync();
+        BeginShutdown();
+        if (onboot is not null) await onboot.DisposeAsync();
+        await DrainPublicationsAsync();
         await waitTimeouts.DisposeAsync();
         await waitLiveness.DisposeAsync();
         await executor.DisposeAsync();

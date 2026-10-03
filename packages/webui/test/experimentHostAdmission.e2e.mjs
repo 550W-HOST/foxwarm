@@ -31,6 +31,8 @@ const peer = createServer(async (request, response) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const models = { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 } } }
 await writeModelFixture(fixture.data, models)
+// This admission probe has no startup task; the real producer is exercised by experimentHostOnboot.
+await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
 const rows = [], state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), faults = join(state, 'experiment-faults')
 await mkdir(sessions, { recursive: true }); await mkdir(faults, { recursive: true }); await writeFile(join(faults, 'record-admissions'), 'record')
 function authority(id, extra = {}) { return { sessionStateVersion: 1, id, agent: 'main', model: 'a', verbose: false, busy: false, history: [], queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0 }, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: randomUUID(), persistentMemorySnapshot: 'Existing selected snapshot', ...extra } }
@@ -79,7 +81,7 @@ async function launch(id) {
 }
 try {
   await fixture.start()
-  assert.deepEqual(await events(), []); assert.equal(requests.length, 0)
+  assert.deepEqual(await events(), ['read main', 'admitted main']); assert.equal(requests.length, 0)
   assert.equal(sql('SELECT session_count FROM catalog_count')[0].session_count, rows.length)
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=40')).status, 200)
   assert.equal((await fixture.api('GET', '/api/session-list/architecture?limit=40')).status, 200)
@@ -88,7 +90,7 @@ try {
   assert.equal((await fixture.api('POST', route('cold-0999') + '/name', { name: 'Cold Main name' })).status, 200)
   const listClient = await connect(); subscribe(listClient, 1, [], ['joined-alias', 'missing'])
   await until(() => listClient.frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 1), 'pure metadata subscription')
-  assert.deepEqual(await events(), []); assert(!listClient.frames.some(frame => frame.type === 'session-state')); assert.equal(requests.length, 0)
+  assert.deepEqual(await events(), ['read main', 'admitted main']); assert(!listClient.frames.some(frame => frame.type === 'session-state')); assert.equal(requests.length, 0)
 
   const before = await readFile(join(sessions, 'other.json'), 'utf8')
   await writeFile(marker('joined', 'admission-hold'), 'hold')
@@ -128,7 +130,7 @@ try {
   assert.equal((await fixture.api('GET', route('unknown') + '/history')).status, 404); assert.equal(sql("SELECT COUNT(*) n FROM session_catalog WHERE session_id='unknown'")[0].n, 0)
 
   await send('child-ref', 'CASE:cold-reference'); await until(async () => (await saved('child-ref')).meta.wait?.waitAll, 'real child placeholder wait')
-  assert.deepEqual((await saved('child-ref')).meta.wait.waitAll.sessions, ['parent-cold', 'main']); assert.equal((await eventsFor('read', 'parent-cold')).length, 0); assert.equal((await eventsFor('read', 'main')).length, 0)
+  assert.deepEqual((await saved('child-ref')).meta.wait.waitAll.sessions, ['parent-cold', 'main']); assert.equal((await eventsFor('read', 'parent-cold')).length, 0); assert.equal((await eventsFor('read', 'main')).length, 1)
   await send('child-ref', 'CASE:refs-finish'); await done('child-ref', 'refs-finish')
   const priorLost = requests.length; assert.equal((await fixture.api('GET', route('lost-hint') + '/history')).status, 200); await sleep(100)
   assert.equal(requests.length, priorLost); assert.equal((await dto('lost-hint')).queueLength, 1); await send('lost-hint', '/dequeue'); await done('lost-hint', 'lost-hint')
@@ -175,8 +177,9 @@ try {
   await until(() => access(join(retainedExec, 'tracking.json')).then(() => false, () => true), 'strict completion acknowledgement')
   assert.deepEqual((await readFile(join(fixture.work, 'executions'), 'utf8')).trim().split('\n').sort(), ['exec-bad', 'exec-finished', 'exec-live'])
   await fixture.stop()
-  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, sameIdRead: 1, creationRead: 0, cleanHosts: 3, mandatoryReadinessFailure: true, deadlineAfterAllValidation: true, failedExecNoAcknowledgement: true, zeroOwnerMetadata: true, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
+  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, sameIdRead: 1, creationRead: 0, cleanHosts: 3, mandatoryReadinessFailure: true, deadlineAfterAllValidation: true, failedExecNoAcknowledgement: true, zeroOwnerMetadata: true, requiredMainStartupRead: 1, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
 } catch (error) { console.error(fixture.output); throw error } finally {
+  console.log(JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids }))
   for (const ws of sockets) ws.terminate()
   for (const id of ['exec-live', 'exec-finished', 'exec-bad']) await writeFile(join(fixture.work, id + '-release'), 'release').catch(() => {})
   await new Promise(done => peer.close(done)); await fixture.cleanup()

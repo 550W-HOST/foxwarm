@@ -1,3 +1,4 @@
+using Foxwarm.Models;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
@@ -114,11 +115,11 @@ internal sealed partial class SessionManager
                 + (start + page.Length < total ? $" Use `start: {start + page.Length}` to see the next page." : "") + "\n\n" + string.Join('\n', page.Select(row => SessionStatus.Row(row, source.Id))) + "\n");
         }
         if (action != "status") throw new InvalidDataException("session.action must be \"status\", \"list\", or \"update-display-name\".");
-        var meta = source.Metadata(); var dto = source.BuildDto(meta); var summary = source.ContextSummary(); var leaf = models.Resolve(meta.Model);
+        var meta = source.Metadata(); var dto = source.BuildDto(meta); var summary = source.ContextSummary(); var catalog = models.Capture(); var leaf = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
         var (_, children) = CatalogMetadataOffset(0, 10, parent: source.Id);
         return Output("📊 *Session Status*\n\n" + $"- session id: `{source.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{source.Agent}`\n- local workspace: `{agents.AgentDirectory(source.Agent)}`\n"
-            + (meta.ParentSessionId is null ? "" : $"- parent session id: `{meta.ParentSessionId}`\n") + $"- model: `{leaf.Key}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf.AllowedEfforts)}, default={leaf.DefaultEffort}\n"
-            + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf.ContextLimit}\n- last usage: {(summary.Usage is null ? "none" : EcmaJson.Stringify(summary.Usage))}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
+            + (meta.ParentSessionId is null ? "" : $"- parent session id: `{meta.ParentSessionId}`\n") + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
+            + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- last usage: {(summary.Usage is null ? "none" : EcmaJson.Stringify(summary.Usage))}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
             + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"
             + $"- runtime state: {SessionStatus.Runtime(dto["runtimeState"]!.AsObject())}\n\nRecent child sessions (max 10):" + (children.Length == 0 ? " none\n" : "\n" + string.Join('\n', children.Select(row => SessionStatus.Row(row))) + "\n"));
     }

@@ -13,6 +13,8 @@ internal static class SessionBoundary
         return now.ToString("yyyy-MM-dd HH:mm:ss ", CultureInfo.InvariantCulture)
             + now.ToString("zzz", CultureInfo.InvariantCulture).Replace(":", "", StringComparison.Ordinal);
     }
+    internal static string SessionEvent(string type, string message) =>
+        $"<foxwarm-message type=\"{Escape(type)}\" eventType=\"{Escape(type)}\" time=\"{LocalTime()}\" hint=\"{Escape(type)} session event\">\n{message}\n</foxwarm-message>";
     internal static string Identity(string parent, string current, bool inherited) =>
         $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\" time=\"{LocalTime()}\" />";
     internal static string Completion(string parent, bool handoffConfirmation = false) =>

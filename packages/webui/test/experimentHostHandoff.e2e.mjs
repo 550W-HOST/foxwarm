@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('handoff'), requests = [], failures = [], scripts = new Map(), shellPids = []
+await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
 const prefix = 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?'
 const suffix = 'I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.'
 const placeholder = '<replace this with your own non-empty review; do not copy this placeholder verbatim>'

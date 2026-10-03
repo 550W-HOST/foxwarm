@@ -20,6 +20,7 @@ internal sealed partial class HostModels
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
     internal bool HandoffConfirmationEnabled { get; private init; }
+    internal double PresentationContextLimit { get; private init; } = 122880;
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
     internal HostModels(ModelConfiguration owner) { this.owner = owner; HandoffConfirmationEnabled = owner.HandoffConfirmationEnabled; }
@@ -32,6 +33,11 @@ internal sealed partial class HostModels
         if (owner is not null) return Capture().Resolve(rawKey);
         return rawKey is not null && entries.TryGetValue(rawKey, out var selected) ? selected
             : entries.TryGetValue(defaultKey, out var fallback) ? fallback : throw new InvalidDataException("No model is configured.");
+    }
+    internal string? StartupSnapshotModelKey()
+    {
+        var catalog = Capture();
+        return catalog.entries.TryGetValue(catalog.defaultKey, out var model) && !model.IsVirtual ? model.Key : null;
     }
     public bool Contains(string key) => owner is null ? entries.ContainsKey(key) : Capture().Contains(key);
     public IReadOnlyList<ConcreteHostModel> Options => owner is null ? displayKeys.Select(key => entries[key] with { Key = key }).ToArray() : Capture().Options;
@@ -116,6 +122,7 @@ internal sealed partial class HostModels
         return new HostModels(selected, models, ordered)
         {
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
+            PresentationContextLimit = SessionWait.Number(llm["contextLimit"]) is { } limit && limit != 0 ? limit : 122880,
             CompactKeepFraction = SessionWait.Number(llm["compactKeepPercent"] ?? llm["compactPercent"]) ?? .3,
             CompactThresholdFraction = SessionWait.Number(llm["compactThresholdPercent"]) ?? .85
         };

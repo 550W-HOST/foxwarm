@@ -23,12 +23,13 @@ var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1/v1"), "", "
     Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_INSTRUCTIONS") ?? "", configuration.MaxOutput);
 var models = configuration.Models;
 await using var sessions = new SessionManager(dataRoot, workspaceRoot, options, models, Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"));
-await sessions.LoadAsync();
+await sessions.LoadMainHostAsync();
 var runtime = new SessionRuntime(sessions);
 var router = new MessageRouter(runtime);
 var server = new HttpServer(args, port, apiToken, distRoot, sessions);
 var webui = new WebUIChannel(sessions, runtime, router);
 webui.Register(server.App);
+server.App.Lifetime.ApplicationStarted.Register(sessions.StartOnboot);
 try { await server.App.RunAsync(); }
 finally
 {

@@ -217,7 +217,8 @@ try {
   await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'unknown.md'),
     '---\nunknown-header: preserved-as-ordinary-frontmatter\n---\nUNKNOWN-HEADER-VISIBLE\n')
   assert.deepEqual((await request('GET', '/api/agents')).body.agents.map(item => item.id), ['alpha', 'beta', 'main'])
-  assert.equal((await request('GET', '/api/sessions/main/state')).status, 404, 'No fabricated main Session')
+  assert.equal((await request('GET', '/api/sessions/main/state')).status, 200, 'Source startup owns a real Main lifetime')
+  const bootMain = JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'main.json'), 'utf8')); assert.match(bootMain.promptCacheKey, /^[0-9a-f]{32}$/); assert(bootMain.persistentMemorySnapshot.includes('LEGACY-MAIN-MEMORY'))
   legacyId = (await request('POST', '/api/sessions')).body.sessionId
   assert(legacyId.startsWith('s_')); await send(legacyId, 'LEGACY-ROOT'); await finished(legacyId, 'LEGACY-DONE')
   assert.match(valueOf(await history(legacyId), 'legacy-pwd').output, new RegExp(workRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
@@ -438,5 +439,6 @@ try {
   try { await browser?.close() } catch {}
   if (host?.child?.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(6000)]) }
   if (provider) { provider.closeAllConnections(); await new Promise(done => provider.close(done)) }
+  console.log(JSON.stringify({ root, firstPid, secondPid: host?.child.pid }))
   await rm(root, { recursive: true, force: true })
 }

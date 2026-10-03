@@ -8,9 +8,10 @@ internal static class SessionPresentation
     internal static JsonObject Build(SessionMetadata meta, HostModels models, Func<string, SessionMetadata?>? resolveAncestry, bool toolActive = false, bool compacting = false)
     {
         var catalog = models.Capture();
-        var model = catalog.Resolve(meta.Model);
-        var effort = meta.Effort is not null && model.AllowedEfforts.Contains(meta.Effort, StringComparer.Ordinal)
-            ? meta.Effort : model.DefaultEffort;
+        var model = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
+        var allowed = model?.AllowedEfforts ?? HostModels.Efforts; var defaultEffort = model is null ? "high" : model.DefaultEffort;
+        var effort = meta.Effort is not null && allowed.Contains(meta.Effort, StringComparer.Ordinal)
+            ? meta.Effort : defaultEffort;
         var runtime = SessionRuntimeState.Build(meta, toolActive, compacting);
         var result = new JsonObject
         {
@@ -34,8 +35,8 @@ internal static class SessionPresentation
             ["defaultModelKey"] = catalog.DefaultKey,
             ["effort"] = meta.Effort,
             ["effectiveEffort"] = effort,
-            ["effortAllowed"] = new JsonArray(model.AllowedEfforts.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
-            ["effortDefault"] = model.DefaultEffort,
+            ["effortAllowed"] = new JsonArray(allowed.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
+            ["effortDefault"] = defaultEffort,
             ["tokenUsage"] = new JsonObject
             {
                 ["cachedTokens"] = meta.CachedTokens,
