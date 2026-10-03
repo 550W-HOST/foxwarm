@@ -36,7 +36,7 @@ An implemented Worker ingress alternative accepts one already-normalized ordinar
 ## Queue and source behavior
 
 - Busy-time ordinary input is queued without an obsolete automatic queue acknowledgement.
-- Ordinary follow-ups merge in queue order at the established provider/tool safe points regardless of source platform, channel instance, or conversation.
+- Ordinary follow-ups merge in queue order at the established provider/tool safe points and immediately before an eligible bounded provider retry, regardless of source platform, channel instance, or conversation.
 - Source metadata is persisted only as message provenance; it never selects a queue batch or an output target.
 - `/stop` cancels only the current main run, then commits queued message/event inputs to canonical history without running another provider turn. It never cancels compact planning. `/stop compact` independently cancels active/pending compaction without setting `stopping`, aborting the ordinary provider request, or consuming ordinary queue rows. If `/stop` is issued while a live main turn awaits synchronous automatic compaction, that compact finishes before normal Stop finalization; if the Session is busy only for an idle-started standalone awaited compact, `/stop` reports that no main run was stopped and leaves the next input unpoisoned.
 - `/dequeue` stops current work if needed and immediately resumes queued items. Under Session-worker placement, one typed exact-owner control counts the hot queue plus already-durable pending Worker ingress, signals `stopping`/`runQueuedAfterStop` and aborts an active provider without waiting behind the turn, then ingests pending input at the stop-override safe point so the same outer action loop continues it. Idle queued work uses that same canonical runner; no dequeue mailbox record or second runner exists.
@@ -49,6 +49,14 @@ After a normal provider assistant append, generated images use a best-effort pos
 - Intermediate/final notices are display-only and preferably update one visible record.
 - Ordinary non-WebUI channels receive concise retry snippets without requiring a channel edit API.
 - Terminal provider failures are exceptions caught at the session turn boundary; fake model-visible `Error:` assistant history is forbidden.
+
+### D-pipeline-retry-input-safe-point
+
+[2026-10-03] An ordinary Session turn that will actually retry reaches an exact-owner preparation safe point after the existing abortable backoff and before the next provider send. The previous attempt's stream/prefix lane and any error-time encrypted-reasoning checkpoint have settled first. The SessionTurnRunner ingests pending Worker mailbox input, applies ready compaction before selecting current ordinary input, and uses the existing strict bulk append to preserve each input as its own Message in original order. Child-handoff mutation, queue rollback, and function-call/result adjacency retain their existing canonical boundaries. The selected batch is finite; input received after selection belongs to a later safe point rather than a wait-until-empty loop.
+
+Stop and Run queued are rechecked after awaited ingestion, compact, and append; cancellation is also checked before dispatch. Run queued leaves control with the existing outer busy owner, while Stop uses ordinary passive finalization. Local preparation or strict persistence failure prevents the retry send and follows existing owner failure cleanup, without entering provider failure classification, retries, or model health accounting. A ready compact job is meaningful even without ordinary input or a wake marker, and the runtime returns from compaction to the existing normal-turn requesting phase before dispatch.
+
+The LLM layer retains the sole retry loop, delay, total physical-attempt budget, captured virtual routing generation, health/failover, requested effort, and prompt-cache key semantics. Preparation is an awaited semantic callback, separate from best-effort retry notification. If input append or compact changes committed context, the existing partial-prefix reconstruction builds a new logical request, journal, and stream identity from exact-owner committed history and the current system snapshot, without resetting the physical budget or duplicating committed output. Unchanged context retains ordinary retry identity. Exhausted/nonretryable failures, detached calls, compact planning, and low-level requests do not consume ordinary retry input.
 
 ## Invariants
 

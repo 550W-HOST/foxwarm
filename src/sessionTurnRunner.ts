@@ -409,8 +409,10 @@ export class SessionTurnRunner {
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
-  ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
-    await this.runPendingCompactionIfNeeded(session.id, session);
+    assertCanConsume?: () => void,
+  ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean; compacted: boolean }> {
+    const compacted = await this.runPendingCompactionIfNeeded(session.id, session, false, !!assertCanConsume);
+    assertCanConsume?.();
     let parts = pendingParts;
     let consumedInput = false;
 
@@ -444,6 +446,7 @@ export class SessionTurnRunner {
     return {
       parts,
       consumedInput,
+      compacted,
     };
   }
 
@@ -569,13 +572,14 @@ export class SessionTurnRunner {
     sessionId: string,
     session: Session,
     stopped = false,
-  ): Promise<void> {
+    propagateFailure = false,
+  ): Promise<boolean> {
     const hasCompletedJob = this.host.hasCompletedCompactJob(sessionId);
     // Commit markers only wake the owner; their queue positions never split inputs.
     if (session.queue.some(item => isQueueItem(item) && item.type === 'compact-commit')) {
       session.queue = session.queue.filter(item => !isQueueItem(item) || item.type !== 'compact-commit');
     }
-    if (!hasCompletedJob) return;
+    if (!hasCompletedJob) return false;
 
     try {
       this.host.setActiveSessionRuntimeState(sessionId, {
@@ -583,9 +587,10 @@ export class SessionTurnRunner {
         since: Date.now(),
         active: { phase: 'compaction' },
       });
-      await this.host.applyCompletedCompactJob(sessionId);
+      return await this.host.applyCompletedCompactJob(sessionId);
     } catch (error: any) {
       logger.error({ err: error, sessionId }, 'Safe-point compaction failed');
+      if (propagateFailure) throw error;
       if (stopped) {
         if (this.host.hasBroadcast(session)) {
           this.host.broadcast(session, `Error: ${error?.message || 'Compaction commit failed'}`);
@@ -593,7 +598,29 @@ export class SessionTurnRunner {
       } else {
         await this.sendSessionError(session, error);
       }
+      return false;
     }
+  }
+
+  private async prepareLlmRetry(session: Session, iteration: number, signal: AbortSignal): Promise<boolean> {
+    const assertCanRetry = () => {
+      if (signal.aborted || session.stopping || session.meta?.runQueuedAfterStop) {
+        const error = new Error('LLM request aborted');
+        error.name = 'AbortError';
+        throw error;
+      }
+    };
+    assertCanRetry();
+    await this.host.ingestPendingQueue?.(session);
+    assertCanRetry();
+    const selected = await this.consumeLeadingQueuedTurnInputs(session, null, assertCanRetry);
+    // Stop/Run queued may change during compact or strict bulk persistence.
+    // Inputs received after selection remain queued for a later safe point.
+    assertCanRetry();
+    this.host.setActiveSessionRuntimeState(session.id, {
+      state: 'requesting-model', since: Date.now(), active: { iteration, phase: 'normal-turn' },
+    });
+    return selected.compacted || selected.consumedInput;
   }
 
   private async maybeRequestAutoCompactionBeforeContinuation(
@@ -861,6 +888,7 @@ export class SessionTurnRunner {
         try {
           result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
+            prepareRetry: signal => this.prepareLlmRetry(session, iteration, signal),
             onIntermediateAssistantText: async text => {
               await this.deliverIntermediateModelText(session, text, broadcast, turnId);
             },
@@ -875,7 +903,7 @@ export class SessionTurnRunner {
             turnId,
           });
         } catch (e: any) {
-          if (session.stopping && llm.isAbortError(e)) {
+          if ((session.stopping || session.meta?.runQueuedAfterStop) && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
             stoppedByUser = true;
             await this.host.saveSession(session);

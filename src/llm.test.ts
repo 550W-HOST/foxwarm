@@ -2209,6 +2209,7 @@ test('error-checkpoint encrypted reasoning stays out of a different concrete fai
   const originalPost = axios.post;
   const session = createOpenAITestSession(makeId('responses_reasoning_failover_filter'));
   session.model = 'responses-keep-failover';
+  session.effort = 'low';
   session.persistentMemorySnapshot = '<foxwarm-current-model model-id="responses-keep-failover" />\n\nsystem prompt';
   const first = new PassThrough();
   const bodies: any[] = [];
@@ -2223,6 +2224,12 @@ test('error-checkpoint encrypted reasoning stays out of a different concrete fai
       toolDefinitions: [], registerAbortController: false, maxRetries: 2,
       appendMessage: async message => { session.history.push(message); },
       onIntermediateAssistantText: () => {},
+      prepareRetry: async () => {
+        assert.equal(session.history.at(-1)?.parts[0]?.providerMeta?.encryptedThinking, 'only-original-leaf',
+          'the previous error-time reasoning checkpoint settles before owner preparation');
+        session.history.push({ role: 'user', parts: [{ text: 'failover queued correction' }] });
+        return true;
+      },
     });
     for (let tries = 0; tries < 100 && bodies.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(bodies.length, 1);
@@ -2238,6 +2245,10 @@ test('error-checkpoint encrypted reasoning stays out of a different concrete fai
     assert.equal(models[1].__meta?.modelId, 'responses-fixture/model');
     assert.equal(models[0].parts[0].providerMeta?.encryptedThinking, 'only-original-leaf');
     assert.equal(JSON.stringify(bodies[1].input).includes('only-original-leaf'), false);
+    assert.equal(JSON.stringify(bodies[1].input).split('failover queued correction').length - 1, 1);
+    assert.deepEqual(bodies.map(body => body.reasoning.effort), ['low', 'low']);
+    assert.equal(models[1].__meta?.virtualModelKey, 'responses-keep-failover');
+    assert.equal(models[1].__meta?.llmAttempt, 1);
   } finally { (axios as any).post = originalPost; first.destroy(); }
 });
 
@@ -3562,6 +3573,193 @@ test('chat propagates final request failure without appending fake Error model t
     (global as any).setTimeout = originalSetTimeout;
     (global as any).clearTimeout = originalClearTimeout;
   }
+});
+
+test('normal Chat Completions and Anthropic retry preparation rebuilds committed input without the Responses prefix hook', async t => {
+  for (const model of ['openai/gpt-5.2-codex', 'anthropic/claude-sonnet-4-5']) {
+    await t.test(model, async () => {
+      const originalPost = axios.post;
+      const session = createOpenAITestSession(makeId('retry_prepared_history'));
+      session.model = model;
+      session.persistentMemorySnapshot = `<foxwarm-current-model model-id="${model}" />\n\nsystem prompt`;
+      const bodies: any[] = [];
+      const resets: any[] = [];
+      let prepared = 0;
+      (axios as any).post = async (_url: string, body: any) => {
+        bodies.push(body);
+        if (bodies.length === 1) throw new Error('retry this transport failure');
+        return { status: 200, statusText: 'OK', headers: {}, data: model.startsWith('anthropic/')
+          ? { content: [{ type: 'text', text: 'prepared answer' }] } : makeChatCompletionStream('prepared answer') };
+      };
+      try {
+        const result = await chat([{ text: 'initial input' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+          currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {}, notifySessionEvent: (_id, event) => { resets.push(event); } },
+          appendMessage: async message => { session.history.push(message); },
+          prepareRetry: async signal => {
+            assert.equal(signal.aborted, false);
+            assert.equal(bodies.length, 1);
+            prepared++;
+            session.history.push({ role: 'user', parts: [{ text: 'queued correction' }] });
+            return true;
+          },
+        });
+        assert.equal(prepared, 1);
+        assert.equal(bodies.length, 2);
+        assert.equal(result.llmAttempt, 1, 'changed context starts a new logical request, not a new physical budget');
+        assert.equal(JSON.stringify(bodies[0]).includes('queued correction'), false);
+        assert.equal(JSON.stringify(bodies[1]).split('queued correction').length - 1, 1);
+        const identities = resets.filter(event => event.type === 'model-stream-reset').map(event => event.llmRequestId);
+        assert.equal(identities.length, 2);
+        assert.notEqual(identities[0], identities[1]);
+        const journal = await reconstructLlmRequest(result.llmRequestId!);
+        assert.equal(journal.completeness, 'complete');
+        if (journal.completeness === 'complete') {
+          assert.equal(JSON.stringify(journal.messages).split('queued correction').length - 1, 1);
+          assert.equal(journal.attempts.length, 1);
+        }
+      } finally { (axios as any).post = originalPost; }
+    });
+  }
+});
+
+test('unchanged retry preparation preserves logical identity and the existing physical budget', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('retry_unchanged_history'));
+  let requests = 0;
+  let prepared = 0;
+  (axios as any).post = async () => {
+    if (++requests === 1) throw new Error('one transient failure');
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('unchanged retry') };
+  };
+  try {
+    const result = await chat([{ text: 'initial input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => { prepared++; return false; },
+    });
+    assert.equal(requests, 2);
+    assert.equal(prepared, 1);
+    assert.equal(result.llmAttempt, 2);
+    const journal = await reconstructLlmRequest(result.llmRequestId!);
+    assert.equal(journal.completeness, 'complete');
+    if (journal.completeness === 'complete') {
+      assert.deepEqual(journal.attempts.map(attempt => attempt.result?.outcome), ['failure', 'success']);
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('retry preparation is awaited, propagates local failure, and rechecks cancellation without another provider send', async t => {
+  for (const cancelled of [false, true]) {
+    await t.test(cancelled ? 'cancel while awaiting owner' : 'strict preparation failure', async () => {
+      const originalPost = axios.post;
+      const session = createOpenAITestSession(makeId('retry_prepare_blocks_dispatch'));
+      const abort = new AbortController();
+      const localFailure = new Error('strict owner append failed');
+      let requests = 0;
+      let prepared = 0;
+      (axios as any).post = async () => { requests++; throw new Error('initial provider outage'); };
+      try {
+        await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 3,
+          abortSignal: abort.signal,
+          appendMessage: async message => { session.history.push(message); },
+          onRetry: () => { throw new Error('best-effort notification failed'); },
+          prepareRetry: async () => {
+            prepared++;
+            await new Promise(resolve => setImmediate(resolve));
+            if (cancelled) { abort.abort(); return false; }
+            throw localFailure;
+          },
+        }), error => cancelled ? llmModule.isAbortError(error) : error === localFailure);
+        assert.equal(requests, 1);
+        assert.equal(prepared, 1, 'local preparation must not be retried or swallowed like a notification');
+      } finally { (axios as any).post = originalPost; }
+    });
+  }
+});
+
+test('cancellation after owner preparation prevents retry dispatch and retains ordinary abort journaling', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('retry_cancel_before_dispatch'));
+  const abort = new AbortController();
+  const resets: any[] = [];
+  let requests = 0;
+  (axios as any).post = async () => { requests++; throw new Error('initial provider outage'); };
+  try {
+    await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2, abortSignal: abort.signal,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => false,
+      currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {},
+        notifySessionEvent: (_id, event) => {
+          if (event.type !== 'model-stream-reset') return;
+          resets.push(event);
+          if (resets.length === 2) abort.abort();
+        },
+      },
+    }), llmModule.isAbortError);
+    assert.equal(requests, 1);
+    assert.equal(resets.length, 2);
+    const journal = await reconstructLlmRequest(resets[0].llmRequestId);
+    assert.equal(journal.completeness, 'complete');
+    if (journal.completeness === 'complete') {
+      assert.deepEqual(journal.attempts.map(attempt => attempt.result?.outcome), ['failure', 'abort']);
+    }
+  } finally { (axios as any).post = originalPost; }
+});
+
+test('exhausted and nonretryable failures and detached or compact calls never prepare ordinary retry input', async t => {
+  for (const mode of ['exhausted', 'nonretryable', 'btw', 'compact-plan', 'detached']) {
+    await t.test(mode, async () => {
+      const originalPost = axios.post;
+      const session = createOpenAITestSession(makeId('retry_prepare_scope'));
+      let requests = 0;
+      let prepared = 0;
+      (axios as any).post = async () => {
+        requests++;
+        if (mode === 'nonretryable') {
+          const stream = new PassThrough();
+          stream.end('invalid request');
+          return { status: 400, statusText: 'Bad Request', headers: {}, data: stream };
+        }
+        throw new Error('provider outage');
+      };
+      try {
+        await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false, notifySessionEvents: false,
+          maxRetries: mode === 'exhausted' ? 1 : 2,
+          ...(mode === 'btw' || mode === 'compact-plan' ? { purpose: mode as 'btw' | 'compact-plan' } : {}),
+          ...(mode === 'detached' ? { snapshotAuthority: 'detached' as const } : {}),
+          appendMessage: async message => { session.history.push(message); },
+          prepareRetry: async () => { prepared++; return true; },
+        }), error => error instanceof LlmRequestError);
+        assert.equal(prepared, 0);
+        assert.equal(requests, mode === 'exhausted' || mode === 'nonretryable' ? 1 : 2);
+      } finally { (axios as any).post = originalPost; }
+    });
+  }
+});
+
+test('changed retry input does not reset the exhausted provider attempt budget', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('retry_changed_budget'));
+  let requests = 0;
+  let prepared = 0;
+  (axios as any).post = async () => { requests++; throw new Error('persistent outage'); };
+  try {
+    await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 2,
+      appendMessage: async message => { session.history.push(message); },
+      prepareRetry: async () => {
+        prepared++;
+        session.history.push({ role: 'user', parts: [{ text: 'new correction' }] });
+        return true;
+      },
+    }), (error: unknown) => error instanceof LlmRequestError && error.attempt === 2);
+    assert.equal(requests, 2);
+    assert.equal(prepared, 1, 'terminal exhaustion cannot consume another batch');
+  } finally { (axios as any).post = originalPost; }
 });
 
 test('chat journals only historical concrete model provenance and strips all __meta from provider payloads', async () => {

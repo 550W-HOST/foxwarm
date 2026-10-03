@@ -10,6 +10,8 @@ import { initArchiveStore } from './session/archiveStore';
 import { readArchiveMessages } from './session/archive';
 import { SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
+import { reconstructLlmRequest } from './llmRequestJournal';
+import * as sessionHistory from './session/history';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import type { Message, QueueItem, Session } from './types';
 import { logger } from './common';
@@ -186,6 +188,15 @@ test('real exact-owner Responses stream durably archives commentary and error-ch
         encrypted_content: 'archive-opaque-checkpoint' } });
     frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
     firstStream.end();
+    for (let tries = 0; tries < 150 && !session.history.some(message => message.__meta?.noticeType === 'llm-retry'); tries++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok(session.history.some(message => message.__meta?.noticeType === 'llm-retry'));
+    assert.equal(bodies.length, 1, 'queued correction arrives during the existing retry backoff');
+    session.queue.push(
+      { type: 'user', parts: [{ text: 'retry correction A' }] },
+      { type: 'background', parts: [{ text: 'retry correction B' }] },
+    );
     for (let tries = 0; tries < 150 && bodies.length < 2; tries++) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(bodies.length, 2);
     persisted = await readSessionHistorySnapshot(session.id);
@@ -200,14 +211,125 @@ test('real exact-owner Responses stream durably archives commentary and error-ch
       'archive-opaque-checkpoint');
     assert.equal(JSON.stringify(bodies[1].input).includes('archive-opaque-checkpoint'), true);
     assert.equal(JSON.stringify(bodies[1].input).includes('drop-this-upstream-id'), false);
+    for (const text of ['Drafting', 'archive-opaque-checkpoint', 'retry correction A', 'retry correction B']) {
+      assert.equal(JSON.stringify(bodies[1].input).split(text).length - 1, 1);
+    }
+    const historyText = session.history.map(message => message.parts[0]?.text);
+    assert.ok(historyText.indexOf('retry correction A') > historyText.indexOf(undefined));
+    assert.equal(historyText.indexOf('retry correction B'), historyText.indexOf('retry correction A') + 1);
     await running;
     assert.deepEqual(session.history.filter(message => message.role === 'model' && message.modelVisible !== false)
       .map(message => message.parts[0]?.text), ['Drafting', undefined, 'done']);
     assert.equal(deliveries.filter(text => text === 'Drafting').length, 1);
+    assert.equal(bodies.length, 2, 'queued corrections belong to the retry, not a later provider turn');
+    const final = session.history.find(message => message.parts[0]?.text === 'done')!;
+    assert.notEqual(final.__meta?.llmRequestId, persistedModels[0].__meta?.llmRequestId);
+    const journal = await reconstructLlmRequest(final.__meta!.llmRequestId!);
+    assert.equal(journal.completeness, 'complete');
+    if (journal.completeness === 'complete') {
+      for (const text of ['Drafting', 'archive-opaque-checkpoint', 'retry correction A', 'retry correction B']) {
+        assert.equal(JSON.stringify(journal.messages).split(text).length - 1, 1);
+      }
+    }
   } finally {
     (axios as any).post = originalPost;
     (configModule as any).resolveModelConfig = originalResolve;
     firstStream.destroy();
+  }
+});
+
+test('retry applies a real ready compact-only commit and rebuilds history and system snapshot within the same budget', async () => {
+  await initArchiveStore();
+  const session = createSession(`retry_compact_only_${Date.now()}`, 'current turn input');
+  session.model = 'fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nbefore compact snapshot';
+  session.promptCacheKey = llm.generatePromptCacheKey();
+  const originalKey = session.promptCacheKey;
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const phases: string[] = [];
+  effects.setRuntimeState = (_id, state) => { phases.push(state.active?.phase || state.state); };
+  await effects.appendMessages(session, [
+    { role: 'user', parts: [{ text: `older compact input ${'alpha '.repeat(3000)}` }] },
+    { role: 'model', parts: [{ text: `older compact answer ${'bravo '.repeat(3000)}` }] },
+    { role: 'user', parts: [{ text: 'recent kept input' }] },
+    { role: 'model', parts: [{ text: 'recent kept answer' }] },
+  ]);
+  const deps: sessionHistory.SessionHistoryDeps = {
+    getSessionById: id => id === session.id ? session : undefined,
+    getExistingSession: async id => id === session.id ? session : null,
+    saveSession: () => effects.persistSession(session),
+    enqueueSessionItem: async (_id, item) => { session.queue.push(item); },
+  };
+  const originalResolve = configModule.resolveModelConfig;
+  const originalPost = axios.post;
+  const originalChat = llm.chat;
+  const originalSnapshot = llm.buildSessionSystemPromptSnapshotForSession;
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+  (llm as any).buildSessionSystemPromptSnapshotForSession = async () => '<foxwarm-current-model model-id="fixture/model" />\n\nafter compact snapshot';
+  (llm as any).chat = async (parts: any, owner: Session, iteration: number, options: any) => {
+    if (options?.purpose !== 'compact-plan') return originalChat(parts, owner, iteration, options);
+    const call = { id: 'retry-compact-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [
+      { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'retry compact summary' },
+    ] } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+    return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+  };
+  const bodies: any[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) {
+      await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.6 }, 'background');
+      for (let tries = 0; tries < 150 && !sessionHistory.hasCompletedCompactJob(session.id); tries++) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+      // Ready work is not discovered only by queue length or a wake marker.
+      session.queue = session.queue.filter(item => item.type !== 'compact-commit');
+      assert.equal(session.queue.length, 0);
+      throw new Error('retry after compact becomes ready');
+    }
+    assert.equal(phases.at(-1), 'normal-turn', 'retry dispatch must not retain the completed compaction phase');
+    assert.ok(phases.includes('compaction'));
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'compact retry done' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  const host = new LocalSessionTurnHost(effects, session, {
+    hasCompletedCompactJob: sessionHistory.hasCompletedCompactJob,
+    applyCompletedCompactJob: id => sessionHistory.applyCompletedCompactJob(deps, id),
+  });
+  try {
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
+    assert.equal(bodies.length, 2);
+    assert.equal(JSON.stringify(bodies[0]).includes('older compact input'), true);
+    assert.equal(JSON.stringify(bodies[1]).includes('older compact input'), false);
+    assert.equal(JSON.stringify(bodies[1]).split('retry compact summary').length - 1, 1);
+    assert.equal(JSON.stringify(bodies[1]).split('current turn input').length - 1, 1);
+    assert.equal(JSON.stringify(bodies[1]).includes('after compact snapshot'), true);
+    assert.equal(JSON.stringify(bodies[1]).includes('before compact snapshot'), false);
+    assert.equal(session.promptCacheKey, originalKey, 'compact inherits the current prefix lineage');
+    const final = session.history.find(message => message.parts[0]?.text === 'compact retry done')!;
+    assert.equal(final.__meta?.llmAttempt, 1);
+    const journal = await reconstructLlmRequest(final.__meta!.llmRequestId!);
+    assert.equal(journal.completeness, 'complete');
+    if (journal.completeness === 'complete') {
+      assert.equal(JSON.stringify(journal.messages).includes('retry compact summary'), true);
+      assert.equal(journal.systemPrompt.includes('after compact snapshot'), true);
+    }
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally {
+    sessionHistory.discardPendingCompactWork(session.id);
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = originalResolve;
+    (llm as any).chat = originalChat;
+    (llm as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
   }
 });
 
@@ -536,6 +658,82 @@ test('retry consumes a later different-source queued row in the same provider tu
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
+  }
+});
+
+test('retry preparation selects one strict batch and leaves input arriving during persistence for a later safe point', async () => {
+  await initArchiveStore();
+  const session = createSession(`retry_finite_batch_${Date.now()}`, 'correction A');
+  session.queue.push({ type: 'background', parts: [{ text: 'correction B' }] });
+  const effects = createEffects(session, []);
+  const originalAppend = effects.appendQueuedMessages;
+  let appends = 0;
+  effects.appendQueuedMessages = async (owner, messages) => {
+    appends++;
+    assert.deepEqual(messages.map(message => message.parts[0].text), ['correction A', 'correction B']);
+    await new Promise(resolve => setImmediate(resolve));
+    session.queue.push({ type: 'user', parts: [{ text: 'later correction' }] });
+    await originalAppend(owner, messages);
+  };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  assert.equal(await (runner as any).prepareLlmRetry(session, 0, new AbortController().signal), true);
+  assert.equal(appends, 1);
+  assert.deepEqual(session.history.map(message => message.parts[0].text), ['correction A', 'correction B']);
+  assert.equal(session.queue[0].parts[0].text, 'later correction');
+});
+
+test('Stop during retry compact prevents queue selection after the awaited compact boundary', async () => {
+  const session = createSession(`retry_compact_stop_${Date.now()}`, 'must remain queued');
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(createEffects(session, []), session, {
+    hasCompletedCompactJob: () => true,
+    applyCompletedCompactJob: async () => {
+      await new Promise(resolve => setImmediate(resolve));
+      session.stopping = true;
+      return true;
+    },
+  }));
+  await assert.rejects(() => (runner as any).prepareLlmRetry(session, 0, new AbortController().signal), llm.isAbortError);
+  assert.equal(session.queue.length, 1);
+  assert.equal(session.history.length, 0);
+});
+
+test('strict queued append failure during real retry restores input and blocks the next provider attempt', async () => {
+  await initArchiveStore();
+  const session = createSession(`retry_strict_append_failure_${Date.now()}`, 'unused');
+  session.queue = [];
+  session.busy = true;
+  session.model = 'fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nretry prompt';
+  const effects = createEffects(session, []);
+  effects.appendQueuedMessages = (owner, messages) => sessionManager.appendQueuedSessionMessagesForSession(owner, messages, async () => {
+    throw new Error('retry queue strict persistence failed');
+  });
+  const originalPost = axios.post;
+  const originalResolve = configModule.resolveModelConfig;
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+  let requests = 0;
+  (axios as any).post = async () => {
+    requests++;
+    session.queue.push({ type: 'user', parts: [{ text: 'uncommitted correction' }] });
+    throw new Error('initial mock provider outage');
+  };
+  try {
+    const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+    await withGlobalOwnerLookupsForbidden(() => (runner as any).runSessionTurn(session.id, { parts: [{ text: 'initial request' }], session }));
+    assert.equal(requests, 1);
+    assert.equal(session.queue.length, 1, 'existing strict append rollback restores the selected input');
+    assert.equal(session.history.some(message => message.parts[0].text === 'uncommitted correction'), false);
+    assert.ok(session.history.some(message => message.parts[0].text?.includes('retry queue strict persistence failed')),
+      'preparation failure follows the ordinary local owner error path');
+    assert.equal(session.history.filter(message => message.__meta?.noticeType === 'llm-retry').length, 1,
+      'local preparation failure does not generate another provider retry notice');
+  } finally {
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = originalResolve;
   }
 });
 

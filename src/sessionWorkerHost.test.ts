@@ -6,6 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import * as configModule from './config';
+import { loadModelsConfigFromObject } from './config';
 import { LocalRpcTransport, ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
@@ -1015,6 +1019,84 @@ test('exec completion is serialized after a failed turn and remains one durable 
     assert.match(String((session.queue[0] as any).parts?.[0]?.system), /foxwarm-system kind="system" time=/);
     assert.equal(readDurable().queue.length, 1);
   });
+});
+
+test('real Worker retry ingests durable mailbox input and honors Stop or dequeue during awaited ingestion', async t => {
+  for (const control of ['continue', 'stop', 'dequeue']) {
+    await t.test(control, async () => {
+      const initial = baseSession(`worker-retry-boundary-${control}-${Date.now()}`);
+      initial.model = 'fixture/model';
+      initial.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nworker retry prompt';
+      const originalPost = axios.post;
+      const originalResolve = configModule.resolveModelConfig;
+      const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+        fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+      } });
+      (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+        currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+      try {
+        await withLocalHost(initial, async ({ host, store, session, turnHost, readDurable }) => {
+          const bodies: any[] = [];
+          const originalIngest = turnHost.ingestPendingQueue.bind(turnHost);
+          let boundaryReached!: () => void;
+          let releaseBoundary!: () => void;
+          const reached = new Promise<void>(resolve => { boundaryReached = resolve; });
+          const release = new Promise<void>(resolve => { releaseBoundary = resolve; });
+          let heldOnce = false;
+          turnHost.ingestPendingQueue = async (owner: Session) => {
+            await originalIngest(owner);
+            if (!heldOnce) { heldOnce = true; boundaryReached(); await release; }
+          };
+          (axios as any).post = async (_url: string, body: any) => {
+            bodies.push(body);
+            if (bodies.length === 1) {
+              store.enqueueIntent(initial.id, 'retry-correction-A', 'enqueue', { type: 'user', parts: [{ text: 'mailbox correction A' }] });
+              store.enqueueIntent(initial.id, 'retry-correction-B', 'enqueue', { type: 'background', parts: [{ text: 'mailbox correction B' }] });
+              assert.equal(session.queue.length, 0, 'new Worker input is durable only in the mailbox before the retry safe point');
+              throw new Error('mock provider retry failure');
+            }
+            const stream = new PassThrough();
+            process.nextTick(() => stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'worker retry answer' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`));
+            return { status: 200, statusText: 'OK', headers: {}, data: stream };
+          };
+          store.enqueueIntent(initial.id, 'initial-retry-turn', 'enqueue', { type: 'user', parts: [{ text: 'worker initial input' }] });
+          const turn = host.runPending(8);
+          await reached;
+          assert.equal(bodies.length, 1, 'the next provider send awaits exact-owner ingestion');
+          assert.equal(readDurable().queue.length, 2);
+          let stopping: Promise<any> | undefined;
+          if (control === 'stop') {
+            stopping = host.interrupt();
+            for (let tries = 0; tries < 40 && !session.stopping; tries++) await new Promise(resolve => setImmediate(resolve));
+            assert.equal(session.stopping, true);
+          } else if (control === 'dequeue') {
+            const result = await host.dequeue();
+            assert.equal(result.queuedItems, 2);
+            assert.equal(result.stoppedCurrent, true);
+          }
+          releaseBoundary();
+          await turn;
+          if (stopping) await stopping;
+          const durable = readDurable();
+          assert.equal(bodies.length, control === 'stop' ? 1 : 2);
+          assert.equal(durable.busy, false);
+          assert.equal(!!durable.stopping, false);
+          assert.equal(durable.queue.length, 0);
+          assert.equal(durable.meta.runQueuedAfterStop, undefined);
+          for (const text of ['mailbox correction A', 'mailbox correction B']) {
+            assert.equal(JSON.stringify(durable.history).split(text).length - 1, 1);
+            if (control !== 'stop') assert.equal(JSON.stringify(bodies[1]).split(text).length - 1, 1);
+          }
+          const assistant = durable.history.find((message: any) => message.parts[0]?.text === 'worker retry answer');
+          if (control !== 'stop') assert.equal(assistant.__meta.llmAttempt, 1);
+          assert.equal(durable.history.some((message: any) => message.parts[0]?.text?.startsWith('Error:')), false);
+        }, true);
+      } finally {
+        (axios as any).post = originalPost;
+        (configModule as any).resolveModelConfig = originalResolve;
+      }
+    });
+  }
 });
 
 test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {

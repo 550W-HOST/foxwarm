@@ -234,7 +234,7 @@ type RequestLlmOnceOptions = {
         outputEndExclusive: number;
     }) => Promise<Message>;
     onPartialAssistantDelivered?: (message: Message, text: string) => Promise<void>;
-    /** Rebuild the next logical request after a partial completion failed upstream. */
+    /** Rebuild the next logical request after committed context changes. */
     getCommittedHistoryForRetry?: () => Message[];
 };
 
@@ -2339,6 +2339,7 @@ export async function chat(
         registerAbortController?: boolean;
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+        prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
         maxRetries?: number;
         purpose?: LlmRequestPurpose;
         compactPlanBackground?: boolean;
@@ -2410,6 +2411,8 @@ export async function chat(
     const contentsForLlm = getCommittedHistoryForRetry();
     const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
         && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
+    const prepareRetry = (options?.purpose || 'normal-turn') === 'normal-turn'
+        && options?.snapshotAuthority !== 'detached' ? options?.prepareRetry : undefined;
     const availableToolDefinitions = await resolveSessionToolDefinitions(session, options?.toolDefinitions);
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
@@ -2435,8 +2438,9 @@ export async function chat(
         compactPlanBackground: options?.compactPlanBackground,
         currentSessionEffects: options?.currentSessionEffects,
         resolveSystemPromptForModel,
+        ...((partialCommitEnabled || prepareRetry) ? { getCommittedHistoryForRetry } : {}),
+        ...(prepareRetry ? { prepareRetry } : {}),
         ...(partialCommitEnabled ? {
-            getCommittedHistoryForRetry,
             onPartialAssistantCommit: async (segment: Parameters<NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>>[0]) => {
                 const message: Message = {
                     role: 'model', parts: segment.parts,
@@ -3347,7 +3351,10 @@ function createResponsesPrefixCommitLane(args: {
     };
 }
 
-async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<InternalLlmResult> {
+async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
+    /** Exact normal-turn owner safe point; true rebuilds committed request context. */
+    prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+}): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
@@ -3453,6 +3460,16 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             if (attempt > 1) {
+                // The previous lane/checkpoint and abortable backoff have settled.
+                // Owner preparation is local work, outside provider classification,
+                // health accounting, and the physical-attempt transport catch.
+                if (abortController.signal.aborted) throw makeAbortError();
+                if (options.purpose === 'normal-turn' && options.prepareRetry && options.getCommittedHistoryForRetry) {
+                    modelStreamEmitter.close();
+                    const contextChanged = await options.prepareRetry(abortController.signal);
+                    if (abortController.signal.aborted) throw makeAbortError();
+                    resumeFromCommittedHistory ||= contextChanged;
+                }
                 if (resumeFromCommittedHistory) {
                     modelStreamEmitter.close();
                     canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
@@ -3592,6 +3609,9 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     onDelivered: options.onPartialAssistantDelivered,
                 }) : undefined;
             try {
+                // Preparation/journal awaits can also receive Stop. Preserve
+                // ordinary abort journaling without dispatching an aborted send.
+                if (abortController.signal.aborted) throw makeAbortError();
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
                 }
