@@ -14,6 +14,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
     private LinuxAtomicJsonFile authorityFile;
     private SqliteArchiveMessageStore archive;
     private readonly string root;
+    internal Foxwarm.Images.ImageBlobStore Images { get; }
     private readonly Action<AtomicJsonWriteStage>? authorityStageHook;
     private readonly Func<int, CancellationToken, Task>? canonicalCommitBarrier;
     private int canonicalCommitCount;
@@ -37,7 +38,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
-        this.root = root; this.authorityStageHook = authorityStageHook;
+        this.root = root; Images = new(root); this.authorityStageHook = authorityStageHook;
         this.sessionId = sessionId;
         this.agent = agent;
         this.canonicalCommitBarrier = canonicalCommitBarrier;
@@ -144,7 +145,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         catch (Exception error) { throw new AuthorityCommittedException("Session authority committed, but its Main catalog projection failed.", error); }
     }
 
-    public Task<SessionSnapshot?> LoadAsync(string requestedSessionId, CancellationToken cancellationToken = default)
+    public async Task<SessionSnapshot?> LoadAsync(string requestedSessionId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (requestedSessionId != sessionId)
@@ -153,7 +154,7 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         {
             if (archive.ReadMessages().Count > 0)
                 throw new InvalidDataException("Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history.");
-            return Task.FromResult<SessionSnapshot?>(null);
+            return null;
         }
         JsonObject raw;
         try { raw = JsonNode.Parse(File.ReadAllText(authorityFile.FilePath)) as JsonObject ?? throw new InvalidDataException("Session authority must be an object."); }
@@ -161,7 +162,21 @@ public sealed class PersistentSessionAuthorityStore : ISessionAuthorityStore, IC
         var normalized = SessionCatalog.NormalizeAuthority(raw, sessionId, agent);
         if (mainFields?.Invoke() is { } main) SessionCatalog.OverlayAuthorityContext(normalized, main);
         var document = SessionAuthorityDocument.FromOwned(normalized, sessionId, agent);
-        return Task.FromResult<SessionSnapshot?>(FromAuthority(document.CloneRoot()));
+        var loaded = FromAuthority(document.CloneRoot());
+        foreach (var message in loaded.History) await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
+        foreach (var item in loaded.Queue)
+        {
+            if (item.Message is not null) await Images.ExternalizeMessageAsync(item.Message, strict: false, cancellationToken);
+            if (item.Parts is not null)
+            {
+                var wrapper = new JsonObject { ["parts"] = new JsonArray(item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()) };
+                await Images.ExternalizeMessageAsync(wrapper, strict: false, cancellationToken);
+                foreach (var (part, index) in item.Parts.Select((part, index) => (part, index)))
+                    if (wrapper["parts"] is JsonArray parts && parts.Count == item.Parts.Count) { part.Clear(); foreach (var pair in parts[index]!.AsObject()) part[pair.Key] = pair.Value?.DeepClone(); }
+            }
+        }
+        await Images.ExternalizeTreeAsync(loaded.Meta, strict: false, cancellationToken);
+        return loaded;
     }
 
     private void ValidateBoundSnapshot(SessionSnapshot snapshot)

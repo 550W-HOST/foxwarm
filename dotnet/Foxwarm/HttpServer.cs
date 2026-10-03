@@ -16,6 +16,8 @@ internal sealed class HttpServer
         builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
+        builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new Foxwarm.Images.ImageTransportConverterFactory()));
+        builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = 51L * 1024 * 1024);
         var app = builder.Build();
         app.Lifetime.ApplicationStopping.Register(sessions.BeginShutdown);
         if (distRoot is not null)

@@ -7,6 +7,28 @@ internal static class ToolOutputGuard
 {
     internal static async Task<JsonObject> GuardAsync(JsonObject response, string workspace, string callId)
     {
+        // Keep recognized image carriers outside the text guard, as Source extraction does.
+        var plain = (JsonObject)response.DeepClone(); var carriers = new JsonObject();
+        if (plain["inlineData"] is JsonObject single && Foxwarm.Images.ImageBlobStore.Mime(single).StartsWith("image/", StringComparison.Ordinal))
+        { carriers["inlineData"] = single.DeepClone(); plain.Remove("inlineData"); }
+        if (plain["inlineDataItems"] is JsonArray items)
+        {
+            var images = items.OfType<JsonObject>().Where(item => Foxwarm.Images.ImageBlobStore.Mime(item).StartsWith("image/", StringComparison.Ordinal)).ToArray();
+            if (images.Length > 0) { carriers["inlineDataItems"] = new JsonArray(images.Select(item => item.DeepClone()).ToArray()); var other = new JsonArray(items.Where(item => !images.Contains(item)).Select(item => item?.DeepClone()).ToArray()); if (other.Count > 0) plain["inlineDataItems"] = other; else plain.Remove("inlineDataItems"); }
+        }
+        if (plain["imageParts"] is JsonArray references)
+        {
+            var images = references.OfType<JsonObject>().Where(item => Foxwarm.Images.ImageBlobStore.NormalizeToolReference(item) is not null).ToArray();
+            if (images.Length > 0) { carriers["imageParts"] = new JsonArray(images.Select(item => item.DeepClone()).ToArray()); var other = new JsonArray(references.Where(item => !images.Contains(item)).Select(item => item?.DeepClone()).ToArray()); if (other.Count > 0) plain["imageParts"] = other; else plain.Remove("imageParts"); }
+        }
+        if (carriers.Count == 0) return await GuardTextAsync(response, workspace);
+        var guarded = await GuardTextAsync(plain, workspace);
+        foreach (var (key, value) in carriers)
+            if (guarded[key] is JsonArray existing && value is JsonArray extracted) foreach (var item in extracted) existing.Add(item?.DeepClone()); else guarded[key] = value?.DeepClone();
+        return guarded;
+    }
+    private static async Task<JsonObject> GuardTextAsync(JsonObject response, string workspace)
+    {
         var text = ToolResponseFormatting.Format(response);
         if (text.Length <= 40_000) return response;
         var directory = Path.Combine(workspace, ".temp", "tool-output");

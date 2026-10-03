@@ -139,6 +139,7 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 interface ChatProps {
   sessionId: string
   experimentalTextOnly?: boolean
+  experimentalImagesOnly?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
   onBack?: () => void
@@ -199,7 +200,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, experimentalImagesOnly = false, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: [], queuedMessages: [] })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
@@ -2122,6 +2123,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canon
 
       <ChatComposer
         experimentalTextOnly={experimentalTextOnly}
+        experimentalImagesOnly={experimentalImagesOnly}
         sessionId={sessionId}
         sessionMissing={sessionMissing}
         loading={loading}
@@ -2187,6 +2189,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, canon
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.experimentalTextOnly === next.experimentalTextOnly &&
+  prev.experimentalImagesOnly === next.experimentalImagesOnly &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   prev.onOpenTerminal === next.onOpenTerminal

@@ -38,7 +38,7 @@ public sealed class ResponsesHttpException(
     bool bodyTruncated)
     : HttpRequestException($"OpenAI Responses HTTP request failed with status {(int)statusCode}.", null, statusCode)
 {
-    public string ResponseBody { get; } = responseBody;
+    public string ResponseBody { get; } = Foxwarm.Images.ImageTransport.DiagnosticBody(responseBody);
     public bool BodyTruncated { get; } = bodyTruncated;
 }
 
@@ -53,7 +53,7 @@ public static partial class ResponsesRequestSerializer
             if (!message.IsModelVisible) continue;
             if (message.Role == "tool")
             {
-                AppendToolOutputs(input, message);
+                AppendToolOutputs(input, raw);
                 continue;
             }
             var role = message.Role == "model" ? "assistant" : "user";
@@ -86,9 +86,8 @@ public static partial class ResponsesRequestSerializer
                 messagePhase = next;
             }
 
-            foreach (var view in message.Parts)
+            foreach (var part in (raw["parts"] as JsonArray ?? []).OfType<JsonObject>())
             {
-                var part = view.ToJson();
                 RejectUnsupportedInput(part);
                 if (String(part, "system") is { Length: > 0 } system)
                 {
@@ -134,6 +133,8 @@ public static partial class ResponsesRequestSerializer
                         textPart["annotations"] = annotations.DeepClone();
                     content.Add(textPart);
                 }
+
+                if (role != "assistant" && ProviderImageParts.Block(part, "responses") is { } imageBlock) content.Add(imageBlock);
 
                 if (part["functionCall"] is JsonObject functionCall)
                 {
@@ -222,41 +223,13 @@ public static partial class ResponsesRequestSerializer
         ["strict"] = false
     });
 
-    private static void AppendToolOutputs(JsonArray input, CanonicalMessage message)
+    private static void AppendToolOutputs(JsonArray input, JsonObject message)
     {
-        var grouped = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var order = new List<string>();
-        foreach (var view in message.Parts)
+        foreach (var group in ProviderImageParts.ToolGroups((message["parts"] as JsonArray ?? []).OfType<JsonObject>()))
         {
-            var part = view.ToJson();
-            if (part["functionResponse"] is not JsonObject functionResponse) continue;
-            var callId = String(functionResponse, "tool_use_id") ?? String(part, "toolUseId");
-            if (string.IsNullOrEmpty(callId))
-                throw new UnsupportedResponsesFeatureException("tool response without stable call ID");
-            if (!grouped.TryGetValue(callId, out var outputs))
-            {
-                outputs = new List<string>();
-                grouped.Add(callId, outputs);
-                order.Add(callId);
-            }
-            if (OpenAIRequestText.PreviousRequest(functionResponse) is string timing) outputs.Insert(0, timing);
-            var output = FormatToolResponsePayload(functionResponse["response"] as JsonObject ?? new JsonObject());
-            if (output.Length > 0) outputs.Add(output);
-        }
-        foreach (var callId in order)
-        {
-            var outputs = grouped[callId];
-            input.Add(new JsonObject
-            {
-                ["type"] = "function_call_output",
-                ["call_id"] = callId,
-                ["output"] = outputs.Count switch
-                {
-                    0 => "",
-                    1 => outputs[0],
-                    _ => new JsonArray(outputs.Select(output => (JsonNode)new JsonObject { ["type"] = "input_text", ["text"] = output }).ToArray())
-                }
-            });
+            var blocks = ProviderImageParts.GroupBlocks(group.Parts, "responses");
+            JsonNode output = blocks.Count == 0 ? JsonValue.Create("")! : blocks.Count == 1 && String(blocks[0] as JsonObject, "type") == "input_text" ? blocks[0]!["text"]!.DeepClone() : blocks;
+            input.Add(new JsonObject { ["type"] = "function_call_output", ["call_id"] = group.Id, ["output"] = output });
         }
     }
 
@@ -340,7 +313,7 @@ public static partial class ResponsesRequestSerializer
 
     private static void RejectUnsupportedInput(JsonObject part)
     {
-        foreach (var property in new[] { "functionResponse", "inlineData", "inlineDataRef" })
+        foreach (var property in new[] { "functionResponse" })
             if (part[property] is not null) throw new UnsupportedResponsesFeatureException($"message part {property}");
         if (part["providerMeta"]?["openaiResponses"]?["outputItem"] is not null)
             throw new UnsupportedResponsesFeatureException("native Responses output-item replay");

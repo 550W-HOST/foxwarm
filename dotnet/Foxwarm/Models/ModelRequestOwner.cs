@@ -5,7 +5,7 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Models;
 
 internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions defaults, ModelRouting routing,
-    Func<int, CancellationToken, Task>? delay = null, ResponsesWsTransport? websockets = null)
+    Func<int, CancellationToken, Task>? delay = null, ResponsesWsTransport? websockets = null, Foxwarm.Images.ImageBlobStore? images = null, string imageOutputFormat = "webp")
 {
     internal static int RetryDelay(int failedAttempt) => failedAttempt switch { <= 1 => 2000, 2 => 5000, 3 => 10000, 4 => 20000, 5 => 40000, _ => 60000 };
 
@@ -52,6 +52,11 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
             var requestDefaults = definitions is null ? defaults : defaults with { Tools = definitions() };
             var options = ConfiguredModelRequests.Plan(leaf, requestDefaults, effort, instructions, providerCache, turnId);
             var prepared = ConcreteRequestHistory.Prepare(history, leaf.Key);
+            if (images is not null)
+            {
+                try { prepared = await images.HydrateAsync(prepared, leaf.ProviderType == "openai-completions" ? "completions" : leaf.ProviderType is "openai" or "openai-responses" or "openai-ws" ? "responses" : "anthropic", outputFormat: imageOutputFormat, token: cancellationToken); }
+                catch (Foxwarm.Images.ImageInputException error) { throw new ModelPreparationException(error.Message, error); }
+            }
             var service = ConfiguredModelRequests.CreatePreparedService(http, leaf, options, providerCache, progress, websockets, scope);
             beginAttempt?.Invoke();
             ModelAttemptFailure failure; ChatResult? result = null; var succeeded = false;

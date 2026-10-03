@@ -37,7 +37,7 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
         }
     }
     private string SafeError(string message, params JsonObject[] configs)
-    { try { return configuration.Redact(message, configs); } catch { return "MCP operation failed; error detail is unavailable."; } }
+    { try { return Foxwarm.Images.ImageTransport.DiagnosticBody(configuration.Redact(message, configs)); } catch { return "MCP operation failed; error detail is unavailable."; } }
 
     internal Task<JsonObject> ConfigureAsync(JsonObject args, CancellationToken cancellationToken) => RunAsync(async token =>
     {
@@ -140,8 +140,8 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
                 }
                 var owned = result.Result is JsonObject obj ? (JsonObject)obj.DeepClone() : throw new InvalidDataException("MCP tools/call returned a non-object result.");
                 if (owned["content"] is JsonArray content && content.Any(UnsupportedContent))
-                    throw new NotSupportedException("MCP result contains unsupported image, audio, or binary content. The server call completed; its effects were not reversed.");
-                return NormalizeResult(owned);
+                    throw new NotSupportedException("MCP result contains unsupported audio or binary content. The server call completed; its effects were not reversed.");
+                return NormalizeResult(NormalizeImages(owned));
             });
         }
         catch (Exception error) when (!token.IsCancellationRequested) { throw new InvalidOperationException(SafeError(error.Message, config)); }
@@ -150,7 +150,20 @@ internal sealed partial class McpClient(string root) : IAsyncDisposable
     private static bool UnsupportedContent(JsonNode? value)
     {
         var kind = SessionWait.Text(value?["type"]);
-        return kind is "image" or "audio" || kind == "resource" && value?["resource"] is JsonObject resource && resource["blob"] is not null;
+        return kind is "audio" || kind == "resource" && value?["resource"] is JsonObject resource && resource["blob"] is not null;
+    }
+    private static JsonObject NormalizeImages(JsonObject result)
+    {
+        if (result["content"] is not JsonArray content) return result;
+        var kept = new JsonArray(); var images = result["inlineDataItems"] as JsonArray ?? new JsonArray();
+        foreach (var item in content)
+            if (item is JsonObject image && SessionWait.Text(image["type"]) == "image" && SessionWait.Text(image["data"]) is string data && SessionWait.Text(image["mimeType"]) is { } mime && mime.StartsWith("image/", StringComparison.Ordinal))
+            { var copy = (JsonObject)image.DeepClone(); copy.Remove("type"); images.Add(copy); }
+            else kept.Add(item?.DeepClone());
+        if (images.Count == 0) return result;
+        if (kept.Count == 0) result.Remove("content"); else result["content"] = kept;
+        if (images.Parent is null) result["inlineDataItems"] = images;
+        return result;
     }
     private static JsonObject NormalizeResult(JsonObject result)
     {

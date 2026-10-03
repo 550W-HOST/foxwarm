@@ -219,6 +219,7 @@ internal static class CompactCandidateBuilder
     }
     public static string Preview(JsonObject row, bool skipSystem)
     {
+        row = (JsonObject)Foxwarm.Images.ImageTokenEstimate.Sanitize(Foxwarm.Images.ImageTransport.Project(row)).Value!;
         var pieces = new List<string>();
         foreach (var part in (row["parts"] as JsonArray)?.OfType<JsonObject>() ?? [])
         {

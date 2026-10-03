@@ -11,9 +11,11 @@ public sealed class SessionIdentityRecoveryTests
     private static SessionManager Manager(string data, string work) => new(data, work, Options, HostModels.ForTest(Options));
 
     [Theory]
-    [InlineData("rolling-back")]
-    [InlineData("finishing")]
-    public async Task Directional_recovery_selects_existing_legacy_metadata_before_ordinary_source_migration(string phase)
+    [InlineData("rolling-back", 1)]
+    [InlineData("finishing", 1)]
+    [InlineData("rolling-back", 2)]
+    [InlineData("finishing", 2)]
+    public async Task Directional_recovery_selects_existing_legacy_metadata_before_ordinary_source_migration(string phase, int version)
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); string catalogPath; JsonObject row;
         await using (var seed = Manager(data, work))
@@ -23,7 +25,9 @@ public sealed class SessionIdentityRecoveryTests
         }
         File.Delete(catalogPath); File.Delete(catalogPath + "-wal"); File.Delete(catalogPath + "-shm");
         var journal = new SessionIdentityMoveJournal(data); var database = Path.Combine(data, "state", "archive-store.sqlite");
-        journal.MoveArtifacts("old", "new"); SqliteArchiveIdentityMove.Rename(database, "old", "new");
+        var originalImages = Path.Combine(data, "state", "sessions-blob", "old.images"); var targetImages = Path.Combine(data, "state", "sessions-blob", "new.images");
+        Directory.CreateDirectory(originalImages); await File.WriteAllTextAsync(Path.Combine(originalImages, "retained.txt"), "Original legacy bytes.");
+        journal.MoveArtifacts("old", "new", version); SqliteArchiveIdentityMove.Rename(database, "old", "new");
         if (phase == "finishing")
         {
             row["id"] = "new"; row["aliases"] = new JsonArray("old");
@@ -31,10 +35,13 @@ public sealed class SessionIdentityRecoveryTests
             await File.WriteAllTextAsync(journal.AuthorityPath("new"), raw.ToJsonString());
         }
         await File.WriteAllTextAsync(Path.Combine(data, "state", "sessions.json"), new JsonObject { ["sessions"] = new JsonObject { [phase == "finishing" ? "new" : "old"] = row } }.ToJsonString());
-        journal.Write(new(phase, "old", "new", "main", [], false, null, 1000));
+        journal.Write(new(phase, "old", "new", "main", [], false, null, 1000, version));
         await using var recovered = Manager(data, work); await recovered.LoadAsync(); var ownerAfter = await recovered.RequiredAsync("old");
         Assert.Equal(phase == "finishing" ? "new" : "old", ownerAfter.Id); Assert.Equal("Original immutable audit", ownerAfter.Entry.Snapshot().History[0]["parts"]![0]!["text"]!.GetValue<string>());
         Assert.Single(ownerAfter.Archive.ReadMessages()); Assert.Equal(ownerAfter.Id, ownerAfter.Archive.ReadMessages().Single().SessionId); Assert.False(File.Exists(journal.FilePath));
+        var retainedImages = version == 1 && phase == "finishing" ? targetImages : originalImages;
+        Assert.Equal("Original legacy bytes.", await File.ReadAllTextAsync(Path.Combine(retainedImages, "retained.txt")));
+        Assert.Equal(version == 1 && phase == "finishing", Directory.Exists(targetImages));
         Assert.True(File.Exists(catalogPath)); Assert.True(File.Exists(Path.Combine(data, "state", "sessions.json.pre-catalog-sqlite-v1.bak")));
         if (phase == "finishing") await Assert.ThrowsAsync<InvalidDataException>(() => recovered.CreateNamedAsync("main", "old", null, null));
     }

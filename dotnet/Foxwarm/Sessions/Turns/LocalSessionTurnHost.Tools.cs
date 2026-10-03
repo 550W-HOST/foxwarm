@@ -48,7 +48,17 @@ public sealed partial class LocalSessionTurnHost
             var response = new JsonObject { ["tool_use_id"] = SessionWait.Text(call["id"]) ?? throw new InvalidOperationException("Canonical function call is missing its stable ID."), ["name"] = SessionWait.Text(call["name"]) ?? "", ["response"] = result.Response.DeepClone() };
             if (result.Timing is not null) response["executionTiming"] = result.Timing.DeepClone();
             if (result.Response["error"] is null && result.ResolvedPaths is { Count: > 0 } paths) response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
-            parts.Add(new JsonObject { ["functionResponse"] = response });
+            var wrapper = new JsonObject { ["role"] = "tool", ["parts"] = new JsonArray(new JsonObject { ["functionResponse"] = response }) };
+            if (store is PersistentSessionAuthorityStore persistent)
+            {
+                try { await persistent.Images.ExternalizeMessageAsync(wrapper); }
+                catch (Foxwarm.Images.ImageInputException error)
+                {
+                    response["response"] = UnsupportedTurnToolExecutor.ToolError("image_materialization_failed", error.Message + " The tool call completed; its effects were not reversed.");
+                    response.Remove("__meta"); wrapper["parts"] = new JsonArray(new JsonObject { ["functionResponse"] = response.DeepClone() });
+                }
+            }
+            foreach (var part in wrapper["parts"]!.AsArray()) parts.Add(part!.DeepClone());
         }
         return parts;
     }

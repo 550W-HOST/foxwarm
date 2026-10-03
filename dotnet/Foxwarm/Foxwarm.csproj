@@ -7,6 +7,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
     <Content Include="../../templates/agents/00_SYSTEM.md" Link="templates/agents/00_SYSTEM.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../templates/main/memory/**/*" Link="templates/main/memory/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../templates/models.example.yaml" Link="templates/models.example.yaml" CopyToOutputDirectory="PreserveNewest" />

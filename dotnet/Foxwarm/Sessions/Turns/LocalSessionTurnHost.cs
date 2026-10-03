@@ -10,6 +10,7 @@ namespace Foxwarm.Sessions;
 public sealed partial class LocalSessionTurnHost
 {
     private readonly SessionEntry entry;
+    private readonly ISessionAuthorityStore store;
     private readonly IChatService chat;
     private readonly ITurnToolExecutor tools;
     private readonly int maxToolIterations;
@@ -28,7 +29,7 @@ public sealed partial class LocalSessionTurnHost
         Func<Task>? safePoint = null,
         Func<ChatResult, Task>? automaticCompact = null)
     {
-        this.entry = entry;
+        this.entry = entry; this.store = store;
         this.chat = chat;
         this.tools = tools ?? new UnsupportedTurnToolExecutor();
         this.maxToolIterations = maxToolIterations > 0 ? maxToolIterations : throw new ArgumentOutOfRangeException(nameof(maxToolIterations));
@@ -132,6 +133,7 @@ public sealed partial class LocalSessionTurnHost
 
     private async Task<IReadOnlyList<JsonObject>> AppendHistoryMessageStrictAsync(JsonObject message)
     {
+        if (store is PersistentSessionAuthorityStore persistent) await persistent.Images.ExternalizeMessageAsync(message);
         var rows = await entry.SaveLane.CommitCanonicalAppendWithResultAsync(state =>
             PrepareCanonicalAppend(state, [message], [], updateLastMessageTime: false, finalizing: false, clock)).ConfigureAwait(false);
         entry.InvokeCommitted(entry.Snapshot());

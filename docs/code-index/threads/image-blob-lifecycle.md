@@ -4,6 +4,8 @@
 
 Cross-module lifecycle for image bytes from transient ingress through canonical session/archive persistence, provider requests, image tools, authenticated WebUI transport, and retained archive lifetime.
 
+The ordinary .NET Main input-only adapter has its canonical scope, staging difference, codec prerequisite and v1/v2 legacy-image retention in [Main input-images](../units/dotnet.md#main-input-images). It does not implement the generation or image-tool stages below.
+
 ## Flow
 
 1. Channels, including the authorization-gated QQ Bot C2C/group media

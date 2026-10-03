@@ -9,16 +9,16 @@ internal static class AnthropicRequestSerializer
     internal static JsonArray ConvertHistory(IEnumerable<JsonObject> history, Uri baseUri)
     {
         var messages = new JsonArray();
-        foreach (var message in history.Select(CanonicalMessage.FromNode).Where(message => message.IsModelVisible))
+        foreach (var raw in history)
         {
-            var raw = message.ToJson();
+            var message = CanonicalMessage.FromNode(raw); if (!message.IsModelVisible) continue;
             var role = message.Role == "model" ? "assistant" : message.Role == "tool" ? "user" : message.Role;
             var blocks = new JsonArray();
-            foreach (var view in message.Parts)
+            var parts = (raw["parts"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
+            foreach (var part in parts)
             {
-                var part = view.ToJson();
-                if (part["inlineData"] is not null || part["inlineDataRef"] is not null)
-                    throw new ModelPreparationException("Anthropic native input/blob hydration is not implemented.");
+                if (message.Role == "tool" && ProviderImageParts.IsImage(part) && SessionWait.Text(part["toolUseId"]) is { Length: > 0 }) continue;
+                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated" && ProviderImageParts.Block(part, "anthropic") is { } imageBlock) blocks.Add(imageBlock);
                 if (CompletionsRequestSerializer.Truthy(part["thinking"]) && CompletionsRequestSerializer.Truthy(part["providerMeta"]?["signature"]))
                     blocks.Add(new JsonObject { ["type"] = "thinking", ["thinking"] = part["thinking"]!.DeepClone(), ["signature"] = part["providerMeta"]!["signature"]!.DeepClone() });
                 if (SessionWait.Text(part["system"]) is { Length: > 0 } system)
@@ -36,8 +36,17 @@ internal static class AnthropicRequestSerializer
                     var id = SessionWait.Text(response["tool_use_id"]) ?? SessionWait.Text(part["toolUseId"]) ?? "unknown";
                     var output = ToolResponseFormatting.Format(CompletionsRequestSerializer.Truthy(response["response"]) ? response["response"] : new JsonObject());
                     var prefix = OpenAIRequestText.PreviousRequest(response);
+                    var associated = parts.Where(image => ProviderImageParts.IsImage(image) && SessionWait.Text(image["toolUseId"]) == id).ToArray();
+                    var resultContent = new JsonArray();
+                    var textOutput = prefix is null ? output : prefix + (output.Length > 0 ? "\n" + output : "");
+                    if (textOutput.Length > 0) resultContent.Add(Text(textOutput));
+                    foreach (var image in associated)
+                    {
+                        if (SessionWait.Text(image["text"]) is { Length: > 0 } label) resultContent.Add(Text(label));
+                        if (ProviderImageParts.Block(image, "anthropic") is { } imageResult) resultContent.Add(imageResult);
+                    }
                     var result = new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id,
-                        ["content"] = prefix is null ? output : prefix + (output.Length > 0 ? "\n" + output : "") };
+                        ["content"] = associated.Length > 0 ? resultContent : JsonValue.Create(textOutput) };
                     if (baseUri.AbsoluteUri.StartsWith("https://api.kimi.com/", StringComparison.Ordinal)
                         && !blocks.OfType<JsonObject>().Any(block => SessionWait.Text(block["type"]) == "thinking")) result["reasoning_content"] = "";
                     blocks.Add(result);

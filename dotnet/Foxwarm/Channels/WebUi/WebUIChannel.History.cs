@@ -62,8 +62,9 @@ internal sealed partial class WebUIChannel
                 || index is <= 0 or > 9007199254740991L)
                 return Results.BadRequest(new { error = "seq must be a positive safe integer." });
             var record = hosted.Archive.ReadEffectiveMessagesRange(index, index).FirstOrDefault();
+            if (record is not null) await sessions.Images.ExternalizeMessageAsync(record.Message, strict: false, request.HttpContext.RequestAborted);
             return record is null ? Results.NotFound(new { error = "Archived message not found" })
-                : Results.Ok(new { seq = record.Seq, message = record.Message, messageJson = record.MessageJson, sourceSessionId = record.SessionId, inherited = record.SessionId != hosted.Id });
+                : Results.Ok(new { seq = record.Seq, message = record.Message, messageJson = EcmaJson.Stringify(Foxwarm.Images.ImageTransport.Project(record.Message)!), sourceSessionId = record.SessionId, inherited = record.SessionId != hosted.Id });
         });
         app.MapGet("/api/sessions/{id}/context-blocks/{blockId}/expand", async (string id, string blockId, HttpRequest request) =>
         {
@@ -78,6 +79,7 @@ internal sealed partial class WebUIChannel
                     || preview is < 1 or > 20000))
                 return Results.BadRequest(new { error = "previewLength must be a positive integer at most 20000." });
             var result = ContextBlockExpansion.Render(hosted.Archive, hosted.Id, index, preview);
+            if (result is not null) await sessions.Images.ExternalizeTreeAsync(result, strict: false, request.HttpContext.RequestAborted);
             return result is null ? Results.NotFound(new { error = $"CTX-BLOCK B#{index} not found.", code = "CTX_BLOCK_NOT_FOUND" })
                 : Results.Ok(result);
         });

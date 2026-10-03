@@ -185,7 +185,7 @@ internal sealed partial class SessionManager
             await owner.Entry.SaveLane.MutateIdentityAsync(async () =>
             {
                 owner.Entry.RequireIdentityAuthority(); await IdentityStageAsync(operation, "before-mutation");
-                mutated = true; details["stage"] = "paths"; IdentityJournal.MoveArtifacts(record.OldId, record.NewId); details["pathsMoved"] = true;
+                mutated = true; details["stage"] = "paths"; IdentityJournal.MoveArtifacts(record.OldId, record.NewId, record.Version); details["pathsMoved"] = true;
                 details["stage"] = "archive"; SqliteArchiveIdentityMove.Rename(ArchiveDatabase, record.OldId, record.NewId); details["archiveMoved"] = true;
                 RebindIdentityOwner(owner, record.NewId, record.TargetAgent);
                 owner.Entry.WithState(state => { state.AuthorityEnvelope["aliases"] = new JsonArray(aliases.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()); if (SessionCatalog.Text(state.AuthorityEnvelope["parentSessionId"]) == record.OldId) state.AuthorityEnvelope["parentSessionId"] = record.NewId; });
@@ -215,7 +215,7 @@ internal sealed partial class SessionManager
                 {
                     async Task Attempt(Func<Task> action) { try { await action(); } catch (Exception error) { errors.Add(error); } }
                     await Attempt(async () => { await IdentityStageAsync(operation, "reverse-archive"); SqliteArchiveIdentityMove.Rename(ArchiveDatabase, record.NewId, record.OldId); });
-                    await Attempt(() => { IdentityJournal.MoveArtifacts(record.NewId, record.OldId); return Task.CompletedTask; });
+                    await Attempt(() => { IdentityJournal.MoveArtifacts(record.NewId, record.OldId, record.Version); return Task.CompletedTask; });
                     await Attempt(() => { RebindIdentityOwner(owner, record.OldId, record.OldAgent); owner.Entry.WithState(state => state.AuthorityEnvelope["aliases"] = new JsonArray(record.OldAliases.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray())); return Task.CompletedTask; });
                     await Attempt(() => { if (Catalog.Get(record.NewId) is not null) Catalog.RewriteIdentity(record.NewId, record.OldId, record.OldAgent, record.OldAliases); return Task.CompletedTask; });
                     await Attempt(() => { deletionChannels.RewriteIdentity(record.NewId, record.OldId); return Task.CompletedTask; });

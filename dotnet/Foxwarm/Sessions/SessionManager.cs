@@ -12,6 +12,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 {
     private readonly PendingWriteRefs pendingWrites = new();
     private readonly string root;
+    internal Foxwarm.Images.ImageBlobStore Images { get; }
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
     internal readonly SessionCatalog Catalog;
@@ -35,6 +36,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal bool HandoffConfirmationEnabled { get; }
     public SessionManager(string root, string workspace, ResponsesClientOptions options, HostModels models, string? skillsRoot = null)
     {
+        Images = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var workspaceRoot = Path.GetFullPath(workspace);
@@ -184,7 +186,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var hosted = new SessionOwner(id, agent, models) { ResolveAncestry = CatalogMetadata, MainMetadata = OverlayMainMetadata };
         hosted.Archive = store.Archive; hosted.AuthorityStore = store;
         hosted.Executor = executor;
-        var requests = new ModelRequestOwner(http, clientOptions, modelRouting, websockets: websockets);
+        var requests = new ModelRequestOwner(http, clientOptions, modelRouting, websockets: websockets, images: Images, imageOutputFormat: models.ConfigurationOwner?.ProviderImageOutputFormat ?? "webp");
         var chat = new SessionChatService(requests, clientOptions, hosted, models, memory, (sessionId, update) =>
         {
             hosted.PublishDraftProgress(update);

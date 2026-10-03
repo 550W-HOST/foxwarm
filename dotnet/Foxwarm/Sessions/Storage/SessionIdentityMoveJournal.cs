@@ -3,12 +3,12 @@ using System.Text.Json.Nodes;
 namespace Foxwarm.Sessions;
 
 internal sealed record SessionIdentityMoveRecord(string Phase, string OldId, string NewId, string OldAgent,
-    string[] OldAliases, bool OwnsAgent, string? OwnedAgent, long CreatedAt)
+    string[] OldAliases, bool OwnsAgent, string? OwnedAgent, long CreatedAt, int Version = 2)
 {
     internal string TargetAgent => SessionIdentity.Agent(NewId);
     internal JsonObject Json() => new()
     {
-        ["v"] = 1, ["phase"] = Phase, ["oldSessionId"] = OldId, ["newSessionId"] = NewId,
+        ["v"] = Version, ["phase"] = Phase, ["oldSessionId"] = OldId, ["newSessionId"] = NewId,
         ["oldAgent"] = OldAgent, ["oldAliases"] = new JsonArray(OldAliases.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
         ["ownsTargetAgentDirectory"] = OwnsAgent, ["targetAgentName"] = OwnedAgent, ["createdAt"] = CreatedAt
     };
@@ -30,7 +30,8 @@ internal sealed class SessionIdentityMoveJournal(string root)
         try { row = JsonNode.Parse(File.ReadAllText(FilePath)) as JsonObject ?? throw new InvalidDataException("Identity move intent must be an object."); }
         catch (FileNotFoundException) { return null; } catch (DirectoryNotFoundException) { return null; }
         var phase = SessionCatalog.Text(row["phase"]); var old = SessionCatalog.Text(row["oldSessionId"]); var target = SessionCatalog.Text(row["newSessionId"]);
-        if (SessionCatalog.Number(row["v"]) != 1 || phase is not ("rolling-back" or "finishing") || old is null || target is null || old == target
+        var version = SessionCatalog.Number(row["v"]);
+        if (version is not (1 or 2) || phase is not ("rolling-back" or "finishing") || old is null || target is null || old == target
             || row["oldAliases"] is not JsonArray aliases || aliases.Any(value => SessionCatalog.Text(value) is null)
             || row["ownsTargetAgentDirectory"] is not JsonValue owns || !owns.TryGetValue<bool>(out var ownsAgent))
             throw new InvalidDataException("Identity move intent lacks valid direction or ownership evidence.");
@@ -40,7 +41,7 @@ internal sealed class SessionIdentityMoveJournal(string root)
         var owned = SessionCatalog.Text(row["targetAgentName"]);
         if (ownsAgent && (owned is null || owned == "main" || owned == agent || owned != SessionIdentity.Agent(target)) || !ownsAgent && owned is not null)
             throw new InvalidDataException("Identity move intent cannot prove ownership of its destination directory.");
-        return new(phase, old, target, agent, names, ownsAgent, owned, (long)(SessionCatalog.Number(row["createdAt"]) ?? 0));
+        return new(phase, old, target, agent, names, ownsAgent, owned, (long)(SessionCatalog.Number(row["createdAt"]) ?? 0), (int)version!.Value);
     }
     internal void Write(SessionIdentityMoveRecord record) => new LinuxAtomicJsonFile(root, "state/session-id-move-pending.json").WritePayload(record.Json());
     internal void Clear()
@@ -56,9 +57,12 @@ internal sealed class SessionIdentityMoveJournal(string root)
                 throw new InvalidDataException("Identity artifact parent cannot be a symbolic link.");
         return path;
     }
-    internal void MoveArtifacts(string from, string to)
+    internal void MoveArtifacts(string from, string to, int version = 2)
     {
-        foreach (var (area, suffix) in new[] { ("state/sessions", ".json"), ("logs/sessions", ".jsonl"), ("logs/sessions", ".blocks.jsonl"), ("state/sessions", ".frontier.json"), ("state/sessions-blob", ".images") })
+        if (version is not (1 or 2)) throw new InvalidDataException("Unsupported identity move intent version.");
+        var artifacts = new List<(string, string)> { ("state/sessions", ".json"), ("logs/sessions", ".jsonl"), ("logs/sessions", ".blocks.jsonl"), ("state/sessions", ".frontier.json") };
+        if (version == 1) artifacts.Add(("state/sessions-blob", ".images"));
+        foreach (var (area, suffix) in artifacts)
         {
             var source = Artifact(area, from, suffix); var target = Artifact(area, to, suffix);
             if (!File.Exists(source) && !Directory.Exists(source)) continue;

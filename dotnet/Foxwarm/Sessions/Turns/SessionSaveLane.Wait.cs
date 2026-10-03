@@ -22,6 +22,17 @@ public sealed partial class SessionSaveLane
         await EnqueueOperationAsync(async () =>
         {
             using var admission = entry.AdmitMutation();
+            if (store is PersistentSessionAuthorityStore persistent)
+            {
+                item = item.CloneItem();
+                if (item.Message is not null) await persistent.Images.ExternalizeMessageAsync(item.Message);
+                if (item.Parts is not null)
+                {
+                    var wrapper = new JsonObject { ["parts"] = new JsonArray(item.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()) };
+                    await persistent.Images.ExternalizeMessageAsync(wrapper);
+                    item = item with { Parts = wrapper["parts"]!.AsArray().OfType<JsonObject>().Select(part => (JsonObject)part.DeepClone()).ToArray() };
+                }
+            }
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();

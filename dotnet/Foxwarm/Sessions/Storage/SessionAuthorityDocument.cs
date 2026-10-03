@@ -60,9 +60,9 @@ public sealed class SessionAuthorityDocument
         {
             var part = partNode as JsonObject
                 ?? throw new InvalidDataException($"{label}.parts[{partIndex}] must be an object.");
-            foreach (var unsupported in new[] { "inlineData", "inlineDataRef", "imageMeta" })
-                if (part.ContainsKey(unsupported))
-                    throw new UnsupportedSessionAuthorityException($"{label}.parts[{partIndex}].{unsupported} is not supported by Slice C1.");
+            foreach (var imageField in new[] { "inlineData", "inlineDataRef", "imageMeta" })
+                if (part[imageField] is JsonNode image && image is not JsonObject)
+                    throw new InvalidDataException($"{label}.parts[{partIndex}].{imageField} must be an object.");
             if (part["functionCall"] is JsonNode callNode && callNode is not JsonObject)
                 throw new InvalidDataException($"{label}.parts[{partIndex}].functionCall must be an object.");
             if (part["functionResponse"] is JsonNode responseNode && responseNode is not JsonObject)

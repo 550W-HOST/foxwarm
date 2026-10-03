@@ -24,6 +24,7 @@ internal sealed partial class ModelConfiguration
     public HostModels Models { get; }
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
     internal bool HandoffConfirmationEnabled { get; }
+    internal string ProviderImageOutputFormat { get; }
     public int MaxOutput { get; }
     public double CompactKeep { get; }
     public double CompactThreshold { get; }
@@ -34,6 +35,8 @@ internal sealed partial class ModelConfiguration
         AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
         app = ConfigurationYaml.Parse(AppRaw, "app config"); HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app); var llm = app["llm"] as JsonObject;
         MaxOutput = HostModels.Positive(llm?["maxOutput"], 32768, "llm.maxOutput");
+        var imageOutput = llm?["providerImageOutputFormat"];
+        ProviderImageOutputFormat = llm?.ContainsKey("providerImageOutputFormat") != true ? "webp" : SessionWait.Text(imageOutput) is "webp" or "jpeg" ? SessionWait.Text(imageOutput)! : throw new InvalidDataException("llm.providerImageOutputFormat must be webp or jpeg.");
         double Fraction(string key, double fallback)
         {
             var raw = llm?[key]; if (raw is null && key == "compactKeepPercent") raw = llm?["compactPercent"];

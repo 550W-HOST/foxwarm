@@ -41,7 +41,7 @@ internal sealed partial class SessionManager
                 if (backward && record.OwnsAgent && metadata.HasOtherAgentLifetime(record.OwnedAgent!, record.NewId))
                     throw new InvalidDataException("Owned identity destination contains another Main lifetime; preserve its directory.");
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
-                IdentityJournal.MoveArtifacts(from, to);
+                IdentityJournal.MoveArtifacts(from, to, record.Version);
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, from, to);
                 if (raw.ContainsKey("id")) raw["id"] = to;
                 raw["agent"] = agent; raw["aliases"] = new JsonArray(aliases.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());

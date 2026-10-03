@@ -10,6 +10,16 @@ namespace Foxwarm.Tests;
 
 public sealed class CompactLifecycleTests
 {
+    [Fact]
+    public async Task Actual_image_history_compacts_without_payloads_and_keeps_original_Archive_and_blob_references()
+    {
+        await using var fixture = await CompactFixture.CreateAsync(); var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png); await fixture.SeedAsync(bytes);
+        var image = fixture.Owner.Entry.Snapshot().History[0]["parts"]!.AsArray().OfType<JsonObject>().Single(part => part["inlineDataRef"] is not null); var reference = image["inlineDataRef"]!.AsObject();
+        var audit = fixture.Store.Archive.ReadMessages().Select(row => row.MessageJson).ToArray(); Assert.DoesNotContain(Convert.ToBase64String(bytes), string.Join('\n', audit));
+        await fixture.Owner.Compactor.StartManualAsync(); await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5)); fixture.Peer.ReleasePlan(); await fixture.Owner.Compactor.DrainAsync(); await fixture.Owner.DrainForegroundAsync();
+        Assert.Single(fixture.Store.Archive.ReadBlocks()); Assert.Contains(fixture.Owner.Entry.Snapshot().History, row => row["__meta"]?["contextBlock"] is JsonObject); Assert.Equal(audit, fixture.Store.Archive.ReadMessages().Take(audit.Length).Select(row => row.MessageJson));
+        Assert.Equal(bytes, await fixture.Store.Images.ReadAsync(reference)); var transport = Foxwarm.Images.ImageTransport.Project(fixture.Store.Archive.ReadMessages()[0].Message)!.ToJsonString(); Assert.Contains("/blobs/", transport); Assert.DoesNotContain(Convert.ToBase64String(bytes), transport);
+    }
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -214,7 +224,7 @@ public sealed class CompactLifecycleTests
             var models = HostModels.Parse(JsonNode.Parse("""{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000},"b":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire-b"],"contextLimit":20000}}}""")!.AsObject(), new JsonObject());
             if (!background) models = HostModels.Parse(JsonNode.Parse("""{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000,"asyncCompact":false}}}""")!.AsObject(), new JsonObject());
             var agents = new AgentCatalog(data, work); var skills = new Skills(agents, Path.Combine(temp.Path, "skills")); var memory = new AgentMemory(agents, skills);
-            Owner = new SessionOwner("s", "main", models) { Archive = Store.Archive }; var requests = new ModelRequestOwner(http, options, new ModelRouting());
+            Owner = new SessionOwner("s", "main", models) { Archive = Store.Archive }; var requests = new ModelRequestOwner(http, options, new ModelRouting(), images: Store.Images);
             var chat = new SessionChatService(requests, options, Owner, models, memory, (_, _) => { });
             Owner.Registry = new SessionRegistry(Store, chat); Owner.Registry.Add("s");
             Owner.Compactor = new SessionCompactor(Owner, Store, models, options, requests, memory);
@@ -222,7 +232,7 @@ public sealed class CompactLifecycleTests
             Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
         }
         internal static async Task<CompactFixture> CreateAsync(bool background = true) { var fixture = new CompactFixture(background); await fixture.Owner.Entry.SaveLane.SaveStrictAsync(); return fixture; }
-        internal async Task SeedAsync() { for (var i = 0; i < 7; i++) { await Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("seed " + i + " " + new string('x', 5000))); await Owner.DrainForegroundAsync(); } }
+        internal async Task SeedAsync(byte[]? image = null) { for (var i = 0; i < 7; i++) { var seedText = "seed " + i + " " + new string('x', 5000); var item = QueueItem.UserText(seedText); if (i == 0 && image is not null) item = item with { Parts = [new JsonObject { ["text"] = seedText }, new JsonObject { ["inlineData"] = new JsonObject { ["mimeType"] = "image/png", ["data"] = Convert.ToBase64String(image) } }] }; await Owner.Registry.Ingress.EnqueueAsync("s", item); await Owner.DrainForegroundAsync(); } }
         public async ValueTask DisposeAsync()
         {
             StageRelease.Set(); ApplyRelease.Set(); Peer.ReleaseForeground(); Peer.ReleasePlan();

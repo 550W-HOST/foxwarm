@@ -8,36 +8,35 @@ internal static class CompletionsRequestSerializer
 {
     internal static JsonArray ConvertHistory(IReadOnlyList<JsonObject> history, string concreteModelId, string reasoningField)
     {
-        var result = new JsonArray();
+        var result = new JsonArray(); var pendingToolImages = new JsonArray();
+        void FlushToolImages()
+        {
+            if (pendingToolImages.Count == 0) return;
+            result.Add(new JsonObject { ["role"] = "user", ["content"] = pendingToolImages.DeepClone() }); pendingToolImages.Clear();
+        }
         foreach (var raw in history)
         {
             var message = CanonicalMessage.FromNode(raw);
             if (!message.IsModelVisible) continue;
-            var parts = message.Parts.Select(part => part.ToJson()).ToArray();
-            foreach (var part in parts)
-                if (part["inlineData"] is not null || part["image"] is not null || part["imageMeta"] is not null)
-                    throw new ModelPreparationException("Chat Completions image/blob projection is not implemented.");
+            var parts = (raw["parts"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
             if (message.Role == "tool")
             {
-                var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-                foreach (var part in parts)
+                foreach (var group in ProviderImageParts.ToolGroups(parts))
                 {
-                    if (part["functionResponse"] is not JsonObject response) continue;
-                    var id = SessionWait.Text(response["tool_use_id"]) ?? SessionWait.Text(part["toolUseId"]);
-                    if (string.IsNullOrEmpty(id)) throw new ModelPreparationException("Chat Completions tool response needs a stable call ID; the legacy fallback is not implemented.");
-                    if (!groups.TryGetValue(id, out var outputs)) groups.Add(id, outputs = []);
-                    if (OpenAIRequestText.PreviousRequest(response) is string time) outputs.Insert(0, time);
-                    var text = ToolResponseFormatting.Format(response["response"] as JsonObject ?? new JsonObject());
-                    if (text.Length > 0) outputs.Add(text);
-                }
-                foreach (var (id, outputs) in groups)
-                    result.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = id, ["content"] = outputs.Count switch
+                    var all = ProviderImageParts.GroupBlocks(group.Parts, "completions");
+                    var texts = new JsonArray(all.OfType<JsonObject>().Where(block => SessionWait.Text(block["type"]) == "text").Select(block => (JsonNode)block.DeepClone()).ToArray());
+                    JsonNode toolContent = texts.Count == 0 ? JsonValue.Create("")! : texts.Count == 1 ? texts[0]!["text"]!.DeepClone() : texts;
+                    result.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = group.Id, ["content"] = toolContent });
+                    var images = all.OfType<JsonObject>().Where(block => SessionWait.Text(block["type"]) == "image_url").ToArray();
+                    if (images.Length > 0)
                     {
-                        0 => JsonValue.Create(""), 1 => JsonValue.Create(outputs[0]),
-                        _ => new JsonArray(outputs.Select(text => (JsonNode)new JsonObject { ["type"] = "text", ["text"] = text }).ToArray())
-                    } });
+                        pendingToolImages.Add(new JsonObject { ["type"] = "text", ["text"] = "Images returned by tool_call_id=" + group.Id + ":" });
+                        foreach (var image in images) pendingToolImages.Add(image.DeepClone());
+                    }
+                }
                 continue;
             }
+            FlushToolImages();
             var role = message.Role == "model" ? "assistant" : message.Role;
             if (role == "user" && parts.Length > 1 && parts.All(part => (part.ContainsKey("text") || part.ContainsKey("system")) && !Truthy(part["thinking"]) && !Truthy(part["functionCall"]) && !Truthy(part["functionResponse"]) && !Truthy(part["inlineData"])))
                 parts = [new JsonObject { ["text"] = string.Join("\n", parts.Select(part => part.ContainsKey("system") ? OpenAIRequestText.System(SessionWait.Text(part["system"]) ?? throw new ModelPreparationException("System content must be a string.")) : SessionWait.Text(part["text"])).Where(text => !string.IsNullOrEmpty(text))) }];
@@ -47,6 +46,7 @@ internal static class CompletionsRequestSerializer
                 if (SessionWait.Text(part["thinking"]) is { Length: > 0 } thought) thinking = thought;
                 if (SessionWait.Text(part["system"]) is { Length: > 0 } system) content.Add(new JsonObject { ["type"] = "text", ["text"] = OpenAIRequestText.System(system) });
                 if (SessionWait.Text(part["text"]) is { Length: > 0 } text) content.Add(new JsonObject { ["type"] = "text", ["text"] = text });
+                if (SessionWait.Text(part["imageMeta"]?["origin"]) != "generated" && ProviderImageParts.Block(part, "completions") is { } imageBlock) content.Add(imageBlock);
                 if (part["functionCall"] is JsonObject call)
                 {
                     var id = SessionWait.Text(call["id"]);
@@ -60,12 +60,13 @@ internal static class CompletionsRequestSerializer
             }
             var wire = new JsonObject { ["role"] = role };
             if (!string.IsNullOrEmpty(thinking)) wire[reasoningField] = thinking;
-            wire["content"] = content.Count == 1 ? content[0]?["text"]?.DeepClone() : content.Count > 0 ? content : raw["content"]?.DeepClone() ?? JsonValue.Create("");
+            wire["content"] = content.Count == 1 && SessionWait.Text(content[0]?["type"]) == "text" ? content[0]?["text"]?.DeepClone() : content.Count > 0 ? content : raw["content"]?.DeepClone() ?? JsonValue.Create("");
             if (calls.Count > 0) wire["tool_calls"] = calls;
             if (role == "assistant" && SessionWait.Text(raw["providerMeta"]?["sourceModelId"]) == concreteModelId && raw["providerMeta"]?["providerSpecificFields"] is JsonObject fields)
                 wire["provider_specific_fields"] = fields.DeepClone();
             result.Add(wire);
         }
+        FlushToolImages();
         return result;
     }
     internal static JsonObject BuildRequest(IReadOnlyList<JsonObject> history, ResponsesClientOptions options, string reasoningField, string promptCacheKey)

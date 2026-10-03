@@ -4,7 +4,7 @@ using Foxwarm.Sessions;
 namespace Foxwarm;
 
 internal sealed record ChannelContext(string SessionId, string Platform);
-internal sealed record ChannelMessage(string Text, string? ClientMessageId);
+internal sealed record ChannelMessage(string Text, string? ClientMessageId, IReadOnlyList<JsonObject>? Parts = null);
 internal sealed record MessageRouteResult(int Status, object Value);
 
 /// <summary>Supported Main-local ingress. Channels validate their wire DTO, this owner handles commands and admission.</summary>
@@ -70,7 +70,9 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             var stopped = await runtime.StopAsync(context.SessionId);
             return new(200, new { success = true, stoppedCurrent = stopped.StoppedCurrent });
         }
-        await runtime.SubmitAndRunAsync(context.SessionId, QueueItem.UserText(message.Text, clientMessageId: message.ClientMessageId));
+        var item = QueueItem.UserText(message.Text, clientMessageId: message.ClientMessageId);
+        if (message.Parts is not null) item = item with { Parts = message.Parts.Select(part => (JsonObject)part.DeepClone()).ToArray() };
+        await runtime.SubmitAndRunAsync(context.SessionId, item);
         return new(202, new { accepted = true, note = "Queue save attempted; durable completion is not guaranteed." });
     }
 }

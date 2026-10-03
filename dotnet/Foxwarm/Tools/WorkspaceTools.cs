@@ -25,7 +25,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         {
             ["type"] = "function",
             ["name"] = "read",
-            ["description"] = "Read a text file or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",
+            ["description"] = "Read a file, view an image, or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -106,7 +106,10 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 var first = Bound("startLine"); var last = Bound("endLine");
                 var path = ResolveReadWrite(pathText, read: true);
                 if (!Directory.Exists(path) && !RegularFile(path)) return Error("not_file", "Regular file or directory not found.");
-                var result = new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken) };
+                var mime = Path.GetExtension(path).ToLowerInvariant() switch { ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", ".bmp" => "image/bmp", _ => null };
+                var result = mime is not null && !Directory.Exists(path)
+                    ? new JsonObject { ["output"] = "[Image loaded: " + pathText + "]", ["mimeType"] = mime, ["inlineData"] = new JsonObject { ["mimeType"] = mime, ["data"] = Convert.ToBase64String(await File.ReadAllBytesAsync(path, cancellationToken)) } }
+                    : new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken) };
                 ReportPaths((pathText, path)); return result;
             }
             foreach (var key in new[] { "overwrite", "createDirs" })
@@ -157,7 +160,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
 
     private string ResolveReadWrite(string path, bool read) => Paths.FilePath(path);
 
-    private static bool RegularFile(string path)
+    internal static bool RegularFile(string path)
     {
         if (!File.Exists(path)) return false;
         if (!OperatingSystem.IsLinux()) return (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) == 0;

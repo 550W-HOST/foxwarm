@@ -19,19 +19,13 @@ internal sealed partial class SessionOwner
         var metadata = Metadata();
         return new SessionMessagePage(actualStart, total, state.HistoryVersion, SessionRuntimeState.Build(metadata, ToolActive, Compacting), rows);
     });
-    internal (int Estimate, JsonObject? Usage, long? Threshold) ContextSummary() => Entry.WithState(state =>
+    internal (int Estimate, JsonObject? Usage, long? Threshold, int Images) ContextSummary() => Entry.WithState(state =>
     {
         var tokens = CompactCandidateBuilder.Tokens(SessionWait.Text(state.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "");
+        var images = 0;
         foreach (var row in state.History.Where(CompactCandidateBuilder.Visible))
-            foreach (var part in (row["parts"] as JsonArray)?.OfType<JsonObject>() ?? [])
-            {
-                foreach (var key in new[] { "system", "text", "thinking" }) tokens += CompactCandidateBuilder.Tokens(SessionWait.Text(part[key]) ?? "");
-                if (part["functionCall"] is JsonObject call) tokens += CompactCandidateBuilder.Tokens(SessionWait.Text(call["name"]) ?? "")
-                    + CompactCandidateBuilder.Tokens(SessionWait.Text(call["rawArgsText"]) ?? (call["args"] is null ? "{}" : EcmaJson.Stringify(call["args"]!)));
-                if (part["functionResponse"] is JsonObject response) tokens += CompactCandidateBuilder.Tokens(SessionWait.Text(response["name"]) ?? "")
-                    + CompactCandidateBuilder.Tokens(response["response"] is null ? "{}" : EcmaJson.Stringify(response["response"]!));
-            }
-        return (tokens, (state.AuthorityEnvelope["stats"] as JsonObject)?["lastUsage"] is JsonObject usage ? (JsonObject)usage.DeepClone() : null, CompactCandidateBuilder.Number(state.AuthorityEnvelope["compactThresholdTokens"]));
+        { var summary = Foxwarm.Images.ImageTokenEstimate.Message(row); tokens += summary.Tokens; images += summary.Images; }
+        return (tokens, (state.AuthorityEnvelope["stats"] as JsonObject)?["lastUsage"] is JsonObject usage ? (JsonObject)usage.DeepClone() : null, CompactCandidateBuilder.Number(state.AuthorityEnvelope["compactThresholdTokens"]), images);
     });
 }
 
@@ -120,7 +114,7 @@ internal sealed partial class SessionManager
         var (_, children) = CatalogMetadataOffset(0, 10, parent: source.Id);
         return Output("📊 *Session Status*\n\n" + $"- session id: `{source.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{source.Agent}`\n- current node: `master`\n- agent directory: `{agents.AgentDirectory(source.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(source.Agent)}`)")}\n"
             + (meta.ParentSessionId is null ? "" : $"- parent session id: `{meta.ParentSessionId}`\n") + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
-            + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- last usage: {(summary.Usage is null ? "none" : EcmaJson.Stringify(summary.Usage))}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
+            + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {(summary.Usage is null ? "none" : EcmaJson.Stringify(summary.Usage))}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
             + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"
             + $"- runtime state: {SessionStatus.Runtime(dto["runtimeState"]!.AsObject())}\n\nRecent child sessions (max 10):" + (children.Length == 0 ? " none\n" : "\n" + string.Join('\n', children.Select(row => SessionStatus.Row(row))) + "\n"));
     }

@@ -213,7 +213,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
         }
         async Task Send(JsonObject data, long? expectedRevision = null)
         {
-            var bytes = Encoding.UTF8.GetBytes(data.ToJsonString());
+            var bytes = Encoding.UTF8.GetBytes(Foxwarm.Images.ImageTransport.Project(data)!.ToJsonString());
             await sendGate.WaitAsync(lifetime.Token);
             try
             {

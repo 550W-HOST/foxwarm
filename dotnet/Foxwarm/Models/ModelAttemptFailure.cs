@@ -17,7 +17,7 @@ internal sealed class ModelAttemptFailure(string message, string kind, bool retr
     internal static ModelAttemptFailure Http(int status, string body)
     {
         var (retryable, countable) = ClassifyHttp(status, body);
-        return new ModelAttemptFailure(body.Length == 0 ? "HTTP " + status : body, "http-error", retryable, countable, status.ToString(CultureInfo.InvariantCulture));
+        return new ModelAttemptFailure(body.Length == 0 ? "HTTP " + status : Foxwarm.Images.ImageTransport.DiagnosticBody(body), "http-error", retryable, countable, status.ToString(CultureInfo.InvariantCulture));
     }
     internal static (bool Retryable, bool Countable) ClassifyHttp(int status, string body)
     {

@@ -78,6 +78,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         RegisterRelationRoutes(app);
         RegisterDeleteRoute(app);
         RegisterHistoryRoutes(app);
+        RegisterImageRoutes(app);
         app.MapPost("/api/sessions/{id}/message", async (string id, HttpRequest request) =>
         {
             var canonical = CatalogRoute(request);
@@ -85,15 +86,12 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
             JsonObject? input;
             try { input = await JsonNode.ParseAsync(request.Body) as JsonObject; }
             catch (JsonException) { return Results.BadRequest(new { error = "Invalid JSON" }); }
-            string? text = null;
-            if (input?["text"] is JsonValue scalar && scalar.TryGetValue<string>(out var plain)
-                && input is not null && input.All(pair => pair.Key is "text" or "clientMessageId")) text = plain;
-            else if (input is not null && input["parts"] is JsonArray { Count: 1 } parts && parts[0] is JsonObject part
-                && part.Count == 1 && part["text"] is JsonValue content && content.TryGetValue<string>(out var fromChat)
-                && input["uploadedFiles"] is JsonArray { Count: 0 }
-                && input.All(pair => pair.Key is "parts" or "uploadedFiles" or "clientMessageId")) text = fromChat;
-            if (input is null || string.IsNullOrWhiteSpace(text))
-                return Results.BadRequest(new { error = "This experimental endpoint accepts text-only messages, without attachments." });
+            if (input is null || input.Any(pair => pair.Key is not ("text" or "parts" or "uploadedFiles" or "filePaths" or "clientMessageId")))
+                return Results.BadRequest(new { error = "Invalid message fields." });
+            if (new[] { "parts", "uploadedFiles", "filePaths" }.Any(key => input.ContainsKey(key) && input[key] is not JsonArray)) return Results.BadRequest(new { error = "Message parts and uploaded files must be arrays." });
+            var text = SessionWait.Text(input["text"]) ?? string.Join("\n", (input["parts"] as JsonArray ?? []).OfType<JsonObject>().Select(part => SessionWait.Text(part["text"]) ?? ""));
+            var hasUploads = (input["uploadedFiles"] as JsonArray ?? input["filePaths"] as JsonArray)?.Count > 0;
+            if (string.IsNullOrWhiteSpace(text) && !hasUploads) return Results.BadRequest(new { error = "Missing message content." });
             var clientId = input["clientMessageId"] is JsonValue idValue && idValue.TryGetValue<string>(out var idText)
                 && idText.Length is > 0 and <= 160 ? idText : null;
             if (input.ContainsKey("clientMessageId") && clientId is null)
@@ -110,9 +108,12 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                     if (owner is null) return Results.NotFound(new { error = "Session not found" });
                     canonical = owner.Id;
                 }
-                var result = await router.HandleMessageAsync(new ChannelContext(canonical, "webui"), new ChannelMessage(text, clientId));
+                if (hasUploads && text.TrimStart().StartsWith("/", StringComparison.Ordinal)) return Results.BadRequest(new { error = "Send images as a message without a Session command." });
+                var parts = await PrepareUploadedPartsAsync(input, runtime.Owner(canonical!)!, request.HttpContext.RequestAborted);
+                var result = await router.HandleMessageAsync(new ChannelContext(canonical, "webui"), new ChannelMessage(text, clientId, parts));
                 return Results.Json(result.Value, statusCode: result.Status);
             }
+            catch (Foxwarm.Images.ImageInputException error) { return Results.BadRequest(new { error = error.Message }); }
             catch (Exception error) { return Results.Problem(error.Message, statusCode: 500); }
         });
         app.MapGet("/api/webui/stream", async (HttpContext context) =>
@@ -172,7 +173,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         => RouteIdentity(request) is { } id ? SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]) : null;
     private static async Task SendSse(HttpContext context, JsonObject payload)
     {
-        await context.Response.WriteAsync("data: " + payload.ToJsonString() + "\n\n", context.RequestAborted);
+        await context.Response.WriteAsync("data: " + Foxwarm.Images.ImageTransport.Project(payload)!.ToJsonString() + "\n\n", context.RequestAborted);
         await context.Response.Body.FlushAsync(context.RequestAborted);
     }
     static bool ReadInt(IQueryCollection query, string name, out int? value)

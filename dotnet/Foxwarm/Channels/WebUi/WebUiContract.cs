@@ -72,10 +72,12 @@ internal static class WebUiContract
                 foreach (var part in existing.OfType<JsonObject>())
                     if (part["text"] is JsonValue text && text.TryGetValue<string>(out var raw))
                         parts.Add(new JsonObject { ["text"] = raw.Length > 4000 ? raw[..4000] + "\n… [preview truncated]" : raw });
+                    else if (part["inlineDataRef"] is not null || part["inlineData"] is not null || part["inlineDataUnavailable"] is not null) parts.Add(Foxwarm.Images.ImageTransport.Project(part));
             if (item.Parts is not null)
                 foreach (var part in item.Parts)
                     if (part["text"] is JsonValue text && text.TryGetValue<string>(out var raw))
                         parts.Add(new JsonObject { ["text"] = raw.Length > 4000 ? raw[..4000] + "\n… [preview truncated]" : raw });
+                    else if (part["inlineDataRef"] is not null || part["inlineData"] is not null || part["inlineDataUnavailable"] is not null) parts.Add(Foxwarm.Images.ImageTransport.Project(part));
             if (parts.Count == 0) continue;
             preview.Add(new JsonObject
             {

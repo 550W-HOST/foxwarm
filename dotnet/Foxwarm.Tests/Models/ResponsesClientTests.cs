@@ -522,7 +522,7 @@ public sealed class ResponsesClientTests
     }
 
     [Fact]
-    public void SerializerRejectsSemanticUnsupportedInputsWithoutMutatingOpenHistory()
+    public void Serializer_projects_inline_input_images_without_mutating_open_history()
     {
         var history = new[]
         {
@@ -539,10 +539,10 @@ public sealed class ResponsesClientTests
         };
         var before = history[0].ToJsonString();
 
-        var error = Assert.Throws<UnsupportedResponsesFeatureException>(() =>
-            ResponsesRequestSerializer.ConvertHistory(history, "openai/test-model"));
-
-        Assert.Equal("message part inlineData", error.Feature);
+        var projected = ResponsesRequestSerializer.ConvertHistory(history, "openai/test-model");
+        Assert.Equal("input_image", projected[0]!["content"]![1]!["type"]!.ToString());
+        Assert.Equal("data:image/png;base64,AA==", projected[0]!["content"]![1]!["image_url"]!.ToString());
+        Assert.DoesNotContain("vendor", projected.ToJsonString());
         Assert.Equal(before, history[0].ToJsonString());
         var legacy = ResponsesRequestSerializer.ConvertHistory(
             [new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["system"] = "current time = old" }) }],
