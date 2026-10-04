@@ -12,6 +12,7 @@ import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActive
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useTheme } from './theme/useTheme'
+import { parseWebUiNodeTargets, getNodeTargetAvailability, type WebUiNodeTarget } from './nodeTargets'
 import { useChatPreferences } from './chatPreferences'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
@@ -30,6 +31,7 @@ function normalizeSettings(value: unknown): WebUiSettings {
 export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'sidebar' }> }) {
   useTheme()
   const [agents, setAgents] = useState<AgentSummary[]>([])
+  const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([])
   const [activeTarget, setActiveTarget] = useState<FoxwarmActiveTarget | null>(null)
   const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([])
   const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
@@ -66,6 +68,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
 
   useEffect(() => {
     void fetchAgents()
+    void fetch(`${API_BASE_PATH}/nodes`).then(response => response.ok ? response.json() : null).then(data => { if (data) setNodeTargets(parseWebUiNodeTargets(data)) }).catch(() => {})
   }, [fetchAgents])
 
   useEffect(() => {
@@ -150,13 +153,13 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
             </button>
             <AgentCreationMenu agents={agents} currentAgent={currentRecord?.agent} compact onCreateAgent={createAgent} onCreateSession={createSession} />
           </div>
-          <div className="mt-2">
+          {nodeTargets.some(node => node.id === (currentRecord?.currentNode || 'master') && getNodeTargetAvailability(node, 'vscode-pty').available) && <div className="mt-2">
             <CreateTabButton
               defaultNodeId={currentRecord?.currentNode || 'master'}
               defaultPath={currentRecord?.cwd || '/'}
               onCreate={() => postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-terminal' })}
             />
-          </div>
+          </div>}
         </div>
         <div className="min-h-0 flex-1 border-t border-fw-border">
           <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} />

@@ -437,3 +437,29 @@ The optional top-level app setting `handoffConfirmation` is a startup boolean, d
 When an ordinary Main Session really has another provider attempt, the existing abortable backoff ends at an awaited owner safe point. Pending ingress and ready compaction precede one strict finite batch of queued inputs, each retained as its own Message. The next send uses the changed committed context without restarting the physical retry budget or recapturing routing, requested effort, cache lineage or turn UUID. Unchanged context keeps its logical request identity with a fresh stream. Stop and Run queued are rechecked across the awaits; strict local failures prevent another send and do not count as provider failures. Detached requests and compact planners never consume the ordinary queue.
 
 The bridge supports the existing Responses HTTP/WS, Chat Completions and Anthropic paths, fresh image projections and already committed commentary/tool pairs. It adds no request journal, error-time reasoning recovery or second queue processor. See the [canonical retry contract](../docs/code-index/threads/message-processing-pipeline.md#d-pipeline-retry-input-safe-point) and [implementation index](../docs/code-index/units/dotnet.md#ordinary-retry-input-safe-point).
+
+## Main-local Code workbench
+
+The existing Web executable serves the original Code workbench with the filesystem, read-only SCM and Foxwarm WebUI browser extensions. Build the current browser extensions before building/publishing the executable:
+
+```sh
+npm --prefix packages/vscode-web run build
+VITE_FOXWARM_DOTNET=1 npm --prefix packages/webui run build
+dotnet build dotnet/Foxwarm.sln
+```
+
+Official workbench assets are optional and are not downloaded by these commands. Use the reviewed Code-OSS preparation in [the workbench package](../packages/vscode-web/README.md), or a separately prepared matching asset directory:
+
+```sh
+export FOXWARM_VSCODE_WEB_ASSET_DIR=/path/to/prepared/code-oss-assets
+# Optional pinned local YAML contributor:
+export FOXWARM_VSCODE_YAML_EXTENSION_DIR=/path/to/redhat.vscode-yaml
+```
+
+Open **Code** in the original App, or an existing tool-file action/commit card. Missing required assets produce an authenticated actionable 503; missing individual assets produce 404. Code's fixed human filesystem APIs use actual absolute POSIX paths and host-UID authority independently of model/Agent file permissions. Binary reads and writes are limited to 50 MiB, without raising other request limits. Read-only Git supports status, immutable/base/working content and direct commit details; it does not expose staging, commit or push actions.
+
+The app root is the runtime application base (`AppContext.BaseDirectory`), and data/config commands use the actual selected data root and configuration files. Relative app-config environment paths retain their process-cwd meaning. The existing multi-root workspace persists below `state/vscode-web/`; explicit settings and malformed preexisting files are retained. Code YAML assistance is advisory: direct saves are human file writes, not Setup validation. Models retain their existing reread behavior and app configuration remains captured at startup.
+
+Main advertises implemented filesystem/Git services, not PTY or remote execution. Original launchers respect an explicit Main service descriptor and retain an unavailable remote selection rather than silently performing Main work. Code uses same-public-origin official webviews with a random process capability scoped only to official `pre/` files; other assets/services retain WebUI auth and the exact loopback Origin policy. The reviewed fallback is not origin isolation or production HTTPS. An explicitly configured foreign/wildcard `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN` fails the Code request without crashing the ordinary host. Public-prefix URLs remain browser-derived; proxy origins are not trusted implicitly. Browser module requests as well as writes from a different proxy port are rejected by the existing Origin policy; prefix preservation does not authorize that proxy origin.
+
+`CodeRoutesTests` exercises real authenticated file/Git/limit/error/workspace paths. `node packages/webui/test/experimentHostCode.e2e.mjs` requires matched official assets and uses the original App, current browser extensions, owned Git fixtures and a loopback model for the actual editor/SCM/Foxwarm webview flows. It never substitutes a mock editor for the workbench.

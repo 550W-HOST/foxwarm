@@ -46,9 +46,12 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
   const selectedTarget = preserveSelectedNodeTarget(availableTargets, nodeId).find(node => node.id === nodeId)
   const selectedAvailability = selectedTarget ? getNodeTargetAvailability(selectedTarget, 'vscode-pty') : { available: false, reason: 'unavailable' }
   const customCreateAvailable = nodeTargets ? selectedAvailability.available : true
+  const defaultTarget = preserveSelectedNodeTarget(availableTargets, defaultNodeId).find(node => node.id === defaultNodeId)
+  const defaultAvailability = defaultTarget ? getNodeTargetAvailability(defaultTarget, 'vscode-pty') : { available: false, reason: 'unavailable' }
+  const defaultCreateAvailable = nodeTargets ? defaultAvailability.available : true
 
   const handleDefaultCreate = () => {
-    onCreate({ nodeId: defaultNodeId || 'master', path: defaultPath || '/' })
+    if (defaultCreateAvailable) onCreate({ nodeId: defaultNodeId || 'master', path: defaultPath || '/' })
   }
 
   const handleCustomCreate = () => {
@@ -68,8 +71,9 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
       <div className="flex w-full items-stretch gap-1">
         <button
           onClick={handleDefaultCreate}
+          disabled={!defaultCreateAvailable}
           className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
-          title={`Create ${label.toLowerCase()} tab`}
+          title={defaultCreateAvailable ? `Create ${label.toLowerCase()} tab` : defaultAvailability.reason}
         >
           <SquareTerminal className="h-4 w-4" />
           <span>{label}</span>

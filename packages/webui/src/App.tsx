@@ -18,7 +18,7 @@ import type { WorkbenchTab } from './workbench/types'
 import { findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
-import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
+import { getNodeTargetAvailability, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
@@ -445,7 +445,7 @@ function App() {
   const [codeNodeId, setCodeNodeId] = useState(loadStoredCodeNodeId)
   const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
   const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: loadStoredCodeNodeId(), path: loadStoredCodePath() }, { embedded: true }).toString())
-  const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([MASTER_NODE_TARGET])
+  const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([])
   const [nodeTargetsError, setNodeTargetsError] = useState('')
 
 
@@ -1418,7 +1418,7 @@ function App() {
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
-          onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
+          onOpenTerminal={nodeTargets.some(node => node.id === (sessionRecord?.currentNode || 'master') && getNodeTargetAvailability(node, 'vscode-pty').available) ? () => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId }) : undefined}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
           onOpenCodeFile={(filePath, lines, target) => {

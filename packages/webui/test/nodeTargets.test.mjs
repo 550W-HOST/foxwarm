@@ -45,3 +45,16 @@ test('offline incompatible status remains distinct from connected quarantine', (
   assert.ok(node)
   assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: false, reason: 'offline · upgrade required' })
 })
+test('an explicit Main descriptor preserves implemented services without inventing PTY', () => {
+  const master = parseWebUiNodeTargets({ nodes: [{ id: 'master', type: 'master', displayName: 'master', online: true, services: { 'vscode-fs': 1, 'vscode-git': 2 } }] })[0]
+  assert.deepEqual(getNodeTargetAvailability(master, 'vscode-fs'), { available: true })
+  assert.deepEqual(getNodeTargetAvailability(master, 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
+  assert.match(formatNodeTargetLabel(master, 'vscode-pty'), /terminal unavailable/)
+})
+
+test('legacy Source responses without a master descriptor retain their existing local services', () => {
+  const master = parseWebUiNodeTargets({ nodes: [] })[0]
+  assert.equal(master.id, 'master')
+  assert.deepEqual(getNodeTargetAvailability(master, 'vscode-fs'), { available: true })
+  assert.deepEqual(getNodeTargetAvailability(master, 'vscode-pty'), { available: true })
+})

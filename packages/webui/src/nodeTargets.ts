@@ -19,7 +19,7 @@ export const MASTER_NODE_TARGET: WebUiNodeTarget = {
   type: 'master',
   displayName: 'master',
   online: true,
-  services: {},
+  services: { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 },
 }
 
 export function normalizeNodeId(value: unknown, fallback = 'master'): string {
@@ -44,7 +44,7 @@ export function parseWebUiNodeTargets(payload: unknown): WebUiNodeTarget[] {
         if (Number.isInteger(version) && Number(version) > 0) services[name] = Number(version)
       }
     }
-    byId.set(id, id === 'master' ? MASTER_NODE_TARGET : {
+    byId.set(id, {
       id,
       type: typeof item.type === 'string' && item.type.trim() ? item.type.trim() : 'remote',
       displayName: typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : id,
@@ -83,7 +83,6 @@ export function preserveSelectedNodeTarget(nodes: readonly WebUiNodeTarget[], se
 }
 
 export function getNodeTargetAvailability(node: WebUiNodeTarget, service: NodeTargetService): { available: boolean; reason?: string } {
-  if (node.id === 'master') return { available: true }
   if (node.unavailable) return { available: false, reason: 'unavailable' }
   if (!node.online) return { available: false, reason: node.protocolStatus === 'upgrade-required' ? 'offline · upgrade required' : 'offline' }
   if (node.protocolStatus === 'upgrade-required') return { available: false, reason: node.protocolMessage || 'upgrade required' }
@@ -97,7 +96,10 @@ export function formatNodeTargetLabel(node: WebUiNodeTarget, service: NodeTarget
   const name = node.displayName && node.displayName !== node.id
     ? `${node.displayName} (${node.id})`
     : node.id
-  if (node.id === 'master') return `${name} · local`
+  if (node.id === 'master') {
+    const availability = getNodeTargetAvailability(node, service)
+    return availability.available ? `${name} · local` : `${name} · local · ${availability.reason}`
+  }
   const availability = getNodeTargetAvailability(node, service)
   if (!availability.available) return `${name} · ${availability.reason}`
   if (service === 'vscode-fs' && Number(node.services['vscode-git'] || 0) < 1) return `${name} · online · no Git`

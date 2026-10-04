@@ -49,7 +49,7 @@ export async function createHostFixture(name, options = {}) {
   }
   async function openApp() {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: join(root, 'browser') })
-    page = await browser.newPage(); await page.goto(origin, { waitUntil: 'networkidle0' })
+    page = await browser.newPage(); options.onPage?.(page); await page.goto(origin, { waitUntil: 'networkidle0' })
     await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', token); await page.click('button[type="submit"]')
     await page.waitForSelector('.foxwarm-chat-root'); return page
   }

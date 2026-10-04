@@ -19,6 +19,7 @@ internal sealed class HttpServer
         builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new Foxwarm.Images.ImageTransportConverterFactory()));
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = 51L * 1024 * 1024);
         var app = builder.Build();
+        var code = new Foxwarm.Code.CodeWorkbench(sessions);
         app.Lifetime.ApplicationStopping.Register(sessions.BeginShutdown);
         if (distRoot is not null)
         {
@@ -42,6 +43,7 @@ internal sealed class HttpServer
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
         app.Use(async (context, next) =>
         {
+            if (code.IsCapabilityRequest(context)) { await next(); return; }
             var origin = context.Request.Headers.Origin.ToString();
             if (origin.Length > 0 && origin != $"http://127.0.0.1:{port}")
             {
@@ -83,6 +85,7 @@ internal sealed class HttpServer
             return Results.Ok(new { success = true });
         });
 
+        code.Register(app);
         App = app;
     }
     static bool Equal(string left, string right) =>

@@ -6,6 +6,16 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Code/workbench.html" />
+    <Content Include="../../packages/vscode-web/foxwarm-fs/package.json" Link="packages/vscode-web/foxwarm-fs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-fs/dist/**/*" Link="packages/vscode-web/foxwarm-fs/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-fs/media/**/*" Link="packages/vscode-web/foxwarm-fs/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-scm/package.json" Link="packages/vscode-web/foxwarm-scm/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-scm/dist/**/*" Link="packages/vscode-web/foxwarm-scm/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-scm/media/**/*" Link="packages/vscode-web/foxwarm-scm/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-webui/package.json" Link="packages/vscode-web/foxwarm-webui/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-webui/dist/**/*" Link="packages/vscode-web/foxwarm-webui/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-webui/media/**/*" Link="packages/vscode-web/foxwarm-webui/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
     <PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="all" />

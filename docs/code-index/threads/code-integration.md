@@ -6,6 +6,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 ## Components
 
+- [Main-local .NET Code](../units/dotnet.md#main-local-code-workbench) — original workbench/three browser extensions, human filesystem and read-only Git with actual Main capabilities.
 - [VS Code Web routes](../units/src-vscode-web-routes.md) — workbench/static/webview serving and filesystem/Git APIs.
 - [VS Code Web extensions](../units/vscode-web-extensions.md) — asset preparation, filesystem, terminal, SCM, and Foxwarm WebUI browser extensions.
 - [Shared config schemas](../units/shared-config-schemas.md) — public-safe Draft-07 objects reused by Setup and Code.
@@ -54,7 +55,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 ## Webview deployment
 
-- Localhost uses hashed webview origins.
+- The Source host uses hashed localhost webview origins. The Main-local .NET host uses the same-public-origin scoped capability fallback under its existing loopback cookie/Origin policy; an unsupported explicitly configured foreign/wildcard origin fails the Code request.
 - Exposed production should use HTTPS plus a configured isolated wildcard origin.
 - Same-origin capability fallback is functional but not origin-isolated; plain HTTP is not made secure by its narrow hash/service-worker compatibility patches.
 
