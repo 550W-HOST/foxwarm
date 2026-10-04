@@ -53,7 +53,6 @@ internal sealed partial class AsrProxy
                     {
                         var text = String(control[field], optional: true)?.Trim();
                         if (text is null) continue;
-                        if (field == "context" && text.Length > 2400) text = text[..2400];
                         forwarded[field] = text;
                     }
                     lifetime.CancelAfter(TimeSpan.FromSeconds(10));

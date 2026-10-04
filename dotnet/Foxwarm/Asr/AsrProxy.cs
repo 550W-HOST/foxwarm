@@ -98,7 +98,6 @@ internal sealed partial class AsrProxy : IDisposable
             foreach (var field in new[] { "context", "language", "segmentSeconds" })
             {
                 var text = form[field].Count == 1 ? form[field].ToString().Trim() : "";
-                if (field == "context" && text.Length > 2400) text = text[..2400];
                 if (text.Length > 0) multipart.Add(new StringContent(text), field);
             }
             using var message = new HttpRequestMessage(HttpMethod.Post, Endpoint("/transcribe")) { Content = multipart }; Authorize(message);

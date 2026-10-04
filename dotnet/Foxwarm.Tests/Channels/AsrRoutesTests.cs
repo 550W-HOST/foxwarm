@@ -59,11 +59,18 @@ public sealed partial class AsrRoutesTests
     public async Task Final_POST_forwards_real_multipart_fields_with_inclusive_limit_and_no_private_output()
     {
         await using var f = await Fixture.Create();
-        using var audio = f.Audio((int)AsrProxy.AudioLimit, "  " + new string('c', 2500) + "  "); audio.Add(new StringContent(" English "), "language"); audio.Add(new StringContent(" 10 "), "segmentSeconds");
+        var context = new string('c', 2500) + "LATEST-DRAFT-TAIL-SENTINEL";
+        using var audio = f.Audio((int)AsrProxy.AudioLimit, "  " + context + "  "); audio.Add(new StringContent(" English "), "language"); audio.Add(new StringContent(" 10 "), "segmentSeconds");
         var response = await f.Client.PostAsync("/api/asr/transcribe", audio); Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
-        var result = await Json(response); Assert.Equal("scripted final", result["text"]!.ToString()); Assert.Equal(AsrProxy.AudioLimit, f.AudioLength); Assert.Equal(2400, f.Metadata["context"]!.ToString().Length); Assert.Equal("English", f.Metadata["language"]!.ToString()); Assert.Equal("10", f.Metadata["segmentSeconds"]!.ToString());
+        var result = await Json(response); Assert.Equal("scripted final", result["text"]!.ToString()); Assert.Equal(AsrProxy.AudioLimit, f.AudioLength); Assert.Equal(context, f.Metadata["context"]!.ToString()); Assert.Equal("English", f.Metadata["language"]!.ToString()); Assert.Equal("10", f.Metadata["segmentSeconds"]!.ToString());
         Assert.DoesNotContain(Fixture.Key, result.ToJsonString()); Assert.Null(result["privatePath"]); Assert.Null(result["credential"]);
         using var oversized = f.Audio((int)AsrProxy.AudioLimit + 1); Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await f.Client.PostAsync("/api/asr/transcribe", oversized)).StatusCode); Assert.Equal(1, f.Uploads);
+    }
+    [Fact]
+    public async Task Final_POST_context_still_obeys_the_metadata_byte_budget()
+    {
+        await using var f = await Fixture.Create(); using var audio = f.Audio(44, new string('c', AsrProxy.ControlLimit));
+        var response = await f.Client.PostAsync("/api/asr/transcribe", audio); Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode); Assert.Equal(0, f.Uploads);
     }
     [Fact]
     public async Task Ordinary_body_limit_is_unchanged_and_bad_HTTP_mapping_does_not_expose_exception_details()

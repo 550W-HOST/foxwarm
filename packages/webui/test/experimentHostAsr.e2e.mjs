@@ -15,8 +15,8 @@ import { writeModelFixture } from './experimentModelFixture.mjs'
 
 const statusResponses = []
 const options = { env: {} }, owned = await createHostFixture('asr', options)
-const key = 'synthetic-service-key-not-browser-transport', failures = [], browserErrors = [], modelRequests = [], recordings = [], asrRequests = []
-let mode = 'normal', healthy = true, streamingSupported = true, healthRequests = 0, postRequests = 0, upgrades = 0, page
+const key = 'synthetic-service-key-not-browser-transport', failures = [], browserErrors = [], modelRequests = [], recordings = [], asrRequests = [], postContexts = []
+let longContextEvidence, mode = 'normal', healthy = true, streamingSupported = true, healthRequests = 0, postRequests = 0, upgrades = 0, page
 await mkdir(join(owned.root, 'home')); await mkdir(join(owned.root, 'spool'))
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n')
 const wav = Buffer.alloc(44 + 16000 * 2)
@@ -27,7 +27,7 @@ const serviceApp = express(), upload = multer({ storage: multer.memoryStorage(),
 serviceApp.use((request, response, next) => { assert.equal(request.headers.authorization, 'Bearer ' + key); assert.equal(request.headers.cookie, undefined); assert.equal(request.headers.origin, undefined); next() })
 serviceApp.get('/health', (request, response) => { healthRequests++; response.json({ ok: healthy, streamingSupported, credential: key, privatePath: '/service-private-path' }) })
 serviceApp.post('/transcribe', upload.single('audio'), (request, response) => {
-  postRequests++; const audio = request.file.buffer
+  postRequests++; postContexts.push(request.body.context || ''); const audio = request.file.buffer
   assert.equal(audio.subarray(0, 4).toString(), 'RIFF'); assert.equal(audio.readUInt16LE(22), 1); assert.equal(audio.readUInt32LE(24), 16000); assert.equal(audio.readUInt16LE(34), 16); assert(audio.readUInt32LE(40) > 0)
   response.json({ text: 'decoded-scripted-final', privatePath: '/service-private-path', credential: key })
 })
@@ -56,7 +56,7 @@ sockets.on('connection', socket => {
       }
       const input = JSON.parse(bytes.toString())
       if (input.type === 'start') {
-        record.started = true; record.context = input.context || ''; assert(!Object.hasOwn(input, 'key')); assert(record.context.length <= 2400)
+        record.started = true; record.context = input.context || ''; assert(!Object.hasOwn(input, 'key')); assert(bytes.length <= 16 * 1024)
         if (record.mode === 'pending') return
         record.ready = true; send({ type: 'ready', credential: key })
       }
@@ -68,7 +68,7 @@ service.listen(0, '127.0.0.1'); await once(service, 'listening')
 const serviceUrl = 'http://127.0.0.1:' + service.address().port
 const model = createServer(async (request, response) => {
   let raw = ''; for await (const chunk of request) raw += chunk
-  modelRequests.push(JSON.parse(raw)); response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'voice-' + modelRequests.length, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'SPEECH-MESSAGE-DONE' }] }], usage: { input_tokens: 10, output_tokens: 3 } } }) + '\n\n')
+  modelRequests.push(JSON.parse(raw)); response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'voice-' + modelRequests.length, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'prior history ' + 'h'.repeat(3000) + 'SPEECH-MESSAGE-DONE' }] }], usage: { input_tokens: 10, output_tokens: 3 } } }) + '\n\n')
 })
 model.listen(0, '127.0.0.1'); await once(model, 'listening')
 await writeModelFixture(owned.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + model.address().port, models: ['wire'], contextLimit: 20000 } } })
@@ -101,11 +101,14 @@ options.onPage = current => {
   current.on('response', async response => { if (new URL(response.url()).pathname.endsWith('/api/asr/status')) statusResponses.push(await response.json()) })
   current.on('request', request => { if (request.url().includes('/api/asr/')) asrRequests.push(request.url()) })
   void current.evaluateOnNewDocument(() => {
-    window.voiceStreams = []; window.voiceSockets = []
+    window.voiceStreams = []; window.voiceSockets = []; window.voiceStarts = []
     const get = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
     navigator.mediaDevices.getUserMedia = async options => { const stream = await get(options); window.voiceStreams.push(stream); return stream }
     const Native = window.WebSocket
-    window.WebSocket = class extends Native { constructor(...args) { super(...args); if (String(args[0]).includes('/api/asr/stream')) window.voiceSockets.push(this) } }
+    window.WebSocket = class extends Native {
+      constructor(...args) { super(...args); this.voiceAsr = String(args[0]).includes('/api/asr/stream'); if (this.voiceAsr) window.voiceSockets.push(this) }
+      send(value) { if (this.voiceAsr && typeof value === 'string') { const payload = JSON.parse(value); if (payload.type === 'start') window.voiceStarts.push(payload) } return super.send(value) }
+    }
   })
 }
 const editor = '[role="textbox"][aria-label="Message"]', start = 'button[aria-label="Start recording"]', stop = 'button[aria-label="Stop recording and transcribe"]'
@@ -125,6 +128,16 @@ try {
   await page.focus(editor); await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control'); assert.equal(await text(), 'before after'); await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control'); assert.equal(await text(), 'before spoken finalafter')
   await page.click('button[aria-label="Send message"]'); await until(() => modelRequests.length === 1, 'ordinary send provider'); await page.waitForFunction(() => document.body.innerText.includes('SPEECH-MESSAGE-DONE'))
   assert(modelRequests[0].input.some(row => row.role === 'user' && row.content?.some(part => part.text === 'before spoken finalafter')))
+  const sentinel = 'LATEST-DRAFT-TAIL-SENTINEL-PRESERVED', longDraft = 'current draft ' + 'd'.repeat(5000) + sentinel
+  await page.focus(editor); await page.keyboard.sendCharacter(longDraft)
+  const longContext = await begin('pending'), producedContext = await page.evaluate(() => window.voiceStarts.at(-1).context)
+  longContextEvidence = { producerUnits: producedContext.length, upstreamUnits: longContext.context.length, latestTailPreserved: longContext.context.endsWith(sentinel) }
+  console.log(JSON.stringify({ longContextEvidence }))
+  assert(producedContext.endsWith(sentinel)); assert.equal(longContext.context, producedContext.trim()); assert(longContext.context.endsWith(sentinel))
+  const contextPost = await page.evaluate(async (bytes, context) => { const form = new FormData(); form.append('audio', new Blob([new Uint8Array(bytes)], { type: 'audio/wav' }), 'synthetic.wav'); form.append('context', context); const response = await fetch('api/asr/transcribe', { method: 'POST', body: form }); return response.status }, Array.from(wav), producedContext)
+  assert.equal(contextPost, 200); assert.equal(postContexts.at(-1).replaceAll('\r\n', '\n'), producedContext.trim()); assert(postContexts.at(-1).endsWith(sentinel))
+  await page.click(stop); await idle(); await ended(); await until(() => longContext.closed, 'long-context startup cancelled'); assert.equal(await text(), longDraft)
+  await page.focus(editor); await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
   for (const next of ['empty', 'error', 'abrupt']) {
     await page.type(editor, next); const record = await begin(next); await until(() => record.partial, 'actual partial before terminal')
     if (next === 'empty') await page.click(stop)
@@ -143,6 +156,6 @@ try {
   healthy = false; await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, 3)
   await writeFile(options.env.FOXWARM_CONFIG_PATH, appConfig(false)); await owned.stop(); const count = healthRequests; await owned.start(); await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, count, 'disabled captured ASR does not probe')
   assert(asrRequests.every(url => url.startsWith(options.publicRoot) && !url.includes(key))); assert.deepEqual(failures, []); assert.deepEqual(browserErrors, []); await owned.stop(); assert.deepEqual(await readdir(join(owned.root, 'spool')), [])
-  console.log(JSON.stringify({ status: 'passed', decodedFinalPosts: postRequests, pcmBytes: recordings.reduce((sum, record) => sum + record.bytes, 0), nonzeroSamples: recordings.reduce((sum, record) => sum + record.nonzero, 0), recordings: recordings.length, healthRequests, modelRequests: modelRequests.length, upgrades, browserErrors, inferenceQualified: false }))
+  console.log(JSON.stringify({ status: 'passed', decodedFinalPosts: postRequests, pcmBytes: recordings.reduce((sum, record) => sum + record.bytes, 0), nonzeroSamples: recordings.reduce((sum, record) => sum + record.nonzero, 0), recordings: recordings.length, healthRequests, modelRequests: modelRequests.length, upgrades, browserErrors, longContextEvidence, inferenceQualified: false }))
 } catch (error) { console.error(owned.output); console.error(JSON.stringify({ recordings, failures, browserErrors })); throw error }
 finally { await owned.cleanup(); for (const socket of sockets.clients) socket.terminate(); sockets.close(); for (const server of [proxy, service, model]) { server.closeAllConnections?.(); await new Promise(done => server.close(done)) } }

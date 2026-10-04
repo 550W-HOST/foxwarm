@@ -11,14 +11,15 @@ public sealed partial class AsrRoutesTests
     public async Task Real_PCM_stream_preserves_shorter_partials_final_context_fragments_and_secrets()
     {
         await using var f = await Fixture.Create(prefix: true); using var socket = await f.Connect("/prefix/api/asr/stream", "https://public.example");
-        await Send(socket, new { type = "start", context = " " + new string('c', 2500) + " ", language = " English ", credential = "not-forwarded" });
+        var context = new string('c', 2500) + "LATEST-DRAFT-TAIL-SENTINEL";
+        await Send(socket, new { type = "start", context = " " + context + " ", language = " English ", credential = "not-forwarded" });
         var ready = await Json(socket); Assert.Equal("ready", ready["type"]!.ToString()); Assert.DoesNotContain(Fixture.Key, ready.ToJsonString());
         await socket.SendAsync(new byte[] { 1, 0, 255 }, WebSocketMessageType.Binary, false, CancellationToken.None);
         await socket.SendAsync(new byte[] { 127 }, WebSocketMessageType.Binary, true, CancellationToken.None);
         Assert.Equal("long hypothesis", (await Json(socket))["text"]!.ToString()); Assert.Equal("short", (await Json(socket))["text"]!.ToString());
         await Send(socket, new { type = "stop" }); var final = await Json(socket); Assert.Equal("scripted final", final["text"]!.ToString()); Assert.Equal("final", final["type"]!.ToString());
         Assert.Null(final["credential"]); Assert.Null(final["privatePath"]); Assert.Equal(4, f.AudioLength);
-        Assert.Equal(2400, f.Controls[0]["context"]!.ToString().Length); Assert.Equal("English", f.Controls[0]["language"]!.ToString()); Assert.Null(f.Controls[0]["credential"]);
+        Assert.Equal(context, f.Controls[0]["context"]!.ToString()); Assert.Equal("English", f.Controls[0]["language"]!.ToString()); Assert.Null(f.Controls[0]["credential"]);
         Assert.All(f.ReceivedCookies, value => Assert.Empty(value)); Assert.All(f.ReceivedOrigins, value => Assert.Empty(value));
     }
     [Fact]
