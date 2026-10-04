@@ -1,6 +1,6 @@
 # Unit: src-utils
 
-Files: src/utils/diskJsonData.ts, src/utils/diskJsonData.test.ts, src/utils/messageFormat.ts, src/utils/messagePreview.ts, src/utils/localTime.ts, src/utils/localTime.test.ts, src/utils/systemMessageParts.ts, src/utils/systemMessageParts.test.ts, src/utils/promptWrappers.ts, src/utils/promptWrappers.test.ts, src/utils/unicode.ts
+Files: src/utils/diskJsonData.ts, src/utils/diskJsonData.test.ts, src/utils/messageFormat.ts, src/utils/messagePreview.ts, src/utils/messagePreview.test.ts, src/utils/messagePreviewTime.ts, src/utils/localTime.ts, src/utils/localTime.test.ts, src/utils/systemMessageParts.ts, src/utils/systemMessageParts.test.ts, src/utils/promptWrappers.ts, src/utils/promptWrappers.test.ts, src/utils/unicode.ts
 
 ## Purpose
 
@@ -13,6 +13,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `shouldIgnoreDirectorySyncError`, `syncDirectoryDurably` — strict file-write durability support with platform-aware directory sync
 - `formatMessageText`, `formatMessagePreviewText`, `formatPrefixedMultilineText`, `formatSubstantiveMessageSearchText` — canonical message-to-text formatting, including the shared model-visible search body
 - `getMessagePreview`, `formatMessagePreviewLine`, `formatSessionMessagesPreview` — message preview utilities
+- `normalizeMessagePreviewTimestamp`, `MessagePreviewTimeState` — validate persisted message times and share per-preview local-day elision state
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
 - `buildSystemMessageParts`, `isSystemPayloadTextPart` — split system messages into header + payload parts
 - `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
@@ -54,8 +55,10 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `formatSubstantiveMessageSearchText(message)` | ~191 | Renders canonical model-visible user/model search text with tool/thinking/display/ephemeral/RAG exclusion and channel-wrapper precedence |
 | `formatMessagePreviewText(message, previewLength, options)` | ~145 | Short preview of a message |
 | `getMessagePreview(msg, previewLength, options)` | ~12 | Preview with display-only redaction support |
-| `formatMessagePreviewLine(msg, idx, previewLength, options)` | ~17 | Indexed emoji-prefixed preview line |
-| `formatSessionMessagesPreview(sessionId, messages, ...)` | ~24 | Formats a batch of session messages |
+| `formatMessagePreviewLine(msg, idx, previewLength, options, timeState)` | messagePreview | Indexed emoji-prefixed preview line with persisted local time |
+| `formatSessionMessagesPreview(sessionId, messages, ...)` | messagePreview | Formats a batch with fresh message-time state per page |
+| `normalizeMessagePreviewTimestamp(value)` | messagePreviewTime | Accepts only finite numeric timestamps representable by Date |
+| `MessagePreviewTimeState.format(value)` | messagePreviewTime | Formats local time and elides a repeated date; missing/invalid timestamps reset comparison |
 | `coerceDate(input)` | ~1 | Converts number to Date if needed |
 | `pad2(value)` | ~5 | Zero-pads to 2 digits |
 | `formatOffset(date)` | ~9 | Formats UTC offset as ±HHMM |
@@ -114,6 +117,7 @@ system text and split `systemPayload` are read compatibility only.
 - Backup rotation shifts numbered backups (N → N+1) before each write; errors are swallowed in `bestEffort` mode.
 - `loadFirstAvailable` iterates primary then backups, returning the first parseable file — provides automatic recovery from corruption.
 - Unicode utilities use `Intl.Segmenter` when available for grapheme-accurate truncation, falling back to code-point iteration.
+- Indexed Session command previews and the context preview renderer share `MessagePreviewTimeState`; the canonical preview timestamp contract is [D-message-preview-timestamps](src-tools-session-agent.md#d-message-preview-timestamps). Plain message-body formatting is unchanged.
 - Message formatting handles multiple part types (text, system, thinking, function calls, function responses, inline data) with configurable truncation and filtering of ephemeral/RAG content. `formatSubstantiveMessageSearchText` is the canonical shared body for search candidate selection and scoring; it preserves ordinary dual text/system fields but honors channel-wrapper precedence that replaces sibling fields for a wrapped channel part.
 
 ## Integration

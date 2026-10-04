@@ -15,7 +15,7 @@ import {
   type ContextPreviewToolDetail,
 } from '../contextPreviewRenderer';
 import { truncateUnicodeSafe } from '../utils/unicode';
-import { formatLocalTimestamp } from '../utils/localTime';
+import { normalizeMessagePreviewTimestamp } from '../utils/messagePreviewTime';
 import { logger } from '../common';
 import { formatMessageText } from '../utils/messageFormat';
 import { hasArchivedSessionId, readEffectiveArchiveMessagePage } from '../session/archiveStore';
@@ -85,7 +85,7 @@ function formatArchiveSourceLabel(sourceKind: string, sourceStart: number, sourc
 }
 
 function normalizeArchiveTimestamp(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  return normalizeMessagePreviewTimestamp(value);
 }
 
 function getArchivedMessageTimestamp(record?: { timestamp?: number; message?: any } | null): number | undefined {
@@ -95,11 +95,6 @@ function getArchivedMessageTimestamp(record?: { timestamp?: number; message?: an
 
   return normalizeArchiveTimestamp(record.timestamp)
     ?? normalizeArchiveTimestamp(record.message?.__meta?.timestamp);
-}
-
-function formatArchivedMessageTime(record: { timestamp?: number; message?: any }): string {
-  const timestamp = getArchivedMessageTimestamp(record);
-  return typeof timestamp === 'number' ? ` time ${formatLocalTimestamp(timestamp)}` : '';
 }
 
 function getDirectBlockMessageSeqRange(record: ArchiveBlockRecord): { startSeq: number; endSeq: number } | undefined {
@@ -210,11 +205,13 @@ function formatArchivedMessagePreview(
     return createMessageContextPreviewItem({
       key: `msg:${record.seq}`,
       heading: formatMessageHeading({
-        label: `[#${record.seq}${formatArchivedMessageTime(record)}]`,
+        label: `[#${record.seq}]`,
+        timestamp: getArchivedMessageTimestamp(record),
         originLabel,
         message: record.message,
       }),
       message: record.message,
+      timestamp: getArchivedMessageTimestamp(record),
       toolDetail: renderOptions.toolDetail as ContextPreviewToolDetail | undefined,
       renderOptions,
     });
@@ -1575,11 +1572,13 @@ async function vectorHitToPreviewItems(
       const messageItems = window.records.map((record: any) => createMessageContextPreviewItem({
         key: `vector:msg:${sourceSessionId}:${record.seq}`,
         heading: formatMessageHeading({
-          label: `[#${record.seq}${formatArchivedMessageTime(record)}]`,
+          label: `[#${record.seq}]`,
+          timestamp: getArchivedMessageTimestamp(record),
           originLabel: `[vector source session:${sourceSessionId}]`,
           message: record.message,
         }),
         message: record.message,
+        timestamp: getArchivedMessageTimestamp(record),
         toolDetail: renderOptions.toolDetail as ContextPreviewToolDetail | undefined,
         renderOptions,
       }));
@@ -1587,6 +1586,7 @@ async function vectorHitToPreviewItems(
         key: String(hit.source_family || `vector:raw:${sourceSessionId}:${range.startSeq}-${range.endSeq}`),
         heading: `[vector source session:${sourceSessionId}; full hit ${formatMessageLogRange(range.startSeq, range.endSeq)}; selected ${formatMessageLogRange(window.selectedStartSeq, window.selectedEndSeq)}; omitted ${window.omittedMessageCount} message(s)]`,
         body: messageItems.map(item => `${item.heading}\n${item.body}`).join('\n\n'),
+        messageItems,
         searchText: source?.records.map((record: any) => rawRecordSearchText(record)).join('\n\n') || '',
         omittedToolText: messageItems.map(item => item.omittedToolText || '').filter(Boolean).join('\n\n') || undefined,
         priorityNotices: window.filterNotices,

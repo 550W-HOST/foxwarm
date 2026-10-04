@@ -1,6 +1,6 @@
 # Unit: src-tools-session-agent
 
-Files: src/toolsSessionAgent.ts (facade), src/toolsSessionAgent/helpers.ts, src/toolsSessionAgent/interSession.ts, src/toolsSessionAgent/archiveLexicalRecall.ts, src/toolsSessionAgent/archiveLexicalRecall.test.ts, src/toolsSessionAgent/archiveRecall.ts, src/toolsSessionAgent/archiveRecallVectorFallback.test.ts, src/toolsSessionAgent/archiveRecallVectorQuality.test.ts, src/contextPreviewRenderer.ts, src/contextPreviewRenderer.test.ts, src/toolsSessionAgent/timers.ts, src/toolsSessionAgent/agents.ts, src/toolsSessionAgent/skills.ts, src/toolsSessionAgent/settings.ts, src/toolsSessionAgent/sessionCrud.ts, src/sessionStatus.ts, src/toolsSessionAgent/toolsSessionAgentArchiveGuard.test.ts, src/toolsSessionAgent/toolsSessionAgentResult.test.ts, src/toolsSessionAgent/sessionTool.test.ts, src/toolsSessionAgent/handoffWait.test.ts
+Files: src/toolsSessionAgent.ts (facade), src/toolsSessionAgent/helpers.ts, src/toolsSessionAgent/interSession.ts, src/toolsSessionAgent/archiveLexicalRecall.ts, src/toolsSessionAgent/archiveLexicalRecall.test.ts, src/toolsSessionAgent/archiveRecall.ts, src/toolsSessionAgent/archiveRecallVectorFallback.test.ts, src/toolsSessionAgent/archiveRecallVectorQuality.test.ts, src/toolsSessionAgent/detachedSessionMessages.test.ts, src/contextPreviewRenderer.ts, src/contextPreviewRenderer.test.ts, src/toolsSessionAgent/timers.ts, src/toolsSessionAgent/agents.ts, src/toolsSessionAgent/skills.ts, src/toolsSessionAgent/settings.ts, src/toolsSessionAgent/sessionCrud.ts, src/sessionStatus.ts, src/toolsSessionAgent/toolsSessionAgentArchiveGuard.test.ts, src/toolsSessionAgent/toolsSessionAgentResult.test.ts, src/toolsSessionAgent/sessionTool.test.ts, src/toolsSessionAgent/handoffWait.test.ts
 
 ## Purpose
 
@@ -70,7 +70,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `renderContextBlockExpansion` | Read-only WebUI helper that expands one CTX-BLOCK layer into structured child block/raw message items without session queue/tool mutation |
 | `searchStructuredRecallSources` | Shared ranked source-family retrieval and Archive reload used by model recall and the authenticated history viewer; caller supplies the already-authorized scope. The viewer requests bounded raw source reads and structured Timeline messages, while model recall retains its existing renderer and preview budget. |
 | `selectBoundedVectorRawMessageWindow` | Scans one raw source family by bounded effective Archive pages with the same message scorer and anchor tie-break as `selectVectorRawMessageWindow`, then reads a bounded neighborhood for the original atomic tool-group/window selector; I/O is proportional to matched source-family length but each SQL page and retained message set are bounded. |
-| `formatArchivedMessagePreview` | Formats a single archived message for display |
+| `formatArchivedMessagePreview` | Formats archived rows through the shared renderer with valid Archive row timestamp precedence and persisted-message fallback |
 | `formatArchivedBlockPreview` | Formats archived blocks listing |
 
 ### contextPreviewRenderer.ts — Shared recall/session preview rendering
@@ -84,7 +84,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `extractStrongArchiveLocators` | Deterministically extracts at most four bounded high-confidence hash/Session/Node/path/symbol/slash-command/CamelCase/snake_case/numeric identifiers; ambiguous lowercase hyphen prose requires exact infrastructure shape or explicit ID/quoting context |
 | `searchArchiveLexicalSideChannel` | Scores bounded Archive candidates from block summaries or substantive model-visible message text and emits source-backed raw/block locations |
 | `fuseDenseAndLexicalHits` | Combines dense and lexical ranks at canonical source-family level with bounded shared boost and raw containment collapse |
-| `formatMessageHeading` | Builds consistent message headings with role emoji, origin labels, and visibility suffix |
+| `formatMessageHeading` | Builds consistent message headings with full local timestamps, role emoji, origin labels, and visibility suffix |
+| `renderMessageItems` / `clipRenderedPreview` / `elideRepeatedMessageDates` | Tracks only generated message-heading spans through grouped vector snippets and final clipping, then elides dates in surviving displayed order |
 
 ### toolsSessionAgent/timers.ts — Timer management
 | Function | Description |
@@ -151,6 +152,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `./utils/messageFormat` — text formatting helpers
 - `./utils/unicode` — safe unicode truncation
 - `./utils/localTime` — local timestamp formatting
+- `./utils/messagePreviewTime` — valid persisted timestamps and shared local-day comparison state
 - `./channel` — `ChannelFile` type
 
 ## Behavior
@@ -195,6 +197,12 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - [2026-08-01] Every successful `get_session_messages` response must include the target session's execution state via the shared `buildSessionRuntimeState` and `formatSessionRuntimeStateSummary` path, including empty and fully filtered pages. Keep the four-state runtime taxonomy canonical rather than defining retrieval-specific labels; append only a nonzero queue count when the compact summary would otherwise omit pending work.
 
 - [2026-07-22] Rename the shared literal result filter on `recall` and `get_session_messages` from ambiguous `query` to `contentFilter`. It is explicitly a case-insensitive post-filter after target/page/vector retrieval; `target` owns exact CTX-BLOCK/range selection and `vector_query` owns semantic search. Do not preserve old `query` compatibility: reject it clearly. Report staged literal/include/exclude exclusion counts, and preserve the count/omit-filter hint even for zero-result or truncated previews.
+
+### D-message-preview-timestamps
+
+Message previews use persisted `Message.__meta.timestamp`, with a valid authoritative Archive row timestamp taking precedence and the persisted Message timestamp as fallback for raw Archive rows. Only finite numeric values representable by `Date` are timed. Each displayed message shows local time to seconds and the numeric UTC offset. The first displayed message/page shows its full local date; only the immediately preceding displayed message on the same local day permits date elision. Missing/invalid message times remain untimed, reset comparison, and never use wall-clock time or body/wrapper parsing.
+
+The shared renderer applies this comparison after filters, result selection and clipping. Grouped raw vector windows retain generated heading spans so the first surviving row keeps its date even when match-centered snippets omit earlier rows. Date removal only shortens the bounded output and never modifies matching body text. `/messages` uses the same time state with a fresh state per page. Archived CTX-BLOCK ranges, canonical messages, Archive storage, provider serialization and WebUI Timeline timing are unchanged.
 
 ### D-session-tool-list-scope
 

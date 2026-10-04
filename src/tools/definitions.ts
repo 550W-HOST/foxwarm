@@ -402,7 +402,7 @@ Example:
         {
             name: 'get_session_messages',
             defaultInject: true,
-            description: "Read a page of a session's messages and its current execution state. Defaults to the latest 10 messages. Filters narrow the selected page, not the entire conversation; use recall for semantic search or older context.",
+            description: "Review a Session's conversation to recover context, check evidence, or investigate a specific issue. Returns a page of messages and the current execution state. For delegated work, normally use completion reports or wait rather than repeatedly reading progress. With neither start nor count, returns the latest 10 messages. Filters apply to the selected page; use recall for semantic search or archived context.",
             parameters: {
                 type: 'object',
                 properties: {
