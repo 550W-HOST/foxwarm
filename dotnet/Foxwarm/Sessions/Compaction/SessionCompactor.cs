@@ -248,7 +248,7 @@ internal sealed partial class SessionCompactor
         }
     }
 
-    public async Task ApplyCompletedAsync()
+    public async Task ApplyCompletedAsync(bool propagateFailure = false)
     {
         CompactRun? run;
         lock (gate)
@@ -265,14 +265,14 @@ internal sealed partial class SessionCompactor
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
         catch (CompactionSnapshotIncompatibleException) { }
-        catch (Exception error) { Report(error); }
+        catch (Exception error) { Report(error); if (propagateFailure) throw; }
         finally { await FinishAsync(run); }
     }
-    public async Task SafePointAsync()
+    public async Task SafePointAsync(bool propagateFailure = false)
     {
-        await ApplyCompletedAsync();
+        await ApplyCompletedAsync(propagateFailure);
         try { await hosted.Entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true); }
-        catch (Exception error) { Report(error); }
+        catch (Exception error) { Report(error); if (propagateFailure) throw; }
     }
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
     {

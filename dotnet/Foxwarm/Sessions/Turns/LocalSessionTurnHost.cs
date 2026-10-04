@@ -18,6 +18,7 @@ public sealed partial class LocalSessionTurnHost
     private int releaseCommits;
     private readonly Func<Task>? safePoint;
     private readonly Func<ChatResult, Task>? automaticCompact;
+    private readonly Func<Task>? retrySafePoint;
 
     public LocalSessionTurnHost(
         SessionEntry entry,
@@ -27,14 +28,15 @@ public sealed partial class LocalSessionTurnHost
         int maxToolIterations = 500,
         Func<long>? clock = null,
         Func<Task>? safePoint = null,
-        Func<ChatResult, Task>? automaticCompact = null)
+        Func<ChatResult, Task>? automaticCompact = null,
+        Func<Task>? retrySafePoint = null)
     {
         this.entry = entry; this.store = store;
         this.chat = chat;
         this.tools = tools ?? new UnsupportedTurnToolExecutor();
         this.maxToolIterations = maxToolIterations > 0 ? maxToolIterations : throw new ArgumentOutOfRangeException(nameof(maxToolIterations));
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        this.safePoint = safePoint; this.automaticCompact = automaticCompact;
+        this.safePoint = safePoint; this.automaticCompact = automaticCompact; this.retrySafePoint = retrySafePoint;
     }
 
     internal Task SafePointAsync() => safePoint?.Invoke() ?? Task.CompletedTask;
@@ -82,7 +84,9 @@ public sealed partial class LocalSessionTurnHost
                 await entry.SaveLane.AppendGoalReminderAsync(registered.Token).ConfigureAwait(false);
                 registered.Token.ThrowIfCancellationRequested();
                 var history = entry.WithState(state => state.History.Select(m => (JsonObject)m.DeepClone()).ToArray());
-                var result = await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
+                var result = chat is ISessionChatService ordinary
+                    ? await ordinary.ChatAsync(entry.State.Id, history, PrepareRetryAsync, registered.Token).ConfigureAwait(false)
+                    : await chat.ChatAsync(entry.State.Id, history, registered.Token).ConfigureAwait(false);
                 try
                 {
                     if (result.AssistantMessage is null) return result;
@@ -129,6 +133,27 @@ public sealed partial class LocalSessionTurnHost
             if (handle is not null) entry.ClearCancellation(handle);
             else requestCts.Dispose();
         }
+    }
+
+    private async Task<bool> PrepareRetryAsync(CancellationToken token)
+    {
+        void AssertCanRetry()
+        {
+            token.ThrowIfCancellationRequested();
+            if (entry.WithState(state => state.Stopping || state.Meta["runQueuedAfterStop"]?.GetValue<bool>() == true))
+                throw new OperationCanceledException(token);
+        }
+        AssertCanRetry();
+        var context = entry.WithState(state => (state.HistoryVersion, state.NextMessageSeq));
+        // Existing Main ingress already publishes to this owner; join its pending save lane.
+        await entry.SaveLane.SaveBestEffortAsync(token).ConfigureAwait(false);
+        AssertCanRetry();
+        await (retrySafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
+        AssertCanRetry();
+        var batch = SessionTurnRunner.DrainLeading(entry);
+        if (batch.Count > 0) await AppendQueuedInputsAsync(batch).ConfigureAwait(false);
+        AssertCanRetry();
+        return entry.WithState(state => (state.HistoryVersion, state.NextMessageSeq) != context);
     }
 
     private async Task<IReadOnlyList<JsonObject>> AppendHistoryMessageStrictAsync(JsonObject message)

@@ -73,7 +73,12 @@ public sealed class SessionTurnRunner
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
                 {
-                    if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false)) continue;
+                    if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
+                    {
+                        // Retry preparation may have committed the selected inputs before Run queued canceled it.
+                        retryPending = entry.WithState(state => !state.Queue.Any(SessionCompactor.Ordinary) && SessionContinuation.IsIncomplete(state.History));
+                        continue;
+                    }
                     await host.FinalizeStoppedAsync().ConfigureAwait(false);
                     claimed = false;
                     break;
@@ -92,6 +97,7 @@ public sealed class SessionTurnRunner
                 {
                     // The current turn does not auto-retry a chat failure, but an HTTP host
                     // must be able to report its terminal outcome rather than imply success.
+                    failed = error is Foxwarm.Models.ModelPreparationException;
                     entry.RecordBackgroundProcessorFailure(error);
                     break;
                 }

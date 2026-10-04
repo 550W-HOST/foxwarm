@@ -5,9 +5,17 @@ namespace Foxwarm.Models;
 
 internal sealed class SessionChatService(
     ModelRequestOwner requests, ResponsesClientOptions baseOptions, SessionOwner hosted, HostModels models, AgentMemory memory,
-    Action<string, ResponsesStreamProgress> progress, Func<JsonArray>? definitions = null) : IChatService
+    Action<string, ResponsesStreamProgress> progress, Func<JsonArray>? definitions = null) : ISessionChatService
 {
-    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken)
+    public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken) =>
+        ChatCoreAsync(sessionId, history, null, cancellationToken);
+
+    public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history,
+        Func<CancellationToken, Task<bool>> prepareRetry, CancellationToken cancellationToken) =>
+        ChatCoreAsync(sessionId, history, prepareRetry, cancellationToken);
+
+    private async Task<ChatResult> ChatCoreAsync(string sessionId, IReadOnlyList<JsonObject> history,
+        Func<CancellationToken, Task<bool>>? prepareRetry, CancellationToken cancellationToken)
     {
         var selectedSnapshot = hosted.Entry.Snapshot(); var catalog = models.Capture(); var selected = catalog.Select(selectedSnapshot);
         var routeKey = selected.RawModel is not null && catalog.Contains(selected.RawModel) ? selected.RawModel : catalog.DefaultKey; var rawEffort = selected.RawEffort; var turnId = hosted.LogicalTurnId;
@@ -28,8 +36,13 @@ internal sealed class SessionChatService(
         try
         {
             return await requests.RequestAsync(sessionId, captured, cacheKey, turnId, history, Prompt,
-                notice.NotifyAsync, () => { if (++attempts > 1) hosted.RestartDraft(); }, progress,
-                hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.Canonical, definitions);
+                notice.NotifyAsync, () => { if (++attempts > 1 && prepareRetry is null) hosted.RestartDraft(); }, progress,
+                hosted.Entry.RecordBestEffortFailure, cancellationToken, ModelRequestScope.Canonical, definitions,
+                prepareRetry is null ? null : async token =>
+                {
+                    if (!await prepareRetry(token)) return null;
+                    return hosted.Entry.WithState(state => state.History.Select(message => (JsonObject)message.DeepClone()).ToArray());
+                });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (ToolAuthorizationUnavailableException) { throw; }

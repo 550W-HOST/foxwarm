@@ -26,6 +26,13 @@ public interface IChatService
     Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken);
 }
 
+/// <summary>Ordinary owner chat may prepare committed input before a real provider retry.</summary>
+public interface ISessionChatService : IChatService
+{
+    Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history,
+        Func<CancellationToken, Task<bool>> prepareRetry, CancellationToken cancellationToken);
+}
+
 public interface ITurnToolExecutor
 {
     Task<JsonObject> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);

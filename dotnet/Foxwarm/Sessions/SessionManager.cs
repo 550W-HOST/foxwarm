@@ -205,6 +205,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
+        registry.OnRetrySafePoint = _ => hosted.Compactor.SafePointAsync(propagateFailure: true);
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
         registry.TriggerOverride = _ => Accepting && !IsDeletionClaimed(hosted.Id) && !hosted.Entry.Retired ? hosted.StartProcessing() : Task.CompletedTask;
         return hosted;

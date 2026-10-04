@@ -48,6 +48,14 @@ An implemented Worker ingress alternative accepts one already-normalized ordinar
 - Ordinary non-WebUI channels receive concise retry snippets without requiring a channel edit API.
 - Terminal provider failures are exceptions caught at the session turn boundary; fake model-visible `Error:` assistant history is forbidden.
 
+### D-pipeline-retry-input-safe-point
+
+[2026-10-03] An ordinary Session turn that will actually retry reaches an exact-owner preparation safe point after the existing abortable backoff and before the next provider send. The previous attempt's stream/prefix lane and any error-time encrypted-reasoning checkpoint have settled first. The SessionTurnRunner ingests pending Worker mailbox input, applies ready compaction before selecting current ordinary input, and uses the existing strict bulk append to preserve each input as its own Message in original order. Child-handoff mutation, queue rollback, and function-call/result adjacency retain their existing canonical boundaries. The selected batch is finite; input received after selection belongs to a later safe point rather than a wait-until-empty loop.
+
+Stop and Run queued are rechecked after awaited ingestion, compact, and append; cancellation is also checked before dispatch. Run queued leaves control with the existing outer busy owner, while Stop uses ordinary passive finalization. Local preparation or strict persistence failure prevents the retry send and follows existing owner failure cleanup, without entering provider failure classification, retries, or model health accounting. A ready compact job is meaningful even without ordinary input or a wake marker, and the runtime returns from compaction to the existing normal-turn requesting phase before dispatch.
+
+The LLM layer retains the sole retry loop, delay, total physical-attempt budget, captured virtual routing generation, health/failover, requested effort, and prompt-cache key semantics. Preparation is an awaited semantic callback, separate from best-effort retry notification. If input append or compact changes committed context, the existing partial-prefix reconstruction builds a new logical request, journal, and stream identity from exact-owner committed history and the current system snapshot, without resetting the physical budget or duplicating committed output. Unchanged context retains ordinary retry identity. Exhausted/nonretryable failures, detached calls, compact planning, and low-level requests do not consume ordinary retry input.
+
 ## Invariants
 
 - Only one queue processor claims a session at a time.

@@ -91,7 +91,7 @@ internal sealed partial class SessionOwner
                 ["sequenceStart"] = 0,
                 ["sequence"] = 0,
                 ["startedAt"] = startedAt,
-                ["llmRequestId"] = requestId
+                ["llmRequestId"] = outerRequestId ?? requestId
             };
         }
         Emit(SessionEventKind.ModelStream, payload);
@@ -203,15 +203,33 @@ internal sealed partial class SessionOwner
     }
 }
 
-internal sealed class RequestChatService(IChatService inner, SessionOwner hosted) : IChatService
+internal sealed class RequestChatService(IChatService inner, SessionOwner hosted) : ISessionChatService
 {
-    public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history,
-        CancellationToken cancellationToken)
+    public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken) =>
+        ChatCoreAsync(sessionId, history, null, cancellationToken);
+
+    public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history,
+        Func<CancellationToken, Task<bool>> prepareRetry, CancellationToken cancellationToken) =>
+        ChatCoreAsync(sessionId, history, prepareRetry, cancellationToken);
+
+    private async Task<ChatResult> ChatCoreAsync(string sessionId, IReadOnlyList<JsonObject> history,
+        Func<CancellationToken, Task<bool>>? prepareRetry, CancellationToken cancellationToken)
     {
         var requestId = hosted.BeginDraft();
+        async Task<bool> Prepare(CancellationToken token)
+        {
+            hosted.ClearDraft();
+            var changed = await prepareRetry!(token);
+            token.ThrowIfCancellationRequested();
+            if (changed) requestId = hosted.BeginDraft();
+            else hosted.BeginDraft(requestId);
+            return changed;
+        }
         try
         {
-            var result = await inner.ChatAsync(sessionId, history, cancellationToken);
+            var result = inner is ISessionChatService ordinary && prepareRetry is not null
+                ? await ordinary.ChatAsync(sessionId, history, Prepare, cancellationToken)
+                : await inner.ChatAsync(sessionId, history, cancellationToken);
             if (result.AssistantMessage is null) hosted.ClearDraft();
             else
             {

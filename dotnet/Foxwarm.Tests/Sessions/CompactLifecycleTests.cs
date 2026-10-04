@@ -184,6 +184,71 @@ public sealed class CompactLifecycleTests
         Assert.Equal(1, dto["queueLength"]!.GetValue<int>()); Assert.Single(dto["queuedMessages"]!.AsArray()); Assert.Equal(0, dto["queuedPreviewOmittedCount"]!.GetValue<int>());
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Real_ready_compact_without_advisory_marker_is_applied_before_retry_input_and_strict_failure_blocks_send(bool inputs, bool failApply)
+    {
+        await using var fixture = await CompactFixture.CreateAsync(); await fixture.SeedAsync();
+        var key = fixture.Owner.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"]!.GetValue<string>();
+        fixture.Peer.FailForegroundOnce = true; fixture.Peer.Phase = () => fixture.Owner.Compacting;
+        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hold foreground")); await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await fixture.Owner.Compactor.StartManualAsync(); await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5)); fixture.Peer.ReleasePlan();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!fixture.Owner.Compactor.HasCompletedJob || !fixture.Owner.Entry.Snapshot().Queue.Any(item => item.Type == QueueItemType.CompactCommit)) await Task.Delay(5, timeout.Token);
+        // The confirmed contract does not depend on delivery of its advisory signal. Only remove that signal;
+        // the actual producer, frozen plan, owner and persistence paths are unchanged.
+        fixture.Owner.Entry.WithState(state => state.Queue.RemoveAll(item => item.Type == QueueItemType.CompactCommit));
+        await File.WriteAllTextAsync(fixture.MemoryPath, "refreshed system snapshot during retry");
+        if (inputs) { await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("correction A")); await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("correction B")); }
+        if (failApply) { fixture.HoldStage = AtomicJsonWriteStage.BeforeRename; fixture.FailHeldStage = true; fixture.StageRelease.Set(); }
+        fixture.Peer.ReleaseForeground(); await fixture.Owner.DrainForegroundAsync();
+        var current = fixture.Owner.Entry.Snapshot(); Assert.Equal(key, current.AuthorityEnvelope["promptCacheKey"]!.GetValue<string>()); Assert.False(fixture.Owner.Compacting);
+        if (failApply) Assert.True(fixture.StageReached.Task.IsCompleted, "Actual compact authority fault stage was reached.");
+        Assert.Equal(failApply ? 8 : 9, fixture.Peer.NormalRequests);
+        if (failApply) { Assert.IsType<ModelPreparationException>(fixture.Owner.Entry.LastBackgroundProcessorFailure); Assert.Equal(2, current.Queue.Count); Assert.DoesNotContain(current.History, row => row["__meta"]?["contextBlock"] is JsonObject); }
+        else
+        {
+            Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure); Assert.Empty(current.Queue); Assert.Contains(current.History, row => row["__meta"]?["contextBlock"] is JsonObject);
+            var body = fixture.Peer.NormalBodies.Last(); Assert.Contains("CTX-BLOCK", body); Assert.Contains("refreshed system snapshot during retry", body); Assert.DoesNotContain("seed 0 ", body); Assert.False(fixture.Peer.CompactingAtSend.Last());
+            if (inputs) { Assert.Contains("correction A", body); Assert.Contains("correction B", body); Assert.Single(current.History, row => row["parts"]!.ToJsonString().Contains("correction A")); }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stop_or_RunQueued_across_actual_retry_compact_write_rechecks_before_selecting_input(bool runQueued)
+    {
+        await using var fixture = await CompactFixture.CreateAsync(); await fixture.SeedAsync(); fixture.Peer.FailForegroundOnce = true;
+        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hold foreground")); await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await fixture.Owner.Compactor.StartManualAsync(); await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5)); fixture.Peer.ReleasePlan();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)); while (!fixture.Owner.Compactor.HasCompletedJob) await Task.Delay(5, timeout.Token);
+        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("cross compact correction")); fixture.HoldStage = AtomicJsonWriteStage.BeforeRename; fixture.Peer.ReleaseForeground();
+        await fixture.StageReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.DoesNotContain(fixture.Owner.Entry.Snapshot().History, row => row["parts"]!.ToJsonString().Contains("cross compact correction"));
+        var action = runQueued ? (Task)fixture.Owner.Registry.Control.DequeueAsync("s") : fixture.Owner.Registry.Control.StopAsync("s"); fixture.StageRelease.Set();
+        await action; await fixture.Owner.DrainForegroundAsync(); Assert.Equal(runQueued ? 9 : 8, fixture.Peer.NormalRequests); Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
+        Assert.Single(fixture.Owner.Entry.Snapshot().History, row => row["parts"]!.ToJsonString().Contains("cross compact correction")); Assert.False(fixture.Owner.Compacting);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stop_or_RunQueued_during_real_pending_ingress_after_backoff_does_not_dispatch_stale_context(bool runQueued)
+    {
+        await using var fixture = await CompactFixture.CreateAsync(); await fixture.SeedAsync(); fixture.Peer.FailForegroundOnce = true;
+        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hold foreground")); await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5)); fixture.Peer.ReleaseForeground();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!fixture.Owner.Entry.Snapshot().History.Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")) await Task.Delay(5, timeout.Token);
+        fixture.HoldIngress = true; var ingress = fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("ingress correction")); await fixture.StageReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(2100); Assert.Equal(8, fixture.Peer.NormalRequests);
+        var action = runQueued ? (Task)fixture.Owner.Registry.Control.DequeueAsync("s") : fixture.Owner.Registry.Control.StopAsync("s"); fixture.StageRelease.Set(); await ingress; await action; await fixture.Owner.DrainForegroundAsync();
+        Assert.Equal(runQueued ? 9 : 8, fixture.Peer.NormalRequests); Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
+        Assert.Single(fixture.Owner.Entry.Snapshot().History, row => row["parts"]!.ToJsonString().Contains("ingress correction"));
+    }
+
     private sealed class NoChat : IChatService
     {
         public Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken cancellationToken) => throw new InvalidOperationException("control-only work must not call provider");
@@ -194,7 +259,7 @@ public sealed class CompactLifecycleTests
         private readonly TempDirectory temp = new(); private readonly HttpClient http;
         internal readonly CompactPeer Peer = new(); internal readonly TaskCompletionSource StageReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly ManualResetEventSlim StageRelease = new(false); internal AtomicJsonWriteStage? HoldStage; internal bool HoldSignal, FailHeldStage;
-        internal bool HoldApplyAfterSignal; internal readonly TaskCompletionSource ApplyReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool HoldIngress; internal bool HoldApplyAfterSignal; internal readonly TaskCompletionSource ApplyReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly ManualResetEventSlim ApplyRelease = new(false);
         internal readonly PersistentSessionAuthorityStore Store; internal readonly SessionOwner Owner; internal readonly string MemoryPath;
         private CompactFixture(bool background)
@@ -210,12 +275,12 @@ public sealed class CompactLifecycleTests
                     HoldApplyAfterSignal = false; ApplyReached.TrySetResult();
                     if (!ApplyRelease.Wait(TimeSpan.FromSeconds(8))) throw new TimeoutException("private applying barrier expired");
                 }
-                if (stage != HoldStage && !(HoldSignal && stage == AtomicJsonWriteStage.BeforeRename)) return;
+                if (stage != HoldStage && !((HoldSignal || HoldIngress) && stage == AtomicJsonWriteStage.BeforeRename)) return;
                 var pending = stage == AtomicJsonWriteStage.AfterRenameBeforeDirectorySync ? authorityPath
                     : Directory.GetFiles(Path.GetDirectoryName(authorityPath)!, "s.json.tmp-*").SingleOrDefault();
                 if (pending is null) return; var document = JsonNode.Parse(File.ReadAllText(pending))!.AsObject();
-                var matches = HoldSignal ? document["queue"]!.AsArray().Any(row => row?["type"]?.GetValue<string>() == "compact-commit") : document["historyVersion"]?.GetValue<long>() == 1;
-                if (!matches) return; HoldStage = null; HoldSignal = false; StageReached.TrySetResult();
+                var matches = HoldIngress ? document["queue"]!.ToJsonString().Contains("ingress correction") : HoldSignal ? document["queue"]!.AsArray().Any(row => row?["type"]?.GetValue<string>() == "compact-commit") : document["historyVersion"]?.GetValue<long>() == 1;
+                if (!matches) return; HoldStage = null; HoldSignal = false; HoldIngress = false; StageReached.TrySetResult();
                 if (!StageRelease.Wait(TimeSpan.FromSeconds(8))) throw new TimeoutException("private compact barrier expired");
                 if (FailHeldStage) throw new IOException("private postrename fault");
             });
@@ -228,7 +293,7 @@ public sealed class CompactLifecycleTests
             var chat = new SessionChatService(requests, options, Owner, models, memory, (_, _) => { });
             Owner.Registry = new SessionRegistry(Store, chat); Owner.Registry.Add("s");
             Owner.Compactor = new SessionCompactor(Owner, Store, models, options, requests, memory);
-            Owner.Registry.OnSafePoint = _ => Owner.Compactor.SafePointAsync(); Owner.Registry.HasCompletedCompact = _ => Owner.Compactor.HasCompletedJob;
+            Owner.Registry.OnSafePoint = _ => Owner.Compactor.SafePointAsync(); Owner.Registry.OnRetrySafePoint = _ => Owner.Compactor.SafePointAsync(propagateFailure: true); Owner.Registry.HasCompletedCompact = _ => Owner.Compactor.HasCompletedJob;
             Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
         }
         internal static async Task<CompactFixture> CreateAsync(bool background = true) { var fixture = new CompactFixture(background); await fixture.Owner.Entry.SaveLane.SaveStrictAsync(); return fixture; }
@@ -245,7 +310,8 @@ public sealed class CompactLifecycleTests
         internal readonly TaskCompletionSource PlanReached = new(TaskCreationOptions.RunContinuationsAsynchronously), ForegroundReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource plan = new(TaskCreationOptions.RunContinuationsAsynchronously), foreground = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal string? PlanRequestModel, PlanInstructions;
-        internal bool FailPlan; internal int NormalRequests;
+        internal bool FailPlan, FailForegroundOnce; internal int NormalRequests;
+        internal Func<bool>? Phase; internal readonly List<string> NormalBodies = []; internal readonly List<bool> CompactingAtSend = [];
         internal void ReleasePlan() => plan.TrySetResult(); internal void ReleaseForeground() => foreground.TrySetResult();
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -265,8 +331,9 @@ public sealed class CompactLifecycleTests
             }
             else
             {
-                Interlocked.Increment(ref NormalRequests);
+                Interlocked.Increment(ref NormalRequests); NormalBodies.Add(body); CompactingAtSend.Add(Phase?.Invoke() ?? false);
                 if (input.LastOrDefault() == "hold foreground") { ForegroundReached.TrySetResult(); await foreground.Task.WaitAsync(cancellationToken); }
+                if (FailForegroundOnce) { FailForegroundOnce = false; return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("owned foreground retry") }; }
                 output = new JsonArray(new JsonObject { ["type"] = "message", ["role"] = "assistant", ["content"] = new JsonArray(new JsonObject { ["type"] = "output_text", ["text"] = "answer" }) });
             }
             var payload = new JsonObject { ["type"] = "response.completed", ["response"] = new JsonObject { ["id"] = "response", ["status"] = "completed", ["output"] = output } };

@@ -15,6 +15,7 @@ public sealed class LocalSessionTurnHostFactory
     private readonly Func<long> clock;
     private readonly Func<SessionEntry, Task>? safePoint;
     private readonly Func<SessionEntry, ChatResult, Task>? automaticCompact;
+    private readonly Func<SessionEntry, Task>? retrySafePoint;
     public LocalSessionTurnHostFactory(
         ISessionAuthorityStore store,
         IChatService chat,
@@ -22,18 +23,20 @@ public sealed class LocalSessionTurnHostFactory
         int maxToolIterations,
         Func<long>? clock = null,
         Func<SessionEntry, Task>? safePoint = null,
-        Func<SessionEntry, ChatResult, Task>? automaticCompact = null)
+        Func<SessionEntry, ChatResult, Task>? automaticCompact = null,
+        Func<SessionEntry, Task>? retrySafePoint = null)
     {
         this.store = store;
         this.chat = chat;
         this.tools = tools;
         this.maxToolIterations = maxToolIterations;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        this.safePoint = safePoint; this.automaticCompact = automaticCompact;
+        this.safePoint = safePoint; this.automaticCompact = automaticCompact; this.retrySafePoint = retrySafePoint;
     }
     public LocalSessionTurnHost For(SessionEntry entry) => new(entry, store, chat, tools, maxToolIterations, clock,
         () => safePoint?.Invoke(entry) ?? Task.CompletedTask,
-        result => automaticCompact?.Invoke(entry, result) ?? Task.CompletedTask);
+        result => automaticCompact?.Invoke(entry, result) ?? Task.CompletedTask,
+        () => retrySafePoint?.Invoke(entry) ?? safePoint?.Invoke(entry) ?? Task.CompletedTask);
 }
 
 public sealed class SessionRegistry
@@ -54,7 +57,8 @@ public sealed class SessionRegistry
         Store = store;
         hosts = new LocalSessionTurnHostFactory(store, chat, tools ?? new UnsupportedTurnToolExecutor(), maxToolIterations, clock,
             entry => OnSafePoint?.Invoke(entry) ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true),
-            (entry, result) => OnTurnCompleted?.Invoke(entry, result) ?? Task.CompletedTask);
+            (entry, result) => OnTurnCompleted?.Invoke(entry, result) ?? Task.CompletedTask,
+            entry => OnRetrySafePoint?.Invoke(entry) ?? OnSafePoint?.Invoke(entry) ?? entry.SaveLane.RemoveCompactWakeAsync(staleOnly: true));
         runner = new SessionTurnRunner(this, hosts);
         ingress = new SessionIngress(this);
         control = new SessionControl(this);
@@ -68,6 +72,7 @@ public sealed class SessionRegistry
     public Func<SessionEntry, Task>? OnTurnStarting { get; set; }
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
+    public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }
     public Func<SessionEntry, bool>? HasCompletedCompact { get; set; }
     internal bool HasRunnableWork(SessionEntry entry) => HasCompletedCompact?.Invoke(entry) == true || entry.WithState(state =>
         state.Queue.Any(item => item.Type != QueueItemType.CompactCommit || item.CompactOwner is null));

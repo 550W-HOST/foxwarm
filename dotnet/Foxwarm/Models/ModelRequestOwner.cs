@@ -25,14 +25,16 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
         string cacheKey, string turnId, IReadOnlyList<JsonObject> history,
         Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
         Func<ModelRetryEvent, Task<bool>>? retry, Action? beginAttempt,
-        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel, Func<JsonArray>? definitions = null) =>
-        RequestAsync(sessionId, Capture(catalog, routeKey, rawEffort), cacheKey, turnId, history, prompt, retry, beginAttempt, progress, warning, cancellationToken, scope, definitions);
+        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel, Func<JsonArray>? definitions = null,
+        Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null) =>
+        RequestAsync(sessionId, Capture(catalog, routeKey, rawEffort), cacheKey, turnId, history, prompt, retry, beginAttempt, progress, warning, cancellationToken, scope, definitions, prepareRetry);
 
     internal async Task<ChatResult> RequestAsync(string sessionId, CapturedRequest captured,
         string cacheKey, string turnId, IReadOnlyList<JsonObject> history,
         Func<ConcreteHostModel, CancellationToken, Task<string>> prompt,
         Func<ModelRetryEvent, Task<bool>>? retry, Action? beginAttempt,
-        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel, Func<JsonArray>? definitions = null)
+        Action<string, ResponsesStreamProgress>? progress, Action<Exception>? warning, CancellationToken cancellationToken, ModelRequestScope scope = ModelRequestScope.LowLevel, Func<JsonArray>? definitions = null,
+        Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null)
     {
         var catalog = captured.Catalog; var route = captured.Route; var request = captured.Routing; var rawEffort = captured.RawEffort;
         const int maxAttempts = 6;
@@ -109,6 +111,14 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
             if (final) throw new ModelRequestException($"API request failed after {attempt} attempts: {reason}", value) { TerminalNoticeDelivered = delivered };
             if (delay is null) await Task.Delay(RetryDelay(attempt), cancellationToken);
             else await delay(RetryDelay(attempt), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            // Semantic owner preparation is awaited outside provider failure/health handling.
+            if (scope == ModelRequestScope.Canonical && prepareRetry is not null)
+            {
+                var updated = await prepareRetry(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (updated is not null) { history = updated; requestStarted = null; }
+            }
         }
         throw new InvalidOperationException("Unreachable attempt limit.");
     }

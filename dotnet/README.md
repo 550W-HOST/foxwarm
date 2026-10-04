@@ -412,3 +412,9 @@ comparison ok: 16 actual TypeScript/C# Responses request-input cases
 Run the preserved Phase 2A differential oracle separately with `python3 dotnet/run-parity.py` after the repository JavaScript dependencies and shared generated package are available. The prototype remains outside normal Node CI and does not alter TypeScript runtime behavior, persistence, model routing, or Session ownership.
 
 The optional top-level app setting `handoffConfirmation` is a startup boolean, default false. Enabled mode adds the framed review checkpoint to model handoffs and child guidance; changing it requires a restart. It does not alter cancellation or authenticated human HTTP routes.
+
+## Ordinary retry input
+
+When an ordinary Main Session really has another provider attempt, the existing abortable backoff ends at an awaited owner safe point. Pending ingress and ready compaction precede one strict finite batch of queued inputs, each retained as its own Message. The next send uses the changed committed context without restarting the physical retry budget or recapturing routing, requested effort, cache lineage or turn UUID. Unchanged context keeps its logical request identity with a fresh stream. Stop and Run queued are rechecked across the awaits; strict local failures prevent another send and do not count as provider failures. Detached requests and compact planners never consume the ordinary queue.
+
+The bridge supports the existing Responses HTTP/WS, Chat Completions and Anthropic paths, fresh image projections and already committed commentary/tool pairs. It adds no request journal, error-time reasoning recovery or second queue processor. See the [canonical retry contract](../docs/code-index/threads/message-processing-pipeline.md#d-pipeline-retry-input-safe-point) and [implementation index](../docs/code-index/units/dotnet.md#ordinary-retry-input-safe-point).
