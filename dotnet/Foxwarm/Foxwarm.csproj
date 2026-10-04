@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Code/workbench.html" />
+    <Content Include="../../packages/webui/public/login.html" Link="packages/webui/login.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../packages/vscode-web/foxwarm-fs/package.json" Link="packages/vscode-web/foxwarm-fs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../packages/vscode-web/foxwarm-fs/dist/**/*" Link="packages/vscode-web/foxwarm-fs/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../packages/vscode-web/foxwarm-fs/media/**/*" Link="packages/vscode-web/foxwarm-fs/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

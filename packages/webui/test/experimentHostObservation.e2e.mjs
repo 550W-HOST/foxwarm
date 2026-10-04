@@ -115,8 +115,8 @@ try {
     args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage(); const frames = []; const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
   cdp.on('Network.webSocketFrameReceived', event => { try { frames.push(JSON.parse(event.response.payloadData)) } catch {} })
-  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#dotnet-token')
-  await page.type('#dotnet-token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
+  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
 
   const value = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
   const goalRows = rows => rows.filter(row => row.__meta?.goalReminder)

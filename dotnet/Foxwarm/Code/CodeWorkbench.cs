@@ -11,6 +11,7 @@ namespace Foxwarm.Code;
 
 internal sealed partial class CodeWorkbench
 {
+    private readonly PublicWebAddress publicAddress;
     private readonly string applicationRoot = Path.GetFullPath(AppContext.BaseDirectory);
     private readonly string dataRoot;
     private readonly string? appConfig;
@@ -24,8 +25,9 @@ internal sealed partial class CodeWorkbench
     private readonly object workspaceGate = new();
     private readonly string capabilityRoute = "webview/" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
     private static readonly JsonObject PrivacyDefaults = new() { ["redhat.telemetry.enabled"] = false, ["yaml.schemaStore.enable"] = false, ["yaml.kubernetesCRDStore.enable"] = false, ["yaml.extension.recommendations"] = false };
-    internal CodeWorkbench(SessionManager sessions)
+    internal CodeWorkbench(SessionManager sessions, PublicWebAddress address)
     {
+        publicAddress = address;
         dataRoot = sessions.DataRoot;
         var config = sessions.Models.ConfigurationOwner;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath); modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
@@ -85,11 +87,12 @@ internal sealed partial class CodeWorkbench
     }
     internal string Bootstrap(HttpContext context)
     {
-        var origin = $"{context.Request.Scheme}://{context.Request.Host}";
+        var address = publicAddress;
+        var origin = address.Origin;
         if (!string.IsNullOrEmpty(configuredOrigin) && configuredOrigin != origin) throw new CodeServiceException("InvalidPath", "Code webviews require the Main public origin.");
         var folder = context.Request.Query[context.Request.Query["embedded"] == "true" ? "initialFolderUri" : "folderUri"].FirstOrDefault() ?? defaultFolder;
         if (!folder.StartsWith("foxwarm://", StringComparison.Ordinal)) throw new CodeServiceException("InvalidPath", "folderUri must use the foxwarm:// scheme.");
-        var route = context.Request.PathBase + "/vscode-web"; var baseUrl = origin + route + "/static";
+        var route = address.Prefix.ToUriComponent() + "/vscode-web"; var baseUrl = origin + route + "/static";
         var extensions = new JsonArray(); foreach (var name in new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui" }) extensions.Add(UriParts(origin + route + "/extensions/" + name));
         if (HasYaml) extensions.Add(UriParts(origin + route + "/extensions/redhat-vscode-yaml"));
         var configuration = new JsonObject { [context.Request.Query["embedded"] == "true" ? "workspaceUri" : "folderUri"] = UriParts(context.Request.Query["embedded"] == "true" ? Workspace(folder) : folder), ["callbackRoute"] = route + "/callback",

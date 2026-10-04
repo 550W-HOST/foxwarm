@@ -20,7 +20,6 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
             catch (Exception error) when (!context.Response.HasStarted && error is IOException or InvalidDataException or InvalidOperationException or NotSupportedException)
             { await Results.Problem(error.Message, statusCode: 500).ExecuteAsync(context); }
         });
-        app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
         app.MapGet("/api/models", (HttpRequest request) => Results.Ok(WebUiContract.Models(models, request.Query["current"])));
         RegisterSetupRoutes(app);
         app.MapPost("/api/sessions/{id}/cwd", async (string id, HttpRequest request) =>
@@ -165,18 +164,16 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
             catch (IOException) when (context.RequestAborted.IsCancellationRequested) { }
             finally { hosted.Unsubscribe(subscriptionId); }
         });
-        app.MapPost("/admin/shutdown", (IHostApplicationLifetime lifetime) =>
-        {
-            sessions.BeginShutdown();
-            lifetime.StopApplication();
-            return Results.Accepted();
-        });
-
     }
     private static string? RouteIdentity(HttpRequest request, bool sessionOnly = false)
     {
-        var parts = request.HttpContext.Features.Get<IHttpRequestFeature>()?.RawTarget?.Split('?', 2)[0].Split('/');
-        if (parts is null || parts.Length < (sessionOnly ? 4 : 5) || parts[1] != "api" || parts[2] != "sessions" || parts[3].Length == 0) return null;
+        var raw = request.HttpContext.Features.Get<IHttpRequestFeature>()?.RawTarget?.Split('?', 2)[0];
+        if (raw is null) return null;
+        // RawTarget retains encoded Session IDs even after the declared mount is removed.
+        foreach (var segment in (request.PathBase.Value ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries))
+        { var next = raw.IndexOf('/', 1); raw = next < 0 ? "/" : raw[next..]; }
+        var parts = raw.Split('/');
+        if (parts.Length < (sessionOnly ? 4 : 5) || parts[1] != "api" || parts[2] != "sessions" || parts[3].Length == 0) return null;
         try { return Uri.UnescapeDataString(parts[3]); } catch (UriFormatException) { return null; }
     }
     private async Task<SessionOwner?> FindRouteAsync(HttpRequest request, string routeId)

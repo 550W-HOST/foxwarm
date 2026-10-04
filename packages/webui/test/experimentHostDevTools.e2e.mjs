@@ -136,8 +136,8 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage()
-  await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' }); await page.waitForSelector('#dotnet-token')
-  await page.type('#dotnet-token', apiToken); await page.click('button[type="submit"]')
+  await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
+  await page.type('#token', apiToken); await page.click('button[type="submit"]')
   await page.waitForSelector('button[aria-label="New session"]')
   const flow = await create(); await send(flow, 'DEV-FLOW')
   try { await until(async () => (await history(flow)).some(item => item.parts?.some(part => part.text?.includes('DEV-FLOW completed'))), 'dev flow', 3500) }

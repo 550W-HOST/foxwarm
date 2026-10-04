@@ -34,22 +34,41 @@ export async function createHostFixture(name, options = {}) {
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening')
   const port = socket.address().port; await new Promise(done => socket.close(done))
   const token = 'synthetic-' + name + '-api', origin = `http://127.0.0.1:${port}`, modelPath = join(data, 'state/models.yaml')
-  let host, browser, page; const hostPids = []
+  let host, browser, page, ownedListener = false; const hostPids = []
   async function api(method, path, body) {
+    assert(ownedListener && host?.child.exitCode === null && host.child.signalCode === null, 'Fixture API requires its own bound live child.')
     const response = await fetch(origin + path, { method, headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
     return { status: response.status, body: await response.json().catch(() => ({})) }
   }
   async function start() {
+    const startup = { ...process.env, ...(options.env || {}), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
+    if (options.normalStartup) { delete startup.FOXWARM_EXPERIMENT_PORT; delete startup.FOXWARM_EXPERIMENT_API_TOKEN }
+    else { startup.FOXWARM_EXPERIMENT_PORT = String(port); startup.FOXWARM_EXPERIMENT_API_TOKEN = token }
+    ownedListener = false
     const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
-      stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: { ...process.env, ...(options.env || {}), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
+      stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: startup
     })
-    let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) })
+    let output = ''
     host = { child, get output() { return output } }; hostPids.push(child.pid)
-    await until(async () => { if (child.exitCode !== null || child.signalCode !== null) throw new Error(output); try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'host ready')
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => finish(new Error('Owned listener did not bind.')), 20000)
+      const finish = error => { clearTimeout(timeout); child.removeListener('exit', exited); error ? reject(error) : resolve() }
+      const exited = code => finish(new Error('Owned host exited before binding: ' + code + ': ' + output))
+      child.once('exit', exited); child.once('error', finish)
+      child.stdout.on('data', bytes => {
+        output = (output + bytes).slice(-20000)
+        const bound = /^Main HTTP listening: (.+)$/m.exec(output)?.[1]
+        if (bound) {
+          if (bound !== origin || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
+          else { ownedListener = true; finish() }
+        }
+      }); child.stderr.on('data', bytes => { output = (output + bytes).slice(-20000) })
+    })
+    const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready')
   }
   async function openApp() {
-    browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: join(root, 'browser') })
-    page = await browser.newPage(); options.onPage?.(page); await page.goto(origin, { waitUntil: 'networkidle0' })
+    browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
+    page = await browser.newPage(); options.onPage?.(page); await page.goto(options.publicRoot || origin, { waitUntil: 'networkidle0' })
     await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', token); await page.click('button[type="submit"]')
     await page.waitForSelector('.foxwarm-chat-root'); return page
   }
@@ -72,5 +91,5 @@ export async function createHostFixture(name, options = {}) {
     await crash()
     if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true }); else console.log('Retained owned root: ' + root)
   }
-  return { root, data, work, modelPath, origin, api, start, openApp, save, stop, crash, sql, cleanup, hostPids, get output() { return host?.output } }
+  return { root, data, work, modelPath, origin, token, port, api, start, openApp, save, stop, crash, sql, cleanup, hostPids, get output() { return host?.output } }
 }

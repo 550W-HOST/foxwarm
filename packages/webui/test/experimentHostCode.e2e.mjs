@@ -1,11 +1,14 @@
 // Main Code through the original App, official workbench and real browser extensions.
 import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
+import { createServer as createTlsServer, request as tlsRequest } from 'node:https'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import sharp from 'sharp'
+import { WebSocket } from 'ws'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 
 assert(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR, 'Prepare the pinned official Code workbench assets first.')
@@ -21,13 +24,42 @@ const rootCommit = git('rev-parse', 'HEAD')
 git('mv', 'old.txt', 'notes.txt'); await writeFile(join(owned.work, 'binary.bin'), Buffer.from([0, 17, 255])); git('add', '.'); git('commit', '-qm', 'rename and binary fixture')
 const commit = git('rev-parse', 'HEAD'), requests = [], failures = [], browserErrors = [], codeResponses = []
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n')
-let appPage, extraPage, prefixProxy
+let appPage, extraPage, prefixProxy, declaredProxy; const declaredMode = process.env.FOXWARM_CODE_DECLARED_PROXY; let proxyUpgrades = 0
+if (declaredMode) {
+  const prefix = '/published/main/'
+  const forward = (request, response) => {
+    if (!request.url.startsWith(prefix)) { response.writeHead(404); response.end(); return }
+    const upstream = httpRequest(owned.origin + '/' + request.url.slice(prefix.length), { method: request.method, headers: { ...request.headers, host: new URL(owned.origin).host } }, result => { response.writeHead(result.statusCode, result.headers); result.pipe(response) })
+    upstream.on('error', error => response.destroy(error)); request.pipe(upstream)
+  }
+  declaredProxy = declaredMode === 'https' ? createTlsServer({ key: await readFile(process.env.FOXWARM_CODE_TLS_KEY), cert: await readFile(process.env.FOXWARM_CODE_TLS_CERT) }, forward) : createServer(forward)
+  declaredProxy.on('upgrade', (request, socket, head) => {
+    if (!request.url.startsWith(prefix)) { socket.destroy(); return }
+    proxyUpgrades++
+    const upstream = httpRequest(owned.origin + '/' + request.url.slice(prefix.length), { headers: { ...request.headers, host: new URL(owned.origin).host } })
+    upstream.on('upgrade', (response, peer, initial) => {
+      socket.write('HTTP/1.1 101 Switching Protocols\r\n' + Object.entries(response.headers).map(([key, value]) => key + ': ' + value).join('\r\n') + '\r\n\r\n')
+      if (head.length) peer.write(head); if (initial.length) socket.write(initial); socket.pipe(peer); peer.pipe(socket)
+      socket.on('error', () => peer.destroy()); peer.on('error', () => socket.destroy()); socket.on('close', () => peer.destroy()); peer.on('close', () => socket.destroy())
+    })
+    upstream.on('response', response => { socket.end('HTTP/1.1 ' + response.statusCode + ' Rejected\r\nContent-Length: 0\r\n\r\n') }); upstream.on('error', () => socket.destroy()); upstream.end()
+  })
+  declaredProxy.listen(0, '127.0.0.1'); await once(declaredProxy, 'listening')
+  options.publicRoot = declaredMode + '://127.0.0.1:' + declaredProxy.address().port + prefix; options.env.FOXWARM_PUBLIC_BASE_URL = options.publicRoot; options.normalStartup = true
+  if (declaredMode === 'https') options.chromeArgs = ['--ignore-certificate-errors']
+  await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
+  await writeFile(join(owned.data, 'state/config.yaml'), 'bot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
+}
 options.onPage = page => { appPage = page; page.on('pageerror', error => browserErrors.push(error.message)); page.on('response', response => { if (response.status() >= 400) codeResponses.push({ url: response.url(), status: response.status() }) }) }
+let releaseHold, holdStarted = false; const hold = new Promise(done => { releaseHold = done })
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); requests.push(body)
-    const output = body.input.some(row => row.type === 'function_call_output' && row.call_id === 'code-read')
+    const latest = body.input.filter(row => row.type === 'message' && row.role === 'user').at(-1)?.content?.map(part => part.text || '').join(' ') || ''
+    if (latest.includes('PUBLIC-HOLD') && !latest.includes('PUBLIC-QUEUED')) { holdStarted = true; await hold }
+    const publicTask = /PUBLIC-(IMAGE|QUEUED)/.exec(latest)?.[0]
+    const output = publicTask ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: publicTask + '-DONE' }] }] : body.input.some(row => row.type === 'function_call_output' && row.call_id === 'code-read')
       ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `CODE-TURN-DONE\n\n<foxwarm-commit node="master" path="${owned.work}" id="${commit}" />\n\n<foxwarm-commit node="master" path="${owned.work}" id="${rootCommit}" />` }] }]
       : [{ type: 'function_call', call_id: 'code-read', name: 'read', arguments: JSON.stringify({ filePath: 'notes.txt', startLine: 2, endLine: 3 }) }]
     response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'code-' + requests.length, output, usage: { input_tokens: 30, output_tokens: 3 } } }) + '\n\n')
@@ -44,7 +76,7 @@ async function palette(frame, command) {
   await frame.waitForSelector('.quick-input-widget input'); await frame.type('.quick-input-widget input', command); await page.keyboard.press('Enter')
 }
 async function codeFrame(page) {
-  return until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').pathname === '/vscode-web/' && frame.parentFrame() === page.mainFrame()), 'actual Code iframe', 30000)
+  return until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').pathname.endsWith('/vscode-web/') && frame.parentFrame() === page.mainFrame()), 'actual Code iframe', 30000)
 }
 async function frameText(page, pattern) {
   for (const frame of page.frames()) { try { const text = await frame.evaluate(() => document.body.innerText); if (pattern.test(text)) return frame } catch {} }
@@ -52,6 +84,9 @@ async function frameText(page, pattern) {
 }
 try {
   await owned.start(); assert.equal((await owned.api('POST', '/api/sessions/main/cwd', { cwd: owned.work })).status, 200); const page = await owned.openApp()
+  assert.equal(await page.evaluate(() => document.querySelector('meta[name="foxwarm-host"]')?.content), 'dotnet')
+  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), owned.token)
+  const loginCookie = (await page.cookies()).find(cookie => cookie.name === 'foxwarm_token'); assert(loginCookie.httpOnly); assert.notEqual(loginCookie.value, owned.token); assert.equal(loginCookie.secure, declaredMode === 'https'); assert.equal(loginCookie.path, declaredMode ? '/published/main/' : '/')
   page.on('pageerror', error => browserErrors.push(error.message))
   page.on('response', response => { if (response.url().includes('/vscode-web/')) codeResponses.push({ url: response.url(), status: response.status() }) })
   await page.evaluate(() => window.foxwarmTest.sendMessage('CODE-TURN'))
@@ -122,6 +157,7 @@ try {
   await popup.click('.editor-instance .view-lines'); await popup.keyboard.down('Control'); await popup.keyboard.press('A'); await popup.keyboard.up('Control'); await popup.keyboard.sendCharacter(rawApp.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n')); await popup.keyboard.down('Control'); await popup.keyboard.press('S'); await popup.keyboard.up('Control')
   await until(async () => (await readFile(roots.configFiles.app.path, 'utf8')).replaceAll('\r\n', '\n') === rawApp.replaceAll('\r\n', '\n'), 'restore owned YAML fixture')
   await popup.close()
+  if (!declaredMode) {
   // Bootstrap preserves a public prefix without trusting forwarded headers.
   // The existing exact host Origin policy blocks module/PUT requests from the
   // different proxy port; this qualification records that limit, not a bypass.
@@ -138,8 +174,49 @@ try {
   assert(prefixResponses.some(row => row.url.includes('/fixture/vscode-web/static/') && row.status === 200), 'Relative Code CSS must retain the prefix.')
   assert.equal(await prefixed.evaluate(async file => (await fetch('/fixture/api/vscode-web/fs/write-file?path=' + encodeURIComponent(file) + '&overwrite=1', { method: 'PUT', body: 'must not write' })).status, join(owned.work, 'notes.txt')), 403)
   assert((await readFile(join(owned.work, 'notes.txt'), 'utf8')).includes('Code saved line')); await prefixed.close(); await new Promise(done => prefixProxy.close(done)); prefixProxy = null
-  assert.equal(git('rev-parse', 'HEAD'), commit); assert.equal(requests.length, 3)
+  } else {
+    await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
+    const bytes = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 190, g: 20, b: 80, alpha: 1 } } }).png().toBuffer()
+    await page.type('[role="textbox"][aria-label="Message"]', 'PUBLIC-IMAGE')
+    await page.$eval('#file-upload', (input, data) => { const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(atob(data), char => char.charCodeAt(0))], 'public.png', { type: 'image/png' })); Object.defineProperty(input, 'files', { configurable: true, value: transfer.files }); input.dispatchEvent(new Event('change', { bubbles: true })) }, bytes.toString('base64'))
+    await page.waitForSelector('.foxwarm-composer-attachment-chip'); await page.click('button[aria-label="Send message"]')
+    await until(async () => (await authority()).history.some(row => row.parts?.some(part => part.text === 'PUBLIC-IMAGE-DONE')), 'public image turn')
+    await page.waitForSelector('.foxwarm-image-item img'); assert.equal(await page.$eval('.foxwarm-image-item img', image => image.naturalWidth), 3)
+    const reference = (await authority()).history.flatMap(row => row.parts || []).find(part => part.inlineDataRef).inlineDataRef
+    const blobPath = '/api/blobs/' + reference.blobId
+    assert.equal(await page.evaluate(async path => (await fetch(location.pathname + path.slice(1))).status, blobPath), 200)
+    // A browser path-shadow candidate cannot suppress the valid HttpOnly credential.
+    await page.setCookie({ name: 'foxwarm_token', value: 'invalid-shadow', url: options.publicRoot, path: '/published/main/api/', httpOnly: false, secure: declaredMode === 'https' })
+    assert.equal(await page.evaluate(async () => (await fetch(location.pathname + 'api/sessions')).status), 200)
+    // Run queued uses the existing stop/admit/process path and live WebSocket updates.
+    await page.evaluate(() => window.foxwarmTest.sendMessage('PUBLIC-HOLD')); await until(() => holdStarted, 'held normal request')
+    await page.evaluate(() => window.foxwarmTest.sendMessage('PUBLIC-QUEUED')); await until(async () => (await authority()).queue.length > 0, 'actual queued browser input')
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.includes('Run queued')))
+    await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('Run queued')).click())
+    await until(async () => !(await authority()).busy && (await authority()).history.some(row => row.parts?.some(part => part.text === 'PUBLIC-QUEUED-DONE')), 'actual Run queued'); releaseHold()
+    const publicOrigin = new URL(options.publicRoot).origin
+    const probe = (path, origin, method = 'GET', extras = {}) => new Promise((resolve, reject) => {
+      const url = new URL(path.replace(/^\//, ''), options.publicRoot), transport = declaredMode === 'https' ? tlsRequest : httpRequest
+      const request = transport(url, { method, rejectUnauthorized: false, headers: { authorization: 'Bearer ' + owned.token, ...(origin === undefined ? {} : { origin }), ...extras } }, response => { let text = ''; response.on('data', data => { text += data }); response.on('end', () => resolve({ status: response.statusCode, text })) }); request.on('error', reject); request.end()
+    })
+    for (const foreign of ['null', 'not an origin', owned.origin, 'https://foreign.invalid', publicOrigin + ', ' + publicOrigin]) {
+      for (const path of ['/api/sessions', blobPath, '/download?path=' + encodeURIComponent(join(owned.work, 'notes.txt')), '/vscode-web/', '/vscode-web/static/out/nls.messages.js']) assert.equal((await probe(path, foreign)).status, 403)
+      assert.equal((await probe('/api/auth', foreign, 'POST')).status, 403)
+      const socketUrl = options.publicRoot.replace(/^http/, 'ws') + 'api/webui/stream'
+      assert.equal(await new Promise((resolve, reject) => { const socket = new WebSocket(socketUrl, { rejectUnauthorized: false, headers: { origin: foreign, authorization: 'Bearer ' + owned.token } }); socket.on('unexpected-response', (_, response) => { resolve(response.statusCode); response.resume() }); socket.on('open', () => { socket.terminate(); reject(new Error('Foreign Origin opened WebSocket')) }); socket.on('error', reject) }), 403)
+    }
+    assert.equal((await probe('/api/sessions', undefined)).status, 200)
+    assert.equal((await probe('/api/sessions', 'https://foreign.invalid', 'GET', { host: new URL(options.publicRoot).host, 'x-forwarded-host': new URL(options.publicRoot).host, 'x-forwarded-proto': declaredMode })).status, 403)
+    const presentation = await probe('/vscode-web/', publicOrigin, 'GET', { host: 'untrusted.invalid', 'x-forwarded-host': 'untrusted.invalid', 'x-forwarded-proto': 'http' }); assert.equal(presentation.status, 200); assert(!presentation.text.includes('untrusted.invalid'))
+    // Same stored credentials work after a real clean restart; no token or config reload.
+    const tokenBefore = await readFile(join(owned.data, 'state/token'), 'utf8'); await owned.stop(); await owned.start(); await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
+    assert.equal(await readFile(join(owned.data, 'state/token'), 'utf8'), tokenBefore); assert(!await page.$('#token'))
+    assert.equal(await page.evaluate(async path => (await fetch(location.pathname + path.slice(1))).status, blobPath), 200)
+    assert(proxyUpgrades > 0, 'Actual browser realtime must traverse the prefix proxy.')
+    assert.equal(await page.evaluate(async file => (await fetch(location.pathname + 'download?path=' + encodeURIComponent(file))).status, join(owned.work, 'notes.txt')), 200)
+  }
+  assert.equal(git('rev-parse', 'HEAD'), commit); assert.equal(requests.length, declaredMode ? 6 : 3)
   assert(!codeResponses.some(row => row.status >= 500), JSON.stringify(codeResponses.filter(row => row.status >= 500)))
-  await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, codeRequests: codeResponses.length, browserErrors, roots, folders: persisted.folders.length, prefixOriginBlocked: true }))
+  await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, codeRequests: codeResponses.length, browserErrors, roots, folders: persisted.folders.length, prefixOriginBlocked: !declaredMode, declaredMode, proxyUpgrades }))
 } catch (error) { console.error(JSON.stringify({ browserErrors, failedRequests: [...new Map(codeResponses.filter(row => row.status >= 500).map(row => [row.url, row])).values()], host: owned.output, frames: await Promise.all([...(appPage?.frames() || []), ...(extraPage?.isClosed() ? [] : extraPage?.frames() || [])].map(async frame => ({ url: frame.url(), text: await frame.evaluate(() => document.body.innerText.slice(0, 1800)).catch(() => '') }))) })); throw error }
-finally { if (prefixProxy) await new Promise(done => prefixProxy.close(done)); await owned.cleanup(); await new Promise(done => peer.close(done)) }
+finally { releaseHold(); await owned.cleanup(); if (declaredProxy) { declaredProxy.closeAllConnections(); await new Promise(done => declaredProxy.close(done)) } if (prefixProxy) await new Promise(done => prefixProxy.close(done)); await new Promise(done => peer.close(done)) }

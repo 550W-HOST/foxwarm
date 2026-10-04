@@ -7,7 +7,6 @@ import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
 
 const App = lazy(() => import('./App'))
-const DotnetLoginGate = lazy(() => import('./DotnetLoginGate'))
 const PopupWebUiApp = lazy(() => import('./PopupWebUiApp'))
 const EmbeddedSidebarApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedSidebarApp })))
 const EmbeddedChatApp = lazy(() => import('./EmbeddedWebUiApp').then(module => ({ default: module.EmbeddedChatApp })))
@@ -49,7 +48,7 @@ const content = popupTarget
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Suspense fallback={<div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />}>
-      {import.meta.env.VITE_FOXWARM_DOTNET === '1' ? <DotnetLoginGate>{content}</DotnetLoginGate> : content}
+      {content}
     </Suspense>
   </StrictMode>,
 )

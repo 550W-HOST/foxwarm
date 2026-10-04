@@ -194,7 +194,7 @@ try {
     window.WebSocket = class extends Native { constructor(...args) { super(...args); window.__testSockets.push(this) } }
   })
   await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' })
-  await page.waitForSelector('#dotnet-token'); await page.type('#dotnet-token', apiToken)
+  await page.waitForSelector('#token'); await page.type('#token', apiToken)
   await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
   async function browserCreateAgent(name, memoryText) {
     await page.click('button[aria-label="New session"]')

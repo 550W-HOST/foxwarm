@@ -107,8 +107,8 @@ try {
   await startHost(); assert.equal((await request('POST', '/api/agents', { agentId: 'team' })).status, 201)
   current = await create('driver'); const admin = await create('operator')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
-  page = await browser.newPage(); await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#dotnet-token')
-  await page.type('#dotnet-token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
+  page = await browser.newPage(); await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
+  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
 
   await task([fn('discover-builtin', 'search_tools', { query: 'MCP server', sources: ['builtin'], limit: 10 }), fn('discover-node', 'search_tools', { query: 'read', sources: ['node'], limit: 1 })], { browserSend: true })
   assert.match((await pair('discover-builtin')).output, /builtin:mcp_config/); assert.match((await pair('discover-builtin')).output, /builtin:list_mcp_servers/)

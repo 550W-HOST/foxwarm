@@ -66,6 +66,7 @@ const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
+const mainHost = document.querySelector('meta[name="foxwarm-host"]')?.getAttribute('content') === 'dotnet'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
 type OriginalFaviconLink = {
@@ -1412,8 +1413,8 @@ function App() {
       return (
         <Chat
           key={`chat:${tab.sessionId}`}
-          experimentalTextOnly={import.meta.env.VITE_FOXWARM_DOTNET === '1'}
-          experimentalAttachments={import.meta.env.VITE_FOXWARM_DOTNET === '1'}
+          experimentalTextOnly={mainHost}
+          experimentalAttachments={mainHost}
           sessionId={tab.sessionId}
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
