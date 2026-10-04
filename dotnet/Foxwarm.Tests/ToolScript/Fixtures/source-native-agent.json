@@ -1,0 +1,12 @@
+{
+  "name": "native-agent",
+  "snapshotBase64": "BQABCQAAAGlubGluZS5weQAACWFza19hZ2VudAEGCHF1ZXN0aW9uAAAACWlubGluZS5weQEAAAAAAAEQPHB5dGhvbi1pbnB1dC0wPnxwcmludCgnc291cmNlLWJlZm9yZScpCnggPSBhc2tfYWdlbnQoJ3F1ZXN0aW9uJykKcHJpbnQoJ3NvdXJjZS1hZnRlcicsIHgpCnJldHVybiBbeCwgTm9uZSwgRmFsc2UsIDAsIHsnZmlyc3QnOjEsJ3NlY29uZCc6Mn1dAXgCAQEDAAAAAQEFAAAAAR4AAYCAgCAAAcgBAO2eAkAGAAABAAAD8wiUTng2BAAAUhcBABYBABQnBAEAUQESAgAEAgARAgBSFwIAEQIABQcIAAQDAAgBBAQACAJBAgA/BQBmBQaRTgaTTgaVTgaWTgaEChYAkE4GFQADkE4AFgAGkE4AFgAHkE4bJAAMkE4lLwAPkE4bMAARkE4bMAAUkE43RQAXkE5HSAAakE4xSQAdkE4xSQAekE5SUwAhkE5VWQAikE5bYAAjkE5iYwAlkE5mbQAokE5ubwAqkE5weAAtkE55egAvkE55egAykE55egA1kE55egAAAwgD8wiUTngHEDxweXRob24taW5wdXQtMD4Nc291cmNlLWJlZm9yZQVwcmludAhxdWVzdGlvbglhc2tfYWdlbnQMc291cmNlLWFmdGVyBWZpcnN0AAAAfHByaW50KCdzb3VyY2UtYmVmb3JlJykKeCA9IGFza19hZ2VudCgncXVlc3Rpb24nKQpwcmludCgnc291cmNlLWFmdGVyJywgeCkKcmV0dXJuIFt4LCBOb25lLCBGYWxzZSwgMCwgeydmaXJzdCc6MSwnc2Vjb25kJzoyfV0BAHgAAAMPAQAAAQARAAAAAAAADwEAAAAAAAAAAAAAAQABAQAAAA==",
+  "stdout": "source-before\n",
+  "resumeValue": "agent-input",
+  "vmRuntime": {
+    "engine": "@pydantic/monty",
+    "version": "0.0.19",
+    "snapshotFormat": "monty-pool-snapshot-v0.0.19"
+  },
+  "runId": "tsr_1791086997838_37db5518"
+}

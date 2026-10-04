@@ -42,7 +42,7 @@ internal static class ToolOutputGuard
         var head = text[..headEnd]; var line = head.LastIndexOf('\n'); if (line > head.Length / 2) head = head[..(line + 1)];
         var tail = text[tailStart..]; line = tail.IndexOf('\n'); if (line >= 0 && line < tail.Length / 2) tail = tail[(line + 1)..];
         var result = new JsonObject();
-        foreach (var key in new[] { "error", "status", "runId", "cancelled", "fullPath", "filePath", "node", "nodeId", "offset", "nextOffset", "totalBytes", "exitCode" })
+        foreach (var key in new[] { "error", "status", "runId", "continuationId", "waitingReason", "question", "cancelled", "fullPath", "filePath", "node", "nodeId", "offset", "nextOffset", "totalBytes", "exitCode" })
             if (response[key] is JsonNode value && value.ToJsonString().Length <= 2000) result[key] = value.DeepClone();
         var excerpt = head + $"\n[Tool output truncated; complete output: {file}]\n" + tail;
         if (response.ContainsKey("error")) result["error"] = "TOOL ERROR OUTPUT TOO LONG\n" + excerpt;

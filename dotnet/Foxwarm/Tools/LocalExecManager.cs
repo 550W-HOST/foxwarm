@@ -90,7 +90,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     internal void BeginShutdown() => closing = true;
 
-    internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct, MainNativePaths? paths = null, Action<string, string>? observeCwd = null)
+    internal async Task<JsonObject> ExecuteAsync(string sessionId, JsonObject? args, CancellationToken ct, MainNativePaths? paths = null, Action<string, string>? observeCwd = null, Foxwarm.ToolScript.ToolScriptDataBudget? programmatic = null)
     {
         if (closing) return Error("exec_unavailable", "Host is shutting down.");
         if (args is null || args.Count is < 1 or > 3 || !String(args, "command", out var command)
@@ -134,14 +134,38 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             var exit = status["exitCode"]?.GetValue<int?>()?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
             var finishedCwd = await ReadFinishedCwdAsync(record);
             if (finishedCwd is not null) observeCwd?.Invoke(record.Cwd, finishedCwd);
-            return new JsonObject { ["output"] = $"{preview["output"]?.GetValue<string>()}{trailer}\n---\nExit code: {exit}\nexecId: {record.Id}{(warning.Length > 0 ? "\n" + warning.TrimEnd() : "")}" };
+            var result = new JsonObject { ["output"] = $"{preview["output"]?.GetValue<string>()}{trailer}\n---\nExit code: {exit}\nexecId: {record.Id}{(warning.Length > 0 ? "\n" + warning.TrimEnd() : "")}" };
+            if (programmatic is not null) await AddProgrammaticAsync(result, record, status, programmatic);
+            return result;
         }
         record = record with { Notify = true };
         await AtomicWriteAsync(Path.Combine(record.Directory, "tracking.json"), "{\"notify\":true}\n");
         pending[Key(sessionId, record.Id)] = record;
         var partial = await PageAsync(record, 0, 4096);
         var liveCwd = ReadLiveCwd(record); if (liveCwd is not null) observeCwd?.Invoke(record.Cwd, liveCwd);
-        return new JsonObject { ["output"] = $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nRead complete output with read_exec({{execId: \"{record.Id}\"}})." };
+        var running = new JsonObject { ["output"] = $"Partial Output:\n{partial["output"]?.GetValue<string>()}\n---\n[Process running longer than {waitSeconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. A completion event will arrive in this Session.\n{warning}execId: {record.Id}\nRead complete output with read_exec({{execId: \"{record.Id}\"}})." };
+        if (programmatic is not null) await AddProgrammaticAsync(running, record, null, programmatic);
+        return running;
+    }
+
+    private static async Task AddProgrammaticAsync(JsonObject result, ExecRecord record, JsonObject? status, Foxwarm.ToolScript.ToolScriptDataBudget budget)
+    {
+        var path = Path.Combine(record.Directory, "output.log");
+        result["status"] = status is null ? "running" : "completed"; result["execId"] = record.Id; result["logPath"] = path;
+        if (status is not null) result["exitCode"] = status["exitCode"]?.DeepClone();
+        try
+        {
+            await using var log = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536, FileOptions.Asynchronous);
+            var length = log.Length; result["sizeBytes"] = length; result["truncated"] = length > 1048576;
+            if (length <= 1048576)
+            {
+                budget.Charge(checked(8 * length + 65536));
+                var bytes = new byte[(int)length]; var read = 0;
+                while (read < bytes.Length) { var amount = await log.ReadAsync(bytes.AsMemory(read)); if (amount == 0) break; read += amount; }
+                result["content"] = Encoding.UTF8.GetString(bytes.AsSpan(0, read));
+            }
+        }
+        catch (FileNotFoundException) { result["truncated"] = true; }
     }
 
     internal async Task<JsonObject> ReadAsync(string sessionId, JsonObject? args)

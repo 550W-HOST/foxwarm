@@ -59,6 +59,7 @@ internal sealed class ToolRegistry(Foxwarm.McpClient mcp, Func<SessionOwner, str
         var result = resolved.Source == "mcp"
             ? await mcp.CallAsync(resolved.Server!, resolved.Name, resolved.Args, cancellationToken)
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
+        if (owner.Programmatic) { owner.ScriptBudget!.JsonValue(result); return result; }
         return await ToolOutputGuard.GuardAsync(result, workspace(owner.Hosted), owner.CurrentCallId);
     }
     internal static void LocalNode(string? node)

@@ -60,7 +60,7 @@ export async function createHostFixture(name, options = {}) {
   }
   async function stop() {
     assert.equal((await api('POST', '/admin/shutdown')).status, 202)
-    const code = host.child.exitCode ?? await Promise.race([once(host.child, 'exit').then(([code]) => code), sleep(12000).then(() => 'timeout')])
+    const code = host.child.exitCode ?? await Promise.race([once(host.child, 'exit').then(([code]) => code), sleep(options.stopTimeout ?? 12000).then(() => 'timeout')])
     assert.equal(code, 0, host.output)
   }
   const sql = (statement, parameters = []) => JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))

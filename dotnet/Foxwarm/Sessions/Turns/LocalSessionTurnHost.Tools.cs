@@ -48,6 +48,7 @@ public sealed partial class LocalSessionTurnHost
             var response = new JsonObject { ["tool_use_id"] = SessionWait.Text(call["id"]) ?? throw new InvalidOperationException("Canonical function call is missing its stable ID."), ["name"] = SessionWait.Text(call["name"]) ?? "", ["response"] = result.Response.DeepClone() };
             if (result.Timing is not null) response["executionTiming"] = result.Timing.DeepClone();
             if (result.Response["error"] is null && result.ResolvedPaths is { Count: > 0 } paths) response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
+            if (result.ToolScriptSubCalls is { Count: > 0 } scriptCalls) { var meta = response["__meta"] as JsonObject ?? new JsonObject(); meta["toolScriptSubCalls"] = scriptCalls.DeepClone(); response["__meta"] = meta; }
             var wrapper = new JsonObject { ["role"] = "tool", ["parts"] = new JsonArray(new JsonObject { ["functionResponse"] = response }) };
             if (store is PersistentSessionAuthorityStore persistent)
             {

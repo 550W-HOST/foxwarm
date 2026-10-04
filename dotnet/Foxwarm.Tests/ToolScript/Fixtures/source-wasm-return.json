@@ -1,0 +1,22 @@
+{
+  "name": "wasm-return",
+  "snapshotBase64": "BQABCQAAAGlubGluZS5weQAACWNhbGxfdG9vbAIGBHJlYWQLAQYIZmlsZVBhdGgGCWlucHV0LnR4dAAAAAlpbmxpbmUucHkBAAAAAAABEDxweXRob24taW5wdXQtMD5lcHJpbnQoJ3NvdXJjZS1iZWZvcmUnKQp4ID0gY2FsbF90b29sKCdyZWFkJywgeydmaWxlUGF0aCc6J2lucHV0LnR4dCd9KQpwcmludCgnc291cmNlLWFmdGVyJykKcmV0dXJuIHgBeAMBAQMAAAABAQUAAAAAAQCA2sQJAYCAgCAAAcgBAMP/GEAJAAACAAAD8wiVTngoBAAAUhcBABYBABUnBAEABAIABAMAQQEAUQISAgAEBABSFwEAEQIAZgUGkU4GmQkGk04GlE4Glk4PAJBOBhUAA5BOABYABpBOABYAB5BOGyQADJBOJSsAD5BOLjgAEpBOOUQAFZBOOUQAGJBOG0YAGpBOG0YAHZBOTVsAIJBOR1wAI5BOR1wAJJBOZGUAJ5BOZGUAAAMEA/MIlU54BxA8cHl0aG9uLWlucHV0LTA+DXNvdXJjZS1iZWZvcmUFcHJpbnQIZmlsZVBhdGgJaW5wdXQudHh0CWNhbGxfdG9vbAxzb3VyY2UtYWZ0ZXIAAABlcHJpbnQoJ3NvdXJjZS1iZWZvcmUnKQp4ID0gY2FsbF90b29sKCdyZWFkJywgeydmaWxlUGF0aCc6J2lucHV0LnR4dCd9KQpwcmludCgnc291cmNlLWFmdGVyJykKcmV0dXJuIHgBAHgAAAMPAQAAAQAaAAAAAAAAGAEAAAAAAAAAAAAAAQABAQAAAA==",
+  "stdout": "source-before\n",
+  "resumeValue": {
+    "output": "qualified-source-text\n---\nFile has 1 line.\nFile size: 22 bytes.",
+    "content": "qualified-source-text\n",
+    "truncated": false,
+    "filePath": "input.txt",
+    "sizeBytes": 22,
+    "selectedBytes": 22,
+    "startLine": 1,
+    "endLine": 1,
+    "totalLines": 1
+  },
+  "vmRuntime": {
+    "engine": "@pydantic/monty",
+    "version": "0.0.19",
+    "snapshotFormat": "monty-pool-snapshot-v0.0.19"
+  },
+  "runId": "tsr_1791086998835_283be1c3"
+}

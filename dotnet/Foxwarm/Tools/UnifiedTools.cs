@@ -6,10 +6,10 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-internal sealed record SearchTool(string Source, string Name, string Description, JsonNode? Schema, string? Scope, bool Hidden, int Score);
+internal sealed record SearchTool(string Source, string Name, string Description, JsonNode? Schema, string? Scope, bool Hidden, int Score, JsonNode? OutputSchema = null);
 internal static partial class UnifiedTools
 {
-    internal static async Task<JsonObject> SearchAsync(ToolRegistry registry, JsonObject args, CancellationToken token, Func<string, string, string?, bool>? visible = null)
+    internal static async Task<JsonObject> SearchAsync(ToolRegistry registry, JsonObject args, CancellationToken token, Func<string, string, string?, bool>? visible = null, Foxwarm.ToolScript.ToolScriptDataBudget? budget = null)
     {
         ToolRegistry.Keys(args, ["query", "sources", "server", "nodeId", "limit", "includeSchema"]);
         var query = ToolRegistry.Text(args, "query") ?? "";
@@ -65,7 +65,7 @@ internal static partial class UnifiedTools
                         var name = SessionWait.Text(tool["name"]) ?? "unknown"; var description = SessionWait.Text(tool["description"]) ?? "";
                         if (visible is not null && !visible("mcp", name, server)) continue;
                         var score = Score(query, name, description, server);
-                        if (score >= 0) collected.Add(new("mcp", name, description, tool["inputSchema"], server, true, score));
+                        if (score >= 0) collected.Add(new("mcp", name, description, tool["inputSchema"], server, true, score, tool["outputSchema"]));
                     }
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -75,7 +75,24 @@ internal static partial class UnifiedTools
         }
         var comparer = StringComparer.Create(CultureInfo.GetCultureInfo("en-US"), false);
         var sorted = collected.OrderByDescending(tool => tool.Score).ThenBy(tool => tool.Source, comparer).ThenBy(tool => tool.Scope ?? "", comparer).ThenBy(tool => tool.Name, comparer).Take(limit).ToArray();
-        return new JsonObject { ["output"] = Render(sorted, collected.Count, warnings, schema) };
+        var response = budget is null ? new JsonObject { ["output"] = Render(sorted, collected.Count, warnings, schema) } : new JsonObject();
+        if (budget is not null)
+        {
+            var rows = new JsonArray();
+            for (var index = 0; index < sorted.Length; index++)
+            {
+                var tool = sorted[index]; budget.JsonValue(tool.Schema);
+                var id = tool.Source == "builtin" ? "builtin:" + tool.Name : tool.Source + ":" + tool.Scope + "/" + tool.Name;
+                var row = new JsonObject { ["toolId"] = id, ["source"] = tool.Source, ["name"] = tool.Name, ["description"] = tool.Description, ["hidden"] = tool.Hidden };
+                if (tool.Source == "node") row["nodeId"] = tool.Scope; else if (tool.Source == "mcp") row["server"] = tool.Scope;
+                if (schema && index < 10 && tool.Schema is not null) row["inputSchema"] = tool.Schema.DeepClone();
+                if (schema && index < 10 && tool.OutputSchema is not null) { budget.JsonValue(tool.OutputSchema); row["outputSchema"] = tool.OutputSchema.DeepClone(); }
+                budget.JsonValue(row); rows.Add(row);
+            }
+            response["tools"] = rows;
+            if (warnings.Count > 0) response["warnings"] = new JsonArray(warnings.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
+        }
+        return response;
     }
     private static int Score(string query, params string[] fields)
     {

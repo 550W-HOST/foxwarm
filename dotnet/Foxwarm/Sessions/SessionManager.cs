@@ -27,6 +27,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly ModelRouting modelRouting = new();
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
+    internal Foxwarm.ToolScript.MainToolScript ToolScript { get; }
     private readonly SessionWaitTimeouts waitTimeouts;
     private readonly WaitLiveness waitLiveness;
     private readonly ConcurrentDictionary<string, SessionOwner> sessions = new();
@@ -37,6 +38,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public SessionManager(string root, string workspace, ResponsesClientOptions options, HostModels models, string? skillsRoot = null)
     {
         Images = new(root);
+        ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var workspaceRoot = Path.GetFullPath(workspace);
@@ -85,6 +87,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in FileDeliveryDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled));
         foreach (var definition in TimerToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
+        foreach (var definition in ToolScriptToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);
@@ -215,6 +218,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         SessionOwner[] current;
         timers.StopFuture(); await timers.DisposeAsync();
+        ToolScript.BeginShutdown();
         onboot?.Close();
         if (onboot is not null) await onboot.DrainAsync();
         await DrainPublicationsAsync();
@@ -229,6 +233,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             .Select(session => session.Registry.Control.StopAsync(session.Id)).ToArray();
         await Task.WhenAll(compactStops.Select(task => (Task)task).Concat(stops));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
+        await ToolScript.DrainAsync();
         foreach (var session in current)
             if (!session.Entry.Retired) await session.Entry.SaveLane.SaveStrictAsync();
     }
@@ -239,6 +244,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         lock (lifecycle) accepting = false;
         onboot?.Close();
         admissionStop.Cancel();
+        ToolScript.BeginShutdown();
         executor.BeginShutdown();
         mcp.BeginShutdown();
         websockets.BeginShutdown();
@@ -254,6 +260,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await DrainPublicationsAsync();
         await waitTimeouts.DisposeAsync();
         await waitLiveness.DisposeAsync();
+        await ToolScript.DisposeAsync();
         await executor.DisposeAsync();
         await mcp.DisposeAsync();
         await websockets.DisposeAsync();

@@ -631,7 +631,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const progressMap = useContext(ToolScriptProgressContext)
   const isToolScriptTool = !!call && TOOLSCRIPT_TOOL_NAMES.has(call.name)
   const responseSubCalls = isToolScriptTool && responses.length > 0
-    ? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
+    ? ((responses[0] as any)?.__meta?.toolScriptSubCalls || (responses[0]?.response as any)?.subCalls) as ToolScriptSubCall[] | undefined
     : undefined
   const progressSubCalls = isToolScriptTool && call?.id ? progressMap[call.id] : undefined
   const toolScriptSubCalls = responseSubCalls || progressSubCalls

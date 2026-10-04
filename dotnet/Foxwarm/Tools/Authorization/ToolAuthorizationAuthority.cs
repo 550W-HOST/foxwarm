@@ -87,6 +87,7 @@ public sealed partial class WorkspaceTools
 {
     internal IReadOnlyList<AuthorizationPath> AuthorizationFacts(string name, JsonObject args)
     {
+        if (name is "run_script" or "start_toolscript_run" && SessionWait.Text(args["code"]) is string code && !string.IsNullOrWhiteSpace(code)) return [];
         string? raw = SessionWait.Text(args[name == "exec" ? "cwd" : "filePath"]);
         if (name == "apply_patch")
         {
@@ -98,7 +99,7 @@ public sealed partial class WorkspaceTools
         if (raw is null || raw.Length == 0) return [];
         var resolved = name switch
         {
-            "read" or "set_tool_rules" or "send_file" => ResolveReadWrite(raw, true), "write" or "image_write_to_file" => ResolveReadWrite(raw, false),
+            "read" or "set_tool_rules" or "send_file" or "run_script" or "start_toolscript_run" => ResolveReadWrite(raw, true), "write" or "image_write_to_file" => ResolveReadWrite(raw, false),
             "edit" => ResolvePatchPath(raw, true), "exec" => Paths.ExecCwd(raw),
             _ => throw new InvalidDataException("No physical path resolver for this capability.")
         };

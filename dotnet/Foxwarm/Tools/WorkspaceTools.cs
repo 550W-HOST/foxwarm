@@ -9,6 +9,8 @@ namespace Foxwarm.Tools;
 public sealed partial class WorkspaceTools : ITurnToolExecutor
 {
     internal string ToolDirectory => root;
+    internal bool Programmatic { get; set; }
+    internal Foxwarm.ToolScript.ToolScriptDataBudget? ScriptBudget { get; set; }
     private const int MaxBytes = 1024 * 1024;
     private readonly string root;
     private readonly PendingWriteRefs pending = new();
@@ -105,11 +107,15 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 }
                 var first = Bound("startLine"); var last = Bound("endLine");
                 var path = ResolveReadWrite(pathText, read: true);
-                if (!Directory.Exists(path) && !RegularFile(path)) return Error("not_file", "Regular file or directory not found.");
+                if (!Directory.Exists(path) && !RegularFile(path)) { if (Programmatic) throw new FileNotFoundException("Regular file or directory not found.", path); return Error("not_file", "Regular file or directory not found."); }
                 var mime = Path.GetExtension(path).ToLowerInvariant() switch { ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", ".bmp" => "image/bmp", _ => null };
+                JsonObject? data = null;
+                if (ScriptBudget is not null)
+                    ScriptBudget.Charge(mime is not null && !Directory.Exists(path) ? checked(12L * new FileInfo(path).Length) : 32L * MaxBytes);
                 var result = mime is not null && !Directory.Exists(path)
                     ? new JsonObject { ["output"] = "[Image loaded: " + pathText + "]", ["mimeType"] = mime, ["inlineData"] = new JsonObject { ["mimeType"] = mime, ["data"] = Convert.ToBase64String(await File.ReadAllBytesAsync(path, cancellationToken)) } }
-                    : new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken) };
+                    : new JsonObject { ["output"] = await FileToolCore.Read(path, pathText, first, last, cancellationToken, Programmatic ? value => data = value : null) };
+                if (data is not null) foreach (var (key, value) in data) result[key] = value?.DeepClone();
                 ReportPaths((pathText, path)); return result;
             }
             foreach (var key in new[] { "overwrite", "createDirs" })
@@ -152,10 +158,10 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             return new JsonObject { ["output"] = "written" };
         }
         catch (OperationCanceledException) { throw; }
-        catch (InvalidDataException error) { return Error("invalid_tool_arguments", error.Message); }
-        catch (ArgumentException) { return Error("invalid_path", "Invalid path."); }
-        catch (IOException error) { return Error("tool_io_error", error.Message); }
-        catch (UnauthorizedAccessException) { return Error("tool_io_error", "Workspace access denied."); }
+        catch (InvalidDataException error) { if (Programmatic) throw; return Error("invalid_tool_arguments", error.Message); }
+        catch (ArgumentException) { if (Programmatic) throw; return Error("invalid_path", "Invalid path."); }
+        catch (IOException error) { if (Programmatic) throw; return Error("tool_io_error", error.Message); }
+        catch (UnauthorizedAccessException) { if (Programmatic) throw; return Error("tool_io_error", "Workspace access denied."); }
     }
 
     private string ResolveReadWrite(string path, bool read) => Paths.FilePath(path);

@@ -6,6 +6,7 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 
 ## Key units
 
+- [limited .NET host](../units/dotnet.md#unmanaged-main-toolscript) — separate unmanaged Main native ToolScript port, exact-owner host bridge, Source run records and its current safety boundary.
 - [src-toolscript](../units/src-toolscript.md) — Foxwarm tool handlers, run persistence, host-call dispatch, suspension, and continuation.
 
 ## Public interfaces

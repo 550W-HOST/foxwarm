@@ -7,6 +7,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.35.1" />
+    <PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="all" />
+    <Protobuf Include="ToolScript/Protocol/monty.proto" GrpcServices="None" />
+    <Content Include="ToolScript/*LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="ToolScript/THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
     <Content Include="../../templates/agents/00_SYSTEM.md" Link="templates/agents/00_SYSTEM.md" CopyToOutputDirectory="PreserveNewest" />

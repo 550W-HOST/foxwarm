@@ -10,7 +10,7 @@ internal static class IsolatedToolCompatibility
     private static readonly HashSet<string> Structural = new(StringComparer.Ordinal)
     { "create_agent", "list_agents", "set_agent_inherit", "set_agent_isolated", "move_session", "create_session", "create_child_session", "delete_session", "get_session_messages" };
     private static readonly HashSet<string> DefaultBuiltins = new(StringComparer.Ordinal)
-    { "apply_patch_memory", "skill", "image_crop", "get_archived_messages", "get_archived_blocks", "recall", "session", "send_to_session", "wait", "submit_compact_plan", "search_tools", "create_timer", "list_timers", "update_timer", "delete_timer" };
+    { "apply_patch_memory", "skill", "image_crop", "get_archived_messages", "get_archived_blocks", "recall", "session", "send_to_session", "wait", "submit_compact_plan", "search_tools", "create_timer", "list_timers", "update_timer", "delete_timer", "run_script", "start_toolscript_run", "continue_script", "list_toolscript_runs", "get_toolscript_run", "cancel_toolscript_run" };
     internal static AgentIsolation Metadata(JsonNode? raw)
     {
         var map = raw as JsonObject; var isolated = Truthy(map?["isolated"]);

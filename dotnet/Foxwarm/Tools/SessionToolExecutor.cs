@@ -3,7 +3,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOwner hosted, SessionManager sessions, ToolRegistry registry)
+internal sealed partial class SessionToolExecutor(ITurnToolExecutor workspace, SessionOwner hosted, SessionManager sessions, ToolRegistry registry)
     : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
@@ -55,7 +55,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token); hosted.Entry.RequireIdentityAuthority();
         var previous = invocation.Value; var current = new TurnToolInvocation(SessionWait.Text(call["id"]) ?? "") { Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null }; invocation.Value = current;
         try { var response = await ExecuteCoreAsync(call, token);
-            return new(response, current.Timing, response["error"] is null ? current.ResolvedPaths : null, current.DeferredCwd); }
+            return new(response, current.Timing, response["error"] is null ? current.ResolvedPaths : null, current.DeferredCwd, current.ToolScriptSubCalls); }
         finally { invocation.Value = previous; }
     }
     public void BeginTurn()
@@ -93,7 +93,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
                 var identity = hosted.Id;
                 if (invocation.Value is { } current && workspace is WorkspaceTools)
                 { current.Files = sessions.IdentityWorkspace(hosted); current.ExecFiles = sessions.IdentityWorkspace(hosted, execSnapshot.Value?.Cwd); }
-                if (invocation.Value?.Files is { } files) files.ResolvedPaths = paths => invocation.Value!.ResolvedPaths = (JsonArray)paths.DeepClone();
+                if (invocation.Value?.Files is { } files) { files.Programmatic = Programmatic; files.ScriptBudget = ScriptBudget; files.ResolvedPaths = paths => invocation.Value!.ResolvedPaths = (JsonArray)paths.DeepClone(); }
                 await AuthorizeAsync(resolved, cancellationToken);
                 if (identity == hosted.Id) break;
             }
@@ -109,21 +109,21 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         catch (ToolAuthorizationUnavailableException error)
         { Interlocked.Exchange(ref policyUnavailable, 1); return UnsupportedTurnToolExecutor.ToolError(ToolAuthorizationUnavailableException.Code, error.Message); }
         catch (ToolAuthorizationDeniedException error)
-        { return UnsupportedTurnToolExecutor.ToolError("tool_authorization_denied", error.Message); }
+        { if (Programmatic) throw; return UnsupportedTurnToolExecutor.ToolError("tool_authorization_denied", error.Message); }
         catch (ArgumentException error)
-        { return UnsupportedTurnToolExecutor.ToolError("invalid_path", error.Message); }
+        { if (Programmatic) throw; return UnsupportedTurnToolExecutor.ToolError("invalid_path", error.Message); }
         catch (UnauthorizedAccessException error)
-        { return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message); }
+        { if (Programmatic) throw; return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         { return UnsupportedTurnToolExecutor.ToolError("tool_call_cancelled", "Tool request canceled. Started effects may have occurred and were not reversed."); }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or IOException or System.Text.Json.JsonException or NotSupportedException or TimeoutException or System.ComponentModel.Win32Exception)
-        { return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message); }
+        { if (Programmatic) throw; return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message); }
     }
     private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)
     {
         string? initial = null; string? observed = null;
         var response = await hosted.Executor.ExecuteAsync(hosted.Id, args, token, paths: ExecFiles.Paths,
-            observeCwd: (start, end) => { initial = start; observed = end; });
+            observeCwd: (start, end) => { initial = start; observed = end; }, programmatic: ScriptBudget);
         if (observed is null) return response;
         if (execSnapshot.Value is not null)
         {
@@ -182,11 +182,12 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         handlers["submit_compact_plan"] = (_, _, _) => Task.FromResult(UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor."));
         foreach (var name in new[] { "move_session", "delete_session", "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
             handlers[name] = (owner, args, token) => owner.ExecuteAgentAsync(name, args, token);
+        foreach (var name in new[] { "run_script", "start_toolscript_run", "continue_script", "list_toolscript_runs", "get_toolscript_run", "cancel_toolscript_run" }) handlers[name] = (owner, args, token) => owner.ExecuteToolScriptAsync(name, args, token);
         foreach (var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }) handlers[name] = (owner, args, token) => owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["send_file"] = (owner, args, token) => owner.Manager.SendFileAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file resolver."), args, token);
         handlers["image_write_to_file"] = (owner, args, token) => owner.Manager.ExportImageAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file resolver."), args, token);
         handlers["set_tool_rules"] = (owner, args, token) => owner.Manager.InstallToolRulesAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file reader."), args, token);
-        handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token, (source, name, server) => owner.Manager.ToolVisible(owner.Hosted, source, name, server));
+        handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token, (source, name, server) => owner.Manager.ToolVisible(owner.Hosted, source, name, server), owner.ScriptBudget);
         handlers["call_tool"] = (_, _, _) => throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
         handlers["mcp_config"] = (_, args, token) => mcp.ConfigureAsync(args, token);
         handlers["list_mcp_servers"] = (_, args, token) => { ToolRegistry.Keys(args, []); return mcp.ListServersAsync(token); };
@@ -194,12 +195,12 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "apply_patch" or "exec" ? "node" : "builtin";
-            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules" or "move_session" or "create_timer" or "list_timers" or "update_timer" or "delete_timer"), handlers[name]);
+            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules" or "move_session" or "create_timer" or "list_timers" or "update_timer" or "delete_timer" or "start_toolscript_run" or "list_toolscript_runs" or "get_toolscript_run" or "cancel_toolscript_run"), handlers[name]);
         }
         return registry;
     }
 }
 
 internal sealed record TurnToolPreparation(JsonObject Response, bool PolicyUnavailable = false);
-internal sealed record TurnToolExecution(JsonObject Response, JsonObject? Timing = null, JsonArray? ResolvedPaths = null, string? DeferredCwd = null);
-internal sealed class TurnToolInvocation(string callId) { internal string CallId { get; } = callId; internal WorkspaceTools? Files { get; set; } internal WorkspaceTools? ExecFiles { get; set; } internal JsonObject? Timing { get; set; } internal JsonArray? ResolvedPaths { get; set; } internal string? DeferredCwd { get; set; } }
+internal sealed record TurnToolExecution(JsonObject Response, JsonObject? Timing = null, JsonArray? ResolvedPaths = null, string? DeferredCwd = null, JsonArray? ToolScriptSubCalls = null);
+internal sealed class TurnToolInvocation(string callId) { internal string CallId { get; } = callId; internal WorkspaceTools? Files { get; set; } internal WorkspaceTools? ExecFiles { get; set; } internal JsonObject? Timing { get; set; } internal JsonArray? ResolvedPaths { get; set; } internal string? DeferredCwd { get; set; } internal JsonArray? ToolScriptSubCalls { get; set; } }

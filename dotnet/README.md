@@ -313,6 +313,25 @@ Bare `POST /api/sessions` and `{}` keep the historical generated `s_<GUID>` and 
 
 `host-e2e.py` retains CLI/SSE and clean restart checks. Eight concentrated browser drivers use the original App/Chat and locally scripted Responses: `experimentHostChat` (chat/queue/Stop), `Agents` (ownership/snapshot/Sidebar), `DevTools` (edit/patch/exec), `Files` (bounded reads/cached retries), `Knowledge` (inheritance/skills), `ModelCompact` (current/child settings, compaction and exact Archive navigation), `Observation` (status/pages/goals) and `Wait` (Continue/activity collaboration). Each corresponding `.e2e.mjs` lives in `packages/webui/test/`, owns separate disposable roots and performs clean-process restart checks where relevant. No paid provider is required. Run these .NET process-tree tests inside a verified hard resource limit; the test commands operate only on their disposable roots and clean up afterward.
 
+## Unmanaged Main ToolScript
+
+The existing executable supports `run_script`/`continue_script` plus discoverable start/get/list/cancel tools. It drives the official pinned Monty 0.0.19 standalone native protocol directly from .NET, without Node, CPython, a JavaScript evaluator or a WASM fallback. Acquire its Linux x64 GNU prerequisite in a separate prefix:
+
+```sh
+python3 dotnet/scripts/acquire-monty-native.py .temp/monty-native
+export FOXWARM_EXPERIMENT_MONTY_BINARY="$PWD/.temp/monty-native/bin/monty"
+```
+
+Use inline code or a native-resolved file with current read permission. Top-level `args` and `main(args)` are supported. Nested tools use the existing exact Session owner, concrete authorization, cancellation/postaction controls and native cwd. Script reads and settled exec expose exact structured data only at the inclusive 1 MiB actual selected/log byte boundary; larger captures retain their preview/locator and omit `content`. Structured discovery returns actual SDK schemas rather than model-facing declaration text. The final outer result still uses the ordinary model text/image guard.
+
+`ask_agent` and safe-boundary timeouts save Source-compatible opaque native snapshots. Continue returns only the new stdout and resumes an already-settled host return/exception without replaying its effects or rereading source. Cumulative stdout has a separate 64 MiB UTF-8 failure boundary. A conservative 1 GiB parent data activity budget covers retained data and concurrent materialization; it is not a process RSS or sandbox guarantee. The native 64 MiB interpreter and 256 MiB protocol frame settings are unchanged. Large run strings use standard segmented JSON writing, and record loading preflights decoded costs before constructing the JSON tree.
+
+Run files remain under `state/toolscript-runs`. Initial state commits before native effects. Active cancel returns a request until the execution owner settles started work and saves its actual state. Shutdown drains admitted activity and owned native children. Write faults preserve truthful committed state; unusable/uncommitted continuation IDs are not presented as usable. Old over-budget or unsupported managed records are retained, not repaired, silently truncated, replayed or migrated into this unmanaged host. Literal historic run ownership is not rewritten through Session aliases.
+
+Native/official-SDK image results enter the VM and records as canonical references; final returned image parts use the existing outer association and authenticated blob paths. Detached model requests use the existing low-level routing with a single raw prompt, no Session context/memory and no tools. Their canonical assistant projection exposes only text/image references; actual generated image outputs remain limited by the existing provider parsers, so this projection alone is not a provider-to-image support claim. No managed-session orchestration, local imports, remote execution or new recovery service is added.
+
+See the [canonical ToolScript runtime/safety contract](../docs/code-index/units/dotnet.md#unmanaged-main-toolscript). Production-driver tests are in `Foxwarm.Tests/ToolScript`, and `packages/webui/test/experimentHostToolScript.e2e.mjs` uses the original App, real native engine, local scripted provider and official SDK peers. Protocol/license notices ship with the existing executable; native redistributors must retain the artifact's upstream notices.
+
 ## Build and tests
 
 With a .NET 10 SDK selected:
