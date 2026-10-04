@@ -42,7 +42,7 @@ internal sealed class ToolScriptRunStore(string root)
                 foreach (var retained in records) budget.JsonValue(retained);
                 var record = await budget.ReadRecordAsync(file, token);
                 if (record["ownerSessionId"]?.GetValue<string>() != owner || status is not null && record["status"]?.GetValue<string>() != status) continue;
-                records.Add(record); records.Sort((left, right) => Number(right["updatedAt"]).CompareTo(Number(left["updatedAt"])));
+                records.Add(record); records.Sort((left, right) => MainToolScript.Number(right["updatedAt"], 0).CompareTo(MainToolScript.Number(left["updatedAt"], 0)));
                 if (records.Count > limit) records.RemoveAt(records.Count - 1);
             }
             catch (ToolScriptDataLimitException) { throw; }
@@ -50,7 +50,6 @@ internal sealed class ToolScriptRunStore(string root)
         }
         return records;
     }
-    private static double Number(JsonNode? node) => node is JsonValue value && value.TryGetValue<double>(out var number) ? number : 0;
     internal async Task WriteAsync(JsonObject record, CancellationToken token, ToolScriptDataBudget? activity = null)
     {
         var id = record["runId"]?.GetValue<string>() ?? throw new InvalidDataException("ToolScript record requires runId."); PathFor(id);

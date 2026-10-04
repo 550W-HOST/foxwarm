@@ -20,11 +20,11 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         internal readonly ToolScriptContext Context;
         internal readonly CancellationTokenSource Cancel;
         internal readonly CancellationToken Token;
-        internal readonly string LiteralOwner;
+        internal readonly string RecordOwner;
         internal volatile string? CommittedStatus;
         internal ActiveRun(JsonObject record, ToolScriptContext context, CancellationToken token)
         {
-            Record = record; Context = context; LiteralOwner = context.LiteralOwner;
+            Record = record; Context = context; RecordOwner = Required(record, "ownerSessionId");
             Cancel = CancellationTokenSource.CreateLinkedTokenSource(token); Token = Cancel.Token;
             CommittedStatus = record["snapshotBase64"] is not null ? "waiting" : null;
         }
@@ -55,7 +55,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             case "continue_script": return await ContinueAsync(args, context, token);
             case "get_toolscript_run": return Project(await RequiredAsync(Required(args, "runId"), context, token), lean: false);
             case "list_toolscript_runs":
-                var limit = args["limit"] is JsonValue v && v.TryGetValue<double>(out var count) && double.IsFinite(count) ? (int)Math.Clamp(Math.Truncate(count), 1, 200) : 20;
+                var count = Number(args["limit"], 20); var limit = double.IsFinite(count) ? (int)Math.Clamp(Math.Truncate(count), 1, 200) : 20;
                 var status = Text(args["status"]); var rows = await store.ListAsync(context.LiteralOwner, limit, status, token);
                 var budget = new ToolScriptDataBudget(); var output = new JsonArray();
                 foreach (var row in rows)
@@ -91,7 +91,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             using var lane = await store.AcquireAsync(id, token); if (store.Exists(id)) continue;
             var now = Now(); var record = new JsonObject
             {
-                ["runId"] = id, ["mode"] = mode, ["status"] = "running", ["ownerSessionId"] = context.LiteralOwner, ["agentName"] = context.Owner.Agent,
+                ["runId"] = id, ["mode"] = mode, ["status"] = "running", ["ownerSessionId"] = context.Owner.Id, ["agentName"] = context.Owner.Agent,
                 ["filePath"] = file ?? "<inline>", ["scriptPath"] = path, ["scriptName"] = path == "<inline>" ? "inline.py" : Path.GetFileName(path),
                 ["vmRuntime"] = RuntimeIdentity(), ["stdout"] = "", ["executedTools"] = new JsonArray(), ["relatedManagedSessions"] = new JsonArray(),
                 ["hostCallCount"] = 0, ["timeoutSecs"] = seconds, ["createdAt"] = now, ["updatedAt"] = now, ["startedAt"] = now
@@ -132,7 +132,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         if (active.TryGetValue(id, out var run))
         {
-            if (run.LiteralOwner != context.LiteralOwner) throw new InvalidDataException("ToolScript run is not owned by this session.");
+            if (run.RecordOwner != context.LiteralOwner) throw new InvalidDataException("ToolScript run is not owned by this session.");
             run.RequestCancel(); return new JsonObject { ["runId"] = id, ["status"] = run.CommittedStatus ?? "running", ["cancellationRequested"] = true };
         }
         using var lane = await store.AcquireAsync(id, token); var record = await RequiredAsync(id, context, token); ToolScriptRunStore.RequireUnmanaged(record);
@@ -153,7 +153,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
     private static string Required(JsonObject args, string key) => Text(args[key]) is { Length: > 0 } text ? text : throw new InvalidDataException(key + " is required.");
     private static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-    private static double Number(JsonNode? node, double fallback) => node is JsonValue value ? value.TryGetValue<double>(out var number) ? number : value.TryGetValue<long>(out var integer) ? integer : value.TryGetValue<int>(out var int32) ? int32 : value.TryGetValue<decimal>(out var decimalValue) ? (double)decimalValue : fallback : fallback;
+    internal static double Number(JsonNode? node, double fallback) => node is JsonValue value ? value.TryGetValue<double>(out var number) ? number : value.TryGetValue<long>(out var integer) ? integer : value.TryGetValue<int>(out var int32) ? int32 : value.TryGetValue<decimal>(out var decimalValue) ? (double)decimalValue : fallback : fallback;
     private static double Timeout(JsonNode? node, double fallback)
     { if (node is null || Text(node) == "") return fallback; var number = Number(node, double.NaN); return double.IsFinite(number) && number > 0 ? number : throw new InvalidDataException("timeoutSecs must be a positive number."); }
     private static string Mode(JsonObject args, bool background)
