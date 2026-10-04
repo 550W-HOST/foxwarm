@@ -79,6 +79,7 @@ interface ChatComposerProps {
   onHeightChange?: (height: number) => void
   onSend: (payload: { text: string; attachments: Array<{ ref: string; file: File }> }) => Promise<boolean>
   onCreateStreamingTranscriber: (options: {
+    signal: AbortSignal
     draftText: string
     onPartial: (text: string) => void
     onFinal: (text: string) => void
@@ -740,6 +741,7 @@ const ChatComposer = memo(function ChatComposer({
   const submitInFlightRef = useRef(false)
   const activeSessionIdRef = useRef(sessionId)
   activeSessionIdRef.current = sessionId
+  const recordingAbortRef = useRef<AbortController | null>(null)
   const recordingGenerationRef = useRef(0)
   const recordingLockRef = useRef(false)
   const unlockRecording = useCallback((focus = false) => {
@@ -855,6 +857,8 @@ const ChatComposer = memo(function ChatComposer({
   useEffect(() => {
     return () => {
       recordingGenerationRef.current += 1
+      recordingAbortRef.current?.abort()
+      recordingAbortRef.current = null
       streamingSessionRef.current?.cancel()
       streamingSessionRef.current = null
       void cleanupRecording()
@@ -1151,6 +1155,16 @@ const ChatComposer = memo(function ChatComposer({
   }, [mergePcmChunksToBuffer, pushAsrDebug])
 
   const handleRecordToggle = useCallback(async () => {
+    if (recordingLockRef.current && recordingAbortRef.current && !streamingSessionRef.current) {
+      recordingGenerationRef.current += 1
+      recordingAbortRef.current.abort()
+      recordingAbortRef.current = null
+      await cleanupRecording()
+      setIsRecordingAudio(false)
+      setTranscribingAudio(false)
+      unlockRecording()
+      return
+    }
     if (transcribingAudio || (recordingLockRef.current && !isRecordingAudio)) return
 
     if (isRecordingAudio) {
@@ -1178,6 +1192,8 @@ const ChatComposer = memo(function ChatComposer({
         pushAsrDebug(`rec stop error; ${e instanceof Error ? e.message : 'Failed to stop streaming audio recording'}`)
         setTranscribingAudio(false)
         recordingGenerationRef.current += 1
+        recordingAbortRef.current?.abort()
+        recordingAbortRef.current = null
         streamingSessionRef.current?.cancel()
         streamingSessionRef.current = null
         unlockRecording()
@@ -1187,12 +1203,16 @@ const ChatComposer = memo(function ChatComposer({
 
     if (loading || sessionMissing || !editorRef.current?.beginTranscription()) return
     const generation = ++recordingGenerationRef.current
-    const isCurrent = () => recordingGenerationRef.current === generation && activeSessionIdRef.current === sessionId
+    const controller = new AbortController()
+    recordingAbortRef.current = controller
+    const isCurrent = () => !controller.signal.aborted && recordingGenerationRef.current === generation && activeSessionIdRef.current === sessionId
     recordingLockRef.current = true
     setRecordingLocked(true)
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setTranscribeError('Current browser does not support microphone recording')
+      controller.abort()
+      recordingAbortRef.current = null
       unlockRecording()
       return
     }
@@ -1201,11 +1221,14 @@ const ChatComposer = memo(function ChatComposer({
     try {
       setTranscribeError(null)
       pushAsrDebug('rec start requested')
+      setIsRecordingAudio(true)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       pendingStream = stream
       if (!isCurrent()) { stream.getTracks().forEach(track => track.stop()); return }
+      audioStreamRef.current = stream
       pushAsrDebug('mic stream granted')
       const streamingSession = await onCreateStreamingTranscriber({
+        signal: controller.signal,
         draftText: serializeComposerDraft(draftRef.current),
         onPartial: (text) => {
           if (isCurrent()) editorRef.current?.updateTranscription(text)
@@ -1217,6 +1240,8 @@ const ChatComposer = memo(function ChatComposer({
             pushAsrDebug('rec final text empty after trim')
           }
           recordingGenerationRef.current += 1
+          controller.abort()
+          recordingAbortRef.current = null
           unlockRecording(true)
           setTranscribingAudio(false)
           setIsRecordingAudio(false)
@@ -1226,6 +1251,8 @@ const ChatComposer = memo(function ChatComposer({
         onError: (message) => {
           if (!isCurrent()) return
           recordingGenerationRef.current += 1
+          controller.abort()
+          recordingAbortRef.current = null
           setTranscribeError(message)
           setTranscribingAudio(false)
           setIsRecordingAudio(false)
@@ -1238,11 +1265,12 @@ const ChatComposer = memo(function ChatComposer({
       if (!isCurrent()) { streamingSession.cancel(); stream.getTracks().forEach(track => track.stop()); return }
 
       const audioContext = new AudioContext()
+      audioContextRef.current = audioContext
       await audioContext.resume().catch(() => {})
       if (!isCurrent()) {
         streamingSession.cancel()
         stream.getTracks().forEach(track => track.stop())
-        void audioContext.close()
+        void audioContext.close().catch(() => {})
         return
       }
       const source = audioContext.createMediaStreamSource(stream)
@@ -1284,7 +1312,6 @@ const ChatComposer = memo(function ChatComposer({
       processor.connect(gain)
       gain.connect(audioContext.destination)
 
-      audioContextRef.current = audioContext
       audioSourceRef.current = source
       audioProcessorRef.current = processor
       audioGainRef.current = gain
@@ -1298,6 +1325,8 @@ const ChatComposer = memo(function ChatComposer({
       setTranscribeError(e instanceof Error ? e.message : 'Failed to start microphone recording')
       pushAsrDebug(`rec start error; ${e instanceof Error ? e.message : 'Failed to start microphone recording'}`)
       recordingGenerationRef.current += 1
+      recordingAbortRef.current?.abort()
+      recordingAbortRef.current = null
       streamingSessionRef.current?.cancel()
       streamingSessionRef.current = null
       await cleanupRecording()

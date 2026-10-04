@@ -363,7 +363,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
           const res = await fetch(`${API_BASE_PATH}/asr/status`)
           if (!res.ok) throw new Error(`Failed to load ASR status (${res.status})`)
           const data = await res.json()
-          return Boolean(data?.configured && data?.available)
+          return Boolean(data?.configured && data?.available && data?.streamingSupported !== false)
         })
         if (!cancelled) setAsrAvailable(available)
       } catch (e) {
@@ -1819,12 +1819,14 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
   }, [sendSessionCommand])
 
   const handleCreateStreamingTranscriber = useCallback(async ({
+    signal,
     draftText,
     onPartial,
     onFinal,
     onError,
     onDebug,
   }: {
+    signal: AbortSignal
     draftText: string
     onPartial: (text: string) => void
     onFinal: (text: string) => void
@@ -1838,10 +1840,20 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
       let resolved = false
       let settled = false
       let terminal = false
+      let deadline: ReturnType<typeof setTimeout>
+      const clearDeadline = () => clearTimeout(deadline)
+      const cancel = () => {
+        if (terminal) return
+        terminal = true; clearDeadline()
+        if (!settled) { settled = true; reject(new DOMException('Recording cancelled', 'AbortError')) }
+        try { socket.close() } catch {}
+      }
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) { cancel(); return }
 
       const fail = (message: string) => {
         if (terminal) return
-        terminal = true
+        terminal = true; clearDeadline(); signal.removeEventListener('abort', cancel)
         onError(message)
         if (!settled) {
           settled = true
@@ -1854,10 +1866,12 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
         } catch {}
       }
 
+      deadline = setTimeout(() => fail('Speech connection did not become ready in time'), 10000)
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
         if (terminal) return
+        clearDeadline(); deadline = setTimeout(() => fail('Speech service did not become ready in time'), 10000)
         onDebug(`ws open; contextLength=${context.length} language=auto`)
         socket.send(JSON.stringify({
           type: 'start',
@@ -1872,13 +1886,17 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
           const payload = JSON.parse(String(event.data))
           if (payload.type === 'ready') {
             onDebug('ws ready received')
-            if (resolved) return
+            if (resolved) { fail('Speech service sent an unexpected ready response'); return }
+            clearDeadline()
             resolved = true
             settled = true
             let chunkCount = 0
             let totalBytes = 0
             resolve({
               sendAudioChunk: (chunk: ArrayBuffer) => {
+                if (terminal) return
+                if (socket.readyState !== WebSocket.OPEN) { fail('Speech connection closed while recording'); return }
+                if (socket.bufferedAmount + chunk.byteLength > 2 * 1024 * 1024) { fail('Speech connection is too slow. Try a shorter recording'); return }
                 if (socket.readyState === WebSocket.OPEN) {
                   socket.send(chunk)
                   chunkCount += 1
@@ -1890,29 +1908,26 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
               },
               stop: () => {
                 if (socket.readyState === WebSocket.OPEN) {
+                  clearDeadline(); deadline = setTimeout(() => fail('Final transcription timed out'), 30000)
                   socket.send(JSON.stringify({ type: 'stop' }))
                   onDebug(`ws stop sent; chunkCount=${chunkCount} totalBytes=${totalBytes}`)
                 }
               },
-              cancel: () => {
-                terminal = true
-                onDebug('ws cancel called')
-                try {
-                  socket.close()
-                } catch {}
-              },
+              cancel,
             })
             return
           }
 
           if (payload.type === 'partial') {
+            if (!resolved || typeof payload.text !== 'string') { fail('Speech service sent an invalid transcript'); return }
             onDebug(`ws partial received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onPartial(typeof payload.text === 'string' ? payload.text : '')
             return
           }
 
           if (payload.type === 'final') {
-            terminal = true
+            if (!resolved || typeof payload.text !== 'string') { fail('Speech service sent an invalid final transcript'); return }
+            terminal = true; clearDeadline(); signal.removeEventListener('abort', cancel)
             onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
@@ -1927,7 +1942,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
           }
         } catch (error) {
           onDebug(`ws invalid payload; ${error instanceof Error ? error.message : 'unknown error'}`)
-          fail(error instanceof Error ? error.message : 'Invalid streaming ASR response')
+          fail('Invalid streaming ASR response')
         }
       }
 
@@ -1940,11 +1955,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
         onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)} terminal=${String(terminal)}`)
         if (terminal) return
         if (resolved) fail('Streaming ASR connection closed before the final transcript')
-        else {
-          terminal = true
-          settled = true
-          reject(new Error('Streaming ASR connection closed before ready'))
-        }
+        else fail('Streaming ASR connection closed before ready')
       }
     })
   }, [messages])

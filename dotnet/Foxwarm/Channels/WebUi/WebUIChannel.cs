@@ -17,6 +17,8 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
         {
             try { await next(); }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+            catch (BadHttpRequestException error) when (!context.Response.HasStarted)
+            { await Results.Problem("Request body is invalid or too large.", statusCode: error.StatusCode is >= 400 and <= 599 ? error.StatusCode : 400).ExecuteAsync(context); }
             catch (Exception error) when (!context.Response.HasStarted && error is IOException or InvalidDataException or InvalidOperationException or NotSupportedException)
             { await Results.Problem(error.Message, statusCode: 500).ExecuteAsync(context); }
         });
@@ -70,7 +72,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
                 new { name = "compact", description = "Compact history.", usage = "/compact", requiresSession = true }
             }
         }));
-        app.MapGet("/api/asr/status", () => Results.Ok(new { configured = false, available = false }));
+        new Foxwarm.Asr.AsrProxy(models.ConfigurationOwner, app.Lifetime.ApplicationStopping).Register(app);
         RegisterAgentRoutes(app);
         RegisterListRoutes(app);
         RegisterPresentationRoutes(app);

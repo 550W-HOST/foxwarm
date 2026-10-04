@@ -27,6 +27,8 @@ await writeFile(entryPath, `
   window.fetch = async () => ({ ok: true, json: async () => ({ commands: [{ name: '/help', description: 'Help' }] }) })
   window.fixtureMicMode = 'ok'
   window.fixtureStreamMode = 'ok'
+  window.fixtureResumeMode = 'ok'
+  window.fixtureClosedContexts = 0
   window.fixtureStoppedTracks = 0
   window.fixtureStreamSessions = []
   window.fixtureGetUserMedia = async () => {
@@ -41,8 +43,8 @@ await writeFile(entryPath, `
     createMediaStreamSource() { return { connect() {}, disconnect() {} } }
     createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null } }
     createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} } }
-    resume() { return Promise.resolve() }
-    close() { return Promise.resolve() }
+    resume() { return window.fixtureResumeMode === 'hold' ? new Promise(resolve => { window.fixtureReleaseResume = resolve }) : Promise.resolve() }
+    close() { window.fixtureClosedContexts += 1; window.fixtureReleaseResume?.(); return Promise.resolve() }
   }
   const noop = async () => {}
   const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window)
@@ -1524,6 +1526,17 @@ test(`${spec.name} unlocks the draft on microphone rejection and retries`, async
   await page.waitForFunction(() => window.fixtureStreamSessions.length === 1)
   await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onFinal(''))
   await page.waitForFunction(() => window.fixtureDraft === 'still editable' && window.fixtureEditor()?.contentEditable === 'true')
+}))
+
+test(`${spec.name} cancels microphone startup while audio-context resume is pending`, async () => withBrowser(spec, async page => {
+  await page.type('[role="textbox"][aria-label="Message"]', 'retained draft')
+  await page.evaluate(() => { window.fixtureResumeMode = 'hold' })
+  await page.click('button[aria-label="Start recording"]')
+  await page.waitForFunction(() => typeof window.fixtureReleaseResume === 'function')
+  await page.click('button[aria-label="Stop recording and transcribe"]')
+  await page.waitForFunction(() => window.fixtureClosedContexts > 0 && window.fixtureStoppedTracks > 0 && window.fixtureStreamSessions[0].cancelled && window.fixtureEditor()?.contentEditable === 'true')
+  await page.evaluate(() => { window.fixtureStreamSessions[0].callbacks.onPartial('late'); window.fixtureStreamSessions[0].callbacks.onFinal('late final') })
+  assert.equal(await page.evaluate(() => window.fixtureDraft), 'retained draft')
 }))
 
 test(`${spec.name} discards pending microphone startup after a Session change or stream setup failure`, async () => withBrowser(spec, async page => {
