@@ -11,11 +11,13 @@ public sealed class SessionIngress
     private readonly SessionRegistry registry;
     public SessionIngress(SessionRegistry registry) => this.registry = registry;
 
-    public async Task EnqueueAsync(string sessionId, QueueItem item)
+    public Task EnqueueAsync(string sessionId, QueueItem item) => EnqueueCoreAsync(sessionId, item, false);
+    internal Task EnqueueTimerAsync(string sessionId, QueueItem item) => EnqueueCoreAsync(sessionId, item, true);
+    private async Task EnqueueCoreAsync(string sessionId, QueueItem item, bool timer)
     {
         EnsureSupported(item);
         var entry = registry.GetRequired(sessionId);
-        var admitted = await entry.SaveLane.AdmitAsync(item, SaveKind.BestEffort).ConfigureAwait(false);
+        var admitted = timer ? await entry.SaveLane.AdmitTimerAsync(item).ConfigureAwait(false) : await entry.SaveLane.AdmitAsync(item, SaveKind.BestEffort).ConfigureAwait(false);
         if (admitted && entry.WithState(state => !state.Busy && !state.Stopping && state.Queue.Count > 0)) registry.Trigger(sessionId);
     }
 

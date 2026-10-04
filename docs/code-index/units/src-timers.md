@@ -76,7 +76,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 - One-time timers are deleted after firing or on delivery failure; cron timers persist and only update `lastTriggeredAt`.
 - Input validation enforces allowed characters in `sessionPrefix`, positive timeout values, and exactly one schedule mode for creates / schedule-changing updates.
 - `createTimer`/`updateTimer` read owner defaults through SessionRuntime projections and never hydrate or save Worker-owned Session authority in Main. New-session timers snapshot model plus raw effort together. At fire time that persisted pair is inherited state, so it is re-normalized against one current models-config snapshot: compatible effort and virtual-union support remain stored on the child, while config-drift incompatibility clears to unset/default instead of failing delivery. Model edits likewise preserve compatible effort or clear incompatible effort without adding a model-facing timer effort argument. `updateTimer` rejects internal wait-timeout timers, verifies optional session ownership scope, preserves omitted fields, supports message/schedule/new-session target edits, and cancels/reschedules the active job so `nextRunAt` reflects the new schedule.
-- Cron runtime behavior is governed by installed `node-schedule` + `cron-parser`: 5-field and optional-seconds 6-field cron are accepted; `L` works for last day-of-month and last weekday-of-month; `W` is rejected.
+- Cron runtime behavior is governed by installed `node-schedule` + `cron-parser`: macros and padded shorter forms are accepted alongside 5-field and optional-seconds 6-field cron; `L` works for last day-of-month and last weekday-of-month; `W` is rejected.
 - The persistence layer uses `DiskJsonData` with backups disabled for lightweight writes.
 
 ## Integration
@@ -92,3 +92,6 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 - [2026-06-29] Add `updateTimer`/`update_timer` so agents can modify timer message, schedule, and new-session target fields without delete+create. Updating must refresh scheduler state and persist atomically; on scheduling failure, restore the previous valid timer/job.
 - [2026-06-29] Document and test cron syntax against the actual installed runtime, not stale package README wording: `L` is supported by current `node-schedule`/`cron-parser`, while `W` remains unsupported.
 - [2026-07-06/2026-07-07] Timer-fired user content is a source-wrapped inbound event, not a bracketed system header: use one `<foxwarm-message type="timer" timerId="..." mode="..." firedAt="..." localTime="..." hint="...">raw body</foxwarm-message>` system part. Wait timeouts remain pure metadata but carry the human message in the body: `<foxwarm-system kind="event" type="wait-timeout" seconds="...">...</foxwarm-system>`.
+## Ordinary .NET owner
+
+The Main-local C# timer owner, Source-derived forward calculator, retained-record/publication rules and canonical-only wait compatibility are documented in [the .NET timer contract](dotnet.md#main-session-timers). This pointer does not change TypeScript timer lifecycle behavior.

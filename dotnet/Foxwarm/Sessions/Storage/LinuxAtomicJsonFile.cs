@@ -46,6 +46,7 @@ public sealed class LinuxAtomicJsonFile
 
     public void Write(SessionAuthorityDocument document, CancellationToken cancellationToken = default) => WriteText(document.ToJson(indented: true), cancellationToken);
     internal void WritePayload(System.Text.Json.Nodes.JsonObject payload) => WriteText(payload.ToJsonString(), default);
+    internal void WriteTextPayload(string payload, CancellationToken cancellationToken) => WriteText(payload, cancellationToken);
     private void WriteText(string text, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);

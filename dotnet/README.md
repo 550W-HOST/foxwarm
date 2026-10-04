@@ -293,6 +293,14 @@ Wait IDs, source declarations, waitAll deferred inputs and diagnostic fingerprin
 
 The concentrated original-App/local-provider driver is `packages/webui/test/experimentHostWait.e2e.mjs`; it owns disposable directories, hosts and Chromium and exercises clean-process restart, actual child/exec callbacks, paired errors, strict persistence failure boundaries, original Continue and live waiting presentation. Run it with the same configured SDK and hard process-tree test limit used for the other host drivers.
 
+## Main Session timers
+
+The hidden `create_timer`, `list_timers`, `update_timer` and `delete_timer` tools schedule ordinary messages for existing or fresh Main-local Sessions. Use the existing configured global skills root for `timer-automation`. Once/cron schedules persist independently in `state/timers.json`; timer jobs arm only after real Main and mandatory Session startup validation. Future targets stay cold until due. New-session timers capture owner settings, revalidate the current model catalog at firing, allocate a fresh non-reserved identity and create no parent relationship.
+
+Malformed or unreadable timer stores disable only timer management and are not overwritten. Unknown values, duplicate IDs and unsupported old records remain retained; healthy unique rows still operate. Future cancellation does not undo a delivery already admitted to the ordinary queue or a creation already started. An old callback cannot remove an updated replacement. Overdue once records fire after restart; cron resumes from startup-now without downtime replay. Source-shaped raw timer messages use the normal user/event queue, strict model tool pairing and Stop/Continue behavior. The canonical wait controller remains the only wait clock, including when old internal timer rows exist.
+
+The bounded forward cron implementation derives from cron-parser 4.9.0 and required Luxon 3.7.2 operations, using platform timezone data and preserving the forward loop bound. It does not embed Node, add a calculator package or include unrelated calendar/reverse APIs. Its complete MIT notices accompany build/publish output. The [canonical timer contract](../docs/code-index/units/dotnet.md#main-session-timers) covers mutation publication, retained records, isolated restrictions and validation paths. Remote Node/Worker scheduling, timer administration APIs and a durable outbox are not added.
+
 ### Trusted local execution
 
 Semantic admission rejects unsupported effective non-master Node intent but accepts persisted Main cwd. The existing cwd HTTP setter trims/clears without filesystem validation or directory creation; native effects validate their actual targets. Busy/stopping/incomplete authority still fails automatic recovery. See the [native path/cwd contract](../docs/code-index/units/dotnet.md#main-native-paths-and-cwd).

@@ -182,6 +182,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         handlers["submit_compact_plan"] = (_, _, _) => Task.FromResult(UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor."));
         foreach (var name in new[] { "move_session", "delete_session", "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
             handlers[name] = (owner, args, token) => owner.ExecuteAgentAsync(name, args, token);
+        foreach (var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }) handlers[name] = (owner, args, token) => owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["send_file"] = (owner, args, token) => owner.Manager.SendFileAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file resolver."), args, token);
         handlers["image_write_to_file"] = (owner, args, token) => owner.Manager.ExportImageAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file resolver."), args, token);
         handlers["set_tool_rules"] = (owner, args, token) => owner.Manager.InstallToolRulesAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file reader."), args, token);
@@ -193,7 +194,7 @@ internal sealed class SessionToolExecutor(ITurnToolExecutor workspace, SessionOw
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "apply_patch" or "exec" ? "node" : "builtin";
-            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules" or "move_session"), handlers[name]);
+            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules" or "move_session" or "create_timer" or "list_timers" or "update_timer" or "delete_timer"), handlers[name]);
         }
         return registry;
     }

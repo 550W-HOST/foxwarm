@@ -84,6 +84,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
         foreach (var definition in FileDeliveryDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled));
+        foreach (var definition in TimerToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions()) definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions()) definitions.Add(definition);
@@ -95,6 +96,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         tools = SessionToolExecutor.CreateRegistry(definitions, mcp, owner => agents.AgentDirectory(owner.Agent));
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
+        timers = new(this.root, DeliverTimerAsync, TimerPlacement);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
     }
@@ -103,6 +105,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private async Task LoadOwnersAsync(bool ensureMain)
     {
         await EnsureIdentityStartupAsync();
+        await timers.LoadAsync();
         foreach (var row in Catalog.List())
         {
             var id = SessionCatalog.Text(row["id"])!; var agent = SessionCatalog.Text(row["agent"])!;
@@ -115,6 +118,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await Task.WhenAll(mandatory);
         servicesReady = true;
         foreach (var owner in sessions.Values) WaitTransition(owner.Id);
+        if (ensureMain) { foreach (var owner in sessions.Values) await ReconcileTimerWaitsAsync(owner); timers.Start(); }
         executor.StartReconciliation();
         foreach (var owner in sessions.Values)
             if (owner.Entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary))) _ = owner.StartProcessing();
@@ -134,6 +138,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Changed?.Invoke(value);
         };
         CaptureLocalProjection(owner);
+        if (servicesReady) _ = ReconcileTimerWaitsAsync(owner);
         TopologyChanged?.Invoke();
     }
     private void WaitTransition(string id) { if (!IsDeletionClaimed(id)) { waitTimeouts.Transition(id); waitLiveness.Transition(id); } }
@@ -208,6 +213,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async Task ShutdownAsync()
     {
         SessionOwner[] current;
+        timers.StopFuture(); await timers.DisposeAsync();
         onboot?.Close();
         if (onboot is not null) await onboot.DrainAsync();
         await DrainPublicationsAsync();
@@ -228,6 +234,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public void BeginShutdown()
     {
+        timers.StopFuture();
         lock (lifecycle) accepting = false;
         onboot?.Close();
         admissionStop.Cancel();
@@ -241,6 +248,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         BeginShutdown();
+        await timers.DisposeAsync();
         if (onboot is not null) await onboot.DisposeAsync();
         await DrainPublicationsAsync();
         await waitTimeouts.DisposeAsync();

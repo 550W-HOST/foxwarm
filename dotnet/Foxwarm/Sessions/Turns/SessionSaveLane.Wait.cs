@@ -4,6 +4,9 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
+    private static readonly AsyncLocal<bool> TimerQueueScope = new();
+    internal static bool IsTimerQueueWrite => TimerQueueScope.Value;
+    internal Task<bool> AdmitTimerAsync(QueueItem item) => AdmitWithReceiptAsync(item, null, SaveKind.BestEffort, timer: true);
     private static readonly AsyncLocal<bool> WaitCommitScope = new();
     internal static bool IsWaitCommit => WaitCommitScope.Value;
     private async Task CommitWaitSnapshotAsync(SessionSnapshot staged)
@@ -15,7 +18,7 @@ public sealed partial class SessionSaveLane
     }
     // All wait/queue mutations share the existing ordered save lane. Stop retains its immediate state/CTS path.
     internal Task<bool> AdmitAsync(QueueItem item, SaveKind kind) => AdmitWithReceiptAsync(item, null, kind);
-    private async Task<bool> AdmitWithReceiptAsync(QueueItem item, string? receipt, SaveKind kind = SaveKind.Strict)
+    private async Task<bool> AdmitWithReceiptAsync(QueueItem item, string? receipt, SaveKind kind = SaveKind.Strict, bool timer = false)
     {
         using var accepted = entry.AdmitMutation();
         var admitted = false;
@@ -57,8 +60,10 @@ public sealed partial class SessionSaveLane
             if (kind == SaveKind.BestEffort)
             {
                 entry.WithState(Publish); // Ordinary input stays hot even when its save attempt fails.
+                var priorTimerScope = TimerQueueScope.Value; TimerQueueScope.Value = timer;
                 try { await store.CommitAsync(entry.SnapshotForPersistence(), kind); }
                 catch (Exception error) { entry.RecordBestEffortFailure(error); }
+                finally { TimerQueueScope.Value = priorTimerScope; }
             }
             else
             {

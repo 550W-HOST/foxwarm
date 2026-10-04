@@ -197,7 +197,7 @@ internal sealed partial class SessionManager
     }
 
     private async Task<SessionOwner> CreateNamedLockedAsync(string agentName, string sessionName, string? parentId,
-        string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null, IReadOnlyList<string>? selectedFiles = null, bool startupMain = false)
+        string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null, IReadOnlyList<string>? selectedFiles = null, bool startupMain = false, bool timerCreation = false, string? timerNode = null)
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         if (!agents.Exists(agentName)) throw new InvalidDataException($"Agent '{agentName}' does not exist.");
@@ -210,6 +210,7 @@ internal sealed partial class SessionManager
         return await WithCreationIdentityAsync(id, async () =>
         {
         var (model, effort) = startupMain ? ((string?)null, (string?)null) : ValidateModelSettings(inherited, forceModel);
+        if (timerCreation) model = inherited?.Model;
         var snapshotModel = startupMain ? models.StartupSnapshotModelKey() : models.Resolve(model).Key;
         var snapshotText = snapshotModel is null ? "" : await memory.BuildAsync(agentName, id, snapshotModel, selection: selectedFiles);
         var store = MakeStore(id, agentName);
@@ -221,6 +222,7 @@ internal sealed partial class SessionManager
             state.AuthorityEnvelope["agent"] = agentName;
             if (parentId is not null) state.AuthorityEnvelope["parentSessionId"] = parentId;
             if (displayName is not null) state.AuthorityEnvelope["displayName"] = displayName;
+            if (timerCreation) state.AuthorityEnvelope["currentNode"] = timerNode ?? "master";
             if (model is not null) state.AuthorityEnvelope["model"] = model;
             if (effort is not null) state.AuthorityEnvelope["effort"] = effort;
             state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshotText;
@@ -394,6 +396,16 @@ internal sealed partial class SessionManager
             {
                 File.Delete(legacyCreateMarker);
                 throw new IOException("Injected experimental legacy Session post-rename failure.");
+            }
+            if (stage == AtomicJsonWriteStage.BeforeRename && SessionSaveLane.IsTimerQueueWrite)
+            {
+                var hold = Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store?.SessionId ?? id) + ".timer-queue-hold-before-rename");
+                if (File.Exists(hold))
+                {
+                    File.WriteAllText(hold + ".reached", "reached"); var deadline = DateTime.UtcNow.AddSeconds(15);
+                    while (File.Exists(hold) && DateTime.UtcNow < deadline) Thread.Sleep(2);
+                    if (File.Exists(hold)) throw new TimeoutException("Experimental timer queue publication barrier expired.");
+                }
             }
             if (stage != AtomicJsonWriteStage.BeforeRename || !SessionSaveLane.IsSnapshotCommit || !File.Exists(Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store!.SessionId) + ".snapshot-before-rename"))) return;
             File.Delete(Path.Combine(root, "state", "experiment-faults", SessionIdentity.ExecDirectorySegment(store!.SessionId) + ".snapshot-before-rename"));
