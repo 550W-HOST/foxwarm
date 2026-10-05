@@ -448,6 +448,10 @@ test('resident Docker exec reuses canonical foreground, cwd, failure, artifact-r
     assert.match(success.output, /hello/); assert.equal(success.__execBatchCwdSync.nextCwd, path.join(repo, 'sub'));
     const failure = await invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec', args: { command: 'printf bad; exit 7', timeout: 5 }, context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }) as any;
     assert.match(failure.output, /bad/); assert.match(failure.output, /exit code:\s*7/i);
+    const programmatic = await invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec', args: { command: "printf 'script-data\\n'; exit 7", timeout: 5 }, context: { agent: 'main', currentNode: 'n', cwd: repo, programmatic: true, deferSessionCwdSync: true } }) as any;
+    assert.equal(programmatic.content, 'script-data\n'); assert.equal(programmatic.status, 'completed'); assert.equal(programmatic.exitCode, 7);
+    assert.equal(programmatic.truncated, false); assert.ok(programmatic.logPath.startsWith(artifactDir));
+
     const envArgs = launches[0].filter((_value, index, all) => index > 0 && all[index - 1] === '-e');
     assert.ok(envArgs.every(value => /^(TERM|FOXWARM_EXEC_[A-Z_]+)=/.test(value))); assert.equal(envArgs.some(value => /HOME|DOCKER|SESSION/.test(value)), false);
     const artifactFiles = (await fs.readdir(artifactDir, { recursive: true }) as string[]).map(item => path.join(artifactDir, item)); const logPath = artifactFiles.find(item => item.endsWith('.log')); assert.ok(logPath);

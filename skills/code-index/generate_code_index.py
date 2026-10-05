@@ -24,11 +24,21 @@ def shell_quote(value):
     return "'" + str(value).replace("'", "'\"'\"'") + "'"
 
 
+def call_text_tool(name, args):
+    """Use retained script data rather than parsing a tool's presentation output."""
+    result = call_tool(name, args)
+    if not isinstance(result, dict) or "content" not in result or result.get("truncated", True):
+        raise ValueError("Complete text is unavailable from " + name)
+    if name == "exec" and result["status"] != "completed":
+        raise ValueError("Command is still running; complete text is not available yet")
+    return result["content"]
+
+
 def absolute_path(value):
     """Expand ~/ and resolve a POSIX path without importing host filesystem modules."""
     path = str(value)
     if path == "~" or path.startswith("~/"):
-        home = call_tool("exec", {"command": "printf '%s\\n' \"$HOME\""}).strip()
+        home = call_text_tool("exec", {"command": "printf '%s\\n' \"$HOME\""}).strip()
         if not home.startswith("/"):
             raise ValueError("Could not resolve the ToolScript host home directory")
         path = home + path[1:]
@@ -36,7 +46,7 @@ def absolute_path(value):
         raise ValueError("Only ~/ home-relative paths are supported")
 
     if not path.startswith("/"):
-        cwd = call_tool("exec", {"command": "pwd -P"}).strip()
+        cwd = call_text_tool("exec", {"command": "pwd -P"}).strip()
         if not cwd.startswith("/"):
             raise ValueError("Could not resolve the ToolScript host working directory")
         path = cwd.rstrip("/") + "/" + path
@@ -98,7 +108,7 @@ def scan_files(source, files_filter, include_extensions):
         for f in files_filter:
             full_path = f if f.startswith("/") else source + "/" + f
             rel_path = f if not f.startswith("/") else f.replace(source + "/", "")
-            wc = call_tool("exec", {"command": f"wc -l < {shell_quote(full_path)} 2>/dev/null || echo 0"})
+            wc = call_text_tool("exec", {"command": f"wc -l < {shell_quote(full_path)} 2>/dev/null || echo 0"})
             lines_str = wc.strip()
             lines = int(lines_str) if lines_str.isdigit() else 0
             result.append({"path": rel_path, "lines": lines})
@@ -109,7 +119,7 @@ def scan_files(source, files_filter, include_extensions):
         f"cd {shell_quote(source)} && "
         "(git ls-files 2>/dev/null || find . -type f | sed 's#^./##')"
     )
-    raw = call_tool("exec", {"command": cmd})
+    raw = call_text_tool("exec", {"command": cmd})
     all_files = [f.strip() for f in raw.strip().split("\n") if f.strip()]
 
     # Filter excluded dirs and extensions
@@ -137,7 +147,7 @@ def scan_files(source, files_filter, include_extensions):
 
     # Batch wc -l
     files_arg = " ".join([shell_quote(source + "/" + f) for f in filtered[:200]])
-    wc_out = call_tool("exec", {"command": f"wc -l {files_arg} 2>/dev/null | grep -v ' total$'"})
+    wc_out = call_text_tool("exec", {"command": f"wc -l {files_arg} 2>/dev/null | grep -v ' total$'"})
 
     result = []
     for line in wc_out.strip().split("\n"):
@@ -236,7 +246,7 @@ def generate_units(groupings, source, output_dir):
         file_contents = []
         for f in files:
             full_path = source + "/" + f
-            content = call_tool("read", {"filePath": full_path})
+            content = call_text_tool("read", {"filePath": full_path})
             if isinstance(content, str) and len(content) > 12000:
                 content = content[:8000] + "\n\n... [TRUNCATED - " + str(len(content)) + " chars total] ...\n\n" + content[-3000:]
             file_contents.append({"path": f, "content": content if isinstance(content, str) else str(content)})
@@ -306,7 +316,7 @@ Write the markdown summary now (start with ## Purpose):"""
 
 def generate_modules(output_dir):
     """Generate module-level summaries from unit docs (two-step: plan then generate)."""
-    units_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/units/')} 2>/dev/null"})
+    units_raw = call_text_tool("exec", {"command": f"ls {shell_quote(output_dir + '/units/')} 2>/dev/null"})
     unit_files = [f.strip() for f in units_raw.strip().split("\n") if f.strip().endswith(".md")]
 
     if not unit_files:
@@ -317,7 +327,7 @@ def generate_modules(output_dir):
     unit_briefs = []
     unit_full = {}
     for uf in unit_files:
-        content = call_tool("read", {"filePath": output_dir + "/units/" + uf})
+        content = call_text_tool("read", {"filePath": output_dir + "/units/" + uf})
         if isinstance(content, str):
             unit_full[uf] = content
             # Extract just the header + purpose section (first ~10 lines)
@@ -438,7 +448,7 @@ Write the module document now (start with ## Responsibility):"""
 
 def generate_threads(output_dir):
     """Generate cross-module thread docs from module summaries."""
-    modules_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
+    modules_raw = call_text_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
     module_files = [f.strip() for f in modules_raw.strip().split("\n") if f.strip().endswith(".md")]
 
     if not module_files:
@@ -448,7 +458,7 @@ def generate_threads(output_dir):
     # Read module summaries (these should be manageable size)
     module_contents = ""
     for mf in module_files:
-        content = call_tool("read", {"filePath": output_dir + "/modules/" + mf})
+        content = call_text_tool("read", {"filePath": output_dir + "/modules/" + mf})
         if isinstance(content, str):
             # Truncate each module to keep total reasonable
             module_contents += f"\n---\n{content[:3000]}\n"
@@ -508,15 +518,15 @@ def generate_overview(output_dir, project):
     """Generate top-level overview from modules and threads."""
     all_content = ""
 
-    modules_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
+    modules_raw = call_text_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
     for mf in [f.strip() for f in modules_raw.strip().split("\n") if f.strip().endswith(".md")]:
-        content = call_tool("read", {"filePath": output_dir + "/modules/" + mf})
+        content = call_text_tool("read", {"filePath": output_dir + "/modules/" + mf})
         if isinstance(content, str):
             all_content += f"\n---\nModule: {mf}\n{content[:2000]}\n"
 
-    threads_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/threads/')} 2>/dev/null"})
+    threads_raw = call_text_tool("exec", {"command": f"ls {shell_quote(output_dir + '/threads/')} 2>/dev/null"})
     for tf in [f.strip() for f in threads_raw.strip().split("\n") if f.strip().endswith(".md")]:
-        content = call_tool("read", {"filePath": output_dir + "/threads/" + tf})
+        content = call_text_tool("read", {"filePath": output_dir + "/threads/" + tf})
         if isinstance(content, str):
             all_content += f"\n---\nThread: {tf}\n{content[:1500]}\n"
 
@@ -550,7 +560,7 @@ Write the overview markdown now:"""
 def main(args):
     source = args.get("source")
     if not source:
-        source = call_tool("exec", {"command": "pwd"}).strip()
+        source = call_text_tool("exec", {"command": "pwd"}).strip()
     source = absolute_path(source)
 
     project = args.get("project") or path_basename(source) or "project"

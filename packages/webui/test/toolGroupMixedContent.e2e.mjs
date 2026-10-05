@@ -1,6 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { readFile, readdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 
@@ -8,11 +9,30 @@ const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.
 const call = (id, seq) => ({ role: 'model', parts: [{ functionCall: { id, name: 'exec', args: { command: `echo ${id}` } } }], __meta: { seq } })
 const result = (id, seq) => ({ role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: id, response: { output: `${id} result` } } }], __meta: { seq } })
 const answer = (text, seq) => ({ role: 'model', parts: [{ text }], __meta: { seq } })
-const image = { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xx7zWQAAAABJRU5ErkJggg==' } }
+const image = { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' } }
 const generatedImage = { inlineDataRef: { mimeType: 'image/png', imageId: 'generated-fixture', apiPath: '/blobs/generated-fixture.png' }, imageMeta: { origin: 'generated' } }
 const unavailableImage = { inlineDataUnavailable: { mimeType: 'image/png', unavailable: true } }
 const webSearch = { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'search', query: 'sample query' } } } } }
 const cases = {
+  reasoningRuns: [{ role: 'model', parts: [
+    { thinking: '**First**\nOriginal first summary.' }, { providerMeta: { thinkingSummaries: ['Original second summary.'] } },
+    { thinking: '', providerMeta: { encryptedThinking: 'opaque-fixture-not-visible', thinkingSummaries: [] } },
+    { text: 'Text boundary' }, { thinking: 'After text' }, image,
+    { thinking: 'After image' }, webSearch, { thinking: 'After hosted item' }, {},
+    { thinking: 'After unknown part' }, { system: 'System boundary' },
+    { thinking: 'After system' }, call('reasoning-barrier', 201).parts[0],
+    { thinking: 'After tool' }, { thinking: 'Mixed reasoning', text: 'Mixed ordinary text', ...image },
+    { thinking: 'After mixed' },
+  ], __meta: { seq: 201, usage: { inputTokens: 10, outputTokens: 140, reasoningTokens: 123 } } }],
+  reasoningEmpty: [
+    { role: 'model', parts: [{ thinking: '' }, { providerMeta: { thinkingSummaries: [] } }, { providerMeta: { encryptedThinking: 'opaque-fixture-not-visible' } }], __meta: { seq: 202, usage: { reasoningTokens: 0 } } },
+    { role: 'model', parts: [{ thinking: '' }], __meta: { seq: 203, llmRequestId: 'prefix-reasoning', llmSegment: {outputStart:0,outputEndExclusive:2,complete:false} } },
+    { role: 'model', parts: [], __meta: { seq: 208, llmRequestId: 'prefix-reasoning', llmSegment: {outputStart:2,outputEndExclusive:2,complete:true}, usage: {reasoningTokens:91} } },
+    { role: 'model', parts: [{ providerMeta: { signature: 'not-reasoning' } }, { providerMeta: { thinkingSummaries: [null] } }], __meta: { seq: 204 } },
+  ],
+  reasoningGrouped: [call('reasoning-group', 205), result('reasoning-group', 206),
+    { role: 'model', parts: [{ thinking: '' }, { thinking: 'Grouped summary' }, { thinking: '' }, { text: 'Grouped final answer' }], __meta: { seq: 207, usage: { reasoningTokens: 17 } } },
+  ],
   mixed: [
     { role: 'model', parts: [{ text: 'INTRO_MIXED' }, call('mixed', 1).parts[0]], __meta: { seq: 1, usage: { cachedTokens: 1, inputTokens: 2, outputTokens: 3 } } },
     result('mixed', 2), answer('FINAL_MIXED', 3),
@@ -75,7 +95,7 @@ before(async () => {
     const cases = ${JSON.stringify(cases)}
     for (const [id, messages] of Object.entries(cases)) {
       createRoot(document.getElementById(id)).render(React.createElement(ChatTimeline, {
-        sessionId: 'fixture/main', messages, isMobile: false, groupTools: true, showUsageBadge: true,
+        sessionId: 'fixture/main', messages, isMobile: false, groupTools: id !== 'reasoningRuns', showUsageBadge: true,
       }))
     }
   `
@@ -94,10 +114,11 @@ before(async () => {
     response.end(`<!doctype html><html><body>${Object.keys(cases).map(id => `<div id="${id}"></div>`).join('')}<script>${bundle.outputFiles[0].text}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  const firefox = process.env.FOXWARM_E2E_BROWSER === 'firefox'
+  browser = await puppeteer.launch({ ...(firefox ? { browser: 'firefox' } : {}), executablePath: firefox ? process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox' : process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: firefox ? [] : ['--no-sandbox', '--disable-setuid-sandbox'] })
   page = await browser.newPage()
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'load' })
-  await page.waitForFunction(() => document.querySelectorAll('[data-tool-group]').length === 14)
+  await page.waitForFunction(() => document.querySelectorAll('[data-tool-group]').length === 15)
 })
 
 after(async () => {
@@ -322,4 +343,56 @@ test('tool-role text remains grouped content rather than disappearing with ordin
     { text: 'FINAL_TOOL_TEXT', insideCard: false },
   ])
   assert.equal(expanded.tools.length, 1)
+})
+
+test('original adjacent reasoning parts share one tag while every original content barrier keeps distinct runs', async () => {
+  const state = await page.$eval('#reasoningRuns', root => ({
+    tags: [...root.querySelectorAll('.foxwarm-reasoning-tag')].map(tag => tag.textContent),
+    tokens: [...root.querySelectorAll('[data-reasoning-tokens]')].map(el => ({ text: el.textContent, title: el.title, className: el.className })),
+    ordinary: [...root.querySelectorAll('.foxwarm-assistant-message-card')].map(el => el.textContent.trim()),
+    images: root.querySelectorAll('img').length,
+    searches: root.querySelectorAll('[data-model-thread-card="web-search"]').length,
+    text: root.textContent,
+  }))
+  assert.deepEqual(state.tags, ['Reasoning ×3', ...Array(8).fill('Reasoning')])
+  assert.equal(state.tokens.length, 1)
+  assert.equal(state.tokens[0].text, '123 tokens')
+  assert.equal(state.tokens[0].title, 'Message reasoning tokens')
+  assert.ok(state.tokens[0].className.includes('text-fw-text-muted'))
+  assert.ok(state.ordinary.includes('Mixed ordinary text'))
+  assert.equal(state.images, 2)
+  assert.equal(state.searches, 1)
+  assert.equal(state.text.includes('opaque-fixture-not-visible'), false)
+  await page.$eval('#reasoningRuns .foxwarm-reasoning-header', el => el.click())
+  await page.waitForSelector('#reasoningRuns [data-search-surface="reasoning"]')
+  const markers = await page.$$eval('#reasoningRuns [data-search-surface="reasoning"]', elements => elements.map(el => ({ index: el.dataset.searchPartIndex, text: el.textContent })))
+  assert.deepEqual(markers.map(item => item.index), ['0', '1', '2'])
+  assert.ok(markers[1].text.includes('Original second summary.'))
+  assert.equal(markers[2].text, '')
+  if (process.env.FOXWARM_E2E_SCREENSHOT_PATH) {
+    const assets = new URL('../dist/assets/', import.meta.url)
+    const cssName = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
+    await page.addStyleTag({ content: await readFile(new URL(cssName, assets), 'utf8') })
+    await page.addStyleTag({ content: 'body > div:not(#reasoningRuns):not(#reasoningEmpty) { display: none } #reasoningRuns, #reasoningEmpty { max-width: 850px; margin: 20px auto }' })
+    await page.waitForFunction(() => document.querySelector('#reasoningRuns [data-model-thread-card="reasoning"]')?.style.height === '')
+    await page.screenshot({ path: process.env.FOXWARM_E2E_SCREENSHOT_PATH, fullPage: true })
+  }
+})
+
+test('empty reasoning cards count real parts and display zero usage without inventing summary or metadata text', async () => {
+  assert.deepEqual(await page.$$eval('#reasoningEmpty .foxwarm-reasoning-tag', elements => elements.map(el => el.textContent)), ['Reasoning ×3', 'Reasoning'])
+  assert.deepEqual(await page.$$eval('#reasoningEmpty [data-reasoning-tokens]', elements => elements.map(el => el.textContent)), ['0 tokens'])
+  assert.equal(await page.$eval('#reasoningEmpty', root => root.textContent.includes('opaque-fixture-not-visible')), false)
+  assert.deepEqual(await page.$$eval('#reasoningEmpty .foxwarm-reasoning-preview', elements => elements.map(el => el.textContent)), ['', ''])
+})
+
+test('folded tool-group summary counts empty reasoning members and expands one original contiguous card', async () => {
+  const collapsed = await snapshot('reasoningGrouped')
+  assert.equal(collapsed.groups[0].header, 'reasoning ×3exec ×1')
+  assert.equal(collapsed.reasoning.length, 0)
+  await toggle('reasoningGrouped', 0, true)
+  assert.deepEqual(await page.$$eval('#reasoningGrouped .foxwarm-reasoning-tag', elements => elements.map(el => el.textContent)), ['Reasoning ×3'])
+  assert.deepEqual(await page.$$eval('#reasoningGrouped [data-reasoning-tokens]', elements => elements.map(el => el.textContent)), ['17 tokens'])
+  await toggle('reasoningGrouped', 0, false)
+  assert.equal((await snapshot('reasoningGrouped')).reasoning.length, 0)
 })

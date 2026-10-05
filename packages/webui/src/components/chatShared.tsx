@@ -131,6 +131,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[] }
   name: string
   response: any
 }
@@ -161,6 +162,8 @@ export interface OpenAIResponsesAnnotation {
 }
 
 export interface MessagePartProviderMeta {
+  thinkingSummaries?: string[]
+  encryptedThinking?: string
   openaiResponses?: {
     annotations?: OpenAIResponsesAnnotation[]
     outputItem?: Record<string, unknown>
@@ -226,6 +229,21 @@ export interface ModelStreamToolCallDelta {
   argumentsDelta?: ModelStreamTextDelta
 }
 
+export interface ModelStreamPart {
+  outputIndex: number
+  kind: 'reasoning' | 'text' | 'tool-call' | 'image-generation'
+  contentIndex?: number
+  summaryIndex?: number
+  text?: string
+  phase?: 'commentary' | 'final_answer'
+  status?: string
+}
+
+export interface ModelStreamPartDelta extends Omit<ModelStreamPart, 'text'> {
+  added?: true
+  textDelta?: ModelStreamTextDelta
+}
+
 export interface ContextBlockMessageMeta {
   id: number
   level: number
@@ -254,6 +272,8 @@ export interface SessionStreamEvent {
   reasoningDelta?: ModelStreamTextDelta
   textDelta?: ModelStreamTextDelta
   toolCallDeltas?: ModelStreamToolCallDelta[]
+  partDeltas?: ModelStreamPartDelta[]
+  trimBeforeOutputIndex?: number
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]
@@ -283,6 +303,7 @@ export interface Message {
       completedAt: number
       durationMs: number
     }
+    llmSegment?: { outputStart: number; outputEndExclusive: number; complete: boolean }
     contextBlock?: ContextBlockMessageMeta
     preservedFromBlockId?: number
     [key: string]: any

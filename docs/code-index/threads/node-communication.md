@@ -63,6 +63,8 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 
 ## Units
 
+- [Shell HTTP Node](../units/src-nodes-shell-http.md)
+
 - [src-nodes-manager](../units/src-nodes-manager.md)
 - [src-node-providers](../units/src-node-providers.md)
 - [src-nodes-misc](../units/src-nodes-misc.md)
@@ -76,6 +78,20 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 - [terminal router](../units/src-terminal-router.md)
 
 ## Design decisions
+
+### D-node-thread-shell-http
+
+An exec-only Shell Node is an authenticated remote Node behind the same provider/selection boundary. It uses the existing pre-created per-node credential and a genuine HTTP long-poll transport, without client JSON parsing, WebSocket emulation, filesystem services, or external-owner capabilities. Main keeps the original dispatch Session, generated exec ID, and signed completion grant; the client reports only that task's result. Foreground timeout transitions to the same background command and its completion uses the existing durable Session-event admission/ACK boundary. No network failure requeues an already delivered command.
+
+The client drains output while retaining only fixed 4 KiB head/tail samples and total bytes; it does not save full logs. Its startup directory supplies default/relative cwd without creating Agent directories. HTTP runtime state, task contexts and bounded receipts are process-local, so restart/loss of context means an unknown outcome rather than crash continuation. Completion expiry does not kill a command or remove an active collector. Exact implementation and validation boundaries are owned by [src-nodes-shell-http](../units/src-nodes-shell-http.md).
+
+### D-node-thread-onboarding-options
+
+[2026-09-28; updated 2026-09-30] Node onboarding supports both the existing shared-pairing-token request/approve/claim lifecycle and authorized `/node create <node-id>` pre-creation. Direct creation immediately persists a per-node token hash and returns plaintext once to that command caller; it does not create a pending pairing or reuse the shared token. Both paths authenticate through the same per-node Node identity and register before capabilities are available. The pending request's full ID, not an unrelated six-digit display code, is the approval reference. Old pending registry records are readable while new writes drop the old code without losing unclaimed approved credentials. No core protocol generation change is required; existing registered Node credentials remain valid.
+
+The optional top-level `url` supplies public bootstrap instruction/download examples, including an optional deployment path, but never changes the listen address, internal API origin, or actual downloaded script's request-derived default host. A path-prefixed example passes explicit `--host`/`-HostUrl` so the Node preserves that route. The exact startup, credential-file, and client-display behavior is indexed in the registry, bootstrap, and CLI Node units.
+
+System Architecture's Nodes surface shows Node metadata without Session lists, filters, usage or inspectors. New nodes opens friendly setup methods and pending approvals through authenticated Main APIs. Commands inline complete addresses, prioritizing configured `url`, using a replaceable example host for CLI help or the browser deployment address as a GUI suggestion; a user override wins. Pending summaries exclude approved offline handoffs and expose no credentials. Approval is explicit and stale/repeated approval cannot mint a second identity. Shell setup uses explicit direct creation, returning its credential only in that action's command. Browser setup commands are modal-owned, not persisted or placed in ordinary summaries, URLs or logs; closing discards modal state. No new pairing identity, claim protocol or token platform is introduced. Implementation: [WebUI Node onboarding](../units/webui-node-onboarding.md) and [authenticated onboarding routes](../units/src-webui-node-onboarding.md).
 
 ### D-node-thread-tool-service-split
 

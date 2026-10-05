@@ -23,7 +23,7 @@ import * as sessionAgentMetadata from './session/agentMetadata';
 import { normalizeAgentToolRules } from './permissions';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
-import { readArchiveBlocksByIdRange } from './session/layeredContext';
+import { readArchiveBlocksByIdRange, resolveNextSessionBlockId } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, initArchiveStore, rollbackUncommittedSessionArchive } from './session/archiveStore';
 import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
@@ -1598,6 +1598,9 @@ export async function getOrCreateSessionForChannel(
   return withChannelSessionCreationLock(channelId, conversationId, async () => {
     const existingSessionId = getSessionByChannel(channelId, conversationId);
     if (existingSessionId) {
+      if (!getSessionCatalog(existingSessionId)) {
+        throw new Error(`Attached channel target session "${existingSessionId}" is unavailable. Rebind this conversation to an existing session.`);
+      }
       const session = options?.hydrateExisting === false
         ? getSessionCatalog(existingSessionId)
         : await getSession(existingSessionId);
@@ -1733,6 +1736,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     await saveSession(sourceSession.id);
   }
   const spawnedSettings = resolveSpawnedSessionModelEffort(sourceSession, options?.model, options?.effort);
+  const nextBlockId = await resolveNextSessionBlockId(sourceSession);
 
   const forkedSession: Session = {
     id: newSessionId,
@@ -1752,7 +1756,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     meta: { lastMessageTime: Date.now() },
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
     nextMessageSeq: sourceSession.nextMessageSeq,
-    nextBlockId: sourceSession.nextBlockId,
+    nextBlockId,
     parentSessionId: realSourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
@@ -1836,7 +1840,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     await ensureSessionBranch(newSessionId, {
       parentSessionId: realSourceSessionId,
       forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
-      forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+      forkBlockId: nextBlockId - 1,
     });
     await vector.copySessionArchiveIndexCheckpoint(realSourceSessionId, newSessionId).catch(error => {
       logger.warn({ code: (error as any)?.code || 'VECTOR_FORK_BASELINE_FAILED', sessionId: newSessionId }, 'Failed to initialize derived fork baseline');
@@ -2754,7 +2758,7 @@ export async function requestSessionCompaction(
   const session = await getSession(sessionId);
   assertSessionDestructiveMutationAllowed([session.id], 'start compaction work');
 
-  if (session.queue.some(item => item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
+  if (sessionHistory.hasPendingCompactWork(session.id) || sessionHistory.getCompactOperationPhase(session.id) !== undefined) {
     return {
       alreadyQueued: true,
       startedImmediately: false,
@@ -2776,7 +2780,8 @@ export async function requestSessionCompaction(
     };
   }
 
-  const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
+  const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy
+    && session.queue.every(item => item.type === 'compact-commit');
   if (canRunAwaitedNow) {
     await updateSessionBusyState(session, true);
     createStandaloneCompactAdmission(sessionId);
@@ -2861,6 +2866,10 @@ export async function processSessionCompactionRequest(
   owner: sessionHistory.CompactOperationOwner = 'turn',
 ): Promise<void> {
   await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode, owner);
+}
+
+export function hasCompletedCompactJob(sessionId: string): boolean {
+  return sessionHistory.hasCompletedCompactJob(sessionId);
 }
 
 export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {
@@ -3115,13 +3124,13 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
   return result.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
 }
 
-export function listSessionCatalogPage(limit: number, offset: number = 0): { sessions: Session[]; total: number } {
+export function listSessionCatalogPage(limit: number, offset: number = 0, agent?: string): { sessions: Session[]; total: number } {
   const boundedLimit = Math.max(0, Math.floor(limit));
   const boundedOffset = Math.max(0, Math.floor(offset));
-  const metadata = sessionCatalogStore.list({ limit: boundedLimit, offset: boundedOffset });
+  const metadata = sessionCatalogStore.list({ limit: boundedLimit, offset: boundedOffset, agent });
   return {
     sessions: metadata.map(row => sessions.get(row.id)).filter((session): session is Session => !!session),
-    total: sessionCatalogStore.count(),
+    total: sessionCatalogStore.count({ agent }),
   };
 }
 

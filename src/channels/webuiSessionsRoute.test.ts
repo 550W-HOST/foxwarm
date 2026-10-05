@@ -58,12 +58,13 @@ function createSseDataReader(body: ReadableStream<Uint8Array>) {
 
 test('WebUI creation routes create agents and random or custom sessions', async () => {
   const agentId = makeSessionId('webui_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
-  const port = 35500 + Math.floor(Math.random() * 200);
+
   const token = 'creation-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   const request = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, {
     ...init,
@@ -149,11 +150,11 @@ test('WebUI list uses catalog queue count for a lightweight stub, then exact hyd
     queue: [{ type: 'background', parts: [{ text: 'authority wins' }] }],
   } as Session));
 
-  const port = 34700 + Math.floor(Math.random() * 400);
-  const server = new HttpServer(port, 'queue-token');
+  const server = new HttpServer(0, 'queue-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'queue-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const readListed = async () => {
     const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers: { Authorization: 'Bearer queue-token' } });
     assert.equal(response.status, 200);
@@ -204,9 +205,10 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
   const volatile = sessionManager.getAllSessions().get(ids.volatile)!; volatile.meta.lastMessageTime = now + 1000; volatile.busy = true;
   const deepBusy = sessionManager.getAllSessions().get(ids.deep)!;
 
-  const port = 34900 + Math.floor(Math.random() * 300); const token = 'bounded-list-token';
-  const server = new HttpServer(port, token); setHttpServer(server);
+  const token = 'bounded-list-token';
+  const server = new HttpServer(0, token); setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const request = (route: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${route}`, {
     ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
   });
@@ -427,9 +429,10 @@ test('sidebar focus query keeps comma IDs, repeatable focus values, and a comple
   } as Session));
   for (const session of sessions) sessionManager.getAllSessions().set(session.id, session);
   sessionCatalogStore.upsertMany(sessions as any[]);
-  const port = 40500 + Math.floor(Math.random() * 100); const token = 'deep-focus-token';
-  const server = new HttpServer(port, token); setHttpServer(server);
+  const token = 'deep-focus-token';
+  const server = new HttpServer(0, token); setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   try {
     const params = new URLSearchParams({ mode: 'default', limit: '100', childLimit: '5' });
     params.append('focusSessionId', rootId); params.append('focusSessionId', ids.at(-1)!);
@@ -457,8 +460,9 @@ test('bounded cursor and volatile union share SQLite BINARY UTF-8 tie ordering',
     await sessionManager.saveSession(id);
   }
   const volatile = sessionManager.getAllSessions().get(ids[3])!; volatile.busy = true;
-  const port = 40700 + Math.floor(Math.random() * 100); const token = 'binary-token'; const server = new HttpServer(port, token);
+  const token = 'binary-token'; const server = new HttpServer(0, token);
   setHttpServer(server); new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const get = (route: string) => fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}` } });
   try {
     let response = await get('/api/session-list/sidebar?mode=flat-time&limit=2'); const first = await response.json() as any;
@@ -501,11 +505,11 @@ test('restart catalog stubs preserve sanitized timer, waitAll, and exec presenta
   } as Session));
   await sessionManager.loadSessions();
 
-  const port = 35100 + Math.floor(Math.random() * 300);
-  const server = new HttpServer(port, 'wait-token');
+  const server = new HttpServer(0, 'wait-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'wait-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const list = async () => {
     const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers: { Authorization: 'Bearer wait-token' } });
     assert.equal(response.status, 200);
@@ -553,11 +557,11 @@ test('WebUI sessions route treats bare wait as idle while preserving busy fields
   } as Session['meta'];
   await sessionManager.saveSession(sessionId);
 
-  const port = 34200 + Math.floor(Math.random() * 500);
-  const server = new HttpServer(port, 'runtime-token');
+  const server = new HttpServer(0, 'runtime-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'runtime-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
@@ -639,11 +643,11 @@ test('WebUI history route returns queued preview messages separately from commit
   session.meta = { lastMessageTime: Date.now() } as Session['meta'];
   await sessionManager.saveSession(sessionId);
 
-  const port = 34750 + Math.floor(Math.random() * 500);
-  const server = new HttpServer(port, 'history-token');
+  const server = new HttpServer(0, 'history-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'history-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   let blobId: string | undefined;
 
   try {
@@ -799,11 +803,11 @@ test('WebUI history route serves guarded tail, prefix, and after-seq ranges', as
   session.meta = { lastMessageTime: 200 } as Session['meta'];
   await sessionManager.saveSession(sessionId);
 
-  const port = 36500 + Math.floor(Math.random() * 500);
-  const server = new HttpServer(port, 'history-range-token');
+  const server = new HttpServer(0, 'history-range-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'history-range-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const get = (query = '') => fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/history${query}`, {
     headers: { Authorization: 'Bearer history-range-token' },
   });
@@ -875,12 +879,12 @@ test('WebUI session projections and settings routes use the local SessionRuntime
   session.displayName = 'Before Runtime Route';
   await sessionManager.saveSession(sessionId);
 
-  const port = 35000 + Math.floor(Math.random() * 300);
   const token = 'session-runtime-route-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
   try {
@@ -984,12 +988,13 @@ test('WebUI message route forwards the bounded optimistic client identity to the
       routedMessage = message;
     },
   };
-  const port = 34600 + Math.floor(Math.random() * 400);
+
   const token = 'client-message-id-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   new WebUIChannel({ router: router as any, token, enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/message`, {
@@ -1033,14 +1038,14 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
   } as Session['meta'];
   await sessionManager.saveSession(sessionId);
 
-  const port = 34900 + Math.floor(Math.random() * 300);
   const token = 'session-stream-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   sessionManager.setOnSessionStateUpdated((updatedSessionId) => channel.broadcastSessionStateUpdate(updatedSessionId));
   sessionManager.setOnHistoryUpdated((updatedSessionId, message) => channel.broadcastMessage(updatedSessionId, message));
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   let sse: ReturnType<typeof createSseDataReader> | null = null;
   let socket: WebSocket | null = null;
@@ -1186,13 +1191,14 @@ test('WebUI global SSE broadcasts every session creation path used by the sideba
   const parentSessionId = makeSessionId('webui_global_parent');
   const ordinarySessionName = makeSessionId('webui_global_ordinary');
   const createdSessionIds: string[] = [];
-  const port = 35200 + Math.floor(Math.random() * 200);
+
   const token = 'global-session-stream-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   sessionManager.setOnSessionListUpdated(() => channel.broadcastSessionListUpdate());
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   let sse: ReturnType<typeof createSseDataReader> | null = null;
   const expectListUpdate = async () => {
@@ -1262,10 +1268,11 @@ test('WebUI global SSE broadcasts every session creation path used by the sideba
 });
 
 test('global SSE sends bounded watched-row deltas plus catalog invalidation without a global list payload', async () => {
-  const sessionId = makeSessionId('webui_global_delta'); const port = 40900 + Math.floor(Math.random() * 100);
-  const token = 'global-delta-token'; const server = new HttpServer(port, token); setHttpServer(server);
+  const sessionId = makeSessionId('webui_global_delta');
+  const token = 'global-delta-token'; const server = new HttpServer(0, token); setHttpServer(server);
   const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   const created = await sessionManager.createEmptySession(sessionId); assert.equal(created.created, true); await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const alias = `${sessionId}_alias`; sessionManager.getAllSessions().get(sessionId)!.aliases = [alias];
   await sessionManager.saveSessionCatalogEntries([sessionId]);
   let sse: ReturnType<typeof createSseDataReader> | null = null;
@@ -1307,11 +1314,11 @@ test('WebUI session pin route persists live metadata without writing session his
   session.meta = { lastMessageTime: Date.now() } as Session['meta'];
   await sessionManager.saveSession(sessionId);
 
-  const port = 35000 + Math.floor(Math.random() * 200);
-  const server = new HttpServer(port, 'pin-token');
+  const server = new HttpServer(0, 'pin-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'pin-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   const postPin = (pinned: unknown) => fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/pin`, {
     method: 'POST',
@@ -1381,11 +1388,11 @@ test('WebUI move route reparents, detaches, reorders, and rejects parent cycles'
     await sessionManager.saveSession(sessionId);
   }
 
-  const port = 35250 + Math.floor(Math.random() * 500);
-  const server = new HttpServer(port, 'move-token');
+  const server = new HttpServer(0, 'move-token');
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token: 'move-token', enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   const postMove = async (sessionId: string, body: Record<string, unknown>) => {
     return fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/move`, {
@@ -1492,12 +1499,12 @@ test('WebUI recursive archive includes deep descendants while unarchive remains 
   await sessionManager.setSessionParent(grandchildId, childId);
   await sessionManager.archiveSession(childId, true);
 
-  const port = 35800 + Math.floor(Math.random() * 300);
   const token = 'archive-tree-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const postArchive = (sessionId: string, body: Record<string, unknown>) => fetch(
     `http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/archive`,
     {
@@ -1555,12 +1562,12 @@ test('WebUI delete detaches surviving children and recursively preflights before
   await sessionManager.setSessionParent(childId, rootId);
   await sessionManager.setSessionParent(grandchildId, childId);
 
-  const port = 36100 + Math.floor(Math.random() * 300);
   const token = 'delete-tree-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
   const deleteSession = (sessionId: string, includeDescendants?: boolean) => fetch(
     `http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
     {
@@ -1687,12 +1694,12 @@ test('WebUI delete claim rejects late channel, relation, child-creation, and wor
     (await sessionManager.getSession(childId)).busy = true;
   });
 
-  const port = 36400 + Math.floor(Math.random() * 200);
   const token = 'delete-claim-token';
-  const server = new HttpServer(port, token);
+  const server = new HttpServer(0, token);
   setHttpServer(server);
   new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
   await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
 
   try {
     let response = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(rootId)}`, {

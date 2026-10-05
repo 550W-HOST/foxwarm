@@ -1,3 +1,5 @@
+import { MessagePreviewTimeState, normalizeMessagePreviewTimestamp } from './utils/messagePreviewTime';
+import { formatLocalTimestamp } from './utils/localTime';
 import { Message, MessagePart } from './types';
 import { formatArchiveBlockContextText, type ArchiveBlockRecord } from './session/layeredContext';
 import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
@@ -14,6 +16,9 @@ export type ContextPreviewItem = {
   searchText?: string;
   omittedToolText?: string;
   priorityNotices?: string[];
+  // Presentation metadata stays separate from searchable content and stored messages.
+  messageTime?: { timestamp?: number };
+  messageItems?: ContextPreviewItem[];
 };
 
 export type ContextPreviewRenderOptions = {
@@ -269,23 +274,27 @@ function firstMatchIndex(text: string, filters: CompiledPreviewFilters): { index
   return best;
 }
 
-function truncateFromStart(text: string, maxChars: number): string {
+type PreviewSliceObserver = (start: number, end: number, prefixLength: number) => void;
+
+function truncateFromStart(text: string, maxChars: number, observe?: PreviewSliceObserver): string {
   const normalized = String(text || '').trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  return truncateUnicodeSafe(normalized, Math.max(0, maxChars - 1), '…');
+  const start = text.indexOf(normalized);
+  const result = normalized.length <= maxChars ? normalized : truncateUnicodeSafe(normalized, Math.max(0, maxChars - 1), '…');
+  observe?.(start, start + (result === normalized ? normalized.length : result.length - 1), 0);
+  return result;
 }
 
-function buildMatchCenteredSnippet(text: string, maxChars: number, filters: CompiledPreviewFilters): string {
+function buildMatchCenteredSnippet(text: string, maxChars: number, filters: CompiledPreviewFilters, observe?: PreviewSliceObserver): string {
   const normalized = String(text || '').trim();
   if (normalized.length <= maxChars) {
+    const start = text.indexOf(normalized);
+    observe?.(start, start + normalized.length, 0);
     return normalized;
   }
 
   const match = firstMatchIndex(normalized, filters);
   if (!match) {
-    return truncateFromStart(normalized, maxChars);
+    return truncateFromStart(text, maxChars, observe);
   }
 
   const ellipsisBudget = 2;
@@ -298,7 +307,11 @@ function buildMatchCenteredSnippet(text: string, maxChars: number, filters: Comp
   }
   const prefix = start > 0 ? '…' : '';
   const suffix = end < normalized.length ? '…' : '';
-  return `${prefix}${normalized.slice(start, end).trim()}${suffix}`;
+  const window = normalized.slice(start, end);
+  const trimmed = window.trim();
+  const actualStart = text.indexOf(normalized) + start + window.indexOf(trimmed);
+  observe?.(actualStart, actualStart + trimmed.length, prefix.length);
+  return `${prefix}${trimmed}${suffix}`;
 }
 
 function countAdditionalMatches(text: string, filters: CompiledPreviewFilters): number {
@@ -470,6 +483,7 @@ export function createMessageContextPreviewItem(options: {
   heading: string;
   message: Message;
   hideDisplayOnlyContent?: boolean;
+  timestamp?: unknown;
   toolDetail?: ContextPreviewToolDetail;
   filters?: CompiledPreviewFilters;
   renderOptions?: ContextPreviewRenderOptions;
@@ -487,6 +501,7 @@ export function createMessageContextPreviewItem(options: {
   return {
     key: options.key,
     heading: options.heading,
+    messageTime: { timestamp: normalizeMessagePreviewTimestamp(options.timestamp) ?? normalizeMessagePreviewTimestamp(options.message.__meta?.timestamp) },
     body,
     searchText: buildMessageSearchText(message),
     omittedToolText: toolDetail === 'names' ? buildMessageOmittedToolText(message) : undefined,
@@ -517,22 +532,94 @@ export function createArchivedBlockContextPreviewItem(options: {
   };
 }
 
-function renderSingleItem(item: ContextPreviewItem, maxChars: number, filters: CompiledPreviewFilters): string {
+// Track generated heading positions through clipping. Only surviving headings
+// participate in day elision; matching body text is never treated as metadata.
+type RenderedMessageHeading = {
+  start: number;
+  end: number;
+  timeStart: number;
+  timestamp?: number;
+};
+type RenderedPreview = { text: string; messageHeadings: RenderedMessageHeading[] };
+
+function shiftMessageHeadings(headings: RenderedMessageHeading[], offset: number): RenderedMessageHeading[] {
+  return headings.map(heading => ({
+    ...heading,
+    start: heading.start + offset,
+    end: heading.end + offset,
+    timeStart: heading.timeStart + offset,
+  }));
+}
+
+function clipRenderedPreview(preview: RenderedPreview, maxChars: number, filters?: CompiledPreviewFilters): RenderedPreview {
+  let messageHeadings: RenderedMessageHeading[] = [];
+  const observe: PreviewSliceObserver = (start, end, prefixLength) => {
+    const retained = preview.messageHeadings.filter(heading => heading.start >= start && heading.end <= end);
+    messageHeadings = shiftMessageHeadings(retained, prefixLength - start);
+  };
+  const text = filters?.active
+    ? buildMatchCenteredSnippet(preview.text, maxChars, filters, observe)
+    : truncateFromStart(preview.text, maxChars, observe);
+  return { text, messageHeadings };
+}
+
+function messageHeadingRanges(item: ContextPreviewItem): RenderedMessageHeading[] {
+  if (!item.messageTime) return [];
+  const timestamp = item.messageTime.timestamp;
+  return [{
+    start: 0,
+    end: item.heading.length,
+    timeStart: timestamp === undefined ? 0 : item.heading.indexOf(formatLocalTimestamp(timestamp)),
+    timestamp,
+  }];
+}
+
+function renderMessageItems(items: ContextPreviewItem[]): RenderedPreview {
+  let text = '';
+  const messageHeadings: RenderedMessageHeading[] = [];
+  for (const item of items) {
+    if (text) text += '\n\n';
+    messageHeadings.push(...shiftMessageHeadings(messageHeadingRanges(item), text.length));
+    text += `${item.heading}\n${item.body}`;
+  }
+  return { text, messageHeadings };
+}
+
+function elideRepeatedMessageDates(preview: RenderedPreview): string {
+  const state = new MessagePreviewTimeState();
+  let text = '';
+  let cursor = 0;
+  for (const heading of preview.messageHeadings) {
+    const formatted = state.format(heading.timestamp);
+    if (!formatted || heading.timeStart < heading.start) continue;
+    text += preview.text.slice(cursor, heading.timeStart) + formatted;
+    cursor = heading.timeStart + formatLocalTimestamp(heading.timestamp!).length;
+  }
+  return text + preview.text.slice(cursor);
+}
+
+function renderSingleItem(item: ContextPreviewItem, maxChars: number, filters: CompiledPreviewFilters): RenderedPreview {
   const headingPrefix = item.heading ? `${item.heading}\n` : '';
   const usableBodyChars = Math.max(80, maxChars - headingPrefix.length);
-  let body = item.body || '[empty]';
+  const nested = item.messageItems ? renderMessageItems(item.messageItems) : undefined;
+  let body = nested?.text || item.body || '[empty]';
+  let bodyHeadings = nested?.messageHeadings || [];
   if (body.length > usableBodyChars) {
-    body = filters.active
-      ? buildMatchCenteredSnippet(body, usableBodyChars, filters)
-      : truncateFromStart(body, usableBodyChars);
+    const clipped = clipRenderedPreview({ text: body, messageHeadings: bodyHeadings }, usableBodyChars, filters);
+    body = clipped.text;
+    bodyHeadings = clipped.messageHeadings;
   }
 
   if (filters.active && item.omittedToolText && itemMatchesFilters({ ...item, body: item.omittedToolText, searchText: item.omittedToolText }, filters)) {
     const omittedNote = 'Matched in omitted tool call/result content; rerun with toolDetail:"snippets" or "full" to inspect.';
     const candidate = `${body}\n[${omittedNote}]`;
-    body = candidate.length <= usableBodyChars
-      ? candidate
-      : `${buildMatchCenteredSnippet(body, Math.max(40, usableBodyChars - omittedNote.length - 4), filters)}\n[${omittedNote}]`;
+    if (candidate.length <= usableBodyChars) {
+      body = candidate;
+    } else {
+      const clipped = clipRenderedPreview({ text: body, messageHeadings: bodyHeadings }, Math.max(40, usableBodyChars - omittedNote.length - 4), filters);
+      body = `${clipped.text}\n[${omittedNote}]`;
+      bodyHeadings = clipped.messageHeadings;
+    }
   }
 
   if (filters.active) {
@@ -542,7 +629,10 @@ function renderSingleItem(item: ContextPreviewItem, maxChars: number, filters: C
     }
   }
 
-  return `${headingPrefix}${body}`.trim();
+  return {
+    text: `${headingPrefix}${body}`.trim(),
+    messageHeadings: [...messageHeadingRanges(item), ...shiftMessageHeadings(bodyHeadings, headingPrefix.length)],
+  };
 }
 
 export function renderContextPreviewItems(args: {
@@ -614,6 +704,7 @@ export function renderContextPreviewItems(args: {
   const prefix = buildPrefix(242);
   let output = prefix ? `${prefix}\n\n` : '';
   let omittedCount = 0;
+  let messageHeadings: RenderedMessageHeading[] = [];
   for (let index = 0; index < filteredItems.length; index += 1) {
     const remainingItems = filteredItems.length - index;
     const remainingBudget = budget - output.length;
@@ -627,16 +718,15 @@ export function renderContextPreviewItems(args: {
     let itemText = renderSingleItem(filteredItems[index], itemBudget, filters);
     const separator = index === 0 ? '' : '\n\n';
     const maxAppend = budget - output.length - separator.length - (remainingItems > 1 ? 80 : 0);
-    if (itemText.length > maxAppend) {
-      itemText = filters.active
-        ? buildMatchCenteredSnippet(itemText, Math.max(60, maxAppend), filters)
-        : truncateFromStart(itemText, Math.max(60, maxAppend));
+    if (itemText.text.length > maxAppend) {
+      itemText = clipRenderedPreview(itemText, Math.max(60, maxAppend), filters);
     }
-    if (itemText.length <= 0) {
+    if (itemText.text.length <= 0) {
       omittedCount = remainingItems;
       break;
     }
-    output += `${separator}${itemText}`;
+    messageHeadings.push(...shiftMessageHeadings(itemText.messageHeadings, output.length + separator.length));
+    output += `${separator}${itemText.text}`;
   }
 
   if (omittedCount > 0) {
@@ -644,11 +734,16 @@ export function renderContextPreviewItems(args: {
     if (output.length + note.length <= budget) {
       output += note;
     } else {
-      output = `${truncateUnicodeSafeByCodeUnitsWithEllipsis(output, Math.max(0, budget - note.length))}${note}`;
+      const retained = truncateUnicodeSafeByCodeUnitsWithEllipsis(output, Math.max(0, budget - note.length));
+      messageHeadings = messageHeadings.filter(heading => heading.end <= retained.length - 1);
+      output = `${retained}${note}`;
     }
   }
 
+  const needsFinalClip = output.length > budget;
   output = truncateUnicodeSafeByCodeUnitsWithEllipsis(output, budget);
+  if (needsFinalClip) messageHeadings = messageHeadings.filter(heading => heading.end < output.length);
+  output = elideRepeatedMessageDates({ text: output, messageHeadings });
 
   return {
     text: output.trimEnd(),
@@ -665,8 +760,11 @@ export function formatMessageHeading(options: {
   label: string;
   message: Message;
   originLabel?: string;
+  timestamp?: unknown;
 }): string {
   const roleEmoji = options.message.role === 'user' ? '👤' : options.message.role === 'model' ? '🤖' : '🔧';
   const origin = options.originLabel ? `${options.originLabel} ` : '';
-  return `${options.label} ${origin}${roleEmoji} ${options.message.role}${formatModelVisibilitySuffix(options.message)}:`;
+  const timestamp = normalizeMessagePreviewTimestamp(options.timestamp) ?? normalizeMessagePreviewTimestamp(options.message.__meta?.timestamp);
+  const label = timestamp === undefined ? options.label : options.label.replace(/\]$/, ` time ${formatLocalTimestamp(timestamp)}]`);
+  return `${label} ${origin}${roleEmoji} ${options.message.role}${formatModelVisibilitySuffix(options.message)}:`;
 }

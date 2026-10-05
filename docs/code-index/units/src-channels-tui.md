@@ -1,6 +1,6 @@
 # Unit: src-channels-tui
 
-Files: src/channels/tuiChannel.ts
+Files: src/channels/tuiChannel.ts, src/channels/tuiChannel.test.ts
 
 ## Purpose
 
@@ -46,7 +46,7 @@ Implements a terminal-based user interface (TUI) channel using the `blessed` lib
 
 - Maintains two UI tabs: a scrollable log viewer and a chat interface with session list, message log, and text input.
 - On first message to a session, automatically binds the TUI channel to that session via `sessionManager.bindSession`.
-- If no session exists for the selected ID, creates one via `sessionManager.createSession`.
+- Keeps a live current/bound selection when possible and falls back to the live `main` Session only when it exists; when no default target is available, the UI reports that an existing Session must be selected.
 - Handles `/`-prefixed commands by delegating to the registered command handler.
 - Displays non-command replies directly; it no longer carries a special filter for busy queue acknowledgements because the router now enqueues busy messages silently.
 - Polls the SessionRuntime projection every 500ms to update a processing indicator in the status bar and chat label without hydrating Worker-owned state in Main.

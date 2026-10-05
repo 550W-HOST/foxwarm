@@ -1,6 +1,6 @@
 # Unit: browser node extension
 
-Files: packages/browser-node/manifest.json, packages/browser-node/README.md, packages/browser-node/background/main.js, packages/browser-node/background/websocket.js, packages/browser-node/background/nodeProtocol.js, packages/browser-node/background/tools.js, packages/browser-node/background/toolResults.js, packages/browser-node/background/permissions.js, packages/browser-node/background/storage.js, packages/browser-node/popup/popup.html, packages/browser-node/popup/popup.js, packages/browser-node/popup/popup.css, packages/browser-node/test/nodeProtocol.test.mjs, packages/browser-node/test/toolResults.test.mjs
+Files: packages/browser-node/manifest.json, packages/browser-node/README.md, packages/browser-node/background/main.js, packages/browser-node/background/websocket.js, packages/browser-node/background/nodeProtocol.js, packages/browser-node/background/tools.js, packages/browser-node/background/toolResults.js, packages/browser-node/background/permissions.js, packages/browser-node/background/storage.js, packages/browser-node/popup/popup.html, packages/browser-node/popup/popup.js, packages/browser-node/popup/popup.css, packages/browser-node/test/nodeProtocol.test.mjs, packages/browser-node/test/toolResults.test.mjs, packages/browser-node/test/pairingStatus.test.mjs
 
 ## Purpose
 
@@ -41,6 +41,7 @@ Plain-ES-module Manifest V3 extension that pairs/authenticates to Foxwarm as a n
 
 - Master URL is converted to `/node_ws` pairing or authenticated URL.
 - Approved credentials are stored and cause a quick authenticated reconnect.
+- The pending state and popup expose the exact `/node approve <pending-id>` command, including when the popup opens after the pairing status event; no six-digit display code is used.
 - Ordinary close schedules a 5-second reconnect unless manually disconnected or pairing was rejected.
 - Pairing and authenticated registration advertise core Node protocol range 1-2, select generation 2 with a current Master, accept an unversioned old-Master response as generation 1, and stop automatic reconnect on a malformed/disjoint upgrade-required mismatch. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - The extension handles pairing states, registration, `tool_call`, error, and an expected JSON `pong`.
@@ -48,7 +49,7 @@ Plain-ES-module Manifest V3 extension that pairs/authenticates to Foxwarm as a n
 ## Limitations
 
 - The current master does not answer the extension's JSON `ping`; see [browser node known limitation](../modules/browser-node.md#known-limitation).
-- There are no automated tests or build step in this package.
+- Protocol, tool-result and pending-state Node tests exist; a full browser-extension popup and live browser workflow are not covered by these tests. There is no separate build step in this package.
 - Host permission does not make browser-internal/restricted pages scriptable.
 - The extension exposes no node file transfer, session RPC, or backend service messages.
 

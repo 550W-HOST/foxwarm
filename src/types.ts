@@ -63,6 +63,8 @@ export interface FunctionResponse {
   name: string;
   /** Measured duration of the tool invocation until its result returns. */
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
+  /** Persisted presentation metadata, excluded from model requests. */
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[] };
   /**
    * Internal timing for the model request which produced this tool batch.
    * It is persisted with the first tool response so serializers never need to
@@ -149,6 +151,8 @@ export interface Message {
     usage?: TokenUsage;
     /** Persisted wall-clock boundaries and monotonic duration for the logical LLM request. */
     llmRequestTiming?: LlmRequestTiming;
+    /** Responses output range [start, end) of this immutable assistant segment. */
+    llmSegment?: { outputStart: number; outputEndExclusive: number; complete: boolean };
     /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
     contextBlock?: ContextBlockMessageMeta;
     /** Present when a raw message is intentionally preserved after a covering block. */
@@ -188,6 +192,22 @@ export interface ModelStreamToolCallDelta {
   argumentsDelta?: ModelStreamTextDelta;
 }
 
+/** One provider output slice; reasoning summaries retain their own indices within an output item. */
+export interface ModelStreamPart {
+  outputIndex: number;
+  kind: 'reasoning' | 'text' | 'tool-call' | 'image-generation';
+  contentIndex?: number;
+  summaryIndex?: number;
+  text?: string;
+  phase?: 'commentary' | 'final_answer';
+  status?: string;
+}
+
+export interface ModelStreamPartDelta extends Omit<ModelStreamPart, 'text'> {
+  added?: true;
+  textDelta?: ModelStreamTextDelta;
+}
+
 export type ChannelTurnToolStatus = 'running' | 'success' | 'error';
 
 export interface ChannelTurnToolRef {
@@ -221,6 +241,10 @@ export interface SessionStreamEvent {
   reasoningDelta?: ModelStreamTextDelta;
   textDelta?: ModelStreamTextDelta;
   toolCallDeltas?: ModelStreamToolCallDelta[];
+  /** Responses-only ordered output slices; flat fields below remain a compatibility projection. */
+  partDeltas?: ModelStreamPartDelta[];
+  /** Exclusive provider output index of the committed prefix; remaining draft only. */
+  trimBeforeOutputIndex?: number;
   /** Legacy cumulative fields retained for tolerant readers only. */
   reasoning?: string;
   text?: string;

@@ -1,3 +1,4 @@
+import { MessagePreviewTimeState } from './messagePreviewTime'
 import { Message } from '../types'
 import { formatMessagePreviewText, formatPrefixedMultilineText } from './messageFormat'
 import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from '../session/messageVisibility'
@@ -11,10 +12,12 @@ export function getMessagePreview(msg: Message, previewLength: number = 100, opt
   return formatMessagePreviewText(message, previewLength, { skipEphemeralSystem: true, skipThinking: true })
 }
 
-export function formatMessagePreviewLine(msg: Message, idx: number, previewLength: number = 100, options: MessagePreviewOptions = {}): string {
+export function formatMessagePreviewLine(msg: Message, idx: number, previewLength: number = 100, options: MessagePreviewOptions = {}, timeState = new MessagePreviewTimeState()): string {
+  const timestamp = timeState.format(msg.__meta?.timestamp)
+  const time = timestamp ? ` time ${timestamp}` : ''
   const roleEmoji = msg.role === 'user' ? '👤' : msg.role === 'model' ? '🤖' : '🔧'
   const preview = getMessagePreview(msg, previewLength, options)
-  return `${formatPrefixedMultilineText(`[${idx}] ${roleEmoji} ${msg.role}${formatModelVisibilitySuffix(msg)}: `, preview)}\n`
+  return `${formatPrefixedMultilineText(`[${idx}${time}] ${roleEmoji} ${msg.role}${formatModelVisibilitySuffix(msg)}: `, preview)}\n`
 }
 
 export function formatSessionMessagesPreview(
@@ -30,8 +33,9 @@ export function formatSessionMessagesPreview(
   }
 
   let result = `Session \`${sessionId}\` - showing ${messages.length} of ${totalMessages} message(s):\n\n`
+  const timeState = new MessagePreviewTimeState()
   for (let i = 0; i < messages.length; i++) {
-    result += formatMessagePreviewLine(messages[i], startIndex + i, previewLength, options)
+    result += formatMessagePreviewLine(messages[i], startIndex + i, previewLength, options, timeState)
   }
   return result
 }

@@ -7,13 +7,16 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
+import { listNodeTopology } from './nodeExecution';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkGenericToolAuthorizationForSession, checkPathAccess } from './isolatedCheck';
+import { checkGenericToolAuthorizationForSession, checkPathAccess, isToolVisibleForSession } from './isolatedCheck';
+import { isPermissionNeutralBuiltinDispatcher } from './permissions';
+import { builtinNodeArgumentSelectsPlacement, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import type { ResolvedTool } from './tools/resolvedTools';
 import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
@@ -28,19 +31,21 @@ import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
 import { boundSafetyBufferingMetadata, createStreamingAttemptWatchdog } from './llmStreamingTimeout';
 import {
     buildOpenAIImageGenerationTool,
+    createGeneratedImageExternalizationBudget,
     externalizeGeneratedImageItems,
     formatGeneratedImageFailureNote,
     formatGeneratedImageModelPlaceholder,
     GeneratedImageReplayError,
     isImageGenerationCallItem,
     isCompletedImageGenerationItem,
+    type GeneratedImageExternalizationBudget,
 } from './llmProviders/openaiImages';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
-import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
+import { appendImageGuidanceText, buildImageGuidanceText, normalizeToolResultImages } from './toolImages';
 import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
 import { deduplicateProviderRequestImages } from './providerImageDedup';
 import { guardToolOutputForModel } from './toolOutputGuard';
@@ -48,6 +53,7 @@ import { isToolAuthorizationPolicyUnavailable, TOOL_AUTH_POLICY_UNAVAILABLE } fr
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import {
+    addToolCancellationSchema,
     getToolCancellationArgumentError,
     isSingleToolCancellationRequested,
     isWholeBatchCancellationRequested,
@@ -215,6 +221,21 @@ type RequestLlmOnceOptions = {
     compactPlanBackground?: boolean;
     currentSessionEffects?: CurrentSessionEffects;
     resolveSystemPromptForModel?: (modelId: string) => Promise<string>;
+    /** Normal-turn Responses only: canonical append and delivery owned by chat(). */
+    onPartialAssistantCommit?: (segment: {
+        parts: MessagePart[];
+        text: string;
+        providerMeta?: ChatResult['providerMeta'];
+        modelId: string;
+        virtualModelKey?: string;
+        llmRequestId: string;
+        llmAttempt: number;
+        outputStart: number;
+        outputEndExclusive: number;
+    }) => Promise<Message>;
+    onPartialAssistantDelivered?: (message: Message, text: string) => Promise<void>;
+    /** Rebuild the next logical request after committed context changes. */
+    getCommittedHistoryForRetry?: () => Message[];
 };
 
 function resolveProviderPromptCacheKey(
@@ -232,6 +253,9 @@ function resolveProviderPromptCacheKey(
 
 type InternalLlmResult = {
     result: ChatResult;
+    committedSegments?: Message[];
+    committedOutputEnd?: number;
+    outputEndExclusive?: number;
     /**
      * Provider-local completion held outside the reusable pool until the
      * exact assistant Message has crossed the canonical history boundary.
@@ -364,6 +388,7 @@ type ModelStreamProgressSnapshot = {
     reasoning?: string;
     text?: string;
     toolCalls?: ModelStreamToolCall[];
+    parts?: ModelStreamPart[];
 };
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
@@ -558,6 +583,57 @@ function makeModelStreamTextDelta(previous: string, current: string) {
     return { offset: 0, text: current };
 }
 
+function modelStreamPartKey(part: ModelStreamPart): string {
+    return `${part.outputIndex}:${part.kind}:${part.contentIndex ?? ''}:${part.summaryIndex ?? ''}`;
+}
+
+function areModelStreamPartsEqual(left?: ModelStreamPart[], right?: ModelStreamPart[]): boolean {
+    if (left === right) return true;
+    if (!left || !right || left.length !== right.length) return false;
+    return left.every((part, index) => {
+        const other = right[index];
+        return part.outputIndex === other.outputIndex && part.kind === other.kind
+            && part.contentIndex === other.contentIndex && part.summaryIndex === other.summaryIndex
+            && part.text === other.text && part.phase === other.phase && part.status === other.status;
+    });
+}
+
+function makeModelStreamPartDeltas(previous: ModelStreamPart[], current: ModelStreamPart[]): ModelStreamPartDelta[] {
+    const previousByKey = new Map(previous.map(part => [modelStreamPartKey(part), part]));
+    return current.flatMap(part => {
+        const old = previousByKey.get(modelStreamPartKey(part));
+        const textDelta = part.text !== undefined ? makeModelStreamTextDelta(old?.text || '', part.text) : undefined;
+        if (old && !textDelta && old.phase === part.phase && old.status === part.status) return [];
+        return [{
+            outputIndex: part.outputIndex,
+            kind: part.kind,
+            ...(part.contentIndex !== undefined ? { contentIndex: part.contentIndex } : {}),
+            ...(part.summaryIndex !== undefined ? { summaryIndex: part.summaryIndex } : {}),
+            ...(!old ? { added: true as const } : {}),
+            ...(textDelta ? { textDelta } : {}),
+            ...(part.phase ? { phase: part.phase } : {}),
+            ...(part.status ? { status: part.status } : {}),
+        }];
+    });
+}
+
+function projectModelStreamParts(parts: ModelStreamPart[], committedThrough: number): ModelStreamProgressSnapshot {
+    const remaining = parts.filter(part => part.outputIndex >= committedThrough);
+    const summaries = new Map<number, string[]>();
+    for (const part of remaining) {
+        if (part.kind !== 'reasoning' || !part.text) continue;
+        const values = summaries.get(part.outputIndex) || [];
+        values[part.summaryIndex || 0] = part.text;
+        summaries.set(part.outputIndex, values);
+    }
+    return {
+        parts: remaining,
+        reasoning: [...summaries.entries()].sort(([left], [right]) => left - right)
+            .map(([, values]) => values.filter(Boolean).join('\n')).filter(Boolean).join('\n'),
+        text: remaining.filter(part => part.kind === 'text').map(part => part.text || '').join(''),
+    };
+}
+
 export function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
@@ -579,6 +655,7 @@ export function createModelStreamEventEmitter(args: {
     let lastSentAt = 0;
     let lastToolArgsSentAt = 0;
     let sequence = 0;
+    let committedThrough = 0;
     let startedAt = now();
     const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
         if (!args.sessionId) return;
@@ -614,7 +691,10 @@ export function createModelStreamEventEmitter(args: {
         });
         const reasoningDelta = makeModelStreamTextDelta(previousReasoning, reasoning);
         const textDelta = makeModelStreamTextDelta(previousText, text);
-        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0) return;
+        const partDeltas = latestSnapshot.parts
+            ? makeModelStreamPartDeltas(emittedSnapshot.parts || [], latestSnapshot.parts)
+            : [];
+        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0 && partDeltas.length === 0) return;
         notifySessionEvent({
             type: 'model-stream-update',
             streamId,
@@ -627,6 +707,7 @@ export function createModelStreamEventEmitter(args: {
             ...(reasoningDelta ? { reasoningDelta } : {}),
             ...(textDelta ? { textDelta } : {}),
             ...(toolCallDeltas.length ? { toolCallDeltas } : {}),
+            ...(partDeltas.length ? { partDeltas } : {}),
         });
         emittedSnapshot = {
             reasoning,
@@ -635,6 +716,7 @@ export function createModelStreamEventEmitter(args: {
                 ...call,
                 arguments: toolArgsDue ? call.arguments : previousByIndex.get(call.index)?.arguments,
             })),
+            ...(latestSnapshot.parts ? { parts: latestSnapshot.parts } : {}),
         };
         updateModelStreamDraft(args.sessionId, {
             streamId,
@@ -645,6 +727,8 @@ export function createModelStreamEventEmitter(args: {
             reasoning,
             text,
             toolCalls: currentToolCalls,
+            ...(latestSnapshot.parts ? { parts: latestSnapshot.parts } : {}),
+            ...(committedThrough ? { committedThrough } : {}),
         });
         lastSentAt = now();
         if (toolArgsDue && toolCallDeltas.some(call => call.argumentsDelta)) lastToolArgsSentAt = lastSentAt;
@@ -682,6 +766,7 @@ export function createModelStreamEventEmitter(args: {
 
             latestSnapshot = { reasoning: '', text: '', toolCalls: [] };
             emittedSnapshot = { reasoning: '', text: '', toolCalls: [] };
+            committedThrough = 0;
             startedAt = now();
             if (timer) {
                 clearTimer(timer);
@@ -706,15 +791,20 @@ export function createModelStreamEventEmitter(args: {
             lastToolArgsSentAt = lastSentAt;
         },
         emit(snapshot: ModelStreamProgressSnapshot) {
+            const projected = snapshot.parts && committedThrough > 0
+                ? projectModelStreamParts(snapshot.parts, committedThrough)
+                : snapshot;
             const nextSnapshot = {
-                reasoning: snapshot.reasoning ?? latestSnapshot.reasoning ?? '',
-                text: snapshot.text ?? latestSnapshot.text ?? '',
-                toolCalls: normalizeModelStreamToolCalls(snapshot.toolCalls ?? latestSnapshot.toolCalls),
+                reasoning: projected.reasoning ?? latestSnapshot.reasoning ?? '',
+                text: projected.text ?? latestSnapshot.text ?? '',
+                toolCalls: normalizeModelStreamToolCalls(projected.toolCalls ?? latestSnapshot.toolCalls),
+                ...(projected.parts ? { parts: projected.parts } : {}),
             };
             const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
             if ((latestSnapshot.reasoning || '') === nextSnapshot.reasoning
                 && (latestSnapshot.text || '') === nextSnapshot.text
-                && areModelStreamToolCallsEqual(currentToolCalls, nextSnapshot.toolCalls)) {
+                && areModelStreamToolCallsEqual(currentToolCalls, nextSnapshot.toolCalls)
+                && areModelStreamPartsEqual(latestSnapshot.parts, nextSnapshot.parts)) {
                 return;
             }
 
@@ -729,9 +819,39 @@ export function createModelStreamEventEmitter(args: {
                     reasoning: nextSnapshot.reasoning || '',
                     text: nextSnapshot.text || '',
                     toolCalls: nextSnapshot.toolCalls || [],
+                    ...(nextSnapshot.parts ? { parts: nextSnapshot.parts } : {}),
+                    ...(committedThrough ? { committedThrough } : {}),
                 });
             }
             scheduleNotify();
+        },
+        commitPrefix(outputEndExclusive: number) {
+            if (outputEndExclusive <= committedThrough) return;
+            this.flush();
+            committedThrough = outputEndExclusive;
+            if (!latestSnapshot.parts) return;
+            const projected = projectModelStreamParts(latestSnapshot.parts, committedThrough);
+            const reasoningDelta = makeModelStreamTextDelta(emittedSnapshot.reasoning || '', projected.reasoning || '');
+            const textDelta = makeModelStreamTextDelta(emittedSnapshot.text || '', projected.text || '');
+            latestSnapshot = { ...latestSnapshot, ...projected };
+            emittedSnapshot = { ...emittedSnapshot, ...projected };
+            if (args.enabled && args.sessionId) {
+                const trimEvent: import('./types').SessionStreamEvent = {
+                    type: 'model-stream-update', streamVersion: 2, streamId, iteration: args.iteration,
+                    sequenceStart: sequence + 1, sequence: ++sequence,
+                    startedAt, llmRequestId: args.llmRequestId,
+                    trimBeforeOutputIndex: outputEndExclusive,
+                    ...(reasoningDelta ? { reasoningDelta } : {}),
+                    ...(textDelta ? { textDelta } : {}),
+                };
+                updateModelStreamDraft(args.sessionId, {
+                    streamId, iteration: args.iteration, sequence, startedAt, llmRequestId: args.llmRequestId,
+                    reasoning: projected.reasoning || '', text: projected.text || '',
+                    toolCalls: latestSnapshot.toolCalls || [], parts: projected.parts || [],
+                    committedThrough,
+                });
+                notifySessionEvent(trimEvent);
+            }
         },
         flush() {
             if (timer) {
@@ -1194,6 +1314,8 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     let combined = '';
 
     for (const file of mdFiles) {
+        // ONBOOT.md is a retired startup trigger. Keep legacy files out of
+        // model memory so deleting its producer does not change old installs.
         if (file.toLowerCase() === 'onboot.md') continue;
         const filePath = path.join(agentMemoryDir, file);
         const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);
@@ -1376,11 +1498,19 @@ function getHistoricalConcreteModelId(message: Message): string | undefined {
         : undefined;
 }
 
-/**
- * Build an attempt-local provider history. Internal message metadata is never
- * serialized, while model-specific reasoning artifacts are retained only when
- * their concrete source is absent/legacy or exactly matches this destination.
- */
+/** Keep persisted presentation metadata out of canonical request journals and provider input. */
+function stripFunctionResponseDisplayMeta(contents: Message[]): Message[] {
+    return contents.map(message => ({
+        ...message,
+        parts: message.parts.map(part => {
+            if (!part.functionResponse?.__meta) return part;
+            const { __meta: _displayMeta, ...functionResponse } = part.functionResponse;
+            return { ...part, functionResponse };
+        }),
+    }));
+}
+
+/** Filter attempt-local provider history without modifying canonical persisted messages. */
 function prepareHistoryForConcreteModel(contents: Message[], destinationModelId: string): Message[] {
     const prepared: Message[] = [];
 
@@ -1552,7 +1682,7 @@ export function convertToAnthropicFormat(contents: Message[], config: ModelConfi
                 if (msg.role === 'model' && part.imageMeta?.origin === 'generated') {
                     // Cross-provider edit is out of V1 scope. Describe the image
                     // honestly instead of sending an assistant image block.
-                    content.push({ type: 'text', text: formatGeneratedImageModelPlaceholder() });
+                    content.push({ type: 'text', text: `${formatGeneratedImageModelPlaceholder()}\n${buildImageGuidanceText([part])}` });
                     continue;
                 }
                 content.push({
@@ -1627,6 +1757,8 @@ type PreparedToolCall = {
 type ExecutedToolCall = PreparedToolCall & {
     result: any;
     executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
+    resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>;
+    toolScriptSubCalls?: ToolScriptSubCall[];
     imageParts: MessagePart[];
     stopCurrentTurn: boolean;
     waitForReply: boolean;
@@ -1796,6 +1928,8 @@ function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
 async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
     let result = prepared.result;
     let executionTiming: ExecutedToolCall['executionTiming'];
+    let resolvedPaths: ExecutedToolCall['resolvedPaths'];
+    let toolScriptSubCalls: ToolScriptSubCall[] | undefined;
     let imageParts: MessagePart[] = [];
     let stopCurrentTurn = false;
     let waitForReply = false;
@@ -1820,7 +1954,17 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             const startedAt = Date.now();
             const monotonicStart = performance.now();
             try {
-                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
+                const isToolScriptExecution = prepared.resolved.source === 'builtin'
+                    && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
+                result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, {
+                    ...localToolContext,
+                    ...(isToolScriptExecution ? { onToolScriptSubCalls: (subCalls: ToolScriptSubCall[]) => {
+                        toolScriptSubCalls = subCalls.map(subCall => ({ ...subCall }));
+                    } } : {}),
+                    onResolvedPaths: (paths: Array<{ raw: string; resolved: string }>) => {
+                        resolvedPaths = paths.map(path => ({ ...path, nodeId: prepared.resolved!.executionNode }));
+                    },
+                }));
             } finally {
                 executionTiming = {
                     startedAt,
@@ -1873,12 +2017,15 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
             ...(error?.retryable === true ? { retryable: true } : {}) };
         imageParts = [];
+        resolvedPaths = undefined;
     }
 
     return {
         ...prepared,
         result: normalizeExecutedToolResult(result),
         ...(executionTiming ? { executionTiming } : {}),
+        ...(resolvedPaths?.length ? { resolvedPaths } : {}),
+        ...(toolScriptSubCalls !== undefined ? { toolScriptSubCalls } : {}),
         imageParts,
         stopCurrentTurn,
         waitForReply,
@@ -2096,11 +2243,16 @@ export async function executeTools(
         } catch (error: any) {
             result = { error: error?.message || String(error) };
         }
+        const resolvedPaths = !result?.error && execution.resolvedPaths?.length ? execution.resolvedPaths : undefined;
         parts.push(...execution.imageParts, {
             functionResponse: {
                 tool_use_id: execution.toolId,
                 name: execution.call.name,
                 ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
+                ...(resolvedPaths || execution.toolScriptSubCalls !== undefined ? { __meta: {
+                    ...(resolvedPaths ? { resolvedPaths } : {}),
+                    ...(execution.toolScriptSubCalls !== undefined ? { toolScriptSubCalls: execution.toolScriptSubCalls } : {}),
+                } } : {}),
                 ...(execution.index === 0 && toolContext.previousLlmRequest ? {
                     previousLlmRequest: {
                         time: formatLocalTimestamp(toolContext.previousLlmRequest.completedAt),
@@ -2151,13 +2303,33 @@ export async function executeTools(
     return toolMessage;
 }
 
-/**
- * Call LLM and handle tool calls
- */
-/**
- * Call LLM once (single API call, no recursion)
- * Returns response with tool calls if any
- */
+/** Project default tools for this Session and preserve the selected Shell exec schema. */
+export async function resolveSessionToolDefinitions(session: Session, override?: ToolDefinition[]): Promise<ToolDefinition[]> {
+    if (override) return override;
+    const currentNode = session.currentNode || 'master';
+    // Policy failures must propagate before the optional topology lookup's catch.
+    const definitions = tools.modelFacingDefinitions.filter(tool => {
+        if (isPermissionNeutralBuiltinDispatcher(tool.name)) return true;
+        if (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(tool.name as any)) {
+            return isToolVisibleForSession(session, { source: 'node', node: currentNode, tool: tool.name }, currentNode);
+        }
+        const placement = resolveBuiltinToolPlacement(tool.name, undefined, currentNode);
+        return isToolVisibleForSession(session, { source: 'builtin', tool: tool.name }, placement.executionNode,
+            { targetNodeUnknown: builtinNodeArgumentSelectsPlacement(tool.name) });
+    });
+    if (!session.currentNode || session.currentNode === 'master') return definitions;
+    let node;
+    try { [node] = await listNodeTopology(session.id, session.currentNode); }
+    catch { return definitions; }
+    if (node?.type !== 'shell-node') return definitions;
+    const capability = node.tools.find(tool => tool.name === 'exec');
+    if (!capability) return definitions.filter(tool => tool.name !== 'exec');
+    return definitions.map(tool => tool.name === 'exec'
+        ? addToolCancellationSchema(capability as ToolDefinition)
+        : tool);
+}
+
+/** Call LLM once and return response with tool calls if any. */
 export async function chat(
     parts: MessagePart[] | null, 
     session: Session,
@@ -2169,11 +2341,15 @@ export async function chat(
         registerAbortController?: boolean;
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+        prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+        maxRetries?: number;
         purpose?: LlmRequestPurpose;
         compactPlanBackground?: boolean;
         turnId?: string;
         currentSessionEffects?: CurrentSessionEffects;
         snapshotAuthority?: 'authoritative' | 'detached';
+        onCommittedAssistantMessage?: (message: Message) => void | Promise<void>;
+        onIntermediateAssistantText?: (text: string) => void | Promise<void>;
     },
 ): Promise<ChatResult> {
     const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
@@ -2227,15 +2403,19 @@ export async function chat(
     }
     
     // Convert to appropriate format based on provider
-    const contentsForLlm = session.history
+    const getCommittedHistoryForRetry = () => session.history
         .filter(isModelVisibleMessage)
         .map((message: Message): Message => {
             const { __meta, ...msg } = message;
             const modelId = getHistoricalConcreteModelId(message);
             return modelId ? { ...msg, __meta: { modelId } } : msg;
         });
-    const availableToolDefinitions = options?.toolDefinitions
-        ?? tools.modelFacingDefinitions;
+    const contentsForLlm = getCommittedHistoryForRetry();
+    const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
+        && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
+    const prepareRetry = (options?.purpose || 'normal-turn') === 'normal-turn'
+        && options?.snapshotAuthority !== 'detached' ? options?.prepareRetry : undefined;
+    const availableToolDefinitions = await resolveSessionToolDefinitions(session, options?.toolDefinitions);
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
     if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
@@ -2255,12 +2435,42 @@ export async function chat(
         registerAbortController: options?.registerAbortController,
         abortSignal: options?.abortSignal,
         onRetry: options?.onRetry,
+        maxRetries: options?.maxRetries,
         purpose: options?.purpose || 'normal-turn',
         compactPlanBackground: options?.compactPlanBackground,
         currentSessionEffects: options?.currentSessionEffects,
         resolveSystemPromptForModel,
+        ...((partialCommitEnabled || prepareRetry) ? { getCommittedHistoryForRetry } : {}),
+        ...(prepareRetry ? { prepareRetry } : {}),
+        ...(partialCommitEnabled ? {
+            onPartialAssistantCommit: async (segment: Parameters<NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>>[0]) => {
+                const message: Message = {
+                    role: 'model', parts: segment.parts,
+                    ...(segment.providerMeta ? { providerMeta: segment.providerMeta } : {}),
+                    __meta: {
+                        modelId: segment.modelId,
+                        ...(segment.virtualModelKey ? { virtualModelKey: segment.virtualModelKey } : {}),
+                        llmRequestId: segment.llmRequestId, llmAttempt: segment.llmAttempt,
+                        llmSegment: { outputStart: segment.outputStart, outputEndExclusive: segment.outputEndExclusive, complete: false },
+                    },
+                };
+                await appendMessage(message);
+                return message;
+            },
+            onPartialAssistantDelivered: async (message: Message, text: string) => {
+                if (text) {
+                    try { await options!.onIntermediateAssistantText!(text); }
+                    catch (error) { logger.error({ err: error, sessionId: session.id }, 'Committed assistant progress delivery failed'); }
+                }
+                if (options?.onCommittedAssistantMessage) {
+                    try { await options.onCommittedAssistantMessage(message); }
+                    catch (error) { logger.error({ err: error, sessionId: session.id }, 'Committed assistant media delivery failed'); }
+                }
+            },
+        } : {}),
     });
     const result = completion.result;
+    let committedAssistantMessage: Message | undefined;
 
     try {
         if (result.usage) {
@@ -2274,7 +2484,7 @@ export async function chat(
 
         // Add assistant message to history. A stateful provider completion is
         // deliberately not reusable until this exact object has committed.
-        if (result.allParts && result.allParts.length > 0) {
+        if ((result.allParts && result.allParts.length > 0) || completion.committedSegments?.length) {
             const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
             const assistantMeta = {
                 ...(result.modelId ? { modelId: result.modelId } : {}),
@@ -2282,19 +2492,27 @@ export async function chat(
                 ...(result.usage ? { usage: result.usage } : {}),
                 ...(llmRequestTiming ? { llmRequestTiming } : {}),
                 ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
+                ...(completion.committedOutputEnd !== undefined ? {
+                    llmSegment: {
+                        outputStart: completion.committedOutputEnd,
+                        outputEndExclusive: completion.outputEndExclusive ?? completion.committedOutputEnd,
+                        complete: true,
+                    },
+                } : {}),
             };
             const assistantMsg: Message = {
                 role: 'model',
-                parts: result.allParts,
+                parts: result.allParts || [],
                 ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
                 ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
             };
             await appendMessage(assistantMsg);
             settleHistoryAppendFinalizer(
                 completion.finalizeHistoryAppend,
-                { appended: true, message: assistantMsg },
+                { appended: true, messages: [...(completion.committedSegments || []), assistantMsg] },
                 'Failed to finalize provider state after assistant history commit',
             );
+            committedAssistantMessage = assistantMsg;
         } else {
             settleHistoryAppendFinalizer(
                 completion.finalizeHistoryAppend,
@@ -2309,6 +2527,17 @@ export async function chat(
             'Failed to discard provider state after assistant history failure',
         );
         throw error;
+    }
+
+    // Normal turns may deliver generated media after the assistant message has
+    // committed. Delivery is not a provider effect and must never retry a
+    // successful generation or undo its canonical history append.
+    if (committedAssistantMessage && options?.onCommittedAssistantMessage) {
+        try {
+            await options.onCommittedAssistantMessage(committedAssistantMessage);
+        } catch (error) {
+            logger.error({ err: error, sessionId: session.id }, 'Committed assistant media delivery failed');
+        }
     }
 
     return result;
@@ -2784,7 +3013,8 @@ function buildConcreteRequestPlan(options: {
     };
 }
 
-async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Promise<ChatResult> {
+async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any, allowEmptySuffix = false,
+    generatedImageBudget?: GeneratedImageExternalizationBudget, outputIndexStart = 0): Promise<ChatResult> {
     let responseText = '';
     const allParts: Message['parts'] = [];
     let messageProviderMeta: ChatResult['providerMeta'];
@@ -2796,7 +3026,9 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
         // Externalize hosted image results before any logging or journaling so
         // only Blob references survive past this await boundary.
-        const generatedImages = await externalizeGeneratedImageItems(outputItems, { sourceModelId: plan.modelId });
+        const generatedImages = await externalizeGeneratedImageItems(outputItems, {
+            sourceModelId: plan.modelId, budget: generatedImageBudget, outputIndexStart,
+        });
         const generatedImagePartByIndex = new Map(generatedImages.images.map(entry => [entry.index, entry.part]));
         for (let outputIndex = 0; outputIndex < outputItems.length; outputIndex += 1) {
             const item = outputItems[outputIndex];
@@ -2873,7 +3105,7 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
                 allParts.push({ functionCall: { id: callId, name: item.name, ...parsedArgs } });
             }
         }
-        successfulImageCount = generatedImages.images.length;
+        successfulImageCount = generatedImageBudget?.externalizedCount ?? generatedImages.images.length;
         imageFailureCount = generatedImages.failures.length;
         imageFailureNote = formatGeneratedImageFailureNote(generatedImages.failures);
         if (successfulImageCount > 0 && imageFailureNote) {
@@ -2957,7 +3189,7 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
                 countable: false,
             });
         }
-        if (plan.modelEntry.disallowEmptyResponse === true) {
+        if (plan.modelEntry.disallowEmptyResponse === true && !allowEmptySuffix) {
             throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
                 kind: 'response-error',
                 retryable: true,
@@ -3017,13 +3249,120 @@ async function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: an
     };
 }
 
-async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<InternalLlmResult> {
+/** A single provider attempt's ordered, completed output prefix. Only chat() supplies the commit callback. */
+function createResponsesPrefixCommitLane(args: {
+    plan: ConcreteRequestPlan;
+    requestId: string;
+    attempt: number;
+    virtualModelKey?: string;
+    abortController: AbortController;
+    emitter: ReturnType<typeof createModelStreamEventEmitter>;
+    generatedImageBudget: GeneratedImageExternalizationBudget;
+    onCommit: NonNullable<RequestLlmOnceOptions['onPartialAssistantCommit']>;
+    onDelivered?: RequestLlmOnceOptions['onPartialAssistantDelivered'];
+}) {
+    const completed = new Map<number, any>();
+    const committedMessages: Message[] = [];
+    let scheduledEnd = 0;
+    let committedEnd = 0;
+    let failure: unknown;
+    let tail: Promise<void> = Promise.resolve();
+
+    const commitSegment = async (start: number, end: number, output: any[], deliver: boolean) => {
+        const parsed = await parseConcreteProviderResponse(args.plan, { output }, !deliver, args.generatedImageBudget, start);
+        if (!parsed.allParts?.length) throw new Error('Completed Responses prefix had no replayable assistant content.');
+        args.emitter.flush();
+        const message = await args.onCommit({
+            parts: parsed.allParts,
+            text: parsed.text,
+            ...(parsed.providerMeta ? { providerMeta: parsed.providerMeta } : {}),
+            modelId: args.plan.modelId,
+            ...(args.virtualModelKey ? { virtualModelKey: args.virtualModelKey } : {}),
+            llmRequestId: args.requestId,
+            llmAttempt: args.attempt,
+            outputStart: start,
+            outputEndExclusive: end,
+        });
+        committedMessages.push(message);
+        committedEnd = end;
+        try { args.emitter.commitPrefix(end); }
+        catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant draft trim failed'); }
+        if (deliver) {
+            try { await args.onDelivered?.(message, parsed.text); }
+            catch (error) { logger.warn({ err: error, llmRequestId: args.requestId }, 'Committed assistant channel delivery failed'); }
+        }
+    };
+
+    const onOutputItemDone = ({ outputIndex, item }: { outputIndex: number; item: any }) => {
+        if (args.abortController.signal.aborted || failure || !Number.isSafeInteger(outputIndex) || outputIndex < 0) return;
+        completed.set(outputIndex, item);
+        let cursor = scheduledEnd;
+        let commentaryEnd = scheduledEnd;
+        while (completed.has(cursor)) {
+            const next = completed.get(cursor);
+            if ((next.status && next.status !== 'completed')
+                || !['reasoning', 'message', 'image_generation_call', 'web_search_call'].includes(next.type)) break;
+            if (next.type === 'message' && next.phase !== 'commentary') break;
+            if (next.type === 'message' && next.role !== 'assistant') break;
+            if (next.type === 'message' && next.content?.some((part: any) => part?.type !== 'output_text')) break;
+            cursor += 1;
+            if (next.type === 'message' && next.content?.some((part: any) => typeof part?.text === 'string' && part.text.length > 0)) {
+                commentaryEnd = cursor;
+            }
+        }
+        if (commentaryEnd === scheduledEnd) return;
+        const start = scheduledEnd;
+        const end = commentaryEnd;
+        const output = Array.from({ length: end - start }, (_, offset) => completed.get(start + offset));
+        scheduledEnd = end;
+        tail = tail.then(async () => {
+            if (args.abortController.signal.aborted || failure) return;
+            await commitSegment(start, end, output, true);
+        }).catch(error => {
+            failure = error;
+            args.abortController.abort();
+        });
+    };
+
+    return {
+        onOutputItemDone,
+        async settle() { await tail; if (failure) throw failure; },
+        async commitReasoningOnError() {
+            if (failure || args.abortController.signal.aborted) return;
+            const start = committedEnd;
+            let end = start;
+            while (completed.has(end)) {
+                const item = completed.get(end);
+                if (item?.type !== 'reasoning' || (item.status && item.status !== 'completed')
+                    || typeof item.encrypted_content !== 'string' || !item.encrypted_content.trim()) break;
+                end += 1;
+            }
+            if (end === start) return;
+            const output = Array.from({ length: end - start }, (_, offset) => completed.get(start + offset));
+            try {
+                await commitSegment(start, end, output, false);
+            } catch (error) {
+                failure = error;
+                args.abortController.abort();
+                throw error;
+            }
+        },
+        get failure() { return failure; },
+        get committedEnd() { return committedEnd; },
+        get committedMessages() { return [...committedMessages]; },
+    };
+}
+
+async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
+    /** Exact normal-turn owner safe point; true rebuilds committed request context. */
+    prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+}): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    const canonicalContents = stripReservedProviderImageHelperFields(
+    let canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
         fixToolCalls(structuredClone(options.contents || [])),
-    );
+    ));
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
@@ -3071,7 +3410,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     // Allocate the stable outer-request identity before streaming setup. The
     // manifest is written after attempt 1 selects its concrete model and
     // resolves the exact effective prompt, but still before provider send.
-    const requestId = randomUUID();
+    let requestId = randomUUID();
     let requestJournalStarted = false;
     const requestedMaxAttempts = options.maxRetries ?? DEFAULT_LLM_MAX_ATTEMPTS;
     const maxAttempts = Number.isFinite(requestedMaxAttempts)
@@ -3085,13 +3424,16 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
     else options.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
-    const modelStreamEmitter = createModelStreamEventEmitter({
+    const makeModelStreamEmitter = (llmRequestId: string) => createModelStreamEventEmitter({
         enabled: shouldNotifySessionEvents,
         sessionId: options.sessionId,
         iteration,
-        llmRequestId: requestId,
+        llmRequestId,
         currentSessionEffects: options.currentSessionEffects,
     });
+    let modelStreamEmitter = makeModelStreamEmitter(requestId);
+    let journalAttempt = 0;
+    let resumeFromCommittedHistory = false;
     let logFiles: LlmInteractionLogFiles | null = null;
     const virtualRequestSelections: Array<{
         attempt: number;
@@ -3119,7 +3461,33 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
 
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-            if (attempt > 1 && shouldNotifySessionEvents) modelStreamEmitter.reset();
+            if (attempt > 1) {
+                // The previous lane/checkpoint and abortable backoff have settled.
+                // Owner preparation is local work, outside provider classification,
+                // health accounting, and the physical-attempt transport catch.
+                if (abortController.signal.aborted) throw makeAbortError();
+                if (options.purpose === 'normal-turn' && options.prepareRetry && options.getCommittedHistoryForRetry) {
+                    modelStreamEmitter.close();
+                    const contextChanged = await options.prepareRetry(abortController.signal);
+                    if (abortController.signal.aborted) throw makeAbortError();
+                    resumeFromCommittedHistory ||= contextChanged;
+                }
+                if (resumeFromCommittedHistory) {
+                    modelStreamEmitter.close();
+                    canonicalContents = stripFunctionResponseDisplayMeta(stripReservedProviderImageHelperFields(
+                        fixToolCalls(structuredClone(options.getCommittedHistoryForRetry!())),
+                    ));
+                    requestId = randomUUID();
+                    requestJournalStarted = false;
+                    journalAttempt = 0;
+                    requestStartedAt = undefined;
+                    logFiles = null;
+                    modelStreamEmitter = makeModelStreamEmitter(requestId);
+                    resumeFromCommittedHistory = false;
+                }
+                if (shouldNotifySessionEvents) modelStreamEmitter.reset();
+            }
+            journalAttempt += 1;
 
             let selection: VirtualTargetSelection | undefined;
             let modelEntry = routeEntry;
@@ -3178,7 +3546,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             }
             await appendLlmAttemptStart({
                 requestId,
-                attempt,
+                attempt: journalAttempt,
                 concreteModelId: plan.modelId,
                 ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                 providerType: plan.providerType,
@@ -3229,7 +3597,23 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             let responseHeaders: any;
             let cleanupStreamingAttempt = () => {};
             let streamingTimeoutError: Error | undefined;
+            let providerResponseCompleted = false;
+            let upstreamStreamInterrupted = false;
+            let streamCallbackFailed = false;
+            const generatedImageBudget = createGeneratedImageExternalizationBudget();
+            const prefixLane = (plan.useOpenAIResponsesApi && (plan.useStreamingApi || plan.useOpenAIResponsesWs)
+                && options.purpose === 'normal-turn' && options.onPartialAssistantCommit && options.getCommittedHistoryForRetry)
+                ? createResponsesPrefixCommitLane({
+                    plan, requestId, attempt: journalAttempt,
+                    ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                    abortController, emitter: modelStreamEmitter, generatedImageBudget,
+                    onCommit: options.onPartialAssistantCommit,
+                    onDelivered: options.onPartialAssistantDelivered,
+                }) : undefined;
             try {
+                // Preparation/journal awaits can also receive Stop. Preserve
+                // ordinary abort journaling without dispatching an aborted send.
+                if (abortController.signal.aborted) throw makeAbortError();
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
                 }
@@ -3275,44 +3659,62 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
                     };
                 }
+                const withLocalStreamCallback = <T>(callback: () => T): T => {
+                    try { return callback(); }
+                    catch (error) { streamCallbackFailed = true; throw error; }
+                };
                 const streamCollectOptions = {
                     onProgress: shouldNotifySessionEvents
-                        ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
+                        ? (snapshot: any) => withLocalStreamCallback(() => modelStreamEmitter.emit(snapshot))
                         : undefined,
-                    onMeaningfulProgress: markMeaningfulProgress,
-                    onSafetyBuffering: handleSafetyBuffering,
-                    onImageGenerationActivity: () => {
-                        imageGenerationWatchdog?.reportImageGenerationActivity();
-                    },
-                    onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
-                    onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
+                    onOutputItemDone: prefixLane
+                        ? (entry: { outputIndex: number; item: any }) => withLocalStreamCallback(() => prefixLane.onOutputItemDone(entry))
+                        : undefined,
+                    onResponseCompleted: () => { providerResponseCompleted = true; },
+                    onMeaningfulProgress: markMeaningfulProgress
+                        ? () => withLocalStreamCallback(markMeaningfulProgress)
+                        : undefined,
+                    onSafetyBuffering: handleSafetyBuffering
+                        ? (metadata: Record<string, unknown>) => withLocalStreamCallback(() => handleSafetyBuffering(metadata))
+                        : undefined,
+                    onImageGenerationActivity: () => withLocalStreamCallback(() => imageGenerationWatchdog?.reportImageGenerationActivity()),
+                    onRawChunk: (text: string) => withLocalStreamCallback(() => attemptRawStreamLog?.appendChunk(text)),
+                    onRawSseBlock: (block: string) => withLocalStreamCallback(() => attemptRawStreamLog?.appendSseBlock(block)),
                 };
 
                 if (plan.useOpenAIResponsesWs) {
                     logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM WebSocket request');
-                    const pending = await requestOpenAIResponsesWs({
-                        url: plan.url,
-                        headers: plan.headers,
-                        concreteIdentity: plan.modelKey,
-                        data: plan.data,
-                        placement: options.currentSessionEffects?.placement || 'local',
-                        signal: abortController.signal,
-                        hardTimeoutMs: options.timeoutMs,
-                        streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
-                        diagnostics: {
-                            sessionId: options.sessionId,
-                            purpose: options.purpose || 'low-level',
-                            llmRequestId: requestId,
-                            iteration,
-                            attempt,
-                        },
-                        onProgress: streamCollectOptions.onProgress,
-                        onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
-                        onRawFrame: frame => {
-                            attemptRawStreamLog?.appendChunk(`${frame}\n`);
-                            attemptRawStreamLog?.appendSseBlock(frame);
-                        },
-                    });
+                    let pending: Awaited<ReturnType<typeof requestOpenAIResponsesWs>>;
+                    try {
+                        pending = await requestOpenAIResponsesWs({
+                            url: plan.url,
+                            headers: plan.headers,
+                            concreteIdentity: plan.modelKey,
+                            data: plan.data,
+                            placement: options.currentSessionEffects?.placement || 'local',
+                            signal: abortController.signal,
+                            hardTimeoutMs: options.timeoutMs,
+                            streamContentInactivityTimeoutMs: plan.modelEntry.streamContentInactivityTimeoutMs,
+                            diagnostics: {
+                                sessionId: options.sessionId,
+                                purpose: options.purpose || 'low-level',
+                                llmRequestId: requestId,
+                                iteration,
+                                attempt,
+                            },
+                            onProgress: streamCollectOptions.onProgress,
+                            onOutputItemDone: streamCollectOptions.onOutputItemDone,
+                            onResponseCompleted: streamCollectOptions.onResponseCompleted,
+                            onImageGenerationActivity: streamCollectOptions.onImageGenerationActivity,
+                            onRawFrame: frame => withLocalStreamCallback(() => {
+                                attemptRawStreamLog?.appendChunk(`${frame}\n`);
+                                attemptRawStreamLog?.appendSseBlock(frame);
+                            }),
+                        });
+                    } catch (error) {
+                        upstreamStreamInterrupted = !providerResponseCompleted;
+                        throw error;
+                    }
                     resp = pending.response;
                     responseStatus = '101 WebSocket';
                     responseHeaders = {};
@@ -3340,7 +3742,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                             return;
                         }
                         try {
-                            const replayMessage = prepareHistoryForConcreteModel([outcome.message], plan.modelId);
+                            const replayMessage = prepareHistoryForConcreteModel(outcome.messages, plan.modelId);
                             const replayItems = convertToOpenAIResponsesFormatProvider(replayMessage, plan.modelId);
                             pending.finalize(replayItems);
                         } catch (error) {
@@ -3374,15 +3776,21 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 }
 
                 if (plan.useStreamingApi && response) {
-                    resp = plan.useOpenAIResponsesApi
-                        ? await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions)
-                        : await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                    if (plan.useOpenAIResponsesApi) {
+                        try { resp = await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions); }
+                        catch (error) { upstreamStreamInterrupted = !providerResponseCompleted; throw error; }
+                    } else {
+                        resp = await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                    }
                 } else if (!plan.useOpenAIResponsesWs && response) {
                     resp = response.data;
                 }
 
                 cleanupStreamingAttempt();
-                const result = await parseConcreteProviderResponse(plan, resp);
+                await prefixLane?.settle();
+                const result = await parseConcreteProviderResponse(plan,
+                    prefixLane?.committedEnd ? { ...resp, output: resp.output.slice(prefixLane.committedEnd) } : resp,
+                    !!prefixLane?.committedEnd, generatedImageBudget, prefixLane?.committedEnd || 0);
                 const completedAt = Date.now();
                 const durationMs = Math.max(0, performance.now() - requestStartedAt);
                 if (virtualRoutingRequest && selection) {
@@ -3401,26 +3809,53 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 // result; normal session delivery proceeds.
                 const previousLlmRequest = { completedAt, durationMs };
                 const completedResult: ChatResult = virtualRoutingRequest
-                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt }
-                    : { ...result, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt };
+                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest, llmRequestId: requestId, llmAttempt: journalAttempt }
+                    : { ...result, previousLlmRequest, llmRequestId: requestId, llmAttempt: journalAttempt };
+                const prefixParts = prefixLane?.committedMessages.flatMap(message => message.parts) || [];
+                const journalResult = prefixParts.length ? {
+                    ...completedResult,
+                    text: `${prefixParts.map(part => part.text || '').join('')}${completedResult.text || ''}`,
+                    allParts: [...prefixParts, ...(completedResult.allParts || [])],
+                } : completedResult;
                 await appendLlmAttemptResult({
                     requestId,
-                    attempt,
+                    attempt: journalAttempt,
                     outcome: 'success',
-                    result: completedResult,
+                    result: journalResult,
                 }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
                 return {
                     result: completedResult,
+                    ...(prefixLane?.committedMessages.length ? { committedSegments: prefixLane.committedMessages } : {}),
+                    ...(prefixLane?.committedEnd ? {
+                        committedOutputEnd: prefixLane.committedEnd,
+                        outputEndExclusive: Array.isArray(resp?.output) ? resp.output.length : prefixLane.committedEnd,
+                    } : {}),
                     ...(attemptHistoryAppendFinalizer ? { finalizeHistoryAppend: attemptHistoryAppendFinalizer } : {}),
                 };
             } catch (error: any) {
                 cleanupStreamingAttempt();
-                if (streamingTimeoutError) error = streamingTimeoutError;
+                try { await prefixLane?.settle(); }
+                catch (commitError) { error = commitError; }
+                if (streamingTimeoutError && !prefixLane?.failure) error = streamingTimeoutError;
+                if (plan.modelEntry.keepReasoningOnError === true && upstreamStreamInterrupted
+                    && !providerResponseCompleted && !streamCallbackFailed && !abortController.signal.aborted
+                    && !isAbortError(error) && !prefixLane?.failure) {
+                    try { await prefixLane?.commitReasoningOnError(); }
+                    catch (commitError) { error = commitError; }
+                }
                 settleHistoryAppendFinalizer(
                     attemptHistoryAppendFinalizer,
                     { appended: false },
                     'Failed to discard provider state after LLM attempt failure',
                 );
+                if (prefixLane?.failure) {
+                    await appendLlmAttemptResult({
+                        requestId, attempt: journalAttempt, outcome: 'failure',
+                        error: { kind: 'session-commit', message: String((error as Error)?.message || error), retryable: false, countable: false },
+                    }).catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to journal local assistant commit failure'));
+                    await moveInteractionLogsToErrorDir(logFiles).catch(() => {});
+                    throw error;
+                }
                 if (isAbortError(error)) {
                     responseAttempts.push({
                         attempt,
@@ -3436,7 +3871,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     });
                     await logResponse({ attempts: responseAttempts }, logFiles);
-                    await appendLlmAttemptResult({ requestId, attempt, outcome: 'abort', error: { message: error?.message || String(error), code: error?.code, name: error?.name } })
+                    await appendLlmAttemptResult({ requestId, attempt: journalAttempt, outcome: 'abort', error: { message: error?.message || String(error), code: error?.code, name: error?.name } })
                         .catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append aborted LLM attempt result'));
                     await moveInteractionLogsToErrorDir(logFiles);
                     throw error;
@@ -3486,7 +3921,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 await logResponse({ attempts: responseAttempts }, logFiles);
                 await appendLlmAttemptResult({
                     requestId,
-                    attempt,
+                    attempt: journalAttempt,
                     outcome: 'failure',
                     error: { kind: failure.kind, status: failure.status, message: failure.message, retryable: failure.retryable, countable: failure.countable },
                 }).catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append failed LLM attempt result'));
@@ -3502,6 +3937,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     routeTerminal = recordVirtualTargetFailure(virtualRoutingRequest, selection).terminal;
                 }
                 const final = !failure.retryable || routeTerminal || attempt === maxAttempts;
+                if (!final && prefixLane?.committedEnd) resumeFromCommittedHistory = true;
                 const retryEvent: LlmRetryEvent = {
                     attempt,
                     maxRetries: maxAttempts,

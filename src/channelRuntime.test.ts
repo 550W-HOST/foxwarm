@@ -45,3 +45,32 @@ test('QQ Bot config is included in managed runtime status and disabled reloads',
   assert.equal(reload.statuses.length, 1);
   assert.equal(reload.statuses[0].type, 'qqbot');
 });
+
+test('configured main attachment keeps a missing main identity and preserves a manual binding', async () => {
+  const runtime = await import('./channelRuntime');
+  const sessionManager = await import('./sessionManager');
+  const originalGetSessionCatalog = sessionManager.getSessionCatalog;
+  const channelId = `channel-main-default-${Date.now()}`;
+  const conversationId = `conversation-main-default-${Date.now()}`;
+  const manualConversationId = `${conversationId}-manual`;
+  const manualSession = await sessionManager.getSession(`manual_target_${Date.now()}`);
+
+  try {
+    (sessionManager as any).getSessionCatalog = (sessionId: string) => sessionId === 'main'
+      ? undefined
+      : originalGetSessionCatalog(sessionId);
+
+    assert.equal(runtime.attachConfiguredMainSession(channelId, conversationId), false);
+    assert.equal(sessionManager.getSessionByChannel(channelId, conversationId), 'main');
+    assert.equal(sessionManager.getAllSessions().has('main'), false);
+
+    sessionManager.attachChannel(channelId, manualConversationId, manualSession.id);
+    assert.equal(runtime.attachConfiguredMainSession(channelId, manualConversationId), true);
+    assert.equal(sessionManager.getSessionByChannel(channelId, manualConversationId), manualSession.id);
+  } finally {
+    (sessionManager as any).getSessionCatalog = originalGetSessionCatalog;
+    sessionManager.detachChannel(channelId, conversationId);
+    sessionManager.detachChannel(channelId, manualConversationId);
+    await sessionManager.deleteSession(manualSession.id);
+  }
+});

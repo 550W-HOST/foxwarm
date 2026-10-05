@@ -3,6 +3,7 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
+import HistorySearchView from './components/HistorySearchView'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
@@ -15,7 +16,7 @@ import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
-import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
+import { findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
@@ -23,7 +24,7 @@ import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 
-type AppView = 'session' | 'agents' | 'setup'
+type AppView = 'session' | 'agents' | 'setup' | 'logs'
 
 type RouteState = { view: 'tab'; tabId: string | null }
 
@@ -61,12 +62,13 @@ const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
 const AGENTS_TAB_ID = 'system:agents'
 const SETUP_TAB_ID = 'system:setup'
+const SEARCH_TAB_ID = 'system:search'
+const LOGS_TAB_ID = 'system:logs'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
-const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
 type OriginalFaviconLink = {
@@ -80,6 +82,7 @@ type OriginalFaviconLink = {
 let originalFaviconLinks: OriginalFaviconLink[] | null = null
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const LogsView = lazy(() => import('./components/LogsView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 const TerminalView = lazy(() => import('./components/TerminalView'))
 
@@ -355,13 +358,9 @@ function setTabHash(tabId?: string | null) {
   window.location.hash = `${TAB_HASH_PREFIX}${encodeURIComponent(tabId)}`
 }
 
-function makePreviewChatTabId() {
-  return createWorkbenchId('chatpreview')
-}
-
 function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean }): WorkbenchTab {
   return {
-    id: options?.preview ? makePreviewChatTabId() : getPersistentChatTabId(sessionId),
+    id: getPersistentChatTabId(sessionId),
     type: 'chat',
     sessionId,
     title,
@@ -423,7 +422,7 @@ function makeSetupTab(): WorkbenchTab {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId === LOGS_TAB_ID
 }
 
 function App() {
@@ -532,7 +531,9 @@ function App() {
     ? 'agents'
     : focusedActiveTab?.type === 'setup'
       ? 'setup'
-      : 'session'
+      : focusedActiveTab?.type === 'logs'
+        ? 'logs'
+        : 'session'
   const busyCount = boundedSessions.globalSummary?.busy ?? sessions.filter((session) => isSessionRuntimeActive(session)).length
 
   const fetchWebUiSettings = async () => {
@@ -687,19 +688,6 @@ function App() {
   }, [allTabs, sessions])
 
   useEffect(() => {
-    const legacyPreview = allTabs.find((tab) => isPreviewChatTab(tab) && tab.id === LEGACY_PREVIEW_CHAT_TAB_ID)
-    if (!legacyPreview) return
-
-    const nextId = makePreviewChatTabId()
-    replaceTabId(legacyPreview.id, { ...legacyPreview, id: nextId })
-
-    if (route.tabId === legacyPreview.id) {
-      setRoute({ view: 'tab', tabId: nextId })
-      setTabHash(nextId)
-    }
-  }, [allTabs, route, replaceTabId])
-
-  useEffect(() => {
     const activeTerminalMap = new Map(activeTerminals.map((terminal) => [terminal.id, terminal]))
     const terminalTabs = allTabs.filter((tab): tab is Extract<WorkbenchTab, { type: 'terminal' }> => tab.type === 'terminal')
     const terminalDraftTabs = terminalTabs.filter((tab) => !tab.terminalId)
@@ -810,9 +798,12 @@ function App() {
       return
     }
 
-    if (focusedActiveTabId) {
-      setRoute({ view: 'tab', tabId: focusedActiveTabId })
-      setTabHash(focusedActiveTabId)
+    const currentState = useWorkbenchStore.getState()
+    const currentFocusedPane = currentState.focusedPaneId ? findPaneNode(currentState.root, currentState.focusedPaneId) : null
+    const currentActiveTabId = currentFocusedPane?.activeTabId
+    if (currentActiveTabId && currentState.tabsById[currentActiveTabId] && !closingRouteTabIdsRef.current.has(currentActiveTabId)) {
+      setRoute({ view: 'tab', tabId: currentActiveTabId })
+      setTabHash(currentActiveTabId)
     }
   }, [route, tabsById, focusedActiveTabId])
 
@@ -951,10 +942,12 @@ function App() {
 
     const previewTab = allTabs.find(isPreviewChatTab)
     if (previewTab) {
-      updateTab(previewTab.id, (current) => isPreviewChatTab(current)
-        ? { ...current, sessionId, title, preview: true }
-        : current)
-      navigateToTab(previewTab.id, origin)
+      const nextTab = makeChatTab(sessionId, title, { preview: true })
+      if (currentRouteTabIdRef.current === previewTab.id) {
+        closingRouteTabIdsRef.current.add(previewTab.id)
+      }
+      replaceTabId(previewTab.id, nextTab)
+      navigateToTab(nextTab.id, origin)
       return
     }
 
@@ -962,32 +955,17 @@ function App() {
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id, origin)
   }
-  notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
 
-  const openKeptChatTab = (sessionId: string) => {
-    const title = sessionTitle(sessionId)
-    const existingTab = findPreferredChatTab(sessionId)
-
-    if (existingTab) {
-      if (existingTab.title !== title) {
-        updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
-      }
-      navigateToTab(existingTab.id)
-      return
-    }
-
-    const previewTab = allTabs.find((tab) => isPreviewChatTab(tab) && tab.sessionId === sessionId)
-    if (previewTab) {
-      const persistentTab = makeChatTab(sessionId, title)
-      replaceTabId(previewTab.id, persistentTab)
-      navigateToTab(persistentTab.id)
-      return
-    }
-
-    const tab = makeChatTab(sessionId, title)
-    upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
+  const openLogsTab = () => {
+    upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
+    navigateToTab(LOGS_TAB_ID)
   }
+
+  const openSearchTab = () => {
+    upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'History' }, { activate: true })
+    navigateToTab(SEARCH_TAB_ID)
+  }
+  notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
 
   const getPaneHeight = (paneId: string): number => {
     const paneElement = document.querySelector<HTMLElement>(`[data-pane-id="${paneId}"]`)
@@ -1137,6 +1115,10 @@ function App() {
         ? { kind: 'chat', sessionId: targetTab.sessionId, title: targetTab.title }
         : targetTab.type === 'terminal'
           ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
+          : targetTab.type === 'logs'
+            ? { kind: 'logs' }
+          : targetTab.type === 'search'
+            ? { kind: 'search' }
           : targetTab.type === 'agents'
             ? { kind: 'agents' }
             : { kind: 'setup' }
@@ -1187,43 +1169,18 @@ function App() {
   }
 
   const keepWorkbenchTab = (tabId: string) => {
-    const targetTab = tabsById[tabId]
-    if (!targetTab || !isPreviewChatTab(targetTab)) {
-      return
+    if (tabsById[tabId] && isPreviewChatTab(tabsById[tabId])) {
+      promotePreviewTab(tabId)
     }
-
-    const persistentId = getPersistentChatTabId(targetTab.sessionId)
-    const existingTab = tabsById[persistentId]
-
-    if (existingTab) {
-      removeTab(tabId)
-      navigateToTab(existingTab.id)
-      return
-    }
-
-    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
-    replaceTabId(tabId, persistentTab)
-    navigateToTab(persistentTab.id)
   }
 
   const promotePreviewTab = (tabId: string): string | null => {
     const targetTab = tabsById[tabId]
     if (!targetTab) return null
-
-    if (!isPreviewChatTab(targetTab)) {
-      return tabId
+    if (isPreviewChatTab(targetTab)) {
+      updateTab(tabId, (current) => isPreviewChatTab(current) ? { ...current, preview: false } : current)
     }
-
-    const persistentId = getPersistentChatTabId(targetTab.sessionId)
-    const existingTab = tabsById[persistentId]
-    if (existingTab) {
-      removeTab(tabId)
-      return existingTab.id
-    }
-
-    const persistentTab = makeChatTab(targetTab.sessionId, sessionTitle(targetTab.sessionId))
-    replaceTabId(tabId, persistentTab)
-    return persistentTab.id
+    return tabId
   }
 
   const closePaneTabsByPredicate = async (paneId: string, predicate: (tab: WorkbenchTab) => boolean) => {
@@ -1263,13 +1220,6 @@ function App() {
       } else {
         navigateToTab(nextTabId)
       }
-    }
-  }
-
-  const handleChatDraftEdited = (tabId: string) => {
-    const targetTab = tabsById[tabId]
-    if (targetTab && isPreviewChatTab(targetTab)) {
-      keepWorkbenchTab(tabId)
     }
   }
 
@@ -1440,6 +1390,11 @@ function App() {
       return
     }
 
+    if (route.tabId === LOGS_TAB_ID) {
+      upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
+      return
+    }
+
     if (route.tabId === SETUP_TAB_ID) {
       upsertTab(makeSetupTab(), { activate: true })
       return
@@ -1454,7 +1409,7 @@ function App() {
       return
     }
 
-    openPersistentChatTab(sessionId)
+    openChatTab(sessionId)
   }, [route, tabsById, allTabs, sessions])
 
   useEffect(() => {
@@ -1486,19 +1441,23 @@ function App() {
         <Chat
           key={`chat:${tab.sessionId}`}
           sessionId={tab.sessionId}
+          searchShortcutActive={tab.id === focusedActiveTabId && (!isMobile || !showSessionList)}
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
           onOpenTerminal={() => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId })}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
-          onOpenCodeNewWindow={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd), true)}
-          onOpenCodeFile={(filePath, lines) => {
-            const request = resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, sessionRecord?.cwd, lines)
+          onOpenCodeFile={(filePath, lines, target) => {
+            const request = target
+              ? resolveToolCodeFileTarget(target.resolvedPath, target.nodeId, undefined, lines)
+              : (filePath.startsWith('/') ? resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, undefined, lines) : null)
             if (!request) {
-              window.alert('This path cannot be opened in Code yet. Tool file links require a valid node and either an absolute path or a session cwd.')
+              window.alert('This path cannot be opened in Code yet.')
               return
             }
-            const workspaceTarget = resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
+            const workspaceTarget = target
+              ? resolveSessionCodeTarget(request.nodeId, request.path.substring(0, request.path.lastIndexOf('/')) || '/')
+              : resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
             openCodeFile(request, workspaceTarget)
           }}
           onOpenCodeCommit={openCodeCommit}
@@ -1511,10 +1470,21 @@ function App() {
           onGroupToolsChange={setGroupTools}
           onShowUsageBadgeChange={setShowUsageBadge}
           onShowUserMessageMetadataChange={setShowUserMessageMetadata}
-          onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
     }
+
+    if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
+
+    if (tab.type === 'search') return <HistorySearchView
+      isMobile={isMobile}
+      groupTools={groupTools}
+      showUsageBadge={showUsageBadge}
+      showUserMessageMetadata={showUserMessageMetadata}
+      knownSessions={sidebarSessions.map(session => session.id)}
+      onOpenSession={openChatTab}
+      onBack={onBack}
+    />
 
     if (tab.type === 'agents') {
       return (
@@ -1635,6 +1605,7 @@ function App() {
         emphasizeFocus={paneIds.length > 1}
         dragEnabled={!isMobile}
         showPaneControls={!isMobile}
+        hideTabStrip={paneTabs.length === 1 && paneTabs[0].type !== 'vscode'}
         canClosePane={paneIds.length > 1}
         content={content}
         onFocusPane={handleFocus}
@@ -1686,12 +1657,6 @@ function App() {
 
     if (!overId || !activeData) {
       return
-    }
-
-    const applyTabDrop = (targetPaneId: string, options?: { beforeTabId?: string | null }) => {
-      moveTabToPane(activeId, targetPaneId, { beforeTabId: options?.beforeTabId || null, activate: true })
-      navigateToTab(activeId)
-      return activeId
     }
 
     if (activeData.type === 'session') {
@@ -1761,40 +1726,51 @@ function App() {
       return
     }
 
+    const state = useWorkbenchStore.getState()
+    const sourcePane = findPaneContainingTab(state.root, activeId)
+    if (!sourcePane || !state.tabsById[activeId]) return
+
+    const applyTabDrop = (targetPaneId: string, beforeTabId?: string) => {
+      const tabId = promotePreviewTab(activeId)
+      if (!tabId) return
+      moveTabToPane(tabId, targetPaneId, { beforeTabId, activate: true })
+      navigateToTab(tabId)
+    }
+
     if (overData?.type === 'tab' && overData.paneId) {
-      if (activeData.paneId === overData.paneId) {
-        if (activeId !== overId) {
-          reorderTabs(overData.paneId, activeId, overId)
+      const targetPane = findPaneNode(state.root, overData.paneId)
+      if (!targetPane || !targetPane.tabIds.includes(overId)) return
+      if (sourcePane.id === targetPane.id) {
+        const from = targetPane.tabIds.indexOf(activeId)
+        const to = targetPane.tabIds.indexOf(overId)
+        if (from < 0 || from === to) return
+        const tabId = promotePreviewTab(activeId)
+        if (tabId) {
+          reorderTabs(targetPane.id, tabId, overId)
         }
         return
       }
 
-      applyTabDrop(overData.paneId, { beforeTabId: overId })
+      applyTabDrop(targetPane.id, overId)
       return
     }
 
     if (overData?.type === 'pane-center' && overData.paneId) {
-      if (activeData.paneId !== overData.paneId) {
-        moveTabToPane(activeId, overData.paneId, { activate: true })
-        navigateToTab(activeId)
-      }
+      if (sourcePane.id !== overData.paneId && findPaneNode(state.root, overData.paneId)) applyTabDrop(overData.paneId)
       return
     }
 
     if (overData?.type === 'tab-row' && overData.paneId) {
-      if (activeData.paneId === overData.paneId) {
-        return
-      }
-      applyTabDrop(overData.paneId)
+      if (sourcePane.id !== overData.paneId && findPaneNode(state.root, overData.paneId)) applyTabDrop(overData.paneId)
       return
     }
 
     if (overData?.type === 'pane-edge' && overData.paneId && overData.edge) {
-      if (overData.edge === 'top') {
-        return
-      }
-      dockTabToPaneEdge(activeId, overData.paneId, overData.edge)
-      navigateToTab(activeId)
+      if (overData.edge === 'top' || !findPaneNode(state.root, overData.paneId)) return
+      const tabId = promotePreviewTab(activeId)
+      if (!tabId) return
+      dockTabToPaneEdge(tabId, overData.paneId, overData.edge)
+      navigateToTab(tabId)
     }
   }
 
@@ -1866,9 +1842,11 @@ function App() {
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
           onSelectSession={openChatTab}
-          onKeepSession={openKeptChatTab}
+          onKeepSession={openPersistentChatTab}
           onSelectArchitecture={openAgentsView}
+          onSelectSearch={openSearchTab}
           onSelectSetup={openSetupView}
+          onSelectLogs={openLogsTab}
           codePath={codePath}
           codeNodeId={codeNodeId}
           codeOpenInNewWindow={codeOpenInNewWindow}
@@ -1913,9 +1891,11 @@ function App() {
             currentView={currentView}
             currentSessionRecord={currentContextSessionRecord}
             onSelectSession={openChatTab}
-            onKeepSession={openKeptChatTab}
+            onKeepSession={openPersistentChatTab}
             onSelectArchitecture={openAgentsView}
+            onSelectSearch={openSearchTab}
             onSelectSetup={openSetupView}
+            onSelectLogs={openLogsTab}
             codePath={codePath}
             codeNodeId={codeNodeId}
             codeOpenInNewWindow={codeOpenInNewWindow}
@@ -1946,6 +1926,9 @@ function App() {
         <CollapsedSidebarContainer
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
+          onSelectSearch={openSearchTab}
+          onSelectSetup={openSetupView}
+          onSelectLogs={openLogsTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
           unreadSessionIds={unreadSessionIds}

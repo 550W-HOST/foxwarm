@@ -1,0 +1,21 @@
+# Unit: webui-history-search
+
+Files: packages/webui/src/components/HistorySearchView.tsx, packages/webui/test/historySearchViewer.e2e.mjs
+Secondary files: packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts
+
+## Purpose
+
+The independent workbench Search tab shows authenticated Archive search groups and exact Session message references using the existing ChatTimeline without mounting Chat, its composer or its realtime subscription. Global search defaults to every Agent and Session; optional Agent and Session inputs narrow the source. A copied `sessionId=... msg#N-M` reference selects its Session directly; a bare `msg#N` requires a selected Session.
+
+## Functions and behavior
+
+- `HistorySearchView` owns the query form and one result list; every result contains independent earlier/later loading state, errors, sequence anchors and one Timeline. Its header shows the current first message's valid local time, using a structured CTX block's raw range start instead of its creation time; unavailable or invalid timestamps show no time. Full-width context rows above/below the timeline load earlier/later messages with a directional arrow and the visible message range on that row; when neither direction can load, a static range row remains. A copied range retains its requested and currently shown bounds while its first 20-row page continues within the requested range, then returns to ordinary later browsing. Block/fact hits display an actual expandable CTX-BLOCK; a missing source shows a labeled cached excerpt rather than a fabricated message or fake range.
+- `readHistory` calls deployment-relative authenticated GET routes. `mergeMessages` deduplicates sequence IDs when appending/prepending archive pages.
+- Result headers append a nonblank Session display name in parentheses, using deduplicated `/session-list/by-id` batches of at most 100 IDs rather than the current Sidebar page. Lookup failures leave the archived messages visible; query changes and unmount abort and invalidate stale name lookups. `Open session` delegates to normal App Chat navigation without keeping previews or removing History; standalone viewers use the existing deployment-relative Chat popup URL in a new page, with native modified-click behavior.
+- Query changes, scope changes, unmount and new submissions invalidate/abort old requests; late responses cannot replace current results. No browser-global search state is required.
+- `App` opens one restorable `system:search` tab labeled `History` from the history-clock icon in the desktop/mobile/collapsed footer. Footer icons keep the `Search history` action label and their existing size and placement; the mobile footer Settings menu opens upward within the viewport. Persisted search tabs retain their identity and normalize their display title to `History`. Popout uses the existing leaf route and window title `History`, while the viewer heading remains `Search history`. The ChatTimeline/ToolTimelineItems rendering and Chat-local search mechanics remain unchanged.
+- Browser fixtures verify Timeline grouping, independent paging, tool/CTX/image behavior, reference paste and deployment subpath. Backend HTTP fixtures and the shared source contract are described in [context compaction and recall](../threads/context-compaction-and-recall.md#d-context-history-search-viewer).
+
+## Workbench header integration
+
+The normal sole-tab header close/icon controls use [Single-tab headers](./webui-workbench.md#single-tab-headers). Standalone and embedded leaf roots retain their existing navigation and do not own Workbench tabs.

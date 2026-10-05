@@ -1,7 +1,7 @@
 # Unit: webui-tool-timeline
 
-Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
-Secondary files: packages/webui/test/threadCardSurfaces.e2e.mjs
+Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolResolvedPathNavigation.e2e.mjs, packages/webui/test/toolScriptActivity.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
+Secondary files: packages/webui/test/threadCardSurfaces.e2e.mjs, packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/keepExpandedGroupWebSearch.e2e.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs
 
 ## Purpose
 
@@ -13,6 +13,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `ToolCallsBlock` — renders tool calls from a single message (no responses yet)
 - `ToolResponsesBlock` — renders tool responses from a single message (orphaned)
 - `ToolGroupSummaryCard` — persistent counted-tag header and Tool-style outer card for a historical tool group
+- `getToolCallSearchText` / `getToolResponseSearchText` — text projection from the corresponding expanded Tool arguments/result formatter; `getGroupedToolEntries` supplies the same call/result ownership to pane-local Search and the renderer.
 - `OpenCodeFileHandler` / `ToolCodePath` — callback contract and plain-path wrapper with a keyboard-accessible Code icon action for supported direct file-tool paths
 - `ExecCommandText` — syntax-highlighted shell command with heredoc support
 - `ExecOutputText` — syntax-highlighted or ANSI-parsed command output
@@ -30,6 +31,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `getToolPairStatus(responses, imageParts)` | ~7 | Derives tone (success/error/neutral) for a call-response pair |
 | `truncateToolResultPreview(text)` | ~3 | Truncates a collapsed tool result to the shared 800-character sample |
 | `renderTextResult(text, expanded)` | ~3 | Renders a plain tool result line with the shared collapsed sample |
+| `isToolScriptCall(call)` | ~7 | Identifies direct and unified builtin ToolScript execution calls, including historical descriptors |
 | `ToolScriptSubCallTag({ subCall })` | ~10 | Shared running indicator plus counted tag for one tool script sub-call |
 | `isLegacyDiffToolName(name)` | ~1 | Checks if tool name is legacy edit/edit_memory |
 | `isPatchToolName(name)` | ~1 | Checks if tool name is apply_patch/apply_patch_memory |
@@ -39,7 +41,8 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `isStreamingPartialToolCall(modelMessage)` | ~1 | Detects synthetic streaming assistant tool calls whose args are intentionally incomplete |
 | `renderToolCallPreview(call)` | ~80 | Renders inline preview content for various tool types |
 | `renderToolResponsePreview(call, resp)` | ~40 | Renders inline preview of tool response content |
-| `ToolCallResponseItem({ call, responses, ... })` | ~120 | Main component rendering a single tool call with its response(s) |
+| `ToolCallResponseItem({ call, responses, ... })` | `ToolTimelineItems.tsx` | Single call/result card with optional Timeline-controlled manual disclosure and standalone local fallback. |
+| `toolCallDisclosureKey(call, index)` | `ToolTimelineItems.tsx` | Uses a call ID or message-scoped ID-less call index consistently in pending and paired blocks. |
 | `ToolCallResponseItemInner({ call, responses, ... })` | ~100 | Inner content of a tool item (header, body, response details) |
 | `ToolResponseBody({ call, resp, viewMode })` | ~60 | Renders response body with diff, exec output, or raw text |
 | `ToolCallBody({ call, viewMode })` | ~50 | Renders call arguments body (diff preview, command, or raw JSON) |
@@ -56,6 +59,8 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `inferExecOutputFilePath(command, output)` | ~20 | Heuristically determines output language for syntax highlighting |
 | `ExecOutputText({ text, command })` | ~5 | Renders exec output with inferred syntax highlighting or ANSI parsing |
 
+- A successful native file response may carry ordered per-call `resolvedPaths`. Code icons open the persisted target Node and absolute path while leaving the visible raw label and read line range intact; Update/Add headers use their own operation index. Older relative/`~` paths without metadata are not inferred from current cwd; older absolute paths retain their existing fallback. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+
 ## Dependencies
 
 - `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`, `ToolViewMode`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`, `summarizeToolTagCounts`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
@@ -71,8 +76,9 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 - Tool and counted-group headers publish their own `data-tool-header-tone` for theme-specific surfaces; nested success/error headers are not recolored by a neutral group ancestor.
 
+- An optional selected pane-local Search target reveals its exact Tool card and full argument/result body in the rendered view without changing manual disclosure, starting a height animation, or inserting hidden full-text DOM while Search is closed. Legacy edit and patch-update argument matches use the unified diff’s line changes, counting shared context once. A selected diff card shows unified mode temporarily without overwriting the manual split/unified choice; diff toggles and download controls do not shift a body match’s ordinal.
 - Tool cards use the shared one-shot measured height transition for local expand/collapse and return to natural height for streaming content; group-wide collapse controls/transition belong to `ChatTimeline` (see [D-webui-tool-group-collapse](#d-webui-tool-group-collapse)).
-- Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets.
+- Tool items are collapsible: clicking the thread line or the top tag/call-summary row toggles expanded/collapsed state; the surrounding card, expanded call arguments, and result content are not collapse targets. ChatTimeline supplies controlled manual disclosure so the same call retains its choice across pending/result pairing and tail/historical regrouping; standalone block callers retain local disclosure.
 - A valid persisted `executionTiming` adds a small invocation duration beside the tool tag in the existing header; malformed or legacy responses show none. This is the call-to-return duration, not the lifetime of a background process or the interval between model requests. Collapse behavior and result layout stay unchanged.
 - View mode toggles between "preview" (formatted diff/command) and "raw" (JSON) display
 - Default tool response rendering formats the whole `functionResponse.response` object via the shared WebUI formatter. Single-key objects (for example `{ output: "ok" }` or `{ error: "bad" }`) display the single value, while multi-key objects stay structured/YAML-like. Special renderers such as exec/read still use this formatter as their fallback for non-standard or error-shaped results.
@@ -82,7 +88,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - `getGroupedToolEntries` correlates function calls with their responses and image parts by `toolUseId`, handling orphaned responses and unmatched images
 - `ExecCommandText` parses shell commands to detect heredoc blocks and applies per-language syntax highlighting to heredoc bodies
 - `ExecOutputText` infers output language from command context or content heuristics (JSON detection, import patterns, HTML tags)
-- Tool script sub-calls are rendered via `ToolScriptProgressContext`, showing nested progress for composite tool operations
+- ToolScript subcalls use live `ToolScriptProgressContext` events and persisted `FunctionResponse.__meta.toolScriptSubCalls` for completed/reloaded direct and unified executions. Older `response.subCalls` remains readable; script-owned nested result fields are not removed. See [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch.md#d-dispatch-toolscript-execution-projection).
 - Status-based theming (success/error/neutral) applies to thread lines, headers, and surface backgrounds. Standard treatment retains the established tone-specific opacity composition. Console treatment consumes the complete success/error surface pairs and uses its panel/hover pair for neutral cards and group summaries.
 - Tool tags carry the shared `data-tool-tag-tone` hook even when they are rendered through `ToolTagList` and have no `.foxwarm-tool-tag` class. Completed-tool tags consume the manifest V2 `tool*` family in both treatments; errors and system tags retain their distinct semantic families.
 - Tool cards and diff previews expose semantic CSS hooks (`foxwarm-tool-card`, `foxwarm-tool-tone-*`, `foxwarm-tool-header`, `foxwarm-tool-tag`, `foxwarm-tool-thread-line`, `foxwarm-tool-action-buttons-*`, `foxwarm-diff-*`) so opt-in UI style layers can map success/error/neutral and diff added/removed states to alternate palettes without changing tool grouping or response rendering logic.
@@ -104,7 +110,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 ### D-webui-tool-group-collapse
 
-A counted tool run retains one keyed wrapper even while the final standalone group is forced open. Historical runs use a single neutral Tool-style outer card whose counted-tag header remains present in both states; its own header and `ThreadLineButton` toggle the group, and expanded group-owned tool/result/Reasoning/Event cards nest below the header with a `pl-2` inset. Ordinary model text/system/images from those same rows remain outside the group card in either state, and thinking preceding a text break stays controlled by its prior group. There is no extra "Collapse group" title/rail or duplicate summary within a member row. The first group-row viewport anchor key stays on the stable wrapper, other visible row anchors remain unchanged, and aggregated collapsed usage remains owned by that group's first row/card frame. Member usage badges remain interactive, including outside the nested card edge in rounded/chevron treatments. The last standalone run keeps its direct cards and forced-open rule; when it becomes historical the established default collapse still unmounts its member cards without replacing the wrapper. Group tools off renders ordinary rows without group chrome.
+[Updated 2026-10-02] A counted tool run retains one keyed wrapper even while the final standalone group is forced open. Historical runs use a single neutral Tool-style outer card whose counted-tag header remains present in both states; its own header and `ThreadLineButton` toggle the group, and expanded group-owned tool/result/Reasoning/Event cards nest below the header with a `pl-2` inset. Ordinary model text/system/images from those same rows remain outside the group card in either state, and thinking preceding a text break stays controlled by its prior group. There is no extra "Collapse group" title/rail or duplicate summary within a member row. The first group-row viewport anchor key stays on the stable wrapper, other visible row anchors remain unchanged, and aggregated collapsed usage remains owned by that group's first row/card frame. Member usage badges remain interactive, including outside the nested card edge in rounded/chevron treatments. The last standalone run keeps its direct cards and forced-open rule; when it becomes historical untouched runs still default to collapsed without replacing the wrapper. A user-opened tool retains its expansion through stream/canonical handoff, result pairing, and historical regrouping, and its open action also records explicit expansion of the owning group. Explicit group expansion survives ordinary updates; a later manual group collapse wins without erasing member choices, so reopening that group restores them. Forced-open tails and Search reveals do not record user preferences. Disclosure belongs only to the mounted Session Timeline, keyed by stable message identity plus call ID (or an ID-less index within that message), with no persisted/global state and no cross-Session carryover. Group tools off renders ordinary rows without group chrome.
 
 ### D-webui-malformed-call-args-display
 

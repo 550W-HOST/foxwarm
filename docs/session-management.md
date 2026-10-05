@@ -147,7 +147,7 @@ interface QueueItem {
 - `intersession`：来自其他 session 的消息
 - `background`：后台恢复或异步任务
 - `trigger`：外部 `/trigger` 触发
-- `onboot`：启动时由 `ONBOOT.md` 触发
+- `onboot`：为队列/历史兼容保留的旧版持久化启动事件类型
 
 ## 模型选择
 

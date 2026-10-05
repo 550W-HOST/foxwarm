@@ -1,21 +1,25 @@
 import { logger } from './common';
 import { getChannelId, getChannelType, getConversationId, type ChannelContext } from './channel';
 import { deliverCommittedFinalToAttachments, finishChannelTurnProgress, reportChannelTurnProgress } from './session/channels';
+import { getSafeRasterMimeType, readImageRef, resolveImageBlobPath } from './imageBlobs';
+import { sendFileToSession } from './sessionManager';
 import { defineRpcService, rpcMethod, RpcClient, RpcError, type RpcServiceHandler, type RpcTransport } from './rpc';
-import type { ChannelTurnProgress, QueueSource } from './types';
+import type { ChannelTurnProgress, InlineDataRef, QueueSource } from './types';
 
 export type SessionTurnFinalKind = 'response' | 'error' | 'empty-final';
 export type SessionTurnDeliveryRequest = { sourceSessionId: string; turnId?: string; outcome: SessionTurnFinalKind; text: string };
 export type SessionTurnIntermediateDeliveryRequest = { sourceSessionId: string; turnId?: string; text: string };
 export type SessionTurnProgressRequest = { sourceSessionId: string; turnId: string; progress: ChannelTurnProgress };
 export type SessionTurnProgressFinishRequest = { sourceSessionId: string; turnId: string };
+export type SessionTurnGeneratedImagesRequest = { sourceSessionId: string; images: InlineDataRef[] };
 export type SessionTurnDeliveryAck = { attempted: number; delivered: number };
 
-export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 3, {
+export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 4, {
   deliverCommittedFinal: rpcMethod<SessionTurnDeliveryRequest, SessionTurnDeliveryAck>(),
   deliverIntermediateText: rpcMethod<SessionTurnIntermediateDeliveryRequest, SessionTurnDeliveryAck>(),
   reportProgress: rpcMethod<SessionTurnProgressRequest, void>(),
   finishProgress: rpcMethod<SessionTurnProgressFinishRequest, void>(),
+  deliverGeneratedImages: rpcMethod<SessionTurnGeneratedImagesRequest, SessionTurnDeliveryAck>(),
 });
 
 function plain(value: unknown, label: string): asserts value is Record<string, unknown> {
@@ -99,6 +103,31 @@ async function deliverAttachments(sourceSessionId: string, textValue: string, op
   }
 }
 
+/** Deliver only the image refs from this one committed assistant response. */
+export async function deliverGeneratedImagesToAttachments(sourceSessionId: string, images: InlineDataRef[]): Promise<SessionTurnDeliveryAck> {
+  const result = { attempted: 0, delivered: 0 };
+  for (const image of images) {
+    try {
+      if (!image.blobId || !getSafeRasterMimeType(image.blobId)) throw new Error('Generated image has no safe raster blob.');
+      const bytes = await readImageRef(image);
+      const file = {
+        path: resolveImageBlobPath(image.blobId),
+        name: `${image.imageId.replace(/[^a-zA-Z0-9._-]/g, '_')}.${image.blobId.split('.').pop()}`,
+        mimeType: getSafeRasterMimeType(image.blobId)!,
+        sizeBytes: bytes.length,
+        isImage: true,
+      };
+      const delivery = await sendFileToSession(sourceSessionId, file);
+      result.attempted += delivery.deliveredChannels.length + delivery.failedChannels.length;
+      result.delivered += delivery.deliveredChannels.length;
+      for (const failure of delivery.failedChannels) logger.error({ sessionId: sourceSessionId, imageId: image.imageId, failure }, 'Generated image channel delivery failed');
+    } catch (error) {
+      logger.error({ err: error, sessionId: sourceSessionId, imageId: image.imageId }, 'Generated image delivery failed');
+    }
+  }
+  return result;
+}
+
 export function createSessionTurnDeliveryServiceHandler(options: {
   expectedSourceSessionId: string;
 }): RpcServiceHandler<typeof sessionTurnDeliveryServiceDescriptor> {
@@ -135,6 +164,26 @@ export function createSessionTurnDeliveryServiceHandler(options: {
       if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Progress source session mismatch.');
       await finishChannelTurnProgress(text(input.turnId, 'turnId', 128));
     },
+    async deliverGeneratedImages(input) {
+      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'images'], 'request');
+      const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
+      if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Generated-image source session mismatch.');
+      if (!Array.isArray(input.images) || input.images.length === 0 || input.images.length > 16) {
+        throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'Generated images must be a bounded non-empty array.');
+      }
+      const images = input.images.map((value, index): InlineDataRef => {
+        plain(value, `images[${index}]`);
+        exactKeys(value, ['imageId', 'blobId', 'mimeType', 'byteLength', 'sha256', 'width', 'height', 'format'], `images[${index}]`);
+        const imageId = text(value.imageId, `images[${index}].imageId`, 256);
+        const blobId = text(value.blobId, `images[${index}].blobId`, 128);
+        const mimeType = getSafeRasterMimeType(blobId);
+        if (!mimeType || value.mimeType !== mimeType || !Number.isSafeInteger(value.byteLength) || (value.byteLength as number) < 0 || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256)) {
+          throw new RpcError('SESSION_TURN_DELIVERY_INVALID', `images[${index}] has an invalid blob reference.`);
+        }
+        return { imageId, blobId, mimeType, byteLength: value.byteLength as number, sha256: value.sha256 };
+      });
+      return deliverGeneratedImagesToAttachments(sourceSessionId, images);
+    },
   };
 }
 
@@ -158,6 +207,11 @@ export async function deliverCommittedFinal(request: SessionTurnDeliveryRequest)
 export async function deliverIntermediateText(request: SessionTurnIntermediateDeliveryRequest): Promise<SessionTurnDeliveryAck> {
   if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Intermediate delivery is unavailable.', true);
   return client.call('deliverIntermediateText', request);
+}
+
+export async function deliverGeneratedImages(request: SessionTurnGeneratedImagesRequest): Promise<SessionTurnDeliveryAck> {
+  if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Generated-image delivery is unavailable.', true);
+  return client.call('deliverGeneratedImages', request);
 }
 
 export async function reportChannelProgress(request: SessionTurnProgressRequest): Promise<void> {

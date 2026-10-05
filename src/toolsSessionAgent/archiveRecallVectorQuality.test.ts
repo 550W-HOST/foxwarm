@@ -4,8 +4,9 @@ import * as sessionManager from '../sessionManager';
 import * as vector from '../vector';
 import * as archiveLexicalRecall from './archiveLexicalRecall';
 import type { Session } from '../types';
+import { formatLocalTimestamp } from '../utils/localTime';
 import { containsLoneSurrogate } from '../utils/unicode';
-import { selectVectorRawMessageWindow, tool_recall } from './archiveRecall';
+import { selectVectorRawMessageWindow, tool_recall, tool_get_archived_messages } from './archiveRecall';
 
 function createSession(): Session {
   return {
@@ -480,4 +481,53 @@ test('historical alias recall also skips archive status diagnostics', async () =
   }, ctx => tool_recall({ vector_query: 'alias', sessionId: 'historical-owner', limit: 1 }, ctx)));
   assert.equal(requestedStatusSessionId, '');
   assert.doesNotMatch(output, /\[vector lag\]/);
+});
+
+
+test('raw vector and exact archive previews share authoritative row timestamps and visible-order date elision', async () => {
+  const time = new Date(2026, 9, 1, 8, 9, 10).getTime();
+  const nextDay = new Date(2026, 9, 2, 1, 2, 3).getTime();
+  const records = [messageRecord(1, 'omit'), messageRecord(2, 'ArchiveTimeNeedle keep'), messageRecord(3, 'keep'),
+    messageRecord(4, 'keep'), messageRecord(5, 'keep'), messageRecord(6, 'keep')];
+  records[0].timestamp = time;
+  records[1].timestamp = time + 1000;
+  records[2].timestamp = time + 2000;
+  records[3].timestamp = nextDay;
+  records[4].timestamp = NaN;
+  records[4].message.__meta.timestamp = 9e20;
+  records[5].timestamp = nextDay + 1000;
+  const hits = [{ id: 'times', kind: 'raw', session_id: 'source-session', start_seq: 1, end_seq: 6,
+    raw_start_seq: 1, raw_end_seq: 6, source_family: 'source-session:raw:1-6', chunk_text: 'ArchiveTimeNeedle keep' }];
+  await withRecallStubs({ hits, messages: args => ({ records, totalMatched: records.length, requestedRange: args }) }, async ctx => {
+    const raw = String(await tool_get_archived_messages({ startSeq: 1, endSeq: 6, contentFilter: 'keep', previewLength: 6000 }, ctx));
+    const exact = String(await tool_recall({ target: 'msg#1-6', contentFilter: 'keep', previewLength: 6000 }, ctx));
+    for (const output of [raw, exact]) {
+      assert.ok(output.includes(`[#2 time ${formatLocalTimestamp(time + 1000)}]`));
+      assert.ok(output.includes(`[#3 time ${formatLocalTimestamp(time + 2000).slice(11)}]`));
+      assert.ok(output.includes(`[#4 time ${formatLocalTimestamp(nextDay)}]`));
+      assert.ok(output.includes('[#5]'));
+      assert.ok(output.includes(`[#6 time ${formatLocalTimestamp(nextDay + 1000)}]`));
+      assert.doesNotMatch(output, /\[#1 |NaN|Invalid Date/);
+    }
+    const vectorOutput = String(await tool_recall({ vector_query: 'ArchiveTimeNeedle', limit: 1, previewLength: 6000 }, ctx));
+    assert.ok(vectorOutput.includes(`[#1 time ${formatLocalTimestamp(time)}]`));
+    assert.ok(vectorOutput.includes(`[#2 time ${formatLocalTimestamp(time + 1000).slice(11)}]`));
+    assert.ok(vectorOutput.includes(`[#4 time ${formatLocalTimestamp(nextDay)}]`));
+    assert.ok(vectorOutput.includes('[#5]'));
+    assert.ok(vectorOutput.includes(`[#6 time ${formatLocalTimestamp(nextDay + 1000)}]`));
+  });
+});
+
+test('archive previews fall back to valid persisted message timestamps when the row timestamp is invalid', async () => {
+  const time = new Date(2026, 9, 1, 8, 9, 10).getTime();
+  const records = [messageRecord(1, 'fallback'), messageRecord(2, 'fallback')];
+  records[0].timestamp = 9e20;
+  records[0].message.__meta.timestamp = time;
+  records[1].timestamp = undefined;
+  records[1].message.__meta.timestamp = time + 1000;
+  await withRecallStubs({ hits: [], messages: args => ({ records, totalMatched: 2, requestedRange: args }) }, async ctx => {
+    const output = String(await tool_recall({ target: 'msg#1-2' }, ctx));
+    assert.ok(output.includes(`[#1 time ${formatLocalTimestamp(time)}]`));
+    assert.ok(output.includes(`[#2 time ${formatLocalTimestamp(time + 1000).slice(11)}]`));
+  });
 });

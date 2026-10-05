@@ -85,7 +85,7 @@ async function seedData() {
   await fs.writeFile(path.join(stateRoot, 'mcp.json'), '{}')
   const memory = path.join(dataRoot, 'agents/main/memory')
   await fs.mkdir(memory, { recursive: true })
-  for (const name of ['ONBOOT.md', 'BOOTSTRAP.md', 'MEMORY.md', 'SOUL.md', 'USER.md']) await fs.writeFile(path.join(memory, name), '')
+  for (const name of ['BOOTSTRAP.md', 'MEMORY.md', 'SOUL.md', 'USER.md']) await fs.writeFile(path.join(memory, name), '')
   await fs.writeFile(path.join(dataRoot, 'agents/00_SYSTEM.md'), 'Synthetic full-application E2E system prompt.\n')
 }
 
@@ -314,6 +314,7 @@ try {
       'packages/webui/test/sessionListDrag.e2e.mjs',
       'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
       'packages/webui/test/systemTabs.e2e.mjs',
+      'test/app-e2e/logs.e2e.mjs',
       'test/app-e2e/imageGeneration.e2e.mjs',
       // Runs after a real application restart against the same data root.
       { file: 'test/app-e2e/imageGenerationRestart.e2e.mjs', restartBefore: true },

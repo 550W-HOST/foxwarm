@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import Chat from './components/Chat'
 import TerminalView from './components/TerminalView'
+import HistorySearchView from './components/HistorySearchView'
 import { API_BASE_PATH } from './config'
 import { readEmbeddedSessionLink } from './embeddedWebUi'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
@@ -9,6 +10,7 @@ import { useTheme } from './theme/useTheme'
 import { makeVscodeWebUrl, type CodeCommitTarget } from './vscodeWeb'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const LogsView = lazy(() => import('./components/LogsView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 
 type WebUiSettings = { instanceName: string; tabIcon: string }
@@ -35,7 +37,7 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
   }, [])
 
   useEffect(() => {
-    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
+    document.title = `${'title' in target && target.title ? target.title : target.kind === 'agents' ? 'Agents' : target.kind === 'logs' ? 'Logs' : target.kind === 'search' ? 'History' : target.kind === 'setup' ? 'Setup' : target.kind === 'terminal' ? 'Terminal' : 'Chat'} · Foxwarm`
   }, [target])
 
   useEffect(() => {
@@ -102,6 +104,10 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
     )
   } else if (target.kind === 'terminal') {
     content = <TerminalView initialTerminalId={target.terminalId} />
+  } else if (target.kind === 'logs') {
+    content = <Suspense fallback={<PopupLeafFallback label="Logs" />}><LogsView /></Suspense>
+  } else if (target.kind === 'search') {
+    content = <HistorySearchView isMobile={window.innerWidth < 768} groupTools={preferences.groupTools} showUsageBadge={preferences.showUsageBadge} showUserMessageMetadata={preferences.showUserMessageMetadata} />
   } else if (target.kind === 'agents') {
     content = (
       <Suspense fallback={<PopupLeafFallback label="Agents" />}>

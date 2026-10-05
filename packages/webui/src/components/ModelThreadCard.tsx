@@ -12,9 +12,11 @@ interface ModelThreadCardProps {
   iconName?: string
   preview: string
   previewClassName?: string
+  headerInfo?: ReactNode
   children: ReactNode
   tone?: ModelThreadTone
   defaultExpanded?: boolean
+  searchReveal?: boolean
 }
 
 const lineToneClasses: Record<ModelThreadTone, string> = {
@@ -53,11 +55,14 @@ const ModelThreadCard = ({
   iconName,
   preview,
   previewClassName = '',
+  headerInfo,
   children,
   tone = 'message',
   defaultExpanded,
+  searchReveal = false,
 }: ModelThreadCardProps) => {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? tone === 'processing')
+  const [manualExpanded, setExpanded] = useState(defaultExpanded ?? tone === 'processing')
+  const expanded = manualExpanded || searchReveal
   const { ref: heightRef, prepare } = useThreadCardHeightTransition(expanded)
   const toggle = () => { prepare(); setExpanded(current => !current) }
   const previewFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
@@ -83,6 +88,7 @@ const ModelThreadCard = ({
         onClick={expanded ? (event) => { event.stopPropagation(); toggle() } : undefined}
       >
         <ToolTag name={kind} iconName={iconName} label={label} tone="neutral" className={`${semanticPrefix}-tag`} />
+        {headerInfo}
         {!expanded && (
           <span ref={previewFade.ref} {...previewFade.overflowFadeProps} className={`${semanticPrefix}-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS} ${previewClassName}`} title={preview}>
             {preview}

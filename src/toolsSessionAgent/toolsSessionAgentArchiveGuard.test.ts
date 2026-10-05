@@ -383,7 +383,7 @@ test('recall target selectors read block details and message ranges', async () =
   const messagesForBlock = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'msg:B#4', previewLength: 200 }));
   assert.match(messagesForBlock, /Messages covered by CTX-BLOCK B#4 \(msg#1-2 time 1970-01-01 08:00:01 \+0800 -> 1970-01-01 08:00:02 \+0800\)/);
   assert.match(messagesForBlock, /\[#1 time 1970-01-01 08:00:01 \+0800\]/);
-  assert.match(messagesForBlock, /\[#2 time 1970-01-01 08:00:02 \+0800\]/);
+  assert.match(messagesForBlock, /\[#2 time 08:00:02 \+0800\]/);
   assert.match(messagesForBlock, /archived alpha/);
   assert.match(messagesForBlock, /archived beta/);
   assert.doesNotMatch(messagesForBlock, /archived gamma/);
@@ -391,7 +391,7 @@ test('recall target selectors read block details and message ranges', async () =
 
   const messageRange = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'msg#2-3', previewLength: 200 }));
   assert.match(messageRange, /\[#2 time 1970-01-01 08:00:02 \+0800\]/);
-  assert.match(messageRange, /\[#3 time 1970-01-01 08:00:03 \+0800\]/);
+  assert.match(messageRange, /\[#3 time 08:00:03 \+0800\]/);
   assert.match(messageRange, /archived beta/);
   assert.match(messageRange, /archived gamma/);
   assert.doesNotMatch(messageRange, /archived alpha/);

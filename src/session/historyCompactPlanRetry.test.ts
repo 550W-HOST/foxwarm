@@ -137,14 +137,25 @@ test('awaited compaction replaces a completed tool phase while its provider is h
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('awaited no-op compaction releases its transient runtime phase', async () => {
-  const { sessionHistory } = await loadDeps();
-  const session = { ...await makeCompactableSession((await loadDeps()).archive, makeSessionId('compact_runtime_noop')), history: [] } as Session;
+test('awaited no-op compaction releases its transient runtime phase without calling the planner', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_runtime_noop'));
+  const before = structuredClone(session.history);
   const deps = makeDepsForSession(session, { count: 0 });
   const runtime = trackCompactionRuntime(deps);
-  await sessionHistory.processSessionCompactionRequest(deps, session.id, {}, 'await');
-  assert.equal(runtime.current, 'idle');
-  assert.deepEqual(runtime.events, ['requesting-model:compaction', 'idle']);
+  const originalChat = llm.chat;
+  let calls = 0;
+  try {
+    (llm as any).chat = async () => { calls += 1; throw new Error('no-op must not call the planner'); };
+    session.history = [];
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, {}, 'await');
+    session.history = structuredClone(before);
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 1 }, 'await');
+    assert.deepEqual(session.history, before);
+    assert.equal(calls, 0);
+    assert.equal(runtime.current, 'idle');
+    assert.deepEqual(runtime.events, ['requesting-model:compaction', 'idle', 'requesting-model:compaction', 'idle']);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
@@ -158,6 +169,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
   session.effort = 'none';
   session.childEffortDefault = 'max';
   session.systemPromptFiles = ['custom-memory.md'];
+  const before = structuredClone(session.history);
 
   try {
     (llm as any).buildSessionSystemPromptSnapshotForSession = async (activeSession: Session) => activeSession.persistentMemorySnapshot;
@@ -170,11 +182,24 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
       assert.equal((activeSession as any).__compactJob, true);
       assert.equal(activeSession.effort, 'none');
       assert.equal(activeSession.childEffortDefault, 'max');
+      assert.equal(activeSession.nextMessageSeq, session.nextMessageSeq);
+      assert.equal(activeSession.historyVersion, session.historyVersion);
+      assert.equal(activeSession.promptCacheKey, session.promptCacheKey);
+      assert.deepEqual(activeSession.history.slice(0, 2), before.slice(0, 2));
+      assert.deepEqual(session.history, before);
+      assert.doesNotMatch(JSON.stringify(activeSession.history), /recent (user message|model response) kept outside compact range/);
+      assert.doesNotMatch(flattenPrompt(parts), /recent (user message|model response) kept outside compact range/);
+      if (prompts.length === 0) assert.equal(activeSession.history.length, 2);
+      else {
+        assert.equal(activeSession.history.length, 4);
+        assert.equal(flattenPrompt(activeSession.history[2].parts), prompts[0]);
+      }
       assert.deepEqual(activeSession.systemPromptFiles, ['custom-memory.md']);
       assert.equal(options?.snapshotAuthority, 'detached');
       assert.equal(options?.compactPlanBackground, undefined);
       prompts.push(flattenPrompt(parts));
       purposes.push(options?.purpose);
+      if (parts) await Promise.resolve(options?.appendMessage?.({ role: 'user', parts }));
 
       if (prompts.length === 1) {
         const text = 'I can summarize this in plain text, but I forgot the tool call.';
@@ -209,6 +234,8 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert.equal(prompts.length, 2);
     assert.deepEqual(purposes, ['compact-plan', 'compact-plan']);
     assert.match(prompts[0], /COMPACTION STARTED/);
+    assert.match(prompts[0], /Recent messages \(2 rendered item\(s\), #3-#4\)/);
+    assert.deepEqual(session.history.filter(message => [3, 4].includes(message.__meta?.seq || 0)), before.slice(2));
     assert.match(prompts[1], /COMPACT TOOL CALL INVALID/);
     assert.match(prompts[1], /plain text\/no tool call cannot complete compaction/i);
     assert.match(prompts[1], /submit_compact_plan/);
@@ -248,6 +275,7 @@ test('awaited compact cancellation aborts its provider signal without changing h
       deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone',
     );
     await started;
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
     const cancelled = await sessionHistory.cancelSessionCompaction(deps, session.id);
     await running;
     assert.deepEqual(cancelled, { outcome: 'cancelled', phase: 'planning' });
@@ -350,6 +378,61 @@ test('background enqueue/cancel race waits for producer cleanup and preserves or
     assert.deepEqual(await cancellation, { outcome: 'cancelled', phase: 'enqueueing' });
     assert.deepEqual(session.queue, [first, second]);
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('a consumed job waiting for its enqueue callback cannot erase a newer ready job', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_late_enqueue_new_job'));
+  const ordinary = { type: 'user', parts: [{ text: 'ordinary input survives both jobs' }] } as any;
+  session.queue.push(ordinary);
+  const deps = makeDepsForSession(session, { count: 0 });
+  const originalChat = llm.chat;
+  let enqueueEntered!: () => void; let releaseEnqueue!: () => void;
+  const entered = new Promise<void>(resolve => { enqueueEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseEnqueue = resolve; });
+  let enqueueCount = 0;
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'before-late-enqueue', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'first consumed compact job',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    deps.enqueueSessionItem = async (_id: string, item: any) => {
+      enqueueCount += 1;
+      if (enqueueCount === 1) { enqueueEntered(); await release; }
+      session.queue.push(item);
+      await deps.saveSession(session.id);
+    };
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background');
+    await entered;
+    assert.equal(sessionHistory.getCompactOperationPhase(session.id), 'enqueueing');
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+    assert.deepEqual(session.queue, [ordinary], 'completed state precedes wake-signal insertion');
+    assert.equal(await sessionHistory.applyCompletedCompactJob(deps, session.id), true);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
+    assert.deepEqual(session.queue, [ordinary]);
+
+    // The newly compacted, short history yields a real no-op job without a provider call.
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0 }, 'background');
+    for (let index = 0; index < 100 && sessionHistory.getCompactOperationPhase(session.id) !== 'ready'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+    assert.equal(sessionHistory.getCompactOperationPhase(session.id), 'ready');
+    assert.equal(enqueueCount, 2);
+    releaseEnqueue();
+    for (let index = 0; index < 100 && session.queue.length < 3; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.queue.length, 3);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true, 'late old producer leaves the new result owned');
+    assert.deepEqual(await sessionHistory.cancelSessionCompaction(deps, session.id), { outcome: 'cancelled', phase: 'ready' });
+    assert.deepEqual(session.queue, [ordinary]);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
+  } finally { releaseEnqueue(); (llm as any).chat = originalChat; }
 });
 
 test('pre-existing compact commit still reaches ready cancellation completion without stranding the producer', async () => {
@@ -521,6 +604,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
       summary: `L1 backlog ${index + 1} ${'block-summary '.repeat(1800)}`,
     })));
     session.history = [...blocks.map(layeredContext.renderBlockMessage), ...session.history.slice(0, 2)];
+    const before = structuredClone(session.history);
 
     (llm as any).chat = async (
       parts: MessagePart[] | null,
@@ -529,6 +613,9 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
       options?: { appendMessage?: (message: Message) => Promise<void> | void },
     ): Promise<ChatResult> => {
       assert.equal((activeSession as any).__compactJob, true);
+      assert.deepEqual(activeSession.history.slice(0, before.length), before);
+      assert.deepEqual(session.history, before);
+      if (prompts.length === 0) assert.equal(activeSession.history.length, before.length);
       prompts.push(flattenPrompt(parts));
       const createBlocks = prompts.length === 1
         ? [{
@@ -568,6 +655,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
     );
 
     assert.equal(prompts.length, 2);
+    assert.match(prompts[0], /Recent messages \(none\)/);
     assert.match(prompts[0], /Raw messages: .*message-source replaceAsBlocks entries must actually replace at least/i);
     assert.match(prompts[0], /Source L1 blocks: 5 block\(s\).*newest 3 are force-kept.*oldest 2 may be listed/is);
     assert.match(prompts[1], /RAW-MESSAGE HARD QUOTA REQUIRES/i);
@@ -1169,6 +1257,22 @@ test('compact planning LLM final failure aborts without rewriting session histor
     assert.equal(session.historyVersion, 0);
     assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
     assert(session.history.some(item => item.__meta?.seq === priorCompletion.__meta!.seq), 'failed planning leaves prior completion untouched');
+
+    const ordinary = { type: 'user', parts: [{ text: 'ordinary input survives a failed background job' }] } as any;
+    session.queue.push(ordinary);
+    const deps = makeDepsForSession(session, saveCounter);
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background');
+    for (let index = 0; index < 100 && !sessionHistory.hasCompletedCompactJob(session.id); index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true, 'terminal planning failures are consumable completed work');
+    await assert.rejects(() => sessionHistory.applyCompletedCompactJob(deps, session.id), /API request failed after 5 attempts/);
+    assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
+    assert.equal(sessionHistory.hasCompletedCompactJob(session.id), false);
+    assert.deepEqual(session.queue, [ordinary]);
+    assert.deepEqual(session.history, originalHistory);
+    assert.equal(callCount, 2);
+
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -1257,7 +1361,7 @@ test('compact authority persistence failure restores active state and removes un
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('conflicting required Archive block append fails closed before active history replacement', async () => {
+test('a legacy low block counter advances past immutable Archive without changing compact input', async () => {
   const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_block_append_conflict'));
   const seedSession = { ...session, history: [], nextBlockId: 1 } as Session;
@@ -1273,27 +1377,28 @@ test('conflicting required Archive block append fails closed before active histo
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
       const toolCall = { id: 'conflicting-block-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
-        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'different block content must conflict',
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'new block content uses a fresh identity',
       }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
-    await assert.rejects(
-      () => sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await'),
-      /Required archive block commit failed.*Immutable archive block conflict/,
-    );
-    assert.deepEqual(session.history, originalHistory);
-    assert.equal(session.nextBlockId, originalNextBlockId);
-    assert.equal(session.historyVersion, originalHistoryVersion);
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await');
+    assert.equal(session.nextBlockId, originalNextBlockId + 2);
+    assert.equal(session.historyVersion, originalHistoryVersion! + 1);
+    assert.equal(session.history[0].__meta?.contextBlock?.id, 2);
+    assert.deepEqual(session.history.slice(1, 3), originalHistory.slice(2));
     const blocks = await layeredContext.readLocalArchiveBlocks(session.id);
-    assert.equal(blocks.length, 1);
+    assert.deepEqual(blocks.map(block => block.id), [1, 2]);
     assert.equal(blocks[0].summary, 'preexisting immutable block identity');
+    assert.equal(blocks[1].summary, 'new block content uses a fresh identity');
   } finally { (llm as any).chat = originalChat; }
 });
 
 test('background compact validates exact snapshot content and rejects same-metadata offline edits', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_exact_snapshot_edit'));
+  const ordinary = { type: 'user', parts: [{ text: 'queued input after incompatible snapshot' }] } as any;
+  session.queue.push(ordinary);
   const originalChat = llm.chat;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -1314,6 +1419,7 @@ test('background compact validates exact snapshot content and rejects same-metad
         const applied = await sessionHistory.applyCompletedCompactJob(makeDepsForSession(session, { count: 0 }), session.id);
         if (!sessionHistory.hasPendingCompactWork(session.id)) {
           assert.equal(applied, false);
+          assert.deepEqual(session.queue, [ordinary]);
           assert.equal(session.history[0].parts[0].text, 'offline edited wording with the same seq and metadata');
           return;
         }
@@ -1327,26 +1433,45 @@ test('background compact validates exact snapshot content and rejects same-metad
 test('background compact retains only an appended compatible active-history suffix', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_appended_suffix'));
+  session.history[2].role = 'model';
+  session.history[2].parts = [{ functionCall: { id: 'recent-tool', name: 'exec', args: { command: 'force-kept tool call marker' } } }];
+  session.history[3].role = 'tool';
+  session.history[3].parts = [{ functionResponse: { tool_use_id: 'recent-tool', name: 'exec', response: { output: 'force-kept tool response marker' } } }];
+  const before = structuredClone(session.history);
   const originalChat = llm.chat;
+  let providerEntered!: () => void;
+  const entered = new Promise<void>(resolve => { providerEntered = resolve; });
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   try {
-    (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      providerEntered();
+      assert.equal(options.compactPlanBackground, true);
+      assert.deepEqual(activeSession.history, before.slice(0, 2));
+      assert.deepEqual(session.history, before);
+      assert.doesNotMatch(JSON.stringify(activeSession.history), /force-kept tool (call|response) marker/);
+      assert.doesNotMatch(flattenPrompt(parts), /force-kept tool (call|response) marker/);
+      assert.match(flattenPrompt(parts), /Recent messages \(2 rendered item\(s\), #3-#4\)/);
       await gate;
+      assert.deepEqual(activeSession.history, before.slice(0, 2));
       const toolCall = { id: 'suffix', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'compacted before appended suffix',
       }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
-    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'background');
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.25 }, 'background');
+    await entered;
     const suffix: Message = { role: 'user', parts: [{ text: 'compatible appended suffix survives' }], __meta: { seq: 5, timestamp: 5000 } };
+    await archive.appendMessagesToArchive(session, [suffix]);
     session.history.push(suffix);
+    assert.deepEqual(session.history, [...before, suffix]);
     release();
     for (let index = 0; index < 200; index += 1) {
       const applied = await sessionHistory.applyCompletedCompactJob(makeDepsForSession(session, { count: 0 }), session.id);
       if (!sessionHistory.hasPendingCompactWork(session.id)) {
         assert.equal(applied, true);
+        assert.deepEqual(session.history.filter(message => [3, 4, 5].includes(message.__meta?.seq || 0)), [...before.slice(2), suffix]);
         assert.equal(session.history.some(message => message.parts.some(part => part.text === 'compatible appended suffix survives')), true);
         return;
       }
@@ -1747,4 +1872,108 @@ test('manual pruning rewrites only active history while exact archive recall kee
   const recalled = await sessionHistory.getArchivedMessages(session.id, { startSeq: 2, endSeq: 2 });
   assert.equal(recalled.records.length, 1);
   assert.equal(recalled.records[0].message.parts[0].functionResponse?.response.output, originalOutput);
+});
+
+
+test('clear, reload and later compact keep block identities and new fork caps without rebuilding history', async () => {
+  const { llm, layeredContext } = await loadDeps();
+  const manager = await import('../sessionManager');
+  const store = await import('./archiveStore');
+  const { getSessionHistoryFilePath, serializeSessionHistoryPayload } = await import('./metadataStore');
+  const id = makeSessionId('compact_clear_reload');
+  const originalChat = llm.chat;
+  const createdIds = [id];
+  const messages = (): Message[] => [
+    { role: 'user', parts: [{ text: `older user ${'alpha '.repeat(3000)}` }] },
+    { role: 'model', parts: [{ text: `older model ${'bravo '.repeat(3000)}` }] },
+    { role: 'user', parts: [{ text: 'recent user' }] },
+    { role: 'model', parts: [{ text: 'recent model' }] },
+  ];
+  (llm as any).chat = async (_parts: MessagePart[] | null, planner: Session, _iteration: number, options: any): Promise<ChatResult> => {
+    const raw = planner.history.filter(message => typeof message.__meta?.seq === 'number');
+    assert.equal(raw.length, 2);
+    const toolCall = { id: 'clear-counter-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+      level: 1, sourceKind: 'message', sourceStart: raw[0].__meta!.seq, sourceEnd: raw[1].__meta!.seq,
+      summary: `Summary for ${raw[0].__meta!.seq}-${raw[1].__meta!.seq}.`,
+    }] } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  const compact = (sessionId: string) => manager.processSessionCompactionRequest(sessionId, { keepPercent: 0.5 }, 'await');
+  const reloadWithCounter = async (counter: number): Promise<Session> => {
+    // This is the valid persisted payload written by older clear operations.
+    const statePath = getSessionHistoryFilePath(id);
+    const state = await fs.readJson(statePath);
+    state.nextBlockId = counter;
+    await fs.writeJson(statePath, state);
+    await manager.loadSessions();
+    return manager.getSession(id);
+  };
+  try {
+    await manager.createEmptySession(id);
+    await manager.appendSessionMessages(id, messages());
+    await compact(id);
+    let owner = await manager.getSession(id);
+    const firstBlocks = await store.readLocalArchiveBlocks(id);
+    const firstRows = await store.readLocalArchiveMessages(id);
+    assert.deepEqual(firstBlocks.map(block => block.id), [1]);
+
+    const beforeClearFork = await manager.forkSession(id, 'before-clear');
+    createdIds.push(beforeClearFork);
+    const originalCap = await store.getSessionBranch(beforeClearFork);
+    await manager.clearSession(beforeClearFork);
+    await manager.appendSessionMessages(beforeClearFork, messages());
+    await compact(beforeClearFork);
+    assert.deepEqual((await store.readEffectiveArchiveBlocks(beforeClearFork)).map(block => block.id), [1, 2]);
+    assert.deepEqual(await store.getSessionBranch(beforeClearFork), originalCap, 'clear does not widen an existing fork cap');
+
+    const nextMessageSeq = owner.nextMessageSeq;
+    const cacheKey = owner.promptCacheKey;
+    await manager.startSessionWait(id, { waitForInput: true });
+    await manager.clearSession(id);
+    await manager.loadSessions();
+    owner = await manager.getSession(id);
+    assert.deepEqual(owner.history, []);
+    assert.equal(owner.meta.wait, undefined);
+    assert.equal(owner.nextMessageSeq, nextMessageSeq);
+    assert.equal(owner.nextBlockId, 2);
+    assert.notEqual(owner.promptCacheKey, cacheKey);
+    assert.deepEqual(await store.readLocalArchiveBlocks(id), firstBlocks);
+    assert.deepEqual(await store.readLocalArchiveMessages(id), firstRows);
+
+    owner = await reloadWithCounter(1);
+    assert.equal(owner.nextBlockId, 1, 'hydration is not a counter migration');
+    const sourceBefore = structuredClone(serializeSessionHistoryPayload(owner));
+    const bytesBefore = await fs.readFile(getSessionHistoryFilePath(id));
+    const afterClearFork = await manager.forkSession(id, 'legacy-after-clear');
+    createdIds.push(afterClearFork);
+    const forked = await manager.getSession(afterClearFork);
+    assert.equal(forked.nextBlockId, 2);
+    assert.equal((await store.getSessionBranch(afterClearFork))?.forkBlockId, 1);
+    assert.equal(forked.history.some(message => !!message.__meta?.contextBlock), false);
+    assert.deepEqual(await fs.readFile(getSessionHistoryFilePath(id)), bytesBefore);
+    assert.deepEqual(serializeSessionHistoryPayload(owner), sourceBefore, 'the pure source resolver does not mutate local authority');
+
+    await manager.clearSession(id);
+    assert.equal(owner.nextBlockId, 2, 'clear recovers an already persisted low counter');
+    owner = await reloadWithCounter(1);
+    const lowBefore = structuredClone(serializeSessionHistoryPayload(owner));
+    assert.deepEqual(await layeredContext.appendBlocksToArchive(owner, []), []);
+    assert.deepEqual(serializeSessionHistoryPayload(owner), lowBefore, 'empty block appends stay a true no-op');
+    await manager.appendSessionMessages(id, messages());
+    await compact(id);
+    assert.deepEqual((await store.readLocalArchiveBlocks(id)).map(block => block.id), [1, 2]);
+    assert.deepEqual((await store.readLocalArchiveBlocks(id))[0], firstBlocks[0]);
+    assert.deepEqual((await store.readLocalArchiveMessages(id)).slice(0, firstRows.length), firstRows);
+    assert.equal(owner.nextBlockId, 3);
+    assert.equal(owner.history[0].__meta?.contextBlock?.id, 2);
+    assert.deepEqual((await store.readEffectiveArchiveBlocks(afterClearFork)).map(block => block.id), [1], 'the new fork cannot see later parent blocks');
+
+    owner = await reloadWithCounter(50);
+    await manager.clearSession(id);
+    assert.equal(owner.nextBlockId, 50, 'a higher persisted counter never goes backwards');
+  } finally {
+    (llm as any).chat = originalChat;
+    for (const sessionId of createdIds.reverse()) await manager.deleteSession(sessionId).catch(() => {});
+  }
 });

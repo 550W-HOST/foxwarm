@@ -4,6 +4,7 @@ import { API_BASE_PATH } from '../config'
 import { buildModelsYaml, makeDefaultProvider } from '../setupModels'
 import { APP_CONFIG_YAML_MODEL_URI, MODELS_YAML_MODEL_URI } from '../yamlConfigSchemas'
 import ContentHeader from './ContentHeader'
+import { useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
@@ -112,6 +113,7 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
 }
 
 export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+  const tabHeader = useWorkbenchTabHeader()
   const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
   const [modelsEditorFocusRequest, setModelsEditorFocusRequest] = useState(0)
   const [status, setStatus] = useState<SetupStatus | null>(null)
@@ -415,7 +417,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
             >
               <RefreshCw className="h-4 w-4" /> Refresh
             </button>
-            {!forced && onClose && (
+            {!tabHeader && !forced && onClose && (
               <button
                 type="button"
                 onClick={onClose}

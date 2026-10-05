@@ -198,7 +198,7 @@ export const tool_node_pair_list = async (args: ToolArgs = {}, ctx?: ToolContext
     let result = `${pendings.length} pending pairing(s):\n\n`;
     for (const p of pendings) {
         const status = p.approvedNodeId ? `approved→${p.approvedNodeId} (unclaimed)` : (p.connected ? 'online' : 'offline');
-        result += `- \`${p.id}\` [${p.nodeType}] name=${p.requestedName || '(none)'} code=${p.pairCode} ${status}\n`;
+        result += `- \`${p.id}\` [${p.nodeType}] name=${p.requestedName || '(none)'} ${status}\n`;
     }
     return result;
 };

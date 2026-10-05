@@ -123,7 +123,7 @@ function buildGoalReminderMessage(state: SessionGoalState, anchorSeq: number): M
 }
 
 export function formatSessionGoalReminderText(goal: string): string {
-  return formatFoxwarmSystem({ kind: GOAL_REMINDER_SYSTEM_KIND }, `${goal.trim()}\n${GOAL_REMINDER_GUIDANCE}`);
+  return formatFoxwarmSystem({ kind: GOAL_REMINDER_SYSTEM_KIND, hint: GOAL_REMINDER_GUIDANCE }, goal.trim());
 }
 
 export function countNonReminderMessagesAfterSeq(session: Session, anchorSeq: number): number {

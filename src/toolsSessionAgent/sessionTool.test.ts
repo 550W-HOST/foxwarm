@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { tool_session } from '../toolsSessionAgent';
 import { getAgentDir } from '../config';
+import { definitions } from '../tools/definitions';
+import { buildSessionListOutput } from '../sessionStatus';
 import type { Session } from '../types';
 
 function makeSessionId(prefix: string): string {
@@ -92,6 +94,51 @@ test('session list action preserves old list pagination behavior', async () => {
   } finally {
     await sessionManager.deleteSession(otherId).catch(() => {});
     await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('session list scopes by caller Agent before pagination and preserves explicit global listing', async () => {
+  await sessionManager.loadSessions();
+  const agent = makeSessionId('list_scope_agent');
+  const otherAgent = makeSessionId('list_scope_other_agent');
+  const ids = Array.from({ length: 5 }, (_, index) => makeSessionId(`scope_${index}`));
+  const [currentId, foreignNewest, secondOwn, foreignNext, thirdOwn] = ids;
+  try {
+    for (const [index, id] of ids.entries()) {
+      const session = await ensureSession(id);
+      session.agent = index === 1 || index === 3 ? otherAgent : agent;
+      session.meta.lastMessageTime = Date.now() + 10_000_000 - index * 1000;
+      await sessionManager.saveSession(id);
+    }
+    const current = await sessionManager.getSession(currentId);
+    const ctx = { sessionId: currentId, session: current };
+    const first = String(await tool_session({ action: 'list', count: 1 }, ctx));
+    assert.match(first, /Found 3 session\(s\)\. Showing 1-1\./);
+    assert.ok(first.includes(`\`${currentId}\``));
+    assert.ok(!first.includes(`\`${foreignNewest}\``));
+
+    const second = String(await tool_session({ action: 'list', start: 1, count: 1, scope: 'current-agent' }, ctx));
+    assert.match(second, /Found 3 session\(s\)\. Showing 2-2\./);
+    assert.ok(second.includes(`\`${secondOwn}\``));
+    assert.ok(!second.includes(`\`${foreignNext}\``));
+    const last = String(await tool_session({ action: 'list', start: 2, count: 1 }, ctx));
+    assert.ok(last.includes(`\`${thirdOwn}\``));
+    assert.equal(String(await tool_session({ action: 'list', start: 3 }, ctx)), 'No sessions found in the requested range. Total sessions: 3.');
+
+    const global = String(await tool_session({ action: 'list', count: 5, scope: 'all' }, ctx));
+    assert.ok(global.includes(`\`${foreignNewest}\``));
+    assert.ok(global.includes(`\`${foreignNext}\``));
+    assert.ok(global.includes('Found '));
+    assert.ok(String(await buildSessionListOutput({ scope: 'all', count: 5 })).includes(`\`${foreignNewest}\``));
+    await assert.rejects(() => tool_session({ action: 'list', scope: 'foreign' }, ctx), /session\.scope must be/);
+    await assert.rejects(() => buildSessionListOutput({}), /without current session context/);
+    await assert.rejects(() => buildSessionListOutput({}, 'missing-current-session'), /not found/);
+
+    const schema = definitions.find(def => def.name === 'session')?.parameters;
+    assert.deepEqual((schema?.properties as any)?.scope?.enum, ['current-agent', 'all']);
+    assert.ok(!schema?.required?.includes('scope'));
+  } finally {
+    for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
   }
 });
 

@@ -1,4 +1,6 @@
-import { PanelLeftOpen, Plus } from 'lucide-react'
+import RuntimeBusySpinner from './RuntimeBusySpinner'
+import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
+import { PanelLeftOpen, Plus, History } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
@@ -7,6 +9,9 @@ interface CollapsedSidebarProps {
   currentSession: string
   onSelectSession: (sessionId: string) => void
   onCreateSession: () => void
+  onSelectSearch: () => void
+  onSelectSetup: () => void
+  onSelectLogs: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>
 }
@@ -24,6 +29,9 @@ export default function CollapsedSidebar({
   currentSession,
   onSelectSession,
   onCreateSession,
+  onSelectSearch,
+  onSelectSetup,
+  onSelectLogs,
   onToggleCollapsed,
   unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
@@ -81,12 +89,20 @@ export default function CollapsedSidebar({
             >
               {initial}
               {showRuntimeIndicator && (
-                <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
+                activeRuntime
+                  ? <RuntimeBusySpinner className={`absolute -top-0.5 -right-0.5 h-3 w-3 ${runtimeState === 'running-tool' ? 'text-fw-special' : 'text-fw-accent'}`} />
+                  : <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
               )}
               {isUnread && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-fw-accent ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring" />}
             </button>
           )
         })}
+      </div>
+      <div data-sidebar-footer className="flex w-full shrink-0 flex-col items-center gap-1 border-t border-fw-border py-2">
+        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text-strong">
+          <History className="h-4 w-4" />
+        </button>
+        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} />
       </div>
     </div>
   )

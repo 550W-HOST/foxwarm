@@ -9,15 +9,61 @@ const t = value => Date.parse(value)
 const msg = (role, timestamp, extra = {}) => ({ role, parts: [{ text: role }], __meta: { timestamp, ...extra } })
 const markers = messages => deriveTimelineTimeMarkers(messages, message => message.parts[0]?.text === 'grouped event')
 
-test('adjacent persisted timestamps use the exact 59,999/60,000ms boundary, not request metadata', () => {
+test('next request start uses the exact 59,999/60,000ms boundary rather than request duration', () => {
   const first = t('2026-09-26T09:00:00-04:00')
-  const legacyRequest = { startedAt: first + 1000, completedAt: first + 8 * 3600_000, durationMs: 8 * 3600_000 - 1000 }
-  assert.deepEqual(markers([msg('user', first), msg('model', first + 59_999, { llmRequestTiming: legacyRequest })]), [
+  const request = startedAt => ({ startedAt, completedAt: first + 8 * 3600_000, durationMs: first + 8 * 3600_000 - startedAt })
+  assert.deepEqual(markers([msg('user', first), msg('model', first + 8 * 3600_000, { llmRequestTiming: request(first + 59_999) })]), [
     { timestamp: first }, null,
   ])
-  assert.deepEqual(markers([msg('user', first), msg('model', first + 60_000, { llmRequestTiming: legacyRequest })]), [
+  assert.deepEqual(markers([msg('user', first), msg('model', first + 8 * 3600_000, { llmRequestTiming: request(first + 60_000) })]), [
     { timestamp: first }, { timestamp: first + 60_000 },
   ])
+})
+
+test('slow requests compare their start against the preceding persisted end, not its start', () => {
+  const first = t('2026-09-26T09:00:00-04:00')
+  const end = first + 4 * 60_000
+  assert.deepEqual(markers([
+    msg('user', first - 1), msg('tool', first),
+    msg('model', end, { llmRequestTiming: { startedAt: first + 43, completedAt: end - 15, durationMs: end - first - 58 } }),
+    msg('model', end + 5 * 60_000, { llmRequestTiming: { startedAt: end + 43, completedAt: end + 5 * 60_000 } }),
+  ]), [{ timestamp: first - 1 }, null, null, null])
+  assert.deepEqual(markers([
+    msg('user', first - 1),
+    msg('model', end, { llmRequestTiming: { startedAt: first, completedAt: first + 60_000 } }),
+    msg('model', end + 6 * 60_000, { llmRequestTiming: { startedAt: end + 43 } }),
+  ]), [{ timestamp: first - 1 }, null, null], 'the previous baseline is timestamp, not completedAt or startedAt')
+})
+
+test('absent or invalid next request starts fall back to timestamp without inferring an interval', () => {
+  const first = t('2026-09-26T09:00:00-04:00')
+  for (const startedAt of [undefined, null, 'invalid', first.toString(), -1, Number.NaN, Infinity, 9e15]) {
+    assert.deepEqual(markers([msg('user', first), msg('model', first + 60_000, { llmRequestTiming: { startedAt, completedAt: first + 10_000 } })]), [
+      { timestamp: first }, { timestamp: first + 60_000 },
+    ])
+  }
+  assert.deepEqual(markers([msg('user', first), msg('model', first + 60_000)])[1], { timestamp: first + 60_000 })
+  assert.deepEqual(markers([msg('model', first, { llmRequestTiming: { startedAt: 0 } })])[0], { timestamp: 0 })
+})
+
+test('CTX-BLOCK separators use the stored range start, never the block creation time', () => {
+  const start = t('2026-09-27T05:50:00-04:00')
+  const created = t('2026-09-27T07:51:00-04:00')
+  const block = (id, rawStartTimestamp) => msg('model', created + id, {
+    contextBlock: { id, level: 1, rawStartSeq: id, rawEndSeq: id, rawStartTimestamp },
+    llmRequestTiming: { startedAt: created, completedAt: created + 1000 },
+  })
+  assert.deepEqual(markers([msg('user', start - 60_000), block(858, start), block(864, start + 59_999), msg('user', start + 119_999)]), [
+    { timestamp: start - 60_000 }, { timestamp: start }, null, { timestamp: start + 119_999 },
+  ])
+  assert.deepEqual(markers([block(858, start), block(864, start + 60_000)]), [
+    { timestamp: start }, { timestamp: start + 60_000 },
+  ])
+  for (const invalidStart of [undefined, 'invalid', Number.NaN]) {
+    assert.deepEqual(markers([msg('user', start), block(851, invalidStart), msg('user', created + 60_000)]), [
+      { timestamp: start }, null, { timestamp: created + 60_000 },
+    ], 'an unknown CTX start breaks the comparison rather than falling back to its creation time')
+  }
 })
 
 test('tool/result and grouped event times are adjacent clock boundaries without orphan separator rows', () => {

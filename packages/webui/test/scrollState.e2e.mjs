@@ -28,6 +28,9 @@ async function openPersistentChat(sessionId) {
     window.location.hash = `session/${encodeURIComponent(id)}`
   }, sessionId)
   await waitForChat(sessionId)
+  const row = await page.waitForSelector(`[data-session-id=${JSON.stringify(sessionId)}]`, { timeout: 15_000 })
+  await row.click({ clickCount: 2 })
+  await page.waitForFunction((id) => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[`chat:${id}`]?.preview === false, { timeout: 15_000 }, sessionId)
 }
 
 async function selectTab(sessionId) {

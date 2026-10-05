@@ -5,7 +5,7 @@ import { WebUIChannel } from './channels/webuiChannel';
 import { composeQueuedPreviewProjection } from './channels/webuiQueuePreview';
 import { TUIChannel } from './channels/tuiChannel';
 import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
-import { initializeChannelRuntime, startManagedChannel } from './channelRuntime';
+import { attachConfiguredMainSession, initializeChannelRuntime, startManagedChannel } from './channelRuntime';
 import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
@@ -46,10 +46,8 @@ import {
     MAIN_AGENT_MEMORY_DIR,
     MCP_INBOUND_CONFIG,
     NODE_TOKEN_FILE,
-    ONBOOT_FILE,
     SESSION_WORKERS_CONFIG,
     SESSION_WORKERS_ENABLED,
-    TELEGRAM_CONFIG,
     TOKEN_FILE,
     VECTOR_ENABLED,
 } from './config';
@@ -339,10 +337,6 @@ async function start() {
 
     await initializeExecManager();
 
-    // Ensure "main" session exists
-    await sessionManager.getSession('main');
-    logger.info('Main session initialized');
-
     await sessionRuntime.startEvents();
 
     // Create message router with authorized users
@@ -471,8 +465,8 @@ async function start() {
     }
 
     const defaultTelegramEntry = getDefaultChannelConfigByType<TelegramConfig>('telegram');
-    const telegramChannelPromise: Promise<TelegramChannel | null> = (defaultTelegramEntry?.config?.enabled !== false && defaultTelegramEntry?.config?.botToken)
-        ? startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
+    if (defaultTelegramEntry?.config?.enabled !== false && defaultTelegramEntry?.config?.botToken) {
+        void startWithRetry(`telegram:${defaultTelegramEntry.id}`, async () => {
             const channel = new TelegramChannel(defaultTelegramEntry.config, defaultTelegramEntry.id);
             channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
             channel.onCommand((ctx, command, args, rawArgs) => commandHandler.handleCommand(ctx, command, args, rawArgs));
@@ -481,12 +475,12 @@ async function start() {
             logger.info({ channelId: defaultTelegramEntry.id }, 'Telegram channel initialized');
 
             if (defaultTelegramEntry.config.mainAttachUser) {
-                sessionManager.attachChannel(defaultTelegramEntry.id, defaultTelegramEntry.config.mainAttachUser, 'main');
+                attachConfiguredMainSession(defaultTelegramEntry.id, defaultTelegramEntry.config.mainAttachUser);
             }
 
             return channel;
-        }, { retries: 3, delayMs: 5000 })
-        : Promise.resolve(null);
+        }, { retries: 3, delayMs: 5000 });
+    }
 
     for (const entry of getNormalizedChannelConfigs()) {
         const config: any = entry.config || {};
@@ -501,7 +495,7 @@ async function start() {
                 registerChannel(entry.id, channel);
                 logger.info({ channelId: entry.id }, 'Telegram channel initialized');
                 if (config.mainAttachUser) {
-                    sessionManager.attachChannel(entry.id, config.mainAttachUser, 'main');
+                    attachConfiguredMainSession(entry.id, config.mainAttachUser);
                 }
                 return channel;
             }, { retries: 3, delayMs: 5000 });
@@ -516,7 +510,7 @@ async function start() {
                 await matrixChannel.start();
                 registerChannel(entry.id, matrixChannel);
                 logger.info({ channelId: entry.id }, 'Matrix channel initialized');
-                sessionManager.attachChannel(entry.id, config.botUserId, 'main');
+                attachConfiguredMainSession(entry.id, config.botUserId);
                 return matrixChannel;
             }, { retries: 1, delayMs: 3000 });
             continue;
@@ -544,7 +538,7 @@ async function start() {
                     return result.status;
                 }, { retries: 1, delayMs: 3000 });
             } else if (config.baseUrl || config.enabled) {
-                logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
+                logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /channel weixin login and foxwarm will start it dynamically once config is ready');
             }
             continue;
         }
@@ -582,46 +576,10 @@ async function start() {
     // Schedule log rotation (start immediately and every 10 hours)
     scheduleLogRotation();
 
-    // Handle ONBOOT.md
-    await handleOnboot(telegramChannelPromise);
-    
     // In TUI mode, keep the process running
     if (ENABLE_TUI) {
         // Process will stay alive due to blessed screen event loop
         await new Promise(() => {}); // Never resolves
-    }
-}
-
-async function handleOnboot(telegramChannelPromise: Promise<TelegramChannel | null>) {
-    try {
-        if (await fs.pathExists(ONBOOT_FILE)) {
-            const onbootContent = await fs.readFile(ONBOOT_FILE, 'utf8');
-            if (onbootContent && onbootContent.trim().length > 0) {
-                logger.info('ONBOOT.md found, triggering auto-run after 3 seconds...');
-                await new Promise(r => setTimeout(r, 3000));
-
-                // Send notification via Telegram if available.
-                // The telegram channel may still be starting in the background.
-                if (TELEGRAM_CONFIG.mainAttachUser) {
-                    void telegramChannelPromise.then((telegramChannel) => {
-                        if (!telegramChannel) {
-                            return;
-                        }
-
-                        return telegramChannel.sendMessage(TELEGRAM_CONFIG.mainAttachUser!, '📋 ONBOOT: ' + onbootContent);
-                    }).catch((err: Error) => {
-                        logger.error({ err }, 'Failed to send ONBOOT notification via Telegram');
-                    });
-                }
-
-                // Queue ONBOOT as a session event (don't await processing to avoid blocking startup)
-                sessionManager.queueSessionEvent('main', `ONBOOT: ${onbootContent}`, 'onboot').catch((err: Error) => {
-                    logger.error({ err }, 'Failed to queue ONBOOT event');
-                });
-            }
-        }
-    } catch (e) {
-        logger.error(e, 'Error processing ONBOOT.md');
     }
 }
 

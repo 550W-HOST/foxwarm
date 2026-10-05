@@ -130,6 +130,8 @@ function respondJson(request, body, status = 200) {
 }
 
 async function attachRequestMocks(targetPage, options = {}) {
+  const blockedEditorAssets = options.blockYamlWorkerImport ? ['yaml.worker']
+    : options.blockEditorChunks ? ['monaco-editor', 'monaco-yaml', 'yaml.worker', 'editor.worker'] : []
   let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
   let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
@@ -172,19 +174,14 @@ async function attachRequestMocks(targetPage, options = {}) {
       handleAuthRequests: true,
       patterns: [
         { urlPattern: '*://*/api/*' },
-        ...(options.blockEditorChunks ? [
-          { urlPattern: '*monaco-editor*' },
-          { urlPattern: '*monaco-yaml*' },
-          { urlPattern: '*yaml.worker*' },
-          { urlPattern: '*editor.worker*' },
-        ] : []),
+        ...blockedEditorAssets.map(asset => ({ urlPattern: `*${asset}*` })),
       ],
     })
   }
   targetPage.on('request', (request) => {
     const url = new URL(request.url())
     requestPaths.push(url.pathname)
-    if (options.blockEditorChunks && /(monaco-editor|monaco-yaml|yaml\.worker|editor\.worker)/.test(url.pathname)) {
+    if (blockedEditorAssets.some(asset => url.pathname.includes(asset))) {
       void request.abort('failed')
       return
     }
@@ -1514,17 +1511,21 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
   const degradedPage = await browser.newPage()
   const modelsSaveRequests = []
   const configSaveRequests = []
+  await degradedPage.setViewport({ width: 1440, height: 900 })
   await degradedPage.setCacheEnabled(false)
-  await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true, modelsSaveRequests, configSaveRequests })
+  // The production Monaco chunk also carries bootstrap helpers; reject only the lazy worker import.
+  await attachRequestMocks(degradedPage, { blockYamlWorkerImport: true, oobe: true, modelsSaveRequests, configSaveRequests })
   try {
-    await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
+    await degradedPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
     await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
+    const forcedSetupClose = await degradedPage.waitForSelector('[data-workbench-tab-close="system:setup"]')
+    await degradedPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'system:setup')
     await degradedPage.click('[data-setup-tab="models"]')
-    const forcedSetupClose = await degradedPage.waitForSelector('[data-tab-id="system:setup"] button[title="Close tab"]')
     await forcedSetupClose.click()
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    assert.ok(await degradedPage.$('[data-tab-id="system:setup"]'))
+    assert.ok(await degradedPage.$('[data-workbench-tab-close="system:setup"]'))
+    assert.equal(await degradedPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
+    assert.equal(await degradedPage.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId), 'system:setup')
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
     assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
     const fallbackHeight = await degradedPage.$eval('[data-editor-fallback="true"]', (editor) => ({

@@ -1,7 +1,7 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
-Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
+Files: src/channels/webuiChannel.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTrigger.test.ts, src/channels/webuiTerminalStream.test.ts
+Secondary files: src/channels/webuiLogs.ts, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
 
@@ -23,6 +23,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 ## Route groups
 
 - Authentication and setup status.
+- Authenticated fixed-file `/api/webui/logs` history and approximate time lookup; the channel also owns the optional file-tail subscription dependency and disposes it on stop. Canonical contract: [WebUI Logs](./webui-logs.md).
 - Session list, history, create, update, fork, move, pin, model, cwd, and message routes.
 - Agent registry routes: enriched `GET`/existing `POST /api/agents`, memory manifest `GET /api/agents/:agentId/memory`, mutable metadata `PUT /api/agents/:agentId`, and typed-confirmation `DELETE /api/agents/:agentId`.
 - Fixed bounded `/api/session-list/sidebar`, `/children`, `/by-id`,
@@ -30,10 +31,11 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - One authenticated multiplexed `/api/webui/stream` WebSocket for current clients, plus legacy per-session and global session-list SSE routes.
 - File upload and authenticated download.
 - Authenticated content-addressed image blob delivery.
+- Authenticated read-only global history search (`GET /api/history/search`) and bounded exact/adjacent archive viewing (`GET /api/history/window`). The search route accepts optional Agent or Session scope, returns structured source groups, and reports Vector-disabled/unavailable separately; the exact route does not require Vector. Exact `msg#N[-M]` ranges validate safe ascending sequence IDs, return bounded ordered pages plus requested/shown range and `hasMoreInTarget`; continuation can bound `afterSeq` by optional `targetEndSeq` before normal later browsing. Viewer message transport uses image-blob projection and drops provider replay-only opaque fields without changing archived data or the existing Chat DTO.
 - Model/provider and channel configuration, validation, and connectivity tests.
 - ASR and messaging-platform setup helpers.
 - Browser terminal REST/WebSocket routes.
-- Authenticated public-safe node/service summaries for WebUI launch selectors.
+- Authenticated public-safe node/service summaries for WebUI launch selectors. Separately registered modal-only setup/create/pending/approve actions are owned by [authenticated onboarding routes](./src-webui-node-onboarding.md).
 - Read-only one-layer CTX-BLOCK expansion.
 - Registration of the independent optional Code routes.
 
@@ -92,6 +94,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - CTX-BLOCK expansion delegates to the read-only archive helper and never queues, saves, or broadcasts session mutations.
 - The model-test endpoint treats request exceptions as failed HTTP results rather than scanning successful model text for an `Error:` prefix.
 - Setup routes are normal authenticated WebUI routes: `GET /api/setup/status`; `POST /api/setup/models`, `/api/setup/models/list`, `/api/setup/models/test`, `/api/setup/config`, `/api/setup/channels`, `/api/setup/weixin/login/start`, and `/api/setup/weixin/login/wait`. OOBE is reported when the models file is absent; there is no separate guest/admin role API at these routes.
+- `/trigger` uses an explicit target when supplied and otherwise targets the exact `main` identity only when that live Session exists. A missing default or explicit target returns an actionable error instead of creating or retargeting a Session.
 - `POST /api/setup/models/list` accepts only one transient provider type/base URL/API key/provider-header object. It supports the four known OpenAI protocols through `<api-root>/models` and Anthropic through `<base>/v1/models?limit=1000`; virtual and unknown custom types are rejected rather than guessed. Existing saved app defaults are applied through pure model-config expansion, but no draft YAML is accepted or persisted. The request has a 10-second timeout, a 1 MiB response-body limit, and a 1000-ID result cap; upstream bodies, request headers, and credentials are neither logged nor returned. Failures do not affect Save or provider routing.
 - Setup diagnostics and both raw and retained structured model writes resolve the active models file through the data-directory-only path contract in [D-config-models-data-path](./src-config.md#d-config-models-data-path).
 - Model setup diagnostics expose virtual strategy/targets/failover values and classify a provider string alias as a single-target `session-hash` entry, while session model selection remains the virtual key. `/api/models` exposes each option's allowlisted provider key and exact actual model ID in addition to provider type, virtual status, ordered canonical targets, ordered allowed efforts, and a concrete default or virtual `null`; it does not expose connection URLs, credentials, headers, or other provider configuration. Session projections expose raw/effective current and child effort without materializing defaults. Canonical backend contract: [model routing](../threads/model-routing.md).
@@ -105,6 +108,10 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 
 - List and history payloads retain documented legacy busy fields while current clients prefer `runtimeState`.
 - Persisted session-list presentation metadata may be lost when the metadata index must be rebuilt from history; it is intentionally not duplicated into history files.
+
+## Route fixture setup
+
+`webuiSessionsRoute.test.ts` starts each owned `HttpServer` on port zero and reads the actual bound port after startup. HTTP, SSE, and WebSocket assertions use that same live listener; no random fixed range or reserve-and-reopen socket is involved. Route behavior and production listening configuration remain unchanged.
 
 ## Design decisions
 

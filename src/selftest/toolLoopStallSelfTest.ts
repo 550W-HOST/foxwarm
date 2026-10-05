@@ -8,6 +8,7 @@ import * as sessionManager from '../sessionManager';
 import * as llm from '../llm';
 import * as vector from '../vector';
 import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
+import { getCompactOperationPhase, hasCompletedCompactJob } from '../session/history';
 import { MessagePart, Session } from '../types';
 import { tool_get_archived_messages, tool_set_goal } from '../toolsSessionAgent';
 import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
@@ -613,7 +614,7 @@ async function main(): Promise<void> {
       assert.doesNotMatch(String(output), /archived alpha/);
     });
 
-    await test('automatic in-turn compaction after tool calls continues immediately and commits async compact later', async () => {
+    await test('automatic in-turn compaction continues while planning is held and preserves the completed turn on commit', async () => {
       const sessionId = makeSessionId('selftest_auto_compact_current');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
@@ -629,6 +630,10 @@ async function main(): Promise<void> {
       let mainTurnCallCount = 0;
       let compactJobCallCount = 0;
       let autoCompactMessageRange: { sourceStart: number; sourceEnd: number } | null = null;
+      let plannerEntered!: () => void;
+      let releasePlanner!: () => void;
+      const entered = new Promise<void>(resolve => { plannerEntered = resolve; });
+      const release = new Promise<void>(resolve => { releasePlanner = resolve; });
 
       (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration?: number, options?: { toolDefinitions?: Array<{ name: string }> }) => {
         assert.strictEqual(activeSession.id, sessionId);
@@ -643,6 +648,8 @@ async function main(): Promise<void> {
 
         if (isCompactJob) {
           compactJobCallCount += 1;
+          plannerEntered();
+          await release;
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACTION STARTED/);
           assert.match(systemText, new RegExp(`${COMPACT_FLOW_MAX_ROUNDS} total rounds`, 'i'));
@@ -682,6 +689,9 @@ async function main(): Promise<void> {
         }
 
         if (mainTurnCallCount === 2) {
+          await entered;
+          assert.strictEqual(getCompactOperationPhase(sessionId), 'planning');
+          assert.strictEqual(hasCompletedCompactJob(sessionId), false);
           if (parts !== null) {
             assert(Array.isArray(parts));
             assert(parts.some(part => part.text === 'trigger auto compact now'));
@@ -694,38 +704,52 @@ async function main(): Promise<void> {
         throw new Error(`automatic in-turn compaction should keep main turn to two calls, got main=${mainTurnCallCount} compact=${compactJobCallCount}`);
       };
 
-      await processOwnedTurn(router, sessionId, 'trigger auto compact now');
+      try {
+        await processOwnedTurn(router, sessionId, 'trigger auto compact now');
+        const beforeRelease = await sessionManager.getSession(sessionId);
+        assert.strictEqual(mainTurnCallCount, 2, 'running planning must not block the normal tool continuation');
+        assert.strictEqual(compactJobCallCount, 1);
+        assert.strictEqual(beforeRelease.busy, false);
+        assert.strictEqual(getCompactOperationPhase(sessionId), 'planning');
+        assert.strictEqual(hasCompletedCompactJob(sessionId), false);
+        const continuation = beforeRelease.history.find(msg => msg.role === 'model'
+          && msg.parts.some(part => part.text === 'continued before async compact commit'));
+        assert(continuation?.__meta?.seq, 'continuation must be canonical before releasing the planner');
+        const continuationSnapshot = structuredClone(continuation);
 
-      let compactCommittedInline = false;
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const maybeReady = await sessionManager.getSession(sessionId);
-        if (maybeReady.queue.some(item => item.type === 'compact-commit')) {
-          break;
+        releasePlanner();
+        for (let attempt = 0; attempt < 50 && getCompactOperationPhase(sessionId) !== 'ready'; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 10));
         }
-        if (maybeReady.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary')))) {
-          compactCommittedInline = true;
-          break;
-        }
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-
-      const beforeCommit = await sessionManager.getSession(sessionId);
-      if (beforeCommit.queue.some(item => item.type === 'compact-commit')) {
+        assert.strictEqual(getCompactOperationPhase(sessionId), 'ready');
+        assert.strictEqual(hasCompletedCompactJob(sessionId), true);
         await router.processSessionQueue(sessionId);
-      } else {
-        assert(compactCommittedInline || beforeCommit.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
-      }
 
-      const finalSession = await sessionManager.getSession(sessionId);
-      assert.strictEqual(mainTurnCallCount, 2);
-      assert.strictEqual(compactJobCallCount, 1);
-      assert.strictEqual(finalSession.busy, false);
-      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
-      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
-      assert(finalSession.history.some(msg => msg.role === 'user'
-        && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))
-        && msg.parts.some(part => (part.system || '').includes('You can continue working now.'))));
-      assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('continued before async compact commit'))));
+        const finalSession = await sessionManager.getSession(sessionId);
+        assert.strictEqual(mainTurnCallCount, 2);
+        assert.strictEqual(compactJobCallCount, 1);
+        assert.strictEqual(finalSession.busy, false);
+        assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('auto compact summary'))));
+        assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
+        assert(finalSession.history.some(msg => msg.role === 'user'
+          && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))
+          && msg.parts.some(part => (part.system || '').includes('You can continue working now.'))));
+        assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('continued before async compact commit'))));
+        assert.deepStrictEqual(finalSession.history.find(msg => msg.__meta?.seq === continuationSnapshot.__meta?.seq), continuationSnapshot);
+        assert.strictEqual(finalSession.queue.length, 0);
+        const callIndex = finalSession.history.findIndex(msg => msg.parts.some(part => part.functionCall?.id === 'auto-compact-read'));
+        assert(callIndex >= 0);
+        const call = finalSession.history[callIndex];
+        const response = finalSession.history[callIndex + 1];
+        assert(response?.parts.some(part => part.functionResponse?.tool_use_id === 'auto-compact-read'));
+        const archivedPair = await tool_get_archived_messages({
+          sessionId, startSeq: call.__meta!.seq!, endSeq: response.__meta!.seq!, previewLength: 1000, toolDetail: 'full',
+        }, { sessionId, session: finalSession });
+        assert.match(String(archivedPair), /auto-compact-read/);
+        assert.match(String(archivedPair), /auto compact/);
+      } finally {
+        releasePlanner();
+      }
     });
 
     await test('historical tool-response pruning keeps call args and prunes older responses only', async () => {

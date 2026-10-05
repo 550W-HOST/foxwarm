@@ -1,14 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as llm from './llm';
+import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import * as configModule from './config';
+import { loadModelsConfigFromObject } from './config';
 import * as sessionManager from './sessionManager';
 import { initArchiveStore } from './session/archiveStore';
 import { readArchiveMessages } from './session/archive';
 import { SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
+import { reconstructLlmRequest } from './llmRequestJournal';
+import * as sessionHistory from './session/history';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import type { Message, QueueItem, Session } from './types';
 import { logger } from './common';
+import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
+import fs from 'fs-extra';
+import sharp from 'sharp';
 
 function createSession(id: string, text: string): Session {
   return {
@@ -125,6 +134,256 @@ test('detached exact owner completes canonical foreground provider turn', async 
   }
 });
 
+test('real exact-owner Responses stream durably archives commentary and error-checkpoint reasoning before retry input', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_responses_checkpoint_${Date.now()}`, 'work on an image');
+  session.model = 'fixture/enabled';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/enabled" />\n\nsystem prompt';
+  const effects = createEffects(session, []);
+  const deliveries: string[] = [];
+  session.broadcast = text => { if (text) deliveries.push(text); };
+  const originalResolve = configModule.resolveModelConfig;
+  const originalPost = axios.post;
+  const models = loadModelsConfigFromObject({
+    default: 'fixture/enabled',
+    providers: { fixture: { providerType: 'openai-responses', baseUrl: 'https://example.test/v1',
+      apiKey: 'test-key', keepReasoningOnError: true, models: ['enabled'] } },
+  });
+  (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+  const firstStream = new PassThrough();
+  const bodies: any[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) return { status: 200, statusText: 'OK', headers: {}, data: firstStream };
+    const second = new PassThrough();
+    process.nextTick(() => {
+      for (const event of [
+        { type: 'response.output_item.done', output_index: 0,
+          item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'done' }] } },
+        { type: 'response.completed', response: { output: [] as any[], usage: { input_tokens: 6, output_tokens: 3 } } },
+      ]) second.write(`data: ${JSON.stringify(event)}\n\n`);
+      second.end();
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: second };
+  };
+  const frame = (event: any) => firstStream.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    const running = withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(new LocalSessionTurnHost(effects, session))
+      .processSessionQueue(session.id));
+    for (let tries = 0; tries < 150 && bodies.length === 0; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    frame({ type: 'response.output_item.done', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Drafting' }] } });
+    for (let tries = 0; tries < 150 && !deliveries.includes('Drafting'); tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(deliveries.includes('Drafting'));
+    let persisted = await readSessionHistorySnapshot(session.id);
+    let archived = await readArchiveMessages(session.id);
+    assert.deepEqual(persisted?.history.filter((message: Message) => message.role === 'model').map((message: Message) => message.parts[0]?.text), ['Drafting']);
+    assert.deepEqual(archived.filter(record => record.message.role === 'model').map(record => record.message.parts[0]?.text), ['Drafting']);
+    assert.equal(bodies.length, 1, 'commentary is durable before the first provider response ends');
+    frame({ type: 'response.output_item.done', output_index: 1,
+      item: { type: 'reasoning', id: 'drop-this-upstream-id', summary: [{ type: 'summary_text', text: 'opaque progress' }],
+        encrypted_content: 'archive-opaque-checkpoint' } });
+    frame({ type: 'response.failed', response: { error: { message: 'upstream interrupted' } } });
+    firstStream.end();
+    for (let tries = 0; tries < 150 && !session.history.some(message => message.__meta?.noticeType === 'llm-retry'); tries++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok(session.history.some(message => message.__meta?.noticeType === 'llm-retry'));
+    assert.equal(bodies.length, 1, 'queued correction arrives during the existing retry backoff');
+    session.queue.push(
+      { type: 'user', parts: [{ text: 'retry correction A' }] },
+      { type: 'background', parts: [{ text: 'retry correction B' }] },
+    );
+    for (let tries = 0; tries < 150 && bodies.length < 2; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(bodies.length, 2);
+    persisted = await readSessionHistorySnapshot(session.id);
+    archived = await readArchiveMessages(session.id);
+    const persistedModels: Message[] = persisted?.history.filter((message: Message) => message.role === 'model') || [];
+    assert.deepEqual(persistedModels.slice(0, 2).map(message => message.__meta?.llmSegment), [
+      { outputStart: 0, outputEndExclusive: 1, complete: false },
+      { outputStart: 1, outputEndExclusive: 2, complete: false },
+    ]);
+    assert.equal(persistedModels[1].parts[0].providerMeta?.encryptedThinking, 'archive-opaque-checkpoint');
+    assert.equal(archived.filter(record => record.message.role === 'model')[1].message.parts[0].providerMeta?.encryptedThinking,
+      'archive-opaque-checkpoint');
+    assert.equal(JSON.stringify(bodies[1].input).includes('archive-opaque-checkpoint'), true);
+    assert.equal(JSON.stringify(bodies[1].input).includes('drop-this-upstream-id'), false);
+    for (const text of ['Drafting', 'archive-opaque-checkpoint', 'retry correction A', 'retry correction B']) {
+      assert.equal(JSON.stringify(bodies[1].input).split(text).length - 1, 1);
+    }
+    const historyText = session.history.map(message => message.parts[0]?.text);
+    assert.ok(historyText.indexOf('retry correction A') > historyText.indexOf(undefined));
+    assert.equal(historyText.indexOf('retry correction B'), historyText.indexOf('retry correction A') + 1);
+    await running;
+    assert.deepEqual(session.history.filter(message => message.role === 'model' && message.modelVisible !== false)
+      .map(message => message.parts[0]?.text), ['Drafting', undefined, 'done']);
+    assert.equal(deliveries.filter(text => text === 'Drafting').length, 1);
+    assert.equal(bodies.length, 2, 'queued corrections belong to the retry, not a later provider turn');
+    const final = session.history.find(message => message.parts[0]?.text === 'done')!;
+    assert.notEqual(final.__meta?.llmRequestId, persistedModels[0].__meta?.llmRequestId);
+    const journal = await reconstructLlmRequest(final.__meta!.llmRequestId!);
+    assert.equal(journal.completeness, 'complete');
+    if (journal.completeness === 'complete') {
+      for (const text of ['Drafting', 'archive-opaque-checkpoint', 'retry correction A', 'retry correction B']) {
+        assert.equal(JSON.stringify(journal.messages).split(text).length - 1, 1);
+      }
+    }
+  } finally {
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = originalResolve;
+    firstStream.destroy();
+  }
+});
+
+test('retry applies a real ready compact-only commit and rebuilds history and system snapshot within the same budget', async () => {
+  await initArchiveStore();
+  const session = createSession(`retry_compact_only_${Date.now()}`, 'current turn input');
+  session.model = 'fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nbefore compact snapshot';
+  session.promptCacheKey = llm.generatePromptCacheKey();
+  const originalKey = session.promptCacheKey;
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const phases: string[] = [];
+  effects.setRuntimeState = (_id, state) => { phases.push(state.active?.phase || state.state); };
+  await effects.appendMessages(session, [
+    { role: 'user', parts: [{ text: `older compact input ${'alpha '.repeat(3000)}` }] },
+    { role: 'model', parts: [{ text: `older compact answer ${'bravo '.repeat(3000)}` }] },
+    { role: 'user', parts: [{ text: 'recent kept input' }] },
+    { role: 'model', parts: [{ text: 'recent kept answer' }] },
+  ]);
+  const deps: sessionHistory.SessionHistoryDeps = {
+    getSessionById: id => id === session.id ? session : undefined,
+    getExistingSession: async id => id === session.id ? session : null,
+    saveSession: () => effects.persistSession(session),
+    enqueueSessionItem: async (_id, item) => { session.queue.push(item); },
+  };
+  const originalResolve = configModule.resolveModelConfig;
+  const originalPost = axios.post;
+  const originalChat = llm.chat;
+  const originalSnapshot = llm.buildSessionSystemPromptSnapshotForSession;
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+  (llm as any).buildSessionSystemPromptSnapshotForSession = async () => '<foxwarm-current-model model-id="fixture/model" />\n\nafter compact snapshot';
+  (llm as any).chat = async (parts: any, owner: Session, iteration: number, options: any) => {
+    if (options?.purpose !== 'compact-plan') return originalChat(parts, owner, iteration, options);
+    const call = { id: 'retry-compact-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [
+      { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'retry compact summary' },
+    ] } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+    return { text: '', toolCalls: [call], allParts: [{ functionCall: call }] };
+  };
+  const bodies: any[] = [];
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) {
+      await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.6 }, 'background');
+      for (let tries = 0; tries < 150 && !sessionHistory.hasCompletedCompactJob(session.id); tries++) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(sessionHistory.hasCompletedCompactJob(session.id), true);
+      // Ready work is not discovered only by queue length or a wake marker.
+      session.queue = session.queue.filter(item => item.type !== 'compact-commit');
+      assert.equal(session.queue.length, 0);
+      throw new Error('retry after compact becomes ready');
+    }
+    assert.equal(phases.at(-1), 'normal-turn', 'retry dispatch must not retain the completed compaction phase');
+    assert.ok(phases.includes('compaction'));
+    const stream = new PassThrough();
+    process.nextTick(() => {
+      stream.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'compact retry done' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    return { status: 200, statusText: 'OK', headers: {}, data: stream };
+  };
+  const host = new LocalSessionTurnHost(effects, session, {
+    hasCompletedCompactJob: sessionHistory.hasCompletedCompactJob,
+    applyCompletedCompactJob: id => sessionHistory.applyCompletedCompactJob(deps, id),
+  });
+  try {
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
+    assert.equal(bodies.length, 2);
+    assert.equal(JSON.stringify(bodies[0]).includes('older compact input'), true);
+    assert.equal(JSON.stringify(bodies[1]).includes('older compact input'), false);
+    assert.equal(JSON.stringify(bodies[1]).split('retry compact summary').length - 1, 1);
+    assert.equal(JSON.stringify(bodies[1]).split('current turn input').length - 1, 1);
+    assert.equal(JSON.stringify(bodies[1]).includes('after compact snapshot'), true);
+    assert.equal(JSON.stringify(bodies[1]).includes('before compact snapshot'), false);
+    assert.equal(session.promptCacheKey, originalKey, 'compact inherits the current prefix lineage');
+    const final = session.history.find(message => message.parts[0]?.text === 'compact retry done')!;
+    assert.equal(final.__meta?.llmAttempt, 1);
+    const journal = await reconstructLlmRequest(final.__meta!.llmRequestId!);
+    assert.equal(journal.completeness, 'complete');
+    if (journal.completeness === 'complete') {
+      assert.equal(JSON.stringify(journal.messages).includes('retry compact summary'), true);
+      assert.equal(journal.systemPrompt.includes('after compact snapshot'), true);
+    }
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally {
+    sessionHistory.discardPendingCompactWork(session.id);
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = originalResolve;
+    (llm as any).chat = originalChat;
+    (llm as any).buildSessionSystemPromptSnapshotForSession = originalSnapshot;
+  }
+});
+
+test('normal turn delivers only this committed response images, independently of empty text and later turns', async () => {
+  await initArchiveStore();
+  const session = createSession(`generated_media_runner_${Date.now()}`, 'draw one');
+  const effects = createEffects(session, []);
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#4488aa' } }).png().toBuffer();
+  const first = await putImageBlob({ buffer: png, mimeType: 'image/png', imageId: 'ig_one' });
+  const second = { ...first, imageId: 'ig_two' };
+  const deliveries: string[][] = [];
+  const host = new LocalSessionTurnHost(effects, session, {
+    deliverGeneratedImages: async (_session, images) => { deliveries.push(images.map(image => image.imageId)); },
+  });
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let calls = 0;
+  const toolCall = { id: 'generated_media_test_call', name: 'synthetic', args: {} };
+  (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
+    assert.strictEqual(owner, session);
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    calls++;
+    const assistant: Message = {
+      role: 'model',
+      parts: calls === 1
+        ? [{ inlineDataRef: first, imageMeta: { imageId: first.imageId, origin: 'generated' } }]
+        : calls === 2 ? [{ text: 'second reply' },
+          { inlineDataRef: second, imageMeta: { imageId: second.imageId, origin: 'generated' } },
+          { inlineDataRef: first, imageMeta: { imageId: first.imageId, origin: 'generated' } },
+          { functionCall: toolCall }] : [{ text: 'follow-up after tool' }],
+    };
+    await options.appendMessage(assistant);
+    await options.onCommittedAssistantMessage(assistant);
+    return { text: calls === 1 ? '' : calls === 2 ? 'second reply' : 'follow-up after tool',
+      allParts: assistant.parts, ...(calls === 2 ? { toolCalls: [toolCall] } : {}) };
+  };
+  (llm as any).executeTools = async () => ({ role: 'tool', parts: [{
+    functionResponse: { tool_use_id: toolCall.id, name: toolCall.name, response: { output: 'ok' } },
+  }] });
+  try {
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
+    assert.deepEqual(deliveries, [['ig_one']]);
+    session.queue.push({ type: 'background', parts: [{ text: 'draw another' }] });
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(host).processSessionQueue(session.id));
+    assert.deepEqual(deliveries, [['ig_one'], ['ig_two', 'ig_one']]);
+    assert.equal(calls, 3);
+    assert.equal(session.history.filter(message => message.role === 'model').length, 3);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    await fs.remove(resolveImageBlobPath(first.blobId!));
+  }
+});
+
 test('selected ordinary prefix commits one complete authority batch before postcommit interruption', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_partial_prefix_${Date.now()}`, 'first queued input');
@@ -202,38 +461,169 @@ test('one owned processor sends many different-source rows in one provider turn 
   }
 });
 
-test('one owned processor sequences compact turn compact without another busy claim', async () => {
+test('one owned processor applies ready compaction before all ordinary input across wake markers', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_compact_turn_compact_${Date.now()}`, 'unused');
   session.queue = [
+    { type: 'user', parts: [{ text: 'before compact marker' }] },
     { type: 'compact-commit' },
-    { type: 'user', parts: [{ text: 'between compacts' }] },
+    { type: 'background', parts: [{ text: 'after compact marker' }] },
     { type: 'compact-commit' },
   ];
   const events: string[] = [];
   let compactApplies = 0;
   const effects = createEffects(session, events);
   const host = new LocalSessionTurnHost(effects, session, {
-    applyCompletedCompactJob: async () => { compactApplies += 1; return true; },
+    hasCompletedCompactJob: () => compactApplies === 0,
+    applyCompletedCompactJob: async () => {
+      assert.equal(session.history.length, 0, 'ready compaction precedes canonical queued input');
+      compactApplies += 1;
+      return true;
+    },
   });
   const runner = new SessionTurnRunner(host);
   const originalChat = llm.chat;
   (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
     assert.equal(parts, null);
-    assert.equal(compactApplies, 1, 'the trailing compact remains an outer action until this turn completes');
+    assert.equal(compactApplies, 1);
+    assert.deepEqual(session.history.map(message => message.parts[0].text), ['before compact marker', 'after compact marker']);
     await options.appendMessage({ role: 'model', parts: [{ text: 'between done' }] });
     return { text: 'between done' };
   };
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
-    assert.equal(compactApplies, 2);
-    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(compactApplies, 1);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'user', 'model']);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
   }
+});
+
+test('provider continuation commits a ready job before all follow-ups even before its wake marker exists', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_ready_followups_${Date.now()}`, 'initial input');
+  const events: string[] = [];
+  let ready = false;
+  let applies = 0;
+  const host = new LocalSessionTurnHost(createEffects(session, events), session, {
+    hasCompletedCompactJob: () => ready,
+    applyCompletedCompactJob: async () => {
+      assert.equal(session.history.at(-1)?.parts[0].text, 'first provider result');
+      assert.equal(session.history.some(message => message.parts[0].text === 'follow-up A'), false);
+      applies += 1;
+      ready = false;
+      return true;
+    },
+  });
+  const runner = new SessionTurnRunner(host);
+  const originalChat = llm.chat;
+  let requests = 0;
+  (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+    requests += 1;
+    if (requests === 1) {
+      await options.appendMessage({ role: 'model', parts: [{ text: 'first provider result' }] });
+      owner.queue.push(
+        { type: 'user', parts: [{ text: 'follow-up A' }] },
+        { type: 'background', parts: [{ text: 'follow-up B' }] },
+      );
+      ready = true;
+      return { text: 'first provider result' };
+    }
+    assert.equal(applies, 1);
+    assert.deepEqual(owner.history.slice(-2).map(message => message.parts[0].text), ['follow-up A', 'follow-up B']);
+    await options.appendMessage({ role: 'model', parts: [{ text: 'final provider result' }] });
+    return { text: 'final provider result' };
+  };
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(requests, 2);
+    assert.equal(applies, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('stale wake signals and failed or no-op jobs do not split or swallow ordinary input', async () => {
+  await initArchiveStore();
+  const originalChat = llm.chat;
+  try {
+    for (const outcome of ['signal-only', 'absent', 'noop', 'failed'] as const) {
+      const session = createSession(`detached_compact_${outcome}_${Date.now()}`, 'unused');
+      session.queue = outcome === 'signal-only' ? [{ type: 'compact-commit' }] : [
+        { type: 'user', parts: [{ text: 'input A' }] },
+        { type: 'compact-commit' },
+        { type: 'background', parts: [{ text: 'input B' }] },
+      ];
+      const events: string[] = [];
+      let ready = outcome === 'noop' || outcome === 'failed';
+      let applies = 0;
+      let requests = 0;
+      const runner = new SessionTurnRunner(new LocalSessionTurnHost(createEffects(session, events), session, {
+        hasCompletedCompactJob: () => ready,
+        applyCompletedCompactJob: async () => {
+          ready = false;
+          applies += 1;
+          if (outcome === 'failed') throw new Error('planning failed');
+          return false;
+        },
+      }));
+      (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+        requests += 1;
+        assert.deepEqual(owner.history.map(message => message.parts[0].text), ['input A', 'input B']);
+        await options.appendMessage({ role: 'model', parts: [{ text: 'done' }] });
+        return { text: 'done' };
+      };
+      await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+      assert.equal(requests, outcome === 'signal-only' ? 0 : 1);
+      assert.equal(applies, outcome === 'noop' || outcome === 'failed' ? 1 : 0);
+      assert.equal(events.filter(event => event === 'runtime:requesting-model').length, applies + requests);
+      assert.equal(session.queue.length, 0);
+    }
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('a failed canonical append replays the whole ordinary batch without replaying compact signals', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_compact_batch_rollback_${Date.now()}`, 'unused');
+  session.queue = [
+    { type: 'user', parts: [{ text: 'rollback input A' }] },
+    { type: 'compact-commit' },
+    { type: 'background', parts: [{ text: 'rollback input B' }] },
+  ];
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  let appends = 0;
+  let ready = true;
+  let applies = 0;
+  effects.appendQueuedMessages = (owner, messages) => sessionManager.appendQueuedSessionMessagesForSession(owner, messages, async () => {
+    appends += 1;
+    assert.deepEqual(messages.map(message => message.parts[0].text), ['rollback input A', 'rollback input B']);
+    if (appends === 1) throw new Error('injected queued append persistence failure');
+    await writeAuthoritativeSessionState(owner);
+  });
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session, {
+    hasCompletedCompactJob: () => ready,
+    applyCompletedCompactJob: async () => { ready = false; applies += 1; return true; },
+  }));
+  const originalChat = llm.chat;
+  let requests = 0;
+  (llm as any).chat = async (_parts: any, owner: Session, _iteration: number, options: any) => {
+    requests += 1;
+    assert.deepEqual(owner.history.filter(message => message.role === 'user').map(message => message.parts[0].text), ['rollback input A', 'rollback input B']);
+    await options.appendMessage({ role: 'model', parts: [{ text: 'replayed batch done' }] });
+    return { text: 'replayed batch done' };
+  };
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(appends, 2);
+    assert.equal(applies, 1);
+    assert.equal(requests, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('retry consumes a later different-source queued row in the same provider turn', async () => {
@@ -268,6 +658,82 @@ test('retry consumes a later different-source queued row in the same provider tu
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
+  }
+});
+
+test('retry preparation selects one strict batch and leaves input arriving during persistence for a later safe point', async () => {
+  await initArchiveStore();
+  const session = createSession(`retry_finite_batch_${Date.now()}`, 'correction A');
+  session.queue.push({ type: 'background', parts: [{ text: 'correction B' }] });
+  const effects = createEffects(session, []);
+  const originalAppend = effects.appendQueuedMessages;
+  let appends = 0;
+  effects.appendQueuedMessages = async (owner, messages) => {
+    appends++;
+    assert.deepEqual(messages.map(message => message.parts[0].text), ['correction A', 'correction B']);
+    await new Promise(resolve => setImmediate(resolve));
+    session.queue.push({ type: 'user', parts: [{ text: 'later correction' }] });
+    await originalAppend(owner, messages);
+  };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  assert.equal(await (runner as any).prepareLlmRetry(session, 0, new AbortController().signal), true);
+  assert.equal(appends, 1);
+  assert.deepEqual(session.history.map(message => message.parts[0].text), ['correction A', 'correction B']);
+  assert.equal(session.queue[0].parts[0].text, 'later correction');
+});
+
+test('Stop during retry compact prevents queue selection after the awaited compact boundary', async () => {
+  const session = createSession(`retry_compact_stop_${Date.now()}`, 'must remain queued');
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(createEffects(session, []), session, {
+    hasCompletedCompactJob: () => true,
+    applyCompletedCompactJob: async () => {
+      await new Promise(resolve => setImmediate(resolve));
+      session.stopping = true;
+      return true;
+    },
+  }));
+  await assert.rejects(() => (runner as any).prepareLlmRetry(session, 0, new AbortController().signal), llm.isAbortError);
+  assert.equal(session.queue.length, 1);
+  assert.equal(session.history.length, 0);
+});
+
+test('strict queued append failure during real retry restores input and blocks the next provider attempt', async () => {
+  await initArchiveStore();
+  const session = createSession(`retry_strict_append_failure_${Date.now()}`, 'unused');
+  session.queue = [];
+  session.busy = true;
+  session.model = 'fixture/model';
+  session.persistentMemorySnapshot = '<foxwarm-current-model model-id="fixture/model" />\n\nretry prompt';
+  const effects = createEffects(session, []);
+  effects.appendQueuedMessages = (owner, messages) => sessionManager.appendQueuedSessionMessagesForSession(owner, messages, async () => {
+    throw new Error('retry queue strict persistence failed');
+  });
+  const originalPost = axios.post;
+  const originalResolve = configModule.resolveModelConfig;
+  const models = loadModelsConfigFromObject({ default: 'fixture/model', providers: {
+    fixture: { providerType: 'openai-completions', baseUrl: 'https://example.test/v1', apiKey: 'test-key', models: ['model'] },
+  } });
+  (configModule as any).resolveModelConfig = () => ({ modelsConfig: models, defaultKey: models.default,
+    currentKey: models.default, modelEntry: models.models[models.default], contextLimit: models.models[models.default].contextLimit });
+  let requests = 0;
+  (axios as any).post = async () => {
+    requests++;
+    session.queue.push({ type: 'user', parts: [{ text: 'uncommitted correction' }] });
+    throw new Error('initial mock provider outage');
+  };
+  try {
+    const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+    await withGlobalOwnerLookupsForbidden(() => (runner as any).runSessionTurn(session.id, { parts: [{ text: 'initial request' }], session }));
+    assert.equal(requests, 1);
+    assert.equal(session.queue.length, 1, 'existing strict append rollback restores the selected input');
+    assert.equal(session.history.some(message => message.parts[0].text === 'uncommitted correction'), false);
+    assert.ok(session.history.some(message => message.parts[0].text?.includes('retry queue strict persistence failed')),
+      'preparation failure follows the ordinary local owner error path');
+    assert.equal(session.history.filter(message => message.__meta?.noticeType === 'llm-retry').length, 1,
+      'local preparation failure does not generate another provider retry notice');
+  } finally {
+    (axios as any).post = originalPost;
+    (configModule as any).resolveModelConfig = originalResolve;
   }
 });
 
@@ -377,7 +843,8 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     response?: string;
     successfulSendTargets?: string[];
     failedSend?: boolean;
-    addIncompatibleQueuedItem?: boolean;
+    addPendingInput?: boolean;
+    addStaleCompactSignal?: boolean;
   }): Promise<{ session: Session; reminders: string[] }> {
     const session = createSession(`child_handoff_${options.name}_${Date.now()}_${Math.random()}`, 'unused');
     session.parentSessionId = 'parent-session';
@@ -385,7 +852,14 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     if (options.initialState) session.childHandoffState = structuredClone(options.initialState);
     const reminders: string[] = [];
     const effects = createEffects(session, []);
+    let addedPendingInput = false;
     const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session, {
+      deliverCommittedFinal: async () => {
+        if (options.addPendingInput && !addedPendingInput) {
+          addedPendingInput = true;
+          session.queue.push({ type: 'user', parts: [{ text: 'pending ordinary input at final delivery' }] });
+        }
+      },
       queueSessionSystemEvent: async (_id, reminder) => { reminders.push(reminder); },
       checkAndCompactIfNeeded: async () => {},
       applyCompletedCompactJob: async () => true,
@@ -402,7 +876,7 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
           }] };
         }
       }
-      if (options.addIncompatibleQueuedItem) {
+      if (options.addStaleCompactSignal) {
         session.queue.push({ type: 'compact-commit' });
       }
       const text = options.response ?? 'done';
@@ -502,11 +976,21 @@ test('persisted child-handoff state exclusively drives reminder boundaries, reso
     const queueGuard = await runCase({
       name: 'queue-guard',
       queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
-      addIncompatibleQueuedItem: true,
+      addPendingInput: true,
     });
-    assert.deepEqual(queueGuard.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.deepEqual(queueGuard.session.childHandoffState, { boundary: 'direct-user', resolved: true });
+    assert.equal(queueGuard.session.history.filter(message => message.parts[0].text === 'pending ordinary input at final delivery').length, 1);
     assert.equal(queueGuard.reminders.length, 0);
     assert.equal(queueGuard.session.queue.length, 0);
+
+    const staleSignal = await runCase({
+      name: 'stale-signal',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      addStaleCompactSignal: true,
+    });
+    assert.deepEqual(staleSignal.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.equal(staleSignal.reminders.length, 1, 'a compact wake signal is not pending input');
+    assert.equal(staleSignal.session.queue.length, 0);
 
     const absentState = await runCase({
       name: 'absent-state-history',

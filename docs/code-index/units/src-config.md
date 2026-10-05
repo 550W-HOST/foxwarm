@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
+Files: src/config.ts, src/publicUrl.test.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts, src/imageGenerationConfig.test.ts
 Secondary files: packages/shared/src/configSchemas.ts, templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md, docs/executable-node-provider-protocol.md, docs/docker-worktree-node-provider.md
 
 ## Purpose
@@ -15,6 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
+- `normalizePublicUrl`, `PUBLIC_BASE_URL` — optional top-level public HTTP(S) URL for Node bootstrap examples; no effect on HTTP bind or internal API origin.
 - `safeAppConfigYamlError()` — converts an app-config YAML parse failure to a non-secret error with its 1-based line/column when available; Setup uses the same formatter.
 - `MCP_INBOUND_CONFIG`, `normalizeMcpInboundConfig`, and `authenticateMcpInboundBearer` — startup-validated inbound identity settings and verified principal creation; the validator is shared with Setup. The implementation is owned by [src-mcp-inbound-config](./src-mcp-inbound-config.md).
 - `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
@@ -95,6 +96,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` and `imageGeneration` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum. Each `imageGeneration` side is normalized before merging, and the merged configuration is checked again for field combinations that only become contradictory through inheritance, so a provider background and a model output format cannot combine into an unsupported request.
 - Provider-scoped `disallowEmptyResponse` inherits from the provider entry to each concrete model entry, is rejected on virtual entries, participates in the route fingerprint, and controls whether empty/reasoning-only completions are retryable failures.
+- `keepReasoningOnError` is a strict provider/concrete-model boolean with model override and effective default `false`. It is rejected on virtual providers, preserved through concrete Setup forms and raw YAML/schema editing, and included in virtual leaf fingerprints. Only normal Responses streams consume it; see [D-streaming-keep-reasoning-on-error](../threads/streaming-pipeline.md#d-streaming-keep-reasoning-on-error).
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
 - `openai`, `openai-responses`, `openai-ws`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings. `openai-ws` rejects request compression because compression is an HTTP-body setting.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
@@ -105,6 +107,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 - App YAML missing at read time yields an empty config.
 - App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
+- Runtime startup and Setup validate `url` as an absolute HTTP(S) address without credentials, query, or fragment, trim outer whitespace/trailing slash, and preserve an optional deployment path. Missing `url` retains placeholder-based Node instructions. Shared JSON schema exposes the field to config editors.
 - Setup writes validate by parsing through the same current config readers before replacing files.
 - Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort`, `webSearch`, and `imageGeneration` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.

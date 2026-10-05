@@ -2,6 +2,8 @@ import type { ReactNode } from 'react'
 import { useDndContext, useDroppable } from '@dnd-kit/core'
 import { Columns2, Rows2, X } from 'lucide-react'
 import WorkbenchTabs from './WorkbenchTabs'
+import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
+import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
 interface WorkbenchPaneProps {
@@ -12,6 +14,7 @@ interface WorkbenchPaneProps {
   emphasizeFocus?: boolean
   dragEnabled?: boolean
   showPaneControls?: boolean
+  hideTabStrip?: boolean
   canClosePane: boolean
   content: ReactNode
   onFocusPane: (paneId: string) => void
@@ -56,6 +59,7 @@ export default function WorkbenchPane({
   emphasizeFocus = true,
   dragEnabled = true,
   showPaneControls = true,
+  hideTabStrip = false,
   canClosePane,
   content,
   onFocusPane,
@@ -70,6 +74,10 @@ export default function WorkbenchPane({
   onSplitDown,
   onClosePane,
 }: WorkbenchPaneProps) {
+  const { openContextMenu, openMenuAtElement, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
+  const header = hideTabStrip && tabs.length === 1
+    ? { tab: tabs[0], paneId, dragEnabled, onCloseTab, onKeepTab, openContextMenu, openMenuAtElement }
+    : null
   const hasActiveTab = !!activeTabId
   const { active } = useDndContext()
   const dragActive = !!active
@@ -83,37 +91,40 @@ export default function WorkbenchPane({
       className={`relative flex h-full min-h-0 flex-col overflow-hidden border ${containerChromeClass}`}
       onMouseDown={() => onFocusPane(paneId)}
     >
-      <WorkbenchTabs
-        paneId={paneId}
-        tabs={tabs}
-        activeTabId={activeTabId}
-        focused={focused}
-        dragEnabled={dragEnabled}
-        toolbar={showPaneControls ? (
-          <>
-            <ToolbarButton title="Split right with active tab" disabled={!hasActiveTab} onClick={onSplitRight}>
-              <Columns2 className="h-4 w-4" />
-            </ToolbarButton>
-            <ToolbarButton title="Split down with active tab" disabled={!hasActiveTab} onClick={onSplitDown}>
-              <Rows2 className="h-4 w-4" />
-            </ToolbarButton>
-            <ToolbarButton title="Close pane" disabled={!canClosePane} onClick={onClosePane}>
-              <X className="h-4 w-4" />
-            </ToolbarButton>
-          </>
-        ) : null}
-        onSelectTab={onSelectTab}
-        onCloseTab={onCloseTab}
-        onKeepTab={onKeepTab}
-        onMoveTabToNewWindow={onMoveTabToNewWindow}
-        canMoveTabToNewWindow={canMoveTabToNewWindow}
-        onCloseOtherTabs={onCloseOtherTabs}
-        onCloseAllTabs={onCloseAllTabs}
-      />
+      {!hideTabStrip && (
+        <WorkbenchTabs
+          paneId={paneId}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          focused={focused}
+          dragEnabled={dragEnabled}
+          toolbar={showPaneControls && tabs.length !== 1 ? (
+            <>
+              <ToolbarButton title="Split right with active tab" disabled={!hasActiveTab} onClick={onSplitRight}>
+                <Columns2 className="h-4 w-4" />
+              </ToolbarButton>
+              <ToolbarButton title="Split down with active tab" disabled={!hasActiveTab} onClick={onSplitDown}>
+                <Rows2 className="h-4 w-4" />
+              </ToolbarButton>
+              <ToolbarButton title="Close pane" disabled={!canClosePane} onClick={onClosePane}>
+                <X className="h-4 w-4" />
+              </ToolbarButton>
+            </>
+          ) : null}
+          onSelectTab={onSelectTab}
+          onCloseTab={onCloseTab}
+          onKeepTab={onKeepTab}
+          onMoveTabToNewWindow={onMoveTabToNewWindow}
+          canMoveTabToNewWindow={canMoveTabToNewWindow}
+          onCloseOtherTabs={onCloseOtherTabs}
+          onCloseAllTabs={onCloseAllTabs}
+        />
+      )}
 
       <div className="min-h-0 flex-1 overflow-hidden bg-fw-canvas">
-        {content}
+        <WorkbenchTabHeaderProvider value={header}>{content}</WorkbenchTabHeaderProvider>
       </div>
+      {menu}
 
       {dragActive && (
         <div className="pointer-events-none absolute inset-0 z-[80]">

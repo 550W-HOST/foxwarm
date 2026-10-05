@@ -4,7 +4,7 @@ Files: packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/sr
 
 ## Purpose
 
-Renders the compact global UI dropdown for color mode, Setup, and reload plus the per-Chat session-header dropdown for browser-local input/chat display preferences and Debug.
+Renders the compact global UI dropdown for color mode, Setup, reload, and Logs plus the per-Chat session-header dropdown for browser-local input/chat display preferences and Debug.
 
 ## Key Exports
 
@@ -13,7 +13,7 @@ Renders the compact global UI dropdown for color mode, Setup, and reload plus th
 - `clampAnchoredMenuHorizontally` — pure preferred-alignment + viewport-gutter clamp helper
 - `readHorizontalViewportBounds` — intersects the layout/body bounds with the current visual viewport
 - Both menus use the existing send-mode union (`'modEnter' | 'enter'`) at their component boundary.
-- `GlobalUiSettingsMenuProps` — props interface for Setup activation and preferred menu alignment
+- `GlobalUiSettingsMenuProps` — props interface for Setup/Logs activation and preferred menu alignment
 
 ## Function Index
 
@@ -35,7 +35,8 @@ Renders the compact global UI dropdown for color mode, Setup, and reload plus th
 - The session-header menu provides `groupTools`, `showUsageBadge`, browser-local `Show minimap`, and `Show user message metadata`. Minimap remains disabled only when it is the sole enabled context display, so scrollbar/minimap preferences cannot become both disabled.
 - The session-header menu detects macOS/iOS to display the correct modifier key label (Cmd vs Ctrl) for the send-key option.
 - `useChatPreferences` is the single browser-local owner used by ordinary and embedded Chat roots. Setters write the established keys and update their own root; `storage` events update other roots without writeback effects or stale echoes.
-- The global menu closes automatically after color-mode change or Setup activation. Both menus close on Escape/outside click; opening Debug also closes the session menu.
+- Application rows place the Setup gear, Reload refresh, and Logs document icons before their labels; Reload has no trailing icon. The Setup active marker remains at the row end.
+- The global menu closes automatically after color-mode change or Setup/Logs activation. Both menus close on Escape/outside click; opening Debug also closes the session menu.
 - `menuAlign` remains the preferred start/end alignment rather than an absolute promise. While open, the component measures the trigger/menu against the body and visual viewport, preserves the preferred alignment when it fits, and translates the menu only enough to keep an 8px horizontal gutter on both edges.
 - Horizontal placement stays live while the menu is open, so viewport resize, sidebar width/position changes, scroll, browser zoom/pinch zoom, and menu width changes are re-clamped without closing the menu. Menu height-only changes do not alter horizontal placement.
 - The session-header menu uses the same placement helpers and intersects the viewport with its nearest Chat root, so a narrow split pane shrinks and clamps the menu inside the pane's clipping boundary.
@@ -44,10 +45,10 @@ Renders the compact global UI dropdown for color mode, Setup, and reload plus th
 
 ## Integration
 
-- `GlobalUiSettingsMenu` connects only the compact color-mode control to the shared browser-local runtime and delegates Setup/reload. Chat/App owns the session-header menu's existing browser-local preference state. Instance name/tab icon are server-backed WebUI settings edited in Setup Appearance.
+- `GlobalUiSettingsMenu` connects only the compact color-mode control to the shared browser-local runtime and delegates Setup/reload/Logs. Chat/App owns the session-header menu's existing browser-local preference state. Instance name/tab icon are server-backed WebUI settings edited in Setup Appearance.
 - Theme-family and file-management ownership is documented in [D-webui-theme-controls](./webui-theme-system.md#d-webui-theme-controls).
 - Delegates app reload to `ReloadAppButton`.
-- Optionally triggers an external setup flow via `onOpenSetup` callback.
+- Delegates `Open setup` and `Open logs` through the corresponding callbacks, and labels reload `Reload WebUI`. Main expanded/collapsed/mobile sidebars open the singleton Logs tab; the Code-embedded sidebar opens the existing popup leaf. Logs ownership is documented in [WebUI Logs](./webui-logs.md).
 - Code launch actions are intentionally not exposed here; the dedicated sidebar Code split button is the primary entry and owns launch-mode configuration.
 - Designed to sit in a toolbar/header and align its dropdown via the `menuAlign` prop.
 - Placement and authority are canonical in [D-webui-settings-placement](../modules/webui.md#d-webui-settings-placement).

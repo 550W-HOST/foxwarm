@@ -6,6 +6,8 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
+- [Shell HTTP Node](../units/src-nodes-shell-http.md) — POSIX sh/curl exec-only transport, bounded output, and existing scoped background completion.
+
 - [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
 - [src-docker-worktree-provider](../units/src-docker-worktree-provider.md) — resident first-party Linux Docker provider for one existing worktree, read-only Git metadata, strict lifecycle state, and shared file capabilities.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
@@ -22,6 +24,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - `registerNodeHttpRoutes(httpServer)` — bootstrap scripts, compose template, and source bundle.
 - `buildNodeBootstrapInfo(options)` — current endpoint/examples payload for `node_bootstrap_info`.
 - Pending pairing create/list/approve/reject/claim operations.
+- `/node create <node-id>` directly reserves an approved Node credential and returns its plaintext auth token once; the ordinary pending/approve flow remains available.
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
@@ -45,12 +48,12 @@ The operator-facing deployment/configuration workflow is documented by the singl
 
 ## Invariants
 
-- The master persists only SHA-256 authentication-token hashes. Plaintext exists only in the pending approval/claim handoff.
+- The master persists only SHA-256 authentication-token hashes. Plaintext is returned once for direct creation or held temporarily in the pending approval/claim handoff.
 - Pending pairings expire after one hour; unclaimed approved handoffs are cleaned with their node record.
 - Node IDs are slugged, validated against reserved IDs, and deduplicated.
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
 - Pre-authentication messages are queued and replayed after authentication.
-- Authenticated registration negotiates the shared 1-2 core Node protocol before capability admission. Missing metadata selects executable legacy generation 1, current peers select generation 2, and only malformed/disjoint clients remain connected and visible as upgrade-required without executable capabilities, dispatch, selection, or application events. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
+- Authenticated registration negotiates the shared 1-3 core Node protocol before capability admission. Missing metadata selects executable legacy generation 1, the current CLI selects generation 3, and only malformed/disjoint clients remain connected and visible as upgrade-required without executable capabilities, dispatch, selection, or application events. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
@@ -62,7 +65,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 ## Compatibility
 
 - Missing core protocol metadata is explicitly classified as compatible legacy generation 1 rather than assumed current. Operators update/restart only an explicitly malformed or disjoint upgrade-required Node; credentials and pairing approval remain valid.
-- Current CLI, browser-extension, and Android Node clients advertise range 1-2, prefer generation 2, and accept the omitted-field generation-1 response for Node-first rolling upgrades.
+- Current CLI advertises 1-3 and selects generation 3; browser-extension and Android clients advertise 1-2 and select generation 2. All retain omitted-field generation-1 compatibility for Node-first rolling upgrades. Removing the informational six-digit pairing display code does not alter authentication or supported protocol ranges.
 - Approved-node rename is server-side registry migration plus old-runtime disconnect. The current client has no credential-rewrite protocol; the operator updates/restarts/re-pairs the node.
 - `/node/run-cli-node.sh` remains a bootstrap route alias for the current interactive script.
 - Existing numbered `nodes.json` backups remain readable through the durable JSON store.

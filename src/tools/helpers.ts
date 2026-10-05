@@ -15,7 +15,9 @@ import {
     writeFileToolPath,
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
+import type { ToolScriptSubCall } from '../types';
 import type { ExecRuntime } from '../execManager';
+import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 import {
     fileOperationPathExists,
     nativeFileOperations,
@@ -36,6 +38,8 @@ export interface ToolContext {
     /** Resolved-target file primitives; local production uses the native backend. */
     fileOperations?: FileOperations;
     deferSessionCwdSync?: boolean;
+    /** Trusted producer hint for script data, never derived from tool arguments. */
+    programmatic?: true;
     /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
     persistCurrentSession?: () => Promise<void>;
     /** Main-local detached read marker; permits read helpers to trust ctx.session without hydration or persistence. */
@@ -48,6 +52,10 @@ export interface ToolContext {
     toolExecutionSnapshot?: { currentNode: string; cwd?: string };
     /** Trusted in-process placement, supplied by turn effects and never tool arguments. */
     sessionPlacement?: 'local' | 'session-worker';
+    /** Per-invocation UI-only file paths, never included in model-visible tool results. */
+    onResolvedPaths?: (paths: ResolvedToolPath[]) => void;
+    /** Per-invocation ToolScript activity for persisted UI metadata, never model-visible result data. */
+    onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
 }
 
 // Tool function type
@@ -171,8 +179,8 @@ export function resolveAgentMemoryPath(filePath: string, agentName: string = 'ma
     return resolved;
 }
 
-export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number, operations?: FileOperations) {
-    return readFileToolPath(fullPath, displayPath, startLine, endLine, operations);
+export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number, operations?: FileOperations, programmatic = false) {
+    return readFileToolPath(fullPath, displayPath, startLine, endLine, operations, programmatic);
 }
 
 export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }, operations?: FileOperations) {

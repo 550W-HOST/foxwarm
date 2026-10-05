@@ -78,3 +78,28 @@ test('explicit disjoint Node range stays connected in quarantine and all executi
   await assert.rejects(() => manager.handleSessionEvent('future-client', 'source', 'blocked', 'trigger'), (error: any) => error?.code === 'NODE_PROTOCOL_INCOMPATIBLE');
   manager.unregisterNode('future-client');
 });
+test('programmatic hint reaches advertising CLI peers while old peers retain their native response', async () => {
+  const manager = new NodesManager();
+  const sessionId = `programmatic-node-${Date.now()}`;
+  await sessionManager.getSession(sessionId);
+  const current = new FakeSocket(); const older = new FakeSocket();
+  const readCapability = { tools: [{ name: 'read', description: 'read', parameters: { type: 'object' } }] };
+  manager.registerNodeWithTools(current as any, {} as http.IncomingMessage, 'cli-node', { ...readCapability, features: { programmaticToolData: true } }, 'current-script-peer');
+  manager.registerNodeWithTools(older as any, {} as http.IncomingMessage, 'cli-node', readCapability, 'old-script-peer');
+  try {
+    const currentPromise = manager.executeTool('current-script-peer', 'read', { filePath: 'data' }, sessionId, undefined, true);
+    const currentCall = current.sent.find(message => message.type === 'tool_call');
+    assert.equal(currentCall.programmatic, true); assert.equal(currentCall.args.programmatic, undefined);
+    manager.handleToolResponse(currentCall.callId, { output: 'display', content: 'data', truncated: false }, 'current-script-peer');
+    assert.deepEqual(await currentPromise, { output: 'display', content: 'data', truncated: false });
+    const olderPromise = manager.executeTool('old-script-peer', 'read', { filePath: 'data' }, sessionId, undefined, true);
+    const olderCall = older.sent.find(message => message.type === 'tool_call');
+    assert.equal(Object.prototype.hasOwnProperty.call(olderCall, 'programmatic'), false);
+    manager.handleToolResponse(olderCall.callId, { output: 'legacy display' }, 'old-script-peer');
+    assert.deepEqual(await olderPromise, { output: 'legacy display' });
+    const direct = manager.executeTool('current-script-peer', 'read', { filePath: 'data', programmatic: true }, sessionId);
+    const directCall = current.sent.filter(message => message.type === 'tool_call').at(-1);
+    assert.equal(directCall.programmatic, undefined);
+    manager.handleToolResponse(directCall.callId, 'native direct', 'current-script-peer'); assert.equal(await direct, 'native direct');
+  } finally { manager.unregisterNode('current-script-peer'); manager.unregisterNode('old-script-peer'); await sessionManager.deleteSession(sessionId).catch(() => false); }
+});

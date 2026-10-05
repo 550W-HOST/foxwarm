@@ -8,6 +8,8 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 
 ## Key Exports
 
+- `buildProgrammaticExecResult` reads a retained, byte-budgeted log snapshot only for trusted script callers; ordinary display formatting and process lifecycle are unchanged. See [programmatic data](../threads/tool-dispatch.md#d-dispatch-programmatic-tool-data).
+
 - `PersistentExecManager` — Main class orchestrating process spawning, tracking, reconciliation, and result formatting
 - `RunningExecEntry` — Interface describing a tracked running process, including its retained exact generated script path and either a Session/Agent or disjoint external owner
 - `ExecStatus` — Interface for process exit status
@@ -92,6 +94,9 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 - Foreground exec completions always append a footer beginning with `---` and `Exit code: ...`; shortened outputs say `Command output saved to:` and background completion events say `Command output in`, accurately describing output captured from the shell command or pipeline as executed. Oversized-log footers report the sampled snapshot's exact original byte length and deliberately do not claim an original line count. An oversized-timeout warning is passed separately into foreground/background-switch formatting, so it remains in final metadata even when command output is truncated. Later background completion notifications do not repeat the already-delivered warning.
 - Foreground and timeout-preview formatting preserves boundary whitespace in every non-empty captured/displayed output, including whitespace-only output. Only a zero-byte output uses the no-output placeholder. Metadata starts after the existing trailing LF or one added separator LF; when the capture had no trailing LF, the footer says so without treating the separator as command output.
 - Immediate background-timeout results place partial output before a metadata footer beginning with `---`. That footer says the process remains outstanding until its completion event and includes a best-effort process view. Native POSIX/Windows runtimes use the bounded managed-shell tree. An injected target boundary may supply a truthful formatter when its managed host PID represents a launcher rather than the shell itself, without changing lifecycle or output semantics. Snapshot races, permissions, unsupported platforms, and inspection failures produce an unavailable line instead of failing the exec result. Canonical contract: [D-persistent-exec-background-timeout-footer-tree](#d-persistent-exec-background-timeout-footer-tree).
+
+- The optional `getAgentDir` callback supplies the real native Agent root independently of default cwd and retained exec artifacts. Agent launches ensure `tmp` before validating cwd and inject reserved env only into spawn; external/primitive runtimes omit the root and strip inherited reserved values. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch.md#d-dispatch-native-agent-paths-and-code-targets).
+- Child environment filtering removes only exact lowercase reserved names on POSIX (leaving `FW_TMP`/`FW_AGENTDIR` untouched), but removes case variants for Windows' case-insensitive environment. Parent `process.env` is never modified by this filtering.
 
 ## Integration
 

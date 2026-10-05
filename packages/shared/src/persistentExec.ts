@@ -1,8 +1,10 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { ExternalNodeOwner } from './nodeProtocol';
+import { nativeFileOperations } from './fileOperations';
 import path from 'path';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
+import { expandAgentPathVariable } from './agentPathVariables';
 import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
 import { estimateTokenCount } from './tokenCount';
 import {
@@ -77,6 +79,17 @@ export interface ExecStatus {
   error?: string;
 }
 
+export type ProgrammaticExecResult = {
+  output: string;
+  content?: string;
+  truncated: boolean;
+  status: 'completed' | 'running';
+  exitCode?: number | null;
+  execId: string;
+  logPath: string;
+  sizeBytes?: number;
+};
+
 export interface RunningExecEntry {
   id: string;
   pid: number;
@@ -135,6 +148,8 @@ export type ExecCompletionDispatcher = (entry: RunningExecEntry, status: ExecSta
 export interface PersistentExecManagerOptions {
   getDefaultCwd: (agentName: string) => string;
   getExecTempDir: (agentName: string) => string;
+  /** Actual Agent directory in this process's target namespace, if one exists. */
+  getAgentDir?: (agentName: string) => string;
   getExternalDefaultCwd?: (owner: ExternalNodeOwner) => string;
   getExternalExecTempDir?: (owner: ExternalNodeOwner) => string;
   registryPath?: string;
@@ -673,10 +688,13 @@ export class PersistentExecManager {
     const agentName = externalOwner ? undefined : (options.agentName || 'main');
     const nodeId = options.nodeId || this.options.nodeId || 'master';
     const sessionId = options.sessionId;
+    const agentDir = !externalOwner ? this.options.getAgentDir?.(agentName!) : undefined;
+    if (agentDir) await fs.ensureDir(path.join(agentDir, 'tmp'));
+    const expandCwd = (cwd: unknown): unknown => typeof cwd === 'string' ? expandAgentPathVariable(cwd.trim(), agentDir) : cwd;
     const defaultCwd = externalOwner ? this.options.getExternalDefaultCwd!(externalOwner) : this.getDefaultCwd(agentName!);
     const cwdResult = await resolveValidatedExecCwd({
-      cwd: options.cwd,
-      sessionCwd: options.sessionCwd,
+      cwd: expandCwd(options.cwd),
+      sessionCwd: expandCwd(options.sessionCwd),
       defaultCwd,
       nodeId,
     });
@@ -714,12 +732,19 @@ export class PersistentExecManager {
     let launched: { pid: number };
     try {
       options.onBeforeProcessLaunch?.();
+      // Reserved names belong to this launch, not to the host process or a prior Agent.
+      const hostEnv = { ...process.env };
+      for (const key of Object.keys(hostEnv)) {
+        const name = platform === 'win32' ? key.toLowerCase() : key;
+        if (name === 'fw_agentdir' || name === 'fw_tmp') delete hostEnv[key];
+      }
       launched = await processOperations.launch({
         command: launcher.command,
         args: launcher.args,
         cwd: initialCwd,
         env: {
-          ...process.env,
+          ...hostEnv,
+          ...(agentDir ? { fw_agentdir: agentDir, fw_tmp: path.join(agentDir, 'tmp') } : {}),
           TERM: 'xterm-256color',
           FOXWARM_EXEC_LOG_DIR: dateDir,
           FOXWARM_EXEC_TIME_TOKEN: timeToken,
@@ -982,6 +1007,23 @@ export class PersistentExecManager {
 
   async finalizeForegroundExec(execId: string): Promise<void> {
     await this.removeRunningExec(execId);
+  }
+
+  /** Read only the retained byte snapshot; display footers are never treated as capture data. */
+  async buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult> {
+    const metadata = {
+      output, status: status ? 'completed' as const : 'running' as const,
+      ...(status ? { exitCode: status.exitCode } : {}), execId: entry.id, logPath: entry.logPath,
+    };
+    try {
+      const stat = await nativeFileOperations.stat(entry.logPath);
+      if (stat.size > MAX_FULL_LOG_READ_BYTES) return { ...metadata, truncated: true, sizeBytes: stat.size };
+      const bytes = await nativeFileOperations.read(entry.logPath, 0, stat.size);
+      return { ...metadata, content: bytes.toString('utf8'), truncated: false, sizeBytes: bytes.length };
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+      return { ...metadata, truncated: true };
+    }
   }
 
   async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {

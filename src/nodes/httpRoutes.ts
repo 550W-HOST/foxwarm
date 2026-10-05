@@ -5,6 +5,7 @@ import path from 'path';
 import { logger } from '../common';
 import { BASE_DIR } from '../config';
 import { HttpServer } from '../httpServer';
+import { registerShellNodeHttpRoutes } from './shellHttp';
 
 const NODE_TEMPLATE_DIR = path.join(BASE_DIR, 'templates', 'node');
 const NODE_RUN_SH_PATH = path.join(NODE_TEMPLATE_DIR, 'run.sh');
@@ -90,7 +91,9 @@ function addTextRoute(httpServer: HttpServer, routePath: string, filePath: strin
   });
 }
 
-export function registerNodeHttpRoutes(httpServer: HttpServer): void {
+export function registerNodeHttpRoutes(httpServer: HttpServer): () => void {
+  const stopShellTransport = registerShellNodeHttpRoutes(httpServer);
+  addTextRoute(httpServer, '/node/run-shell.sh', path.join(NODE_TEMPLATE_DIR, 'run-shell.sh'), 'text/x-shellscript');
   addTextRoute(httpServer, '/node/run.sh', NODE_RUN_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-docker.sh', NODE_RUN_DOCKER_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-cli-node.sh', NODE_RUN_INTERACTIVE_SH_PATH, 'text/x-shellscript; charset=utf-8');
@@ -144,4 +147,5 @@ export function registerNodeHttpRoutes(httpServer: HttpServer): void {
       tar.stdout.pipe(res);
     },
   });
+  return stopShellTransport;
 }

@@ -2,7 +2,7 @@
 
 Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/InlineComposerEditor.tsx, packages/webui/src/composerDraft.ts, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/composerDraft.test.mjs, packages/webui/test/composerPastedText.e2e.mjs, packages/webui/test/modelFilter.test.mjs, packages/webui/test/modelSelectorTrigger.e2e.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
 Secondary files: packages/webui/src/attachmentRefs.ts, packages/webui/src/attachmentSend.ts, packages/webui/test/attachmentRefs.test.mjs, packages/webui/test/attachmentSend.test.mjs
-Integration files: packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
+Integration files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
 ## Purpose
 
@@ -53,8 +53,11 @@ A rich chat composer component for the web UI that handles ordered ordinary text
 
 ## Behavior
 
+- Chat passes the optional `compactModelSelector` layout band to the portaled picker: compact explicit-child pickers stack their current/child columns and prefer 360px, while wide ones prefer 720px. Viewport/anchor geometry still clamps fixed positioning; an open picker's anchor container ResizeObserver follows pane resizes. Standalone composer callers that omit the band retain viewport-responsive defaults. The child-model trigger's text follows the owning Chat container at 420px. Canonical boundary: [D-chat-container-layout](./webui-chat.md#d-chat-container-layout).
+
 - Maintains a versioned ordered draft of ordinary text, pasted-text blocks, and atomic attachment metadata segments, plus slash-command suggestions, audio recording, waveform visualization, and drag-over status.
 - Persists structured drafts to localStorage by exact Session ID, reads the former plain-string key as one ordinary text segment, and writes only the new versioned shape. Persistence/quota failures leave the live draft intact and show an actionable in-composer warning instead of silently losing it.
+- The editor wrapper adds no bottom margin before the composer controls. Inside a named Chat container shorter than 600px, the editor minimum height is 35px; at 600px and above, or outside a Chat container, it remains 60px. Multiline content continues to grow within the existing maximum height, with line height and padding unchanged.
 - The inline editor uses native text nodes for ordinary input and `contenteditable=false` pasted-text chips. Parent state updates do not rerender the live editing DOM; Session changes, accepted clears, slash completion, transcription append, undo/redo, and other external replacements use its imperative reset boundary.
 - Firefox/browser-generated empty `<br>` or empty block scaffolds are canonical empty drafts rather than authored newlines. Transitioning to that state clears the live DOM so the overlaid pointer-transparent placeholder returns, and persistence removes both structured and legacy Session keys. Real text-node newlines remain authored content and are preserved.
 - A canonical draft ending in an authored newline receives one editor-only trailing `<br>` so Firefox and Chromium paint the caret on the next visual line immediately. That scaffold has zero canonical width and is ignored by draft parsing, selection offsets, copy, storage, and send; a browser-added trailing `<br>` after an authored text-node newline is normalized away before the single presentation scaffold is rebuilt.
