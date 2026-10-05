@@ -76,6 +76,33 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
+test('MessageRouter reports a missing attached target without creating a replacement session', async () => {
+  await sessionManager.loadSessions();
+  const channelId = makeRouterQueueTestId('missing_target_channel');
+  const conversationId = makeRouterQueueTestId('missing_target_conversation');
+  const missingSessionId = makeRouterQueueTestId('missing_target_session');
+  sessionManager.attachChannel(channelId, conversationId, missingSessionId);
+  const replies: string[] = [];
+  const router = new MessageRouter([{ platform: channelId, userId: 'bot' }]);
+
+  try {
+    await router.handleMessage({
+      channelId,
+      channelType: 'telegram',
+      platform: 'telegram',
+      channelUserId: conversationId,
+      conversationId,
+      senderId: 'bot',
+      reply: async text => { replies.push(text); },
+      sendTyping: async () => {},
+    }, { parts: [{ text: 'hello' }], channelUserId: conversationId, conversationId });
+    assert.deepEqual(replies, [`Attached channel target session "${missingSessionId}" is unavailable. Rebind this conversation to an existing session.`]);
+    assert.equal(sessionManager.getAllSessions().has(missingSessionId), false);
+  } finally {
+    sessionManager.detachChannel(channelId, conversationId);
+  }
+});
+
 test('MessageRouter materializes deferred channel media only after canonical authorization', async () => {
   const originalEnqueue = sessionManager.enqueueSessionItem;
   const router = new MessageRouter() as any;

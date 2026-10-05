@@ -17,7 +17,6 @@ None — this file is the application entry point and does not export any symbol
 | `ensureToken()` | ~80–95 | Reads or generates the main authentication token file |
 | `ensureNodeToken()` | ~97–112 | Reads or generates the node pairing token file |
 | `start()` | ~114–430 | Main bootstrap function: migrates data, initializes channels, HTTP server, router, and all subsystems |
-| `handleOnboot(telegramChannelPromise)` | ~430–465 | Processes ONBOOT.md file to trigger auto-run messages on startup |
 
 ## Dependencies
 
@@ -61,7 +60,8 @@ None — this file is the application entry point and does not export any symbol
 - Starts each configured channel (Telegram, Matrix, WebUI, WeWork, Weixin) with retry logic via `startWithRetry`.
 - Resumes busy sessions after all channels are up.
 - Schedules periodic log rotation.
-- Processes `ONBOOT.md` to send a startup message/event after a 3-second delay.
+- Does not create or hydrate a `main` Session during process startup; existing live Sessions and pending work recover through their established owners.
+- Configured Telegram/Matrix default-main attachments retain the exact `main` target identity and log an actionable warning when that target is unavailable; startup still completes without recreating or retargeting it.
 - On `SIGINT`/`SIGTERM`, closes inbound MCP connections first, then closes the Main process's lazy ToolScript/Monty pool, terminally drains Node execution, closes Node providers while Session ingress remains available, and shuts down Session workers with bounded handback before draining outbound MCP, Main Management, SessionRuntime, and the vector owner.
 
 ## Integration

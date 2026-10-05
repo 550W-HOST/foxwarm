@@ -992,6 +992,9 @@ export class WebUIChannel implements Channel {
             const finalSessionId = sessionId || 'main'; // Default to main session
 
             if (!text) throw new Error('Missing text');
+            if (!sessionManager.getSessionCatalog(finalSessionId)) {
+              throw new Error(`Session "${finalSessionId}" is unavailable. Choose an existing session or create one first.`);
+            }
 
             logger.info({ trigger: true, text, sessionId: finalSessionId }, 'External trigger received');
 

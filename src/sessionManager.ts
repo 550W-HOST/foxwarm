@@ -1598,6 +1598,9 @@ export async function getOrCreateSessionForChannel(
   return withChannelSessionCreationLock(channelId, conversationId, async () => {
     const existingSessionId = getSessionByChannel(channelId, conversationId);
     if (existingSessionId) {
+      if (!getSessionCatalog(existingSessionId)) {
+        throw new Error(`Attached channel target session "${existingSessionId}" is unavailable. Rebind this conversation to an existing session.`);
+      }
       const session = options?.hydrateExisting === false
         ? getSessionCatalog(existingSessionId)
         : await getSession(existingSessionId);

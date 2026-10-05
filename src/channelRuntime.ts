@@ -33,6 +33,29 @@ const lastChannelErrors = new Map<string, string>();
 let runtimeMessageHandler: ((ctx: ChannelContext, message: ChannelMessage) => Promise<void>) | undefined;
 let runtimeCommandHandler: ((ctx: ChannelContext, command: string, args: string[]) => Promise<boolean>) | undefined;
 
+/**
+ * Preserve the configured default-main identity without creating or replacing
+ * a Session when that target is unavailable. A persisted/manual attachment
+ * remains authoritative for the conversation.
+ */
+export function attachConfiguredMainSession(channelId: string, conversationId: string): boolean {
+  const existingSessionId = sessionManager.getSessionByChannel(channelId, conversationId);
+  if (existingSessionId) {
+    if (!sessionManager.getSessionCatalog(existingSessionId)) {
+      logger.warn({ channelId, conversationId, sessionId: existingSessionId }, 'Configured channel target session is unavailable; keeping the existing binding');
+      return false;
+    }
+    return true;
+  }
+
+  const mainSessionAvailable = !!sessionManager.getSessionCatalog('main');
+  if (!mainSessionAvailable) {
+    logger.warn({ channelId, conversationId, sessionId: 'main' }, 'Configured default session is unavailable; retaining the channel binding until it is manually rebound');
+  }
+  sessionManager.attachChannel(channelId, conversationId, 'main');
+  return mainSessionAvailable;
+}
+
 function requireRuntimeMessageHandler(): (ctx: ChannelContext, message: ChannelMessage) => Promise<void> {
   if (!runtimeMessageHandler) {
     throw new Error('Channel runtime is not initialized with a message handler');
@@ -258,9 +281,9 @@ export async function startManagedChannel(channelId: string): Promise<{ started:
     const configEntry = getChannelConfigById(channelId, readAppConfigFile());
     const config = (configEntry?.config || {}) as any;
     if (factory.type === 'telegram' && config.mainAttachUser) {
-      sessionManager.attachChannel(channelId, config.mainAttachUser, 'main');
+      attachConfiguredMainSession(channelId, config.mainAttachUser);
     } else if (factory.type === 'matrix' && config.botUserId) {
-      sessionManager.attachChannel(channelId, config.botUserId, 'main');
+      attachConfiguredMainSession(channelId, config.botUserId);
     }
     lastChannelErrors.delete(channelId);
     logger.info({ channelId, type: factory.type }, 'Managed channel started');

@@ -1314,6 +1314,8 @@ async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inhe
     let combined = '';
 
     for (const file of mdFiles) {
+        // ONBOOT.md is a retired startup trigger. Keep legacy files out of
+        // model memory so deleting its producer does not change old installs.
         if (file.toLowerCase() === 'onboot.md') continue;
         const filePath = path.join(agentMemoryDir, file);
         const content = await readSessionFilteredMemoryFile(filePath, sessionId, modelId);

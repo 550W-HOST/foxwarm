@@ -53,7 +53,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 - Active managed sessions route input through the existing SessionRuntime enqueue path and receive the existing manager-facing acknowledgement.
 - Busy input is enqueued silently. Idle input is enqueued and then invokes the same local turn runner.
 - With an injected `SessionWorkerSubmitHandler` (Session-worker placement), ordinary busy and idle input both go through one durable mailbox submission; the local enqueue/runner path is not used, a failure never falls back locally, and a post-append ambiguous outcome remains durable retryable work. Managed-session input keeps the existing local enqueue/ack path. Local placement (no handler injected) is unchanged.
-- Guest provisioning and concurrent first-message resolution retain the existing keyed session/channel creation contract.
+- Guest provisioning and concurrent first-message resolution retain the existing keyed session/channel creation contract. A persisted attachment whose target no longer has a live catalog entry fails closed with an actionable channel reply instead of recreating that ID.
 - `MessageRouter` owns one `SessionTurnRunner(new LocalSessionTurnHost())`; public queue/retry methods are thin real-path delegates rather than a second state machine.
 
 ## Integration
