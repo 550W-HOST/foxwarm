@@ -311,12 +311,12 @@ Example:
                         description: "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Cannot be combined with waitAnySessions.",
                         uniqueItems: true,
                         minItems: 2,
-                        items: { type: 'string', pattern: '.*\\S.*', description: "Session ID." }
+                        items: { type: 'string', description: "Session ID." }
                     },
                     waitAnySessions: {
                         type: 'array', minItems: 1, uniqueItems: true,
                         description: "Session IDs from which you expect a response. Use this when a response from any one of them is enough to continue.",
-                        items: { type: 'string', pattern: '.*\\S.*', description: "Session ID." }
+                        items: { type: 'string', description: "Session ID." }
                     },
                     waitExecIds: {
                         type: 'array',
