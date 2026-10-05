@@ -1,6 +1,6 @@
 # Unit: src-channels-tui
 
-Files: src/channels/tuiChannel.ts
+Files: src/channels/tuiChannel.ts, src/channels/tuiChannel.test.ts
 
 ## Purpose
 
