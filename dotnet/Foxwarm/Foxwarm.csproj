@@ -17,6 +17,8 @@
     <Content Include="../../packages/vscode-web/foxwarm-webui/package.json" Link="packages/vscode-web/foxwarm-webui/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../packages/vscode-web/foxwarm-webui/dist/**/*" Link="packages/vscode-web/foxwarm-webui/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../packages/vscode-web/foxwarm-webui/media/**/*" Link="packages/vscode-web/foxwarm-webui/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-terminal/package.json" Link="packages/vscode-web/foxwarm-terminal/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-terminal/dist/**/*" Link="packages/vscode-web/foxwarm-terminal/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
     <PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="all" />
@@ -33,4 +35,10 @@
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <Content Include="Timers/THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="BuildFoxwarmPty" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'">
+    <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(TargetDir)libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />
+  </Target>
+  <Target Name="CleanFoxwarmPty" AfterTargets="Clean" Condition="'$(OS)' != 'Windows_NT'">
+    <Delete Files="$(TargetDir)libfoxwarm-pty.so" />
+  </Target>
 </Project>

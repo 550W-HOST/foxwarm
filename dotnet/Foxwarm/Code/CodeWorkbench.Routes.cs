@@ -43,7 +43,7 @@ internal sealed partial class CodeWorkbench
     { CodeFileService.Node(context.Request.Query["nodeId"].FirstOrDefault()); return CodeFileService.PathValue(context.Request.Query["workspace"].FirstOrDefault()); }
     internal void Register(WebApplication app)
     {
-        app.MapGet("/api/nodes", () => Results.Json(new { nodes = new[] { new { id = "master", type = "master", displayName = "master", online = true, services = new Dictionary<string, int> { ["vscode-fs"] = 1, ["vscode-git"] = 2 } } } }));
+        app.MapGet("/api/nodes", () => Results.Json(new { nodes = new[] { new { id = "master", type = "master", displayName = "master", online = true, services = hasPty ? new Dictionary<string, int> { ["vscode-fs"] = 1, ["vscode-git"] = 2, ["vscode-pty"] = 1 } : new Dictionary<string, int> { ["vscode-fs"] = 1, ["vscode-git"] = 2 } } } }));
         app.MapGet("/api/vscode-web/fs/workspace-roots", context => Guard(context, () => { context.Response.Headers.CacheControl = "no-store"; return Json(context, Roots()); }));
         app.MapGet("/api/vscode-web/fs/stat", context => Guard(context, () => Json(context, CodeFileService.StatFile(Target(context)))));
         app.MapGet("/api/vscode-web/fs/read-directory", context => Guard(context, () => Json(context, CodeFileService.ReadDirectory(Target(context)))));
@@ -71,7 +71,7 @@ internal sealed partial class CodeWorkbench
         }));
         app.MapGet("/vscode-web/callback", context => context.Response.WriteAsync("<!doctype html><meta charset=\"utf-8\"><title>Foxwarm Code callback</title><script>window.close();</script>"));
         app.MapGet("/vscode-web/static/{**path}", context => Guard(context, () => Static(context, assetRoot, context.Request.RouteValues["path"]?.ToString(), workbench: true)));
-        foreach (var name in new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui", "redhat-vscode-yaml" })
+        foreach (var name in (hasPty ? new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui", "foxwarm-terminal", "redhat-vscode-yaml" } : new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui", "redhat-vscode-yaml" }))
         {
             var root = name == "redhat-vscode-yaml" ? yamlRoot : Path.Combine(extensionRoot, name);
             app.MapGet("/vscode-web/extensions/" + name + "/{**path}", context => Guard(context, () => Static(context, root, context.Request.RouteValues["path"]?.ToString())));

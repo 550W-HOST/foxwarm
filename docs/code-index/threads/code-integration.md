@@ -37,6 +37,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 - Master file/Git operations execute locally; remote operations require matching advertised `vscode-fs`/`vscode-git` versions.
 - Optional `vscode-pty` owns remote PTY process state and emits fixed service events through the authenticated node connection.
+- The Main-local .NET host advertises `vscode-pty:1` only when its Linux system-libc PTY bridge is available; its cwd-based registry, REST/WebSocket stream, Code helper, and explicit-close/host-shutdown lifecycle follow the same browser contract without binding terminals to Chat Sessions.
 - Terminal browser WebSockets attach to backend PTYs. After authenticated attachment, the server sends a WebSocket protocol ping every 30 seconds as transport keepalive; browser clients answer protocol pong automatically. Page reload or transport close detaches; explicit user close deletes.
 - Terminal `code` helper uses a process-local random capability/socket and one Code-control terminal attachment; it has no browser/master credential.
 

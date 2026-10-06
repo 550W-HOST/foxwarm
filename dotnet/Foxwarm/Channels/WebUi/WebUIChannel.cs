@@ -7,7 +7,7 @@ using Foxwarm.Sessions;
 using Microsoft.AspNetCore.Http.Features;
 namespace Foxwarm.Channels.WebUi;
 
-internal sealed partial class WebUIChannel(SessionManager sessions, SessionRuntime runtime, MessageRouter router)
+internal sealed partial class WebUIChannel(SessionManager sessions, SessionRuntime runtime, MessageRouter router, Foxwarm.Terminal.TerminalRegistry terminals)
 {
     private readonly WebUiRealtime realtime = new(runtime);
     public void Register(WebApplication app)
@@ -73,6 +73,7 @@ internal sealed partial class WebUIChannel(SessionManager sessions, SessionRunti
             }
         }));
         new Foxwarm.Asr.AsrProxy(models.ConfigurationOwner, app.Lifetime.ApplicationStopping).Register(app);
+        RegisterTerminalRoutes(app);
         RegisterAgentRoutes(app);
         RegisterListRoutes(app);
         RegisterPresentationRoutes(app);

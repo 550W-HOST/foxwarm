@@ -260,6 +260,7 @@
       toUriComponents(extensionUrl('extensions/foxwarm-fs')),
       toUriComponents(extensionUrl('extensions/foxwarm-scm')),
       toUriComponents(extensionUrl('extensions/foxwarm-webui')),
+      ...(@@HASPTY@@ ? [toUriComponents(extensionUrl('extensions/foxwarm-terminal'))] : []),
       ...(@@HASYAML@@ ? [toUriComponents(extensionUrl('extensions/redhat-vscode-yaml'))] : []),
     ];
     create(document.body, {

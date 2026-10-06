@@ -22,11 +22,13 @@ internal sealed partial class CodeWorkbench
     private readonly string? configuredOrigin;
     private readonly string defaultFolder;
     private readonly string workspacePath;
+    private readonly bool hasPty;
     private readonly object workspaceGate = new();
     private readonly string capabilityRoute = "webview/" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
     private static readonly JsonObject PrivacyDefaults = new() { ["redhat.telemetry.enabled"] = false, ["yaml.schemaStore.enable"] = false, ["yaml.kubernetesCRDStore.enable"] = false, ["yaml.extension.recommendations"] = false };
-    internal CodeWorkbench(SessionManager sessions, PublicWebAddress address)
+    internal CodeWorkbench(SessionManager sessions, PublicWebAddress address, bool hasPty)
     {
+        this.hasPty = hasPty;
         publicAddress = address;
         dataRoot = sessions.DataRoot;
         var config = sessions.Models.ConfigurationOwner;
@@ -93,7 +95,7 @@ internal sealed partial class CodeWorkbench
         var folder = context.Request.Query[context.Request.Query["embedded"] == "true" ? "initialFolderUri" : "folderUri"].FirstOrDefault() ?? defaultFolder;
         if (!folder.StartsWith("foxwarm://", StringComparison.Ordinal)) throw new CodeServiceException("InvalidPath", "folderUri must use the foxwarm:// scheme.");
         var route = address.Prefix.ToUriComponent() + "/vscode-web"; var baseUrl = origin + route + "/static";
-        var extensions = new JsonArray(); foreach (var name in new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui" }) extensions.Add(UriParts(origin + route + "/extensions/" + name));
+        var extensions = new JsonArray(); foreach (var name in hasPty ? new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui", "foxwarm-terminal" } : new[] { "foxwarm-fs", "foxwarm-scm", "foxwarm-webui" }) extensions.Add(UriParts(origin + route + "/extensions/" + name));
         if (HasYaml) extensions.Add(UriParts(origin + route + "/extensions/redhat-vscode-yaml"));
         var configuration = new JsonObject { [context.Request.Query["embedded"] == "true" ? "workspaceUri" : "folderUri"] = UriParts(context.Request.Query["embedded"] == "true" ? Workspace(folder) : folder), ["callbackRoute"] = route + "/callback",
             ["productConfiguration"] = new JsonObject { ["enableTelemetry"] = false, ["webEndpointUrlTemplate"] = baseUrl, ["webviewContentExternalBaseUrlTemplate"] = origin + route + "/" + capabilityRoute + "/{{uuid}}/" }, ["additionalBuiltinExtensions"] = extensions,
@@ -102,7 +104,7 @@ internal sealed partial class CodeWorkbench
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("Foxwarm.Code.workbench.html")!; using var reader = new StreamReader(resource);
         return reader.ReadToEnd().Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonString()))
             .Replace("@@ASSETBASE@@", context.Request.Path.Value?.EndsWith('/') == true ? "./static" : route + "/static").Replace("@@BASEURL@@", JsonValue.Create(baseUrl)!.ToJsonString())
-            .Replace("@@WEBVIEWROUTE@@", JsonValue.Create(capabilityRoute)!.ToJsonString()).Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToJsonString()).Replace("@@HASYAML@@", HasYaml ? "true" : "false");
+            .Replace("@@WEBVIEWROUTE@@", JsonValue.Create(capabilityRoute)!.ToJsonString()).Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToJsonString()).Replace("@@HASYAML@@", HasYaml ? "true" : "false").Replace("@@HASPTY@@", hasPty ? "true" : "false");
     }
     private static string PatchWorkbench(string source)
     {

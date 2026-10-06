@@ -10,7 +10,7 @@ internal sealed class HttpServer
 {
     public WebApplication App { get; }
     internal bool WebUiEnabled { get; }
-    public HttpServer(string[] args, int port, string apiToken, string? distRoot, SessionManager sessions, PublicWebAddress? publicAddress = null, bool? webUiEnabled = null)
+    public HttpServer(string[] args, int port, string apiToken, string? distRoot, SessionManager sessions, Foxwarm.Terminal.TerminalRegistry terminals, PublicWebAddress? publicAddress = null, bool? webUiEnabled = null)
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
         WebUiEnabled = webUiEnabled ?? HttpServerSettings.Enabled(sessions.Models.ConfigurationOwner);
@@ -22,8 +22,9 @@ internal sealed class HttpServer
         builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new Foxwarm.Images.ImageTransportConverterFactory()));
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = 51L * 1024 * 1024);
         var app = builder.Build();
-        var code = WebUiEnabled ? new Foxwarm.Code.CodeWorkbench(sessions, address) : null;
+        var code = WebUiEnabled ? new Foxwarm.Code.CodeWorkbench(sessions, address, Foxwarm.Terminal.TerminalRegistry.IsSupported) : null;
         app.Lifetime.ApplicationStopping.Register(sessions.BeginShutdown);
+        app.Lifetime.ApplicationStopping.Register(() => _ = terminals.ShutdownAsync());
         app.Use(async (context, next) =>
         {
             var path = context.Request.Path; var pathBase = context.Request.PathBase;

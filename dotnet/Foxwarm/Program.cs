@@ -3,6 +3,8 @@ using Foxwarm.Channels.WebUi;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
+if (await Foxwarm.Terminal.CodeHelperClient.TryRunAsync(args)) return;
+
 static string Required(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
     ? value : throw new InvalidOperationException($"Missing experiment host environment variable {name}.");
 
@@ -22,10 +24,11 @@ var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1/v1"), "", "
 var models = configuration.Models;
 await using var sessions = new SessionManager(dataRoot, workspaceRoot, options, models, Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"));
 await sessions.LoadMainHostAsync();
+await using var terminals = new Foxwarm.Terminal.TerminalRegistry(dataRoot, CancellationToken.None);
 var runtime = new SessionRuntime(sessions);
 var router = new MessageRouter(runtime);
-var server = new HttpServer(args, http.Port, http.Token, distRoot, sessions, http.Address, http.WebUiEnabled);
-var webui = new WebUIChannel(sessions, runtime, router);
+var server = new HttpServer(args, http.Port, http.Token, distRoot, sessions, terminals, http.Address, http.WebUiEnabled);
+var webui = new WebUIChannel(sessions, runtime, router, terminals);
 if (server.WebUiEnabled) webui.Register(server.App);
 server.App.Lifetime.ApplicationStarted.Register(() =>
 {
