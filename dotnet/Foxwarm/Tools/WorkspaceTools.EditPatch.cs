@@ -99,7 +99,8 @@ public sealed partial class WorkspaceTools
                     }
                     else if (operation.Action == "delete")
                     {
-                        _ = await ReadPatchFileAsync(path, ct);
+                        if (!RegularFile(path))
+                            throw new InvalidDataException($"Regular file not found: {path}");
                         File.Delete(path);
                     }
                     else
@@ -212,15 +213,11 @@ public sealed partial class WorkspaceTools
             8192,
             FileOptions.Asynchronous
         );
-        if (stream.Length > MaxBytes)
-            throw new InvalidDataException("File exceeds 1 MiB.");
         using var buffer = new MemoryStream();
         var bytes = new byte[8192];
         int n;
         while ((n = await stream.ReadAsync(bytes, ct)) > 0)
         {
-            if (buffer.Length + n > MaxBytes)
-                throw new InvalidDataException("File exceeds 1 MiB.");
             buffer.Write(bytes, 0, n);
         }
         return StrictUtf8.GetString(buffer.ToArray());
@@ -235,8 +232,6 @@ public sealed partial class WorkspaceTools
     {
         path = AuthorizationPaths.CanonicalPotential(path);
         var bytes = StrictUtf8.GetBytes(content);
-        if (bytes.Length > MaxBytes)
-            throw new InvalidDataException("Resulting file exceeds 1 MiB.");
         var temp = Path.Combine(Path.GetDirectoryName(path)!, $".foxwarm-edit-{Guid.NewGuid():N}");
         try
         {

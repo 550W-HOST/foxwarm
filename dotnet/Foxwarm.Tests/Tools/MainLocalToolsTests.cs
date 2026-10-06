@@ -41,6 +41,8 @@ public sealed class MainLocalToolsTests
             f.Owner = await f.Manager.CreateNamedAsync("main", "tools", null, null);
             f.mcp = new(Path.Combine(f.Temp.Path, "data"));
             var defs = MainLocalToolDefinitions.Definitions();
+            foreach (var definition in WorkspaceTools.Definitions().OfType<JsonObject>())
+                defs.Add(definition.DeepClone());
             foreach (var definition in FileDeliveryDefinitions.Definitions().OfType<JsonObject>())
                 defs.Add(definition.DeepClone());
             foreach (var definition in ArchiveControlTools.Definitions().OfType<JsonObject>())
@@ -672,6 +674,58 @@ public sealed class MainLocalToolsTests
         );
         Assert.Equal(1, decoded.Width);
         Assert.Equal(SKColors.Blue, decoded.GetPixel(0, 0));
+    }
+
+    [Fact]
+    public async Task Large_text_edits_and_binary_patch_delete_use_normal_file_dispatch()
+    {
+        await using var f = await Fixture.Create();
+        var workspace = f.Manager.IdentityWorkspace(f.Owner)!.ToolDirectory;
+        var largeText = new string('a', 1_048_600) + "\nneedle\n";
+        await File.WriteAllTextAsync(Path.Combine(workspace, "large.txt"), largeText);
+
+        var edit = await f.Call(
+            "edit",
+            new JsonObject
+            {
+                ["filePath"] = "large.txt",
+                ["oldText"] = "needle",
+                ["newText"] = "edited",
+            }
+        );
+        Assert.Null(Error(edit));
+        Assert.Contains(
+            "edited",
+            await File.ReadAllTextAsync(Path.Combine(workspace, "large.txt"))
+        );
+
+        var patchText = new string('b', 1_048_600);
+        var patch = await f.Call(
+            "apply_patch",
+            new JsonObject
+            {
+                ["input"] =
+                    "*** Begin Patch\n*** Add File: large-patch.txt\n+"
+                    + patchText
+                    + "\n*** End Patch",
+            }
+        );
+        Assert.Null(Error(patch));
+        Assert.True(new FileInfo(Path.Combine(workspace, "large-patch.txt")).Length > 1_048_576);
+
+        await File.WriteAllBytesAsync(
+            Path.Combine(workspace, "binary.bin"),
+            [0x00, 0xFF, 0x10, 0x80]
+        );
+        var delete = await f.Call(
+            "apply_patch",
+            new JsonObject
+            {
+                ["input"] = "*** Begin Patch\n*** Delete File: binary.bin\n*** End Patch",
+            }
+        );
+        Assert.Null(Error(delete));
+        Assert.False(File.Exists(Path.Combine(workspace, "binary.bin")));
     }
 
     [Fact]
