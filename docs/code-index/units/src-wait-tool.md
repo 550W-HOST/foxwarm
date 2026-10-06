@@ -38,6 +38,7 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 
 ## Behavior
 
+- Session-array item schemas retain string types, cardinality, and uniqueness without regex patterns. Runtime normalization still trims Session IDs, rejects empty or whitespace-only entries, deduplicates targets, and enforces cardinality and target access.
 - Validates required declared-source semantics, all/any mutual exclusion, existence/self/access resolution, exact local/Worker exec ownership, Main-verified remote background liveness, queued completion identity, the fallback rename, and rejection of old `timeoutSeconds`.
 - Verifies that wait timeouts queue a system event and clear wait metadata
 - Confirms the compact-commit queue item is wait-neutral (does not cancel the wait); compact planning itself is no longer queued
