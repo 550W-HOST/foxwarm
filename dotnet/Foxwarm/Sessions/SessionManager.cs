@@ -33,6 +33,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly ConcurrentDictionary<string, SessionOwner> sessions = new();
     private volatile bool accepting = true;
     private readonly object lifecycle = new();
+    internal string MemoryDirectory(string agent) => agents.MemoryDirectory(agent);
 
     internal bool HandoffConfirmationEnabled { get; }
     public SessionManager(string root, string workspace, ResponsesClientOptions options, HostModels models, string? skillsRoot = null)
@@ -85,6 +86,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         definitions.Add(ArchiveRecallTool.Definition());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
         foreach (var definition in FileDeliveryDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
+        foreach (var definition in MainLocalToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         foreach (var definition in AgentToolDefinitions.Definitions()) definitions.Add(HandoffConfirmation.Definition(definition.AsObject(), HandoffConfirmationEnabled));
         foreach (var definition in TimerToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         foreach (var definition in ToolScriptToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());

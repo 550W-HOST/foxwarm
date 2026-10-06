@@ -186,6 +186,9 @@ internal sealed partial class SessionToolExecutor(ITurnToolExecutor workspace, S
         foreach (var name in new[] { "create_timer", "list_timers", "update_timer", "delete_timer" }) handlers[name] = (owner, args, token) => owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["send_file"] = (owner, args, token) => owner.Manager.SendFileAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file resolver."), args, token);
         handlers["image_write_to_file"] = (owner, args, token) => owner.Manager.ExportImageAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file resolver."), args, token);
+        handlers["image_crop"] = (owner, args, token) => owner.Manager.CropImageAsync(owner.Hosted, args, token);
+        foreach (var name in new[] { "read_memory", "write_memory", "edit_memory", "delete_memory", "apply_patch_memory" }) handlers[name] = (owner, args, token) => MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
+        handlers["list_agents"] = (owner, _, _) => Task.FromResult(new JsonObject { ["output"] = owner.Manager.ListAgentsText() });
         handlers["set_tool_rules"] = (owner, args, token) => owner.Manager.InstallToolRulesAsync(owner.Hosted, owner.Files ?? throw new NotSupportedException("This executor has no file reader."), args, token);
         handlers["search_tools"] = (owner, args, token) => UnifiedTools.SearchAsync(registry, args, token, (source, name, server) => owner.Manager.ToolVisible(owner.Hosted, source, name, server), owner.ScriptBudget);
         handlers["call_tool"] = (_, _, _) => throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");

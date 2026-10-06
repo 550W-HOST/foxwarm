@@ -51,7 +51,9 @@ internal sealed partial class SessionManager
         if (!IsCurrentOwner(owner)) throw new InvalidOperationException("Tool source is no longer the current Session owner.");
         var paths = resolved.Source == "node" && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin" && resolved.Name is "set_tool_rules" or "send_file" or "image_write_to_file" or "run_script" or "start_toolscript_run"
-            ? (files ?? throw new NotSupportedException("This executor has no physical path resolver.")).AuthorizationFacts(resolved.Name, resolved.Args) : [];
+            ? (files ?? throw new NotSupportedException("This executor has no physical path resolver.")).AuthorizationFacts(resolved.Name, resolved.Args)
+            : resolved.Source == "builtin" && resolved.Name is "read_memory" or "write_memory" or "edit_memory" or "delete_memory" or "apply_patch_memory"
+            ? MemoryTools.AuthorizationFacts(this, owner, resolved.Name, resolved.Args) : [];
         var request = AuthorizationRequest(owner, resolved.Source, resolved.Name, resolved.Server, resolved.Args, paths);
         var policy = await authorization.LoadAsync(token);
         if (concreteTarget is not null)

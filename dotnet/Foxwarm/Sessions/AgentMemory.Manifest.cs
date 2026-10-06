@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 namespace Foxwarm.Sessions;
 
 internal sealed record AgentMemoryFile(string Path, string AbsolutePath, long Size, double ModifiedAt);
@@ -32,6 +33,18 @@ internal sealed partial class AgentMemory
 
 internal sealed partial class SessionManager
 {
+    internal string ListAgentsText()
+    {
+        var rows = AgentRegistry(); if (rows.Length == 0) return "No agents found.";
+        var result = $"Found {rows.Length} agent(s):\n\n";
+        foreach (var row in rows)
+        {
+            var type = row.GetType(); var name = type.GetProperty("id")?.GetValue(row)?.ToString() ?? "";
+            var count = Convert.ToInt32(type.GetProperty("sessionCount")?.GetValue(row) ?? 0); var inherit = type.GetProperty("inherit")?.GetValue(row)?.ToString(); var isolated = Convert.ToBoolean(type.GetProperty("isolated")?.GetValue(row) ?? false); var node = type.GetProperty("isolatedNode")?.GetValue(row)?.ToString(); var memoryFiles = Convert.ToInt32(type.GetProperty("memoryFileCount")?.GetValue(row) ?? 0); var rules = Convert.ToInt32(type.GetProperty("toolRuleCount")?.GetValue(row) ?? 0);
+            result += $"- **{name}**" + (count > 0 ? $" ({count} session{(count == 1 ? "" : "s")})" : "") + (inherit is null ? "" : $" [inherits: {inherit}]") + (isolated ? $" [isolated{(node is null ? "" : ":" + node)}]" : "") + $" [memory files:{memoryFiles}] [tool rules:{rules}]\n";
+        }
+        return result.TrimEnd();
+    }
     internal AgentMemoryManifest AgentManifest(string name) => memory.Manifest(name);
     internal object[] AgentRegistry()
     {
@@ -58,7 +71,8 @@ internal sealed partial class SessionManager
                 queuedSessionCount = owned.Queued,
                 memoryRoot = manifest.MemoryRoot,
                 memoryFileCount = manifest.Files.Count,
-                memoryLastModified = manifest.Files.Count == 0 ? (double?)null : manifest.Files.Max(file => file.ModifiedAt)
+                memoryLastModified = manifest.Files.Count == 0 ? (double?)null : manifest.Files.Max(file => file.ModifiedAt),
+                toolRuleCount = IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[name]).Rules.Count
             };
         }).ToArray();
     }
