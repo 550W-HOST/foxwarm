@@ -489,36 +489,8 @@ public sealed class LlmRequestJournalStore : IDisposable
                             ["createdAt"] = reader.GetInt64(3),
                         },
                         "llm_journal_requests" => RequestJson(reader),
-                        "llm_journal_attempt_starts" => new()
-                        {
-                            ["v"] = 1,
-                            ["kind"] = "attempt-start",
-                            ["eventId"] = reader.GetString(0),
-                            ["requestId"] = reader.GetString(1),
-                            ["attempt"] = reader.GetInt32(2),
-                            ["startedAt"] = reader.GetInt64(3),
-                            ["concreteModelId"] = reader.GetString(4),
-                            ["virtualModelKey"] = reader.IsDBNull(5) ? null : reader.GetString(5),
-                            ["providerType"] = reader.GetString(6),
-                            ["semanticPayloadSha256"] = reader.GetString(7),
-                            ["promptObjectId"] = reader.IsDBNull(8) ? null : reader.GetString(8),
-                        },
-                        _ => new()
-                        {
-                            ["v"] = 1,
-                            ["kind"] = "attempt-result",
-                            ["eventId"] = reader.GetString(0),
-                            ["requestId"] = reader.GetString(1),
-                            ["attempt"] = reader.GetInt32(2),
-                            ["completedAt"] = reader.GetInt64(3),
-                            ["outcome"] = reader.GetString(4),
-                            ["result"] = reader.IsDBNull(5)
-                                ? null
-                                : Codec.Parse(reader.GetString(5)),
-                            ["error"] = reader.IsDBNull(6)
-                                ? null
-                                : Codec.Parse(reader.GetString(6)),
-                        },
+                        "llm_journal_attempt_starts" => AttemptStartJson(reader),
+                        _ => AttemptResultJson(reader),
                     };
                     await writer.WriteLineAsync(Codec.Write(record));
                 }
@@ -1002,13 +974,13 @@ public sealed class LlmRequestJournalStore : IDisposable
         return payload;
     }
 
-    private static JsonObject RequestJson(SqliteDataReader reader) =>
-        new()
+    private static JsonObject RequestJson(SqliteDataReader reader)
+    {
+        var result = new JsonObject
         {
             ["v"] = 1,
             ["kind"] = "request",
             ["requestId"] = reader.GetString(0),
-            ["sessionId"] = reader.IsDBNull(1) ? null : reader.GetString(1),
             ["purpose"] = reader.GetString(2),
             ["iteration"] = reader.GetInt32(3),
             ["createdAt"] = reader.GetInt64(4),
@@ -1017,16 +989,60 @@ public sealed class LlmRequestJournalStore : IDisposable
             ["requestedModelKey"] = reader.GetString(7),
             ["promptCacheKeyHash"] = reader.GetString(8),
             ["messageCount"] = reader.GetInt32(9),
-            ["checkpointMessageObjectIds"] = reader.IsDBNull(10)
-                ? null
-                : Codec.Parse(reader.GetString(10)),
-            ["baseRequestId"] = reader.IsDBNull(11) ? null : reader.GetString(11),
-            ["commonPrefixLength"] = reader.IsDBNull(12) ? null : reader.GetInt32(12),
-            ["appendedMessageObjectIds"] = reader.IsDBNull(13)
-                ? null
-                : Codec.Parse(reader.GetString(13)),
             ["deltaDepth"] = reader.GetInt32(14),
         };
+        if (!reader.IsDBNull(1))
+            result["sessionId"] = reader.GetString(1);
+        if (!reader.IsDBNull(10))
+            result["checkpointMessageObjectIds"] = Codec.Parse(reader.GetString(10));
+        if (!reader.IsDBNull(11))
+            result["baseRequestId"] = reader.GetString(11);
+        if (!reader.IsDBNull(12))
+            result["commonPrefixLength"] = reader.GetInt32(12);
+        if (!reader.IsDBNull(13))
+            result["appendedMessageObjectIds"] = Codec.Parse(reader.GetString(13));
+        return result;
+    }
+
+    private static JsonObject AttemptStartJson(SqliteDataReader reader)
+    {
+        var result = new JsonObject
+        {
+            ["v"] = 1,
+            ["kind"] = "attempt-start",
+            ["eventId"] = reader.GetString(0),
+            ["requestId"] = reader.GetString(1),
+            ["attempt"] = reader.GetInt32(2),
+            ["startedAt"] = reader.GetInt64(3),
+            ["concreteModelId"] = reader.GetString(4),
+            ["providerType"] = reader.GetString(6),
+            ["semanticPayloadSha256"] = reader.GetString(7),
+        };
+        if (!reader.IsDBNull(5))
+            result["virtualModelKey"] = reader.GetString(5);
+        if (!reader.IsDBNull(8))
+            result["promptObjectId"] = reader.GetString(8);
+        return result;
+    }
+
+    private static JsonObject AttemptResultJson(SqliteDataReader reader)
+    {
+        var result = new JsonObject
+        {
+            ["v"] = 1,
+            ["kind"] = "attempt-result",
+            ["eventId"] = reader.GetString(0),
+            ["requestId"] = reader.GetString(1),
+            ["attempt"] = reader.GetInt32(2),
+            ["completedAt"] = reader.GetInt64(3),
+            ["outcome"] = reader.GetString(4),
+        };
+        if (!reader.IsDBNull(5))
+            result["result"] = Codec.Parse(reader.GetString(5));
+        if (!reader.IsDBNull(6))
+            result["error"] = Codec.Parse(reader.GetString(6));
+        return result;
+    }
 
     private static JsonObject CanonicalMessage(JsonObject source)
     {
