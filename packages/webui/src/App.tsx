@@ -1585,7 +1585,7 @@ function App() {
       }
     }
 
-    const content = activeTab
+    const renderContent = () => activeTab
       ? renderTabContent(activeTab, onBack)
       : (
         <div className="flex h-full items-center justify-center bg-fw-surface-sunken text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge dark:text-fw-text-muted">
@@ -1607,7 +1607,8 @@ function App() {
         showPaneControls={!isMobile}
         hideTabStrip={paneTabs.length === 1 && paneTabs[0].type !== 'vscode'}
         canClosePane={paneIds.length > 1}
-        content={content}
+        canCloseActiveTab={!!activeTab && !(activeTab.type === 'setup' && setupOobe)}
+        renderContent={renderContent}
         onFocusPane={handleFocus}
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}

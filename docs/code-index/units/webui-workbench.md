@@ -1,6 +1,6 @@
 # Unit: webui-workbench
 
-Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/components/WorkbenchTabHeader.tsx, packages/webui/src/components/useWorkbenchTabMenu.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs
+Files: packages/webui/src/components/WorkbenchLayout.tsx, packages/webui/src/components/WorkbenchPane.tsx, packages/webui/src/components/WorkbenchTabs.tsx, packages/webui/src/components/WorkbenchTabHeader.tsx, packages/webui/src/components/WorkbenchTabErrorBoundary.tsx, packages/webui/src/components/useWorkbenchTabMenu.tsx, packages/webui/src/workbench/store.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/systemTabs.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/workbenchTabErrorBoundary.e2e.mjs
 
 ## Purpose
 
@@ -9,7 +9,8 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 ## Key Exports
 
 - `WorkbenchLayout` — recursive component rendering split/pane layout tree with resizable panels
-- `WorkbenchPane` — single pane component with tab bar, drop zones, and toolbar controls
+- `WorkbenchPane` — single pane component with tab bar, drop zones, toolbar controls, and tab-content error isolation
+- `WorkbenchTabErrorBoundary` — leaf boundary that contains one tab's render failure and offers explicit Retry/Close actions
 - `WorkbenchTabs` — single-row sortable tab strip with the shared tab menu
 - `WorkbenchTabHeaderProvider`, `WorkbenchTabClose`, `WorkbenchTabIcon` — pane-owned sole-tab controls and drag handle for content headers
 - `useWorkbenchTabMenu` — existing Keep/copy/popout/close actions shared by strips and header icons
@@ -26,7 +27,8 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 | `WorkbenchLayout({ node, renderPane, onLayoutResize })` | ~21–42 | Recursively renders layout tree as resizable panel groups |
 | `PaneDropZone({ id, className, activeClassName, data })` | ~34–38 | Droppable zone overlay for drag-and-drop targeting |
 | `ToolbarButton({ title, disabled, onClick, children })` | ~40–50 | Styled icon button for pane toolbar actions |
-| `WorkbenchPane(props)` | ~55–130 | Full pane component with tabs, content, drop zones, and toolbar |
+| `WorkbenchPane(props)` | ~55–145 | Full pane component with tabs, content boundary, drop zones, and toolbar |
+| `WorkbenchTabErrorBoundary` | WorkbenchTabErrorBoundary.tsx | Contains one tab render failure, logs diagnostics, and exposes explicit Retry/Close controls |
 | `TabIcon({ type })` | ~38–42 | Returns icon component based on tab type |
 | `isHorizontallyFullyVisible(element, container)` | ~44–49 | Checks if element is fully visible within container bounds |
 | `getNormalizedWheelDelta(event, container)` | ~51–60 | Normalizes wheel event delta across delta modes |
@@ -83,6 +85,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - The tab Close button stops its pointer-down event before the sortable tab drag listener; pointer motion within that small control cannot start a tab drag instead of closing it. The rest of the tab remains draggable.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
 - A pane with exactly one tab hides its split and close-pane toolbar buttons. Sole non-Code tabs omit the strip in every pane, with content and pane drop zones still mounted. Code retains its single-tab strip; multi-tab strips and empty-pane controls are unchanged. Header behavior is owned by [Single-tab headers](#single-tab-headers).
+- Each pane renders the active tab through a tab-keyed error boundary inside the content area. A thrown tab render leaves the tab strip, Sidebar, and other panes mounted; the fallback offers explicit Retry and ordinary tab Close actions when the active tab is closable. Forced Setup and empty-pane states do not show an ineffective Close control. Switching tab identity remounts the boundary, and Retry never loops automatically.
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.
 - Context menus also expose `Move to new window` for every tab type. A terminal draft keeps the item disabled until it has a backend terminal ID. App owns popup/confirmation/route behavior and removes the tab through the ordinary layout-only store action without invoking its separate resource-close lifecycle.
 - Bulk close operations still run each tab's ordinary resource and component close lifecycle. `Close others` preserves its target tab, while `Close all` may leave the pane empty and a forced Setup tab remains protected. Route fencing and final publication are canonical in [D-webui-app-route-close](./webui-app.md#d-webui-app-route-close).

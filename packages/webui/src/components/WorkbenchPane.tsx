@@ -3,6 +3,7 @@ import { useDndContext, useDroppable } from '@dnd-kit/core'
 import { Columns2, Rows2, X } from 'lucide-react'
 import WorkbenchTabs from './WorkbenchTabs'
 import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
+import WorkbenchTabErrorBoundary from './WorkbenchTabErrorBoundary'
 import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
 
@@ -16,7 +17,8 @@ interface WorkbenchPaneProps {
   showPaneControls?: boolean
   hideTabStrip?: boolean
   canClosePane: boolean
-  content: ReactNode
+  canCloseActiveTab?: boolean
+  renderContent: () => ReactNode
   onFocusPane: (paneId: string) => void
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
@@ -51,6 +53,10 @@ function ToolbarButton({ title, disabled, onClick, children }: { title: string; 
   )
 }
 
+function RenderedPaneContent({ renderContent }: { renderContent: () => ReactNode }) {
+  return <>{renderContent()}</>
+}
+
 export default function WorkbenchPane({
   paneId,
   tabs,
@@ -61,7 +67,8 @@ export default function WorkbenchPane({
   showPaneControls = true,
   hideTabStrip = false,
   canClosePane,
-  content,
+  canCloseActiveTab = true,
+  renderContent,
   onFocusPane,
   onSelectTab,
   onCloseTab,
@@ -122,7 +129,19 @@ export default function WorkbenchPane({
       )}
 
       <div className="min-h-0 flex-1 overflow-hidden bg-fw-canvas">
-        <WorkbenchTabHeaderProvider value={header}>{content}</WorkbenchTabHeaderProvider>
+        <WorkbenchTabHeaderProvider value={header}>
+          <WorkbenchTabErrorBoundary
+            key={`${paneId}:${activeTabId || 'empty'}`}
+            tabId={activeTabId || 'empty'}
+            tabTitle={tabs.find((tab) => tab.id === activeTabId)?.title || 'tab'}
+            canClose={!!activeTabId && canCloseActiveTab}
+            onClose={() => {
+              if (activeTabId) onCloseTab(activeTabId)
+            }}
+          >
+            <RenderedPaneContent renderContent={renderContent} />
+          </WorkbenchTabErrorBoundary>
+        </WorkbenchTabHeaderProvider>
       </div>
       {menu}
 
