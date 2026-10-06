@@ -24,6 +24,7 @@ public sealed record ResponsesClientOptions(
 )
 {
     internal string? ProviderPromptCacheKey { get; init; }
+    internal Func<JsonNode, Task>? JournalAttemptStart { get; init; }
     public Uri ResponsesUri =>
         new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
 }
@@ -843,6 +844,8 @@ public sealed class ResponsesChatService : IChatService
     )
     {
         var body = ResponsesRequestPlan.Build(history, options);
+        if (options.JournalAttemptStart is not null)
+            await options.JournalAttemptStart(body).ConfigureAwait(false);
         var completed = await OpenAIHttp
             .RequestAsync(
                 httpClient,

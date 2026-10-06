@@ -100,7 +100,10 @@ internal sealed class SessionChatService(
                                 .History.Select(message => (JsonObject)message.DeepClone())
                                 .ToArray()
                         );
-                    }
+                    },
+                "normal-turn",
+                0,
+                id => hosted.BeginDraft(id)
             );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -90,7 +90,12 @@ public sealed class ToolLoopLimitException(int limit)
         $"Experimental Session turn exceeded the {limit} iteration tool-loop limit."
     );
 
-public sealed record ChatResult(JsonObject? AssistantMessage, JsonObject? Usage = null)
+public sealed record ChatResult(
+    JsonObject? AssistantMessage,
+    JsonObject? Usage = null,
+    string? JournalRequestId = null,
+    int? JournalAttempt = null
+)
 {
     internal HistoryAppendFinalizer? HistoryAppend { get; init; }
 

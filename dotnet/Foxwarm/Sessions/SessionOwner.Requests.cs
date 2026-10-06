@@ -287,16 +287,12 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
         CancellationToken cancellationToken
     )
     {
-        var requestId = hosted.BeginDraft();
+        string? requestId = null;
         async Task<bool> Prepare(CancellationToken token)
         {
             hosted.ClearDraft();
             var changed = await prepareRetry!(token);
             token.ThrowIfCancellationRequested();
-            if (changed)
-                requestId = hosted.BeginDraft();
-            else
-                hosted.BeginDraft(requestId);
             return changed;
         }
         try
@@ -305,6 +301,7 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
                 inner is ISessionChatService ordinary && prepareRetry is not null
                     ? await ordinary.ChatAsync(sessionId, history, Prepare, cancellationToken)
                     : await inner.ChatAsync(sessionId, history, cancellationToken);
+            requestId = result.JournalRequestId ?? requestId;
             if (result.AssistantMessage is null)
                 hosted.ClearDraft();
             else
@@ -312,7 +309,10 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
                 var metadata = result.AssistantMessage["__meta"] as JsonObject;
                 if (metadata is null)
                     result.AssistantMessage["__meta"] = metadata = new JsonObject();
-                metadata["llmRequestId"] = requestId;
+                if (requestId is not null)
+                    metadata["llmRequestId"] = requestId;
+                if (result.JournalAttempt is not null)
+                    metadata["llmAttempt"] = result.JournalAttempt.Value;
             }
             return result;
         }

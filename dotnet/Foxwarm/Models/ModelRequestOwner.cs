@@ -11,7 +11,8 @@ internal sealed class ModelRequestOwner(
     Func<int, CancellationToken, Task>? delay = null,
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
-    string imageOutputFormat = "webp"
+    string imageOutputFormat = "webp",
+    LlmRequestJournalStore? journal = null
 )
 {
     internal static int RetryDelay(int failedAttempt) =>
@@ -61,7 +62,10 @@ internal sealed class ModelRequestOwner(
         CancellationToken cancellationToken,
         ModelRequestScope scope = ModelRequestScope.LowLevel,
         Func<JsonArray>? definitions = null,
-        Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null
+        Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
+        string journalPurpose = "low-level",
+        int journalIteration = 0,
+        Action<string>? journalRequestStarted = null
     ) =>
         RequestAsync(
             sessionId,
@@ -77,7 +81,10 @@ internal sealed class ModelRequestOwner(
             cancellationToken,
             scope,
             definitions,
-            prepareRetry
+            prepareRetry,
+            journalPurpose,
+            journalIteration,
+            journalRequestStarted
         );
 
     internal async Task<ChatResult> RequestAsync(
@@ -94,7 +101,10 @@ internal sealed class ModelRequestOwner(
         CancellationToken cancellationToken,
         ModelRequestScope scope = ModelRequestScope.LowLevel,
         Func<JsonArray>? definitions = null,
-        Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null
+        Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
+        string journalPurpose = "low-level",
+        int journalIteration = 0,
+        Action<string>? journalRequestStarted = null
     )
     {
         var catalog = captured.Catalog;
@@ -103,6 +113,8 @@ internal sealed class ModelRequestOwner(
         var rawEffort = captured.RawEffort;
         const int maxAttempts = 6;
         long? requestStarted = null;
+        string? journalRequestId = null;
+        var journalAttempt = 0;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -142,6 +154,42 @@ internal sealed class ModelRequestOwner(
                 providerCache,
                 turnId
             );
+            if (journal is not null && journalRequestId is null)
+            {
+                journalRequestId = await journal.BeginRequestAsync(
+                    sessionId,
+                    journalPurpose,
+                    journalIteration,
+                    instructions,
+                    requestDefaults.Tools ?? new JsonArray(),
+                    history,
+                    captured.RouteKey,
+                    cacheKey,
+                    cancellationToken
+                );
+                journalAttempt = 0;
+            }
+            var currentJournalRequestId = journalRequestId;
+            var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
+            if (journal is not null && currentJournalRequestId is not null)
+            {
+                journalRequestStarted?.Invoke(currentJournalRequestId);
+                options = options with
+                {
+                    JournalAttemptStart = payload =>
+                        JournalAttemptStartAsync(
+                            journal,
+                            currentJournalRequestId,
+                            currentJournalAttempt,
+                            leaf.Key,
+                            request is null ? null : route.Key,
+                            leaf.ProviderType,
+                            payload,
+                            instructions,
+                            cancellationToken
+                        ),
+                };
+            }
             var prepared = ConcreteRequestHistory.PrepareRequest(history, leaf.Key);
             if (images is not null)
             {
@@ -180,6 +228,31 @@ internal sealed class ModelRequestOwner(
                 requestStarted ??= Stopwatch.GetTimestamp();
                 result = await service.ChatAsync(sessionId, prepared, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
+                if (journal is not null && currentJournalRequestId is not null)
+                {
+                    try
+                    {
+                        await journal
+                            .AppendAttemptResultAsync(
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                "success",
+                                result.AssistantMessage,
+                                null,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception journalError)
+                    {
+                        warning?.Invoke(journalError);
+                    }
+                    result = result with
+                    {
+                        JournalRequestId = currentJournalRequestId,
+                        JournalAttempt = currentJournalAttempt,
+                    };
+                }
                 if (request is not null)
                     routing.Success(request, leaf.Key);
                 if (result.AssistantMessage is JsonObject message)
@@ -207,6 +280,27 @@ internal sealed class ModelRequestOwner(
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                if (journal is not null && currentJournalRequestId is not null)
+                    try
+                    {
+                        await journal
+                            .AppendAttemptResultAsync(
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                "abort",
+                                null,
+                                new JsonObject
+                                {
+                                    ["message"] = "Request cancelled.",
+                                    ["kind"] = "abort",
+                                }
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception journalError)
+                    {
+                        warning?.Invoke(journalError);
+                    }
                 throw;
             }
             catch (ModelPreparationException error)
@@ -217,6 +311,10 @@ internal sealed class ModelRequestOwner(
                 );
             }
             catch (UnsupportedResponsesFeatureException)
+            {
+                throw;
+            }
+            catch (LlmJournalPreparationException)
             {
                 throw;
             }
@@ -237,6 +335,29 @@ internal sealed class ModelRequestOwner(
                     ),
                     _ => new ModelAttemptFailure(error.Message, "request-error", true, true),
                 };
+                if (journal is not null && currentJournalRequestId is not null)
+                    try
+                    {
+                        await journal
+                            .AppendAttemptResultAsync(
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                "failure",
+                                null,
+                                new JsonObject
+                                {
+                                    ["kind"] = failure.Kind,
+                                    ["message"] = failure.Message,
+                                    ["retryable"] = failure.Retryable,
+                                    ["countable"] = failure.Countable,
+                                }
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception journalError)
+                    {
+                        warning?.Invoke(journalError);
+                    }
             }
             finally
             {
@@ -303,9 +424,47 @@ internal sealed class ModelRequestOwner(
                 {
                     history = updated;
                     requestStarted = null;
+                    journalRequestId = null;
+                    journalAttempt = 0;
                 }
             }
         }
         throw new InvalidOperationException("Unreachable attempt limit.");
+    }
+
+    private static async Task JournalAttemptStartAsync(
+        LlmRequestJournalStore store,
+        string requestId,
+        int attempt,
+        string concreteModelId,
+        string? virtualModelKey,
+        string providerType,
+        JsonNode payload,
+        string effectivePrompt,
+        CancellationToken token
+    )
+    {
+        try
+        {
+            await store
+                .AppendAttemptStartAsync(
+                    requestId,
+                    attempt,
+                    concreteModelId,
+                    virtualModelKey,
+                    providerType,
+                    payload,
+                    effectivePrompt,
+                    token
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            throw new LlmJournalPreparationException(
+                "LLM journal attempt start could not be made durable.",
+                error
+            );
+        }
     }
 }

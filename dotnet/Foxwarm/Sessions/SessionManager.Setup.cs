@@ -72,6 +72,39 @@ internal sealed partial class SessionManager
             "setup-model-test",
             "setup-model-test"
         );
+        var setupHistory = new[]
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "Please reply ok" }),
+            },
+        };
+        var requestId = await Journal.BeginRequestAsync(
+            null,
+            "setup-test",
+            0,
+            "",
+            new JsonArray(),
+            setupHistory,
+            testModel,
+            "setup-model-test",
+            cancellationToken
+        );
+        options = options with
+        {
+            JournalAttemptStart = payload =>
+                Journal.AppendAttemptStartAsync(
+                    requestId,
+                    1,
+                    model.Key,
+                    null,
+                    model.ProviderType,
+                    payload,
+                    "",
+                    cancellationToken
+                ),
+        };
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var service = ConfiguredModelRequests.CreatePreparedService(
@@ -83,20 +116,38 @@ internal sealed partial class SessionManager
         );
         try
         {
-            return await service.ChatAsync(
-                "setup-model-test",
-                [
-                    new JsonObject
-                    {
-                        ["role"] = "user",
-                        ["parts"] = new JsonArray(new JsonObject { ["text"] = "Please reply ok" }),
-                    },
-                ],
-                timeout.Token
-            );
+            var result = await service.ChatAsync("setup-model-test", setupHistory, timeout.Token);
+            try
+            {
+                await Journal.AppendAttemptResultAsync(
+                    requestId,
+                    1,
+                    "success",
+                    result.AssistantMessage,
+                    null,
+                    timeout.Token
+                );
+            }
+            catch { }
+            return result;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            try
+            {
+                await Journal.AppendAttemptResultAsync(
+                    requestId,
+                    1,
+                    "abort",
+                    null,
+                    new JsonObject
+                    {
+                        ["kind"] = "timeout",
+                        ["message"] = "Configured model request timed out.",
+                    }
+                );
+            }
+            catch { }
             throw new SetupProviderRequestException(
                 "timeout",
                 "Configured model request timed out.",
@@ -105,6 +156,17 @@ internal sealed partial class SessionManager
         }
         catch (Exception error)
         {
+            try
+            {
+                await Journal.AppendAttemptResultAsync(
+                    requestId,
+                    1,
+                    "failure",
+                    null,
+                    new JsonObject { ["kind"] = "request-error", ["message"] = error.Message }
+                );
+            }
+            catch { }
             throw new SetupProviderRequestException(
                 "request",
                 ConfiguredModelRequests.SafeError(error, model),

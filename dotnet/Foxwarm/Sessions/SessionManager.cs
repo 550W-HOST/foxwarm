@@ -28,6 +28,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     };
     private readonly Foxwarm.McpClient mcp;
     private readonly ModelRouting modelRouting = new();
+    internal LlmRequestJournalStore Journal { get; }
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
     internal Foxwarm.ToolScript.MainToolScript ToolScript { get; }
@@ -53,6 +54,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
+        Journal = new LlmRequestJournalStore(this.root);
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
         authorization = new ToolAuthorizationAuthority(this.root);
@@ -381,7 +383,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             modelRouting,
             websockets: websockets,
             images: Images,
-            imageOutputFormat: models.ConfigurationOwner?.ProviderImageOutputFormat ?? "webp"
+            imageOutputFormat: models.ConfigurationOwner?.ProviderImageOutputFormat ?? "webp",
+            journal: Journal
         );
         var chat = new SessionChatService(
             requests,
@@ -490,6 +493,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.DisposeAsync();
         await mcp.DisposeAsync();
         await websockets.DisposeAsync();
+        Journal.Dispose();
         admissionStop.Dispose();
         Catalog.Dispose();
         http.Dispose();

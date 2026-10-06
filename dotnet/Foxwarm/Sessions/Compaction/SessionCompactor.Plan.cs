@@ -75,7 +75,10 @@ internal sealed partial class SessionCompactor
                         hosted.Entry.RecordBestEffortFailure,
                         cancellationToken,
                         scope,
-                        definitions
+                        definitions,
+                        null,
+                        "compact-plan",
+                        round
                     );
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

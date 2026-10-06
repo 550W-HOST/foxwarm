@@ -2,7 +2,7 @@ using Foxwarm.DevTools;
 
 if (args.Length == 0)
     throw new ArgumentException(
-        "Usage: Foxwarm.DevTools <conditional-memory|responses-request|responses-stream|session-restart> [arguments]"
+        "Usage: Foxwarm.DevTools <conditional-memory|responses-request|responses-stream|journal|session-restart> [arguments]"
     );
 
 var commandArgs = args[1..];
@@ -16,6 +16,9 @@ switch (args[0])
         break;
     case "responses-stream":
         await ResponsesStreamCommand.RunAsync(commandArgs);
+        break;
+    case "journal":
+        await JournalCommand.RunAsync(commandArgs);
         break;
     case "catalog-import-dotnet-v1":
         if (commandArgs.Length != 3 || commandArgs[2] != "--declare-pre-catalog-dotnet-v1")

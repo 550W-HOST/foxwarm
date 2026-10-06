@@ -603,6 +603,10 @@ Concrete boundaries are in `MainToolScript.StartAsync/ContinueAsync/CancelAsync/
 
 ## Main Session timers
 
+## Canonical LLM request journal
+
+`Models/LlmRequestJournal.cs` owns the .NET journal adapter described by the [canonical LLM request journal thread](../threads/llm-request-journal.md). It uses the independent `state/llm-request-journal.sqlite` database, Source-compatible records and hashes, bounded message deltas, strict reconstruction, explicit JSONL import/export, and a local string codec. `ModelRequestOwner` and each protocol adapter append a durable manifest and full semantic payload digest before transport; `SessionOwner.Requests` links the journal logical ID to `llmRequestId` while retaining `streamId` as the per-stream identity. Setup records its direct single-attempt request, and `Foxwarm.DevTools journal` provides explicit qualification operations. `Foxwarm.Tests/Models/LlmRequestJournalTests.cs` covers reconstruction, attempt records, cursor listing, export/import, and SQLite authority markers.
+
 `Timers/MainTimers.*` owns the independent Source-shaped `state/timers.json` document. `SessionManager.Timers` integrates it with real Main bootstrap, exact owner admission, isolated permissions, fresh Session allocation and the ordinary queue. `TimerToolDefinitions` provides hidden `create_timer`, `list_timers`, `update_timer` and `delete_timer` builtins through the same discovery, direct and neutral dispatch as other tools. They have ordinary cancellation controls, not handoff confirmation. The public surface does not expose model, effort, Node, parent, timezone or recovery settings. Existing configured global skill roots supply `timer-automation`; the timer implementation does not deploy or invent that skill.
 
 ### Decision: Main timer persistence and scheduling

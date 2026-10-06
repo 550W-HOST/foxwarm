@@ -98,7 +98,8 @@ internal sealed partial class SessionManager
             modelRouting,
             websockets: websockets,
             images: Images,
-            imageOutputFormat: models.ConfigurationOwner?.ProviderImageOutputFormat ?? "webp"
+            imageOutputFormat: models.ConfigurationOwner?.ProviderImageOutputFormat ?? "webp",
+            journal: Journal
         );
         var captured = requests.Capture(catalog, route, selection.RawEffort);
         var cache = await owner.Entry.SaveLane.EnsurePromptCacheKeyAsync();
@@ -121,7 +122,10 @@ internal sealed partial class SessionManager
             owner.Entry.RecordBestEffortFailure,
             token,
             ModelRequestScope.LowLevel,
-            () => new JsonArray()
+            () => new JsonArray(),
+            null,
+            "toolscript-one-shot",
+            0
         );
         if (result.AssistantMessage is not null)
             budget.JsonValue(result.AssistantMessage);
