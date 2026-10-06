@@ -1,4 +1,6 @@
 import test from 'node:test';
+import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
+import { getChildHandoffBoundaryForQueueItem } from './childHandoffState';
 import assert from 'node:assert/strict';
 import { sendToSession } from './relations';
 import type { QueueItem, Session } from '../types';
@@ -64,4 +66,30 @@ test('sendToSession captures the canonical source relation for the exact target 
   await sendToSession(deps, unrelated.id, 'other', child.id);
 
   assert.deepEqual(relations, ['parent', 'direct-child', 'other']);
+});
+
+test('Task delivery uses bounded task metadata without reply routes or a peer-report boundary', async () => {
+  const source = makeSession('creator');
+  const target = { ...makeSession('owner'), parentSessionId: source.id };
+  let enqueued: QueueItem;
+  let queueOptions: unknown;
+  await sendToSession({
+    getExistingSession: async id => id === source.id ? source : id === target.id ? target : null,
+    getAgentMetadata: () => ({}),
+    enqueueSessionItem: async (_id, item, options) => { enqueued = item; queueOptions = options; },
+  }, target.id, 'Task ownership transferred.', source.id, {
+    trigger: false, taskNotification: { taskId: 'task_' + 'x'.repeat(160), event: 'transferred' },
+  });
+  const wrapped = parseFoxwarmWrappedContent(enqueued.parts[0].system);
+  assert.equal(wrapped.attrs.type, 'task');
+  assert.equal(wrapped.attrs.taskId.length, 128);
+  assert.equal(wrapped.attrs.event, 'transferred');
+  assert.equal(wrapped.attrs.sourceSessionId, source.id);
+  assert.equal(wrapped.attrs.hint, 'task notification from Foxwarm; not direct user input');
+  assert.equal(wrapped.attrs.replyTargetSessionId, undefined);
+  assert.equal(wrapped.attrs.replyVia, undefined);
+  assert.equal(wrapped.content, 'Task ownership transferred.\n');
+  assert.equal(enqueued.type, 'intersession', 'the existing delivery transport is unchanged');
+  assert.equal(getChildHandoffBoundaryForQueueItem(enqueued), undefined, 'a system notice is not a parent directive needing a reply');
+  assert.deepEqual(queueOptions, { trigger: false }, 'only existing queue options cross the enqueue boundary');
 });

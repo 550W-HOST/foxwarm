@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TaskStore } from './taskStore';
+import type { SessionDeliveryOptions } from './types';
 import { TaskService } from './taskService';
 
-function fixture(t: any, send: (target: string, message: string, source: string, options?: { trigger?: boolean }) => Promise<unknown> = async () => {}): TaskService {
+function fixture(t: any, send: (target: string, message: string, source: string, options?: SessionDeliveryOptions) => Promise<unknown> = async () => {}): TaskService {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-task-service-'));
   const store = new TaskStore(path.join(root, 'tasks.sqlite'));
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -30,8 +31,8 @@ test('assign transfer and release use creator/owner authority and existing Sessi
 
 test('completion sends once after commit; delivery failure is a warning and survives store reopen', async t => {
   const sends: any[] = [];
-  const service = fixture(t, async (target, message, source) => {
-    sends.push({ target, message, source });
+  const service = fixture(t, async (target, message, source, options) => {
+    sends.push({ target, message, source, taskNotification: options?.taskNotification });
     assert.equal(service.get(taskId).task.status, 'completed');
     if (fail) throw new Error('synthetic failure');
   });
@@ -42,6 +43,7 @@ test('completion sends once after commit; delivery failure is a warning and surv
   assert.equal(completed.task.completionNotificationStatus, 'sent');
   assert.equal(sends[0].target, 'creator');
   assert.equal(sends[0].source, 'first');
+  assert.deepEqual(sends[0].taskNotification, { taskId, event: 'completed' });
   assert.match(sends[0].message, /Task completed: task_.*Finish\nDelivered/);
   await assert.rejects(() => service.execute({ action: 'complete', taskId }, 'first'), /terminal/);
   assert.equal(sends.length, 1);
@@ -90,7 +92,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   const sends: any[] = [];
   let failTarget: string | undefined;
   const service = fixture(t, async (target, message, source, options) => {
-    sends.push({ target, message, source, trigger: options?.trigger !== false });
+    sends.push({ target, message, source, trigger: options?.trigger !== false, taskNotification: options?.taskNotification });
     if (options?.trigger !== false) assert.equal(service.get(taskId).task.ownerSessionId, target);
     else assert.equal(service.get(taskId).task.previousOwnerSessionId, target);
     if (target === failTarget) throw new Error('synthetic assignment delivery failure');
@@ -100,6 +102,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   assert.equal(sends.length, 0);
   const notified = await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
+  assert.deepEqual(sends[0].taskNotification, { taskId, event: 'assigned' });
   assert.match(sends[0].message, /You have been assigned a task.*task_.*Notify\nStatus: active/);
   assert.ok(sends[0].message.length < 1400);
   service.store.close();
@@ -109,6 +112,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   const transferred = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
   assert.deepEqual(sends.slice(1).map(send => [send.target, send.trigger]), [['first', false], ['second', true]]);
   assert.equal(transferred.task.ownerSessionId, 'second');
+  assert.deepEqual(sends.slice(1).map(send => send.taskNotification), [{ taskId, event: 'transferred' }, { taskId, event: 'transferred' }]);
   assert.equal(transferred.task.previousOwnerNotificationStatus, 'failed');
   assert.equal(transferred.task.assignmentNotificationStatus, 'sent');
   assert.match(transferred.warning, /previous owner notification/);
@@ -122,6 +126,7 @@ test('assignment notices commit before previous/new delivery, preserve independe
   assert.equal(released.task.assignmentNotificationStatus, null);
   assert.deepEqual([sends[4].target, sends[4].trigger], ['second', false]);
   assert.match(sends[4].message, /ownership released/);
+  assert.deepEqual(sends[4].taskNotification, { taskId, event: 'released' });
   await service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator');
   assert.equal(sends.length, 5);
   const self = await service.execute({ action: 'assign', taskId, ownerSessionId: 'creator', notifySession: true }, 'creator');
@@ -192,4 +197,45 @@ test('opting in for an unchanged owner does not retroactively notify a previous 
   await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
   assert.deepEqual(targets, ['second']);
   assert.equal(service.get(taskId).task.previousOwnerNotificationStatus, null);
+});
+
+test('create can commit an existing owner and optional assignment notification without a separate assign action', async t => {
+  const sends: any[] = [];
+  const service = fixture(t, async (target, message, source, options) => {
+    const id = options.taskNotification.taskId;
+    assert.equal(service.get(id).task.ownerSessionId, target, 'ownership is committed before delivery');
+    sends.push({ target, message, source, options });
+    if (fail) throw new Error('synthetic recipient unavailable');
+  });
+  let fail = false;
+  const emptyCount = service.list().total;
+  await assert.rejects(() => service.execute({ action: 'create', title: 'Invalid owner', ownerSessionId: 'missing' }, 'creator'), /Target Session was not found/);
+  assert.equal(service.list().total, emptyCount, 'invalid real target has no task effect');
+  await assert.rejects(() => service.execute({ action: 'create', title: 'Bad owner value', ownerSessionId: 7 }, 'creator'), /ownerSessionId/);
+  await assert.rejects(() => service.execute({ action: 'create', title: 'Bad notification', notifySession: 'yes' }, 'creator'), /boolean/);
+  const quiet = await service.execute({ action: 'create', title: 'Own immediately', ownerSessionId: 'first' }, 'creator');
+  assert.equal(quiet.task.status, 'active');
+  assert.equal(quiet.task.ownerSessionId, 'first');
+  assert.equal(sends.length, 0);
+  await assert.rejects(() => service.execute({ action: 'claim', taskId: quiet.task.id }, 'second'), /already claimed/);
+  const notified = await service.execute({ action: 'create', title: 'Notify on create', ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(notified.task.assignmentNotificationStatus, 'sent');
+  assert.deepEqual(sends[0].options.taskNotification, { taskId: notified.task.id, event: 'assigned' });
+  assert.equal(sends[0].options.trigger, undefined);
+  fail = true;
+  const failed = await service.execute({ action: 'create', title: 'Failed delivery', ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.equal(failed.task.status, 'active');
+  assert.equal(failed.task.ownerSessionId, 'second');
+  assert.equal(failed.task.assignmentNotificationStatus, 'failed');
+  assert.match(failed.warning, /new owner notification/);
+  fail = false;
+  const self = await service.execute({ action: 'create', title: 'Self create', ownerSessionId: 'creator', notifySession: true }, 'creator', 40);
+  assert.equal(self.task.assignmentNotificationStatus, 'skipped');
+  assert.equal(sends.length, 2, 'self target does not produce a redundant send');
+  assert.deepEqual(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 12), true), [], 'self creation starts a fresh progress anchor');
+  assert.equal(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 41), true)[0].id, self.task.id);
+  const open = await service.execute({ action: 'create', title: 'Explicitly unowned', ownerSessionId: null, notifySession: true }, 'creator');
+  assert.equal(open.task.status, 'open');
+  assert.equal(open.task.ownerSessionId, null);
+  assert.equal(sends.length, 2, 'unowned creation has no notification recipient');
 });

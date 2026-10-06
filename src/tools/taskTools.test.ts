@@ -179,3 +179,46 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     resetMainManagementToolsForTests();
   }
 });
+
+test('actual Task notices classify assignment/transfer/release/completion separately while passive recipients remain idle', async () => {
+  const prefix = `task_notifications_${Date.now()}`;
+  const creator = await sessionManager.getSession(`${prefix}_creator`);
+  const first = await sessionManager.getSession(`${prefix}_first`);
+  const second = await sessionManager.getSession(`${prefix}_second`);
+  const triggered: string[] = [];
+  sessionManager.setSessionTriggerCallback(id => { triggered.push(id); });
+  try {
+    const taskId = readResult(await task({ action: 'create', title: 'Task notifications', ownerSessionId: first.id, notifySession: true }, { sessionId: creator.id })).task.id;
+    const notice = (session: typeof creator, index: number, event: string): void => {
+      const text = session.queue[index].parts[0].system;
+      assert.match(text, /^<foxwarm-message type="task"/);
+      assert.match(text, new RegExp(`taskId="${taskId}" event="${event}"`));
+      assert.match(text, /hint="task notification from Foxwarm; not direct user input"/);
+      assert.doesNotMatch(text, /replyTargetSessionId|replyVia|type="inter-agent"/);
+    };
+    notice(first, 0, 'assigned');
+    assert.deepEqual(triggered, [first.id]);
+    await task({ action: 'assign', taskId, ownerSessionId: second.id, notifySession: true }, { sessionId: creator.id });
+    notice(first, 1, 'transferred');
+    notice(second, 0, 'transferred');
+    assert.equal(first.queue[1].trigger, false);
+    assert.deepEqual(triggered, [first.id, second.id], 'previous recipient admission does not wake it');
+    await task({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, { sessionId: creator.id });
+    notice(second, 1, 'released');
+    assert.equal(second.queue[1].trigger, false);
+    assert.deepEqual(triggered, [first.id, second.id], 'release does not wake the released owner');
+    await task({ action: 'claim', taskId }, { sessionId: first.id });
+    await task({ action: 'complete', taskId }, { sessionId: first.id });
+    notice(creator, 0, 'completed');
+    assert.deepEqual(triggered, [first.id, second.id, creator.id]);
+    assert.equal(taskService.get(taskId).task.completionNotificationStatus, 'sent');
+    await sessionManager.sendToSession(creator.id, 'Ordinary peer message', second.id);
+    assert.match(creator.queue[1].parts[0].system, /^<foxwarm-message type="inter-agent"/);
+    assert.match(creator.queue[1].parts[0].system, /replyTargetSessionId=.*replyVia="send_to_session"/);
+  } finally {
+    sessionManager.setSessionTriggerCallback(() => {});
+    for (const session of [creator, first, second]) await sessionManager.deleteSession(session.id);
+    await shutdownMainManagementTools();
+    resetMainManagementToolsForTests();
+  }
+});

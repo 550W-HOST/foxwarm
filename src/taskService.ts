@@ -1,4 +1,4 @@
-import type { SessionEnqueueOptions } from './types';
+import type { SessionDeliveryOptions } from './types';
 import { TaskStore, TaskError, validateTaskArgs } from './taskStore';
 
 export { TaskError } from './taskStore';
@@ -9,7 +9,7 @@ export class TaskService {
   constructor(readonly store: TaskStore, private readonly deps: {
     resolveSessionId: (id: string) => string | undefined;
     readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
-    sendToSession: (target: string, message: string, source: string, options?: SessionEnqueueOptions) => Promise<unknown>;
+    sendToSession: (target: string, message: string, source: string, options?: SessionDeliveryOptions) => Promise<unknown>;
   }) {}
 
   private async exclusive<T>(operation: () => Promise<T> | T): Promise<T> {
@@ -25,12 +25,12 @@ export class TaskService {
     sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
     const result = await this.exclusive(async () => {
       let normalized = args;
-      if (args.action === 'assign' && args.ownerSessionId !== null) {
+      if (args.ownerSessionId !== undefined && args.ownerSessionId !== null) {
         const ownerSessionId = this.deps.resolveSessionId(args.ownerSessionId);
         if (!ownerSessionId) throw new TaskError('TASK_SESSION_NOT_FOUND', 'Target Session was not found.', 404);
         normalized = { ...args, ownerSessionId };
       }
-      const progressAnchor = anchorSeq ?? (['claim', 'assign'].includes(args.action) || (args.action === 'update' && args.status === 'active')
+      const progressAnchor = anchorSeq ?? (['claim', 'assign'].includes(args.action) || (args.action === 'create' && args.ownerSessionId != null) || (args.action === 'update' && args.status === 'active')
         ? await this.deps.readSessionMessageSeq?.(sessionId) : undefined);
       sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
       return this.store.execute(normalized, sessionId, undefined, progressAnchor);
@@ -49,7 +49,13 @@ export class TaskService {
           const message = recipient === 'previous'
             ? `Task ownership ${result.task.ownerSessionId ? `transferred to ${result.task.ownerSessionId}` : 'released'}: ${summary}`
             : `You have been assigned a task: ${summary}`;
-          await this.deps.sendToSession(target, message, sessionId, recipient === 'previous' ? { trigger: false } : undefined);
+          const event = recipient === 'previous'
+            ? result.task.ownerSessionId ? 'transferred' : 'released'
+            : result.task.previousOwnerSessionId ? 'transferred' : 'assigned';
+          await this.deps.sendToSession(target, message, sessionId, {
+            ...(recipient === 'previous' ? { trigger: false } : {}),
+            taskNotification: { taskId: result.task.id, event },
+          });
           this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
         } catch {
           this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'failed');
@@ -68,7 +74,7 @@ export class TaskService {
         this.store.markCompletionNotification(result.task.id, 'skipped');
       } else try {
         await this.deps.sendToSession(creator,
-          `Task completed: ${result.task.id} — ${result.task.title}${result.task.result ? `\n${result.task.result}` : ''}`, sessionId);
+          `Task completed: ${result.task.id} — ${result.task.title}${result.task.result ? `\n${result.task.result}` : ''}`, sessionId, { taskNotification: { taskId: result.task.id, event: 'completed' } });
         this.store.markCompletionNotification(result.task.id, 'sent');
       } catch {
         this.store.markCompletionNotification(result.task.id, 'failed');

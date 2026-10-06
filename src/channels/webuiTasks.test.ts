@@ -58,6 +58,14 @@ test('authenticated task REST uses real selected Session targets and shared acti
   for (const query of ['limit=0', 'limit=100', 'status=claimed', 'unknown=1', 'status=open&status=active']) {
     assert.equal((await request(`/api/tasks?${query}`)).status, 400);
   }
+  assert.equal((await request('/api/tasks', 'POST', { sessionId: 'creator', title: 'Missing owner', ownerSessionId: 'missing' })).status, 404);
+  const ownedResponse = await request('/api/tasks', 'POST', { sessionId: 'creator', title: 'Owned UI create', ownerSessionId: 'worker', notifySession: true });
+  assert.equal(ownedResponse.status, 201);
+  const owned = await ownedResponse.json() as any;
+  assert.equal(owned.task.ownerSessionId, 'worker');
+  assert.equal(owned.task.status, 'active');
+  assert.equal(owned.task.assignmentNotificationStatus, 'sent');
+  assert.equal(notices[2].target, 'worker');
   const missing = await request('/api/tasks/missing');
   assert.equal(missing.status, 404);
   assert.equal((await missing.json() as any).code, 'TASK_NOT_FOUND');

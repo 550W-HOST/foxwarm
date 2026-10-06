@@ -39,7 +39,7 @@ export class TaskError extends Error {
 
 type TaskArgs = Record<string, any>;
 const ACTION_FIELDS: Record<typeof TASK_ACTIONS[number], string[]> = {
-  create: ['title', 'description', 'parentTaskId'],
+  create: ['title', 'description', 'parentTaskId', 'ownerSessionId', 'notifySession'],
   list: ['status'],
   get: ['taskId'],
   claim: ['taskId'],
@@ -74,9 +74,12 @@ export function validateTaskArgs(args: TaskArgs): void {
     const statuses = args.action === 'update' ? ['open', 'active'] : TASK_STATUSES;
     if (!statuses.includes(args.status)) throw new TaskError('TASK_INVALID_ARGS', `status for task ${args.action} must be one of: ${statuses.join(', ')}.`);
   }
-  if (args.action === 'assign' && (!Object.prototype.hasOwnProperty.call(args, 'ownerSessionId')
-    || (args.ownerSessionId !== null && (typeof args.ownerSessionId !== 'string' || !args.ownerSessionId.trim() || args.ownerSessionId.length > 256)))) {
+  if (args.action === 'assign' && !Object.prototype.hasOwnProperty.call(args, 'ownerSessionId')) {
     throw new TaskError('TASK_INVALID_ARGS', 'task assign requires an existing ownerSessionId or null.');
+  }
+  if (Object.prototype.hasOwnProperty.call(args, 'ownerSessionId')
+    && args.ownerSessionId !== null && (typeof args.ownerSessionId !== 'string' || !args.ownerSessionId.trim() || args.ownerSessionId.length > 256)) {
+    throw new TaskError('TASK_INVALID_ARGS', 'ownerSessionId must identify an existing Session or be null.');
   }
   if (Object.prototype.hasOwnProperty.call(args, 'notifySession') && typeof args.notifySession !== 'boolean') {
     throw new TaskError('TASK_INVALID_ARGS', 'notifySession must be a boolean.');
@@ -180,7 +183,7 @@ export class TaskStore {
     validateTaskArgs(args);
     if (args.action !== 'list' && args.action !== 'get' && (typeof sessionId !== 'string' || !sessionId.trim())) throw new TaskError('TASK_INVALID_ARGS', 'task requires a current Session.');
     if (sessionId !== undefined) sessionId = this.canonicalId(sessionId);
-    if (args.action === 'assign' && args.ownerSessionId !== null) args = { ...args, ownerSessionId: this.canonicalId(args.ownerSessionId) };
+    if (args.ownerSessionId !== undefined && args.ownerSessionId !== null) args = { ...args, ownerSessionId: this.canonicalId(args.ownerSessionId) };
     const db = this.getDb();
     // A write transaction covers the read, authority check and update, even
     // across independent SQLite connections/processes racing to claim.
@@ -217,9 +220,13 @@ export class TaskStore {
       // Parent is immutable and can only reference an existing task. A fresh
       // generated ID therefore cannot form a cycle, including self-parenting.
       const id = `task_${randomUUID()}`;
-      db.prepare(`INSERT INTO tasks (id,title,description,status,parentTaskId,createdBySessionId,createdAt,updatedAt)
-        VALUES (?,?,?,'open',?,?,?,?)`).run(id, args.title, args.description ?? null, args.parentTaskId ?? null, sessionId, now, now);
-      return { task: this.requireTask(db, id) };
+      const owner = args.ownerSessionId ?? null;
+      const notify = owner !== null && args.notifySession === true;
+      db.prepare(`INSERT INTO tasks (id,title,description,status,parentTaskId,createdBySessionId,ownerSessionId,createdAt,updatedAt,
+        assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(id, args.title, args.description ?? null, owner ? 'active' : 'open', args.parentTaskId ?? null, sessionId, owner,
+          now, now, owner ? 1 : 0, notify ? 'pending' : null, owner === sessionId ? anchorSeq ?? null : null);
+      return { task: this.requireTask(db, id), ...(notify ? { assignmentNotification: { revision: 1, newOwner: owner } } : {}) };
     }
     const task = this.requireTask(db, args.taskId);
     if (args.action === 'get') {

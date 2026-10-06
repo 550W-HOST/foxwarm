@@ -5,7 +5,7 @@ Secondary files: src/tools.ts, src/tools/definitions.ts, src/tools/placement.ts,
 
 ## Purpose
 
-Implements a small persistent task list shared by Sessions. A coordinator creates a task and passes its ID in an executor's initial message. The executor explicitly claims, updates, and completes the task; the coordinator observes it with list/get. Task actions do not schedule Sessions or implement review/workspace integration. Notifications use ordinary inter-session delivery, and explicit child attachment integrates with the existing creation and completion boundaries.
+Implements a small persistent task list shared by Sessions. A coordinator creates a task and passes its ID in an executor's initial message. The executor explicitly claims, updates, and completes the task; the coordinator observes it with list/get. Task actions do not schedule Sessions or implement review/workspace integration. Notifications use the existing inter-session queue delivery with distinct Task metadata, and explicit child attachment integrates with the existing creation and completion boundaries.
 
 ## Key exports and function index
 
@@ -59,16 +59,22 @@ Exact tool description:
 
 ### Actions
 
-- `create`: Create a new task. Requires title; accepts description and an existing parentTaskId. Records the current Session as creator and starts open/unclaimed.
+- `create`: Create a new task. Requires title; accepts description, an existing parentTaskId, optional existing ownerSessionId (or null), and notifySession. Records the current Session as creator. Without an owner it starts open/unclaimed; an explicit owner commits active ownership atomically with creation. Optional notification uses the same postcommit assignment delivery/self-skip/failure rules, with no previous recipient. Self-owned creation seeds fresh fixed-30 progress.
 - `list`: List bounded task summaries, optionally filtered by status. Supports open, active, completed, cancelled.
 - `get`: Inspect one task and its bounded child/note summary. Requires taskId.
 - `claim`: Claim an unowned task for the current Session. A task owned by another Session is not transferred. Same-owner retries return the current task; a fresh claim sets active.
 - `assign`: Assign or transfer to an existing Session, or release its owner. Creator/current owner may assign; targets resolve through the real catalog. Null releases ownership and sets open; a target sets active. Changes record a short authored note. Optional `notifySession` defaults false. When true, the committed change notifies a new owner normally and a previous owner on transfer/release through queue-only delivery. Self targets are skipped. Each recipient has independent persisted pending/sent/failed/skipped state. Successful/pending retries do not resend; explicitly repeating a failed notification retries only that recipient. An assignment revision prevents an older delayed result from marking a newer assignment delivered. Null ownership may notify the released owner, but there is no new recipient. Notification failure warns without undoing assignment. Queue-only behavior is canonical in [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
 - `update`: Update an owned or otherwise permitted task description, status, or progress note. Requires at least one change; only the owner, or creator when unclaimed, may update. Status accepts only open/active and never releases ownership.
-- `complete`: Mark a task completed with an optional result summary. Only the owner, or creator when unclaimed, may complete. After commit, the shared service sends a normal inter-session notification to the creator. Delivery failure returns a warning without undoing completion. Self completion records skipped without a redundant self-send or warning. Pending/sent/failed/skipped state survives restart; repeated completion never resends. No background notification retry runs.
+- `complete`: Mark a task completed with an optional result summary. Only the owner, or creator when unclaimed, may complete. After commit, the shared service sends a Task notification to the creator through the existing inter-session queue. Delivery failure returns a warning without undoing completion. Self completion records skipped without a redundant self-send or warning. Pending/sent/failed/skipped state survives restart; repeated completion never resends. No background notification retry runs.
 - `cancel`: Cancel a task with an optional reason. Creator or owner may cancel; reason is recorded as an authored note.
 
 Unknown actions, unsupported keys and invalid values fail before effect. Completed/cancelled tasks reject every mutation, including claim, repeated completion/cancellation and attempts to reopen. Mutation results include the current task/owner/status; authority and terminal-state errors include current owner/status and the relevant conflict.
+
+## Notification metadata
+
+Automatic notices use `<foxwarm-message type="task" taskId="..." event="...">` with a task ID bounded to 128 characters and assigned/completed/transferred/released event metadata. The hint identifies a Foxwarm task notification, not direct user input. Source Session/time provenance remains, but replyTargetSessionId/replyVia are absent. These notices do not carry the peer-directive relation that arms a child routine-report boundary. Ordinary send_to_session keeps its existing inter-agent wrapper, reply attributes and relation classification; old messages are not rewritten.
+
+The existing permission, queue/wait and Worker ingress paths remain in use. New-owner/completion delivery triggers normally; previous-owner transfer/release remains passive. Only trigger options cross enqueue; Task metadata is applied once before that boundary. The WebUI’s existing non-channel wrapper classifier displays Task system-like cards, not Inter-agent source/reply previews.
 
 ## Child attachment and WebUI
 

@@ -339,6 +339,14 @@ export interface SessionEnqueueOptions {
   trigger?: boolean;
 }
 
+/** Trusted delivery metadata, applied before the existing queue boundary. */
+export interface SessionDeliveryOptions extends SessionEnqueueOptions {
+  taskNotification?: {
+    taskId: string;
+    event: 'assigned' | 'completed' | 'transferred' | 'released';
+  };
+}
+
 export interface QueueItem {
   /** Internal passive ingress: stays durable but does not independently start processing. */
   trigger?: false;

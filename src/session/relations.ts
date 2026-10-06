@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import { getSessionHistoryFilePath, getSessionHistoryStore } from './metadataStore';
 import { AgentMetadata } from './agentMetadata';
-import { MessagePart, QueueItem, SessionEnqueueOptions, Session } from '../types';
+import { MessagePart, QueueItem, SessionDeliveryOptions, SessionEnqueueOptions, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 
@@ -320,7 +320,7 @@ export async function sendToSession(
   targetSessionId: string,
   message: string,
   fromSessionId?: string,
-  options?: SessionEnqueueOptions
+  options?: SessionDeliveryOptions
 ): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   const { sourceSession: fromSession, targetSession, requestedTargetSessionId } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
   if (fromSession && fromSession.id === targetSession.id) {
@@ -331,7 +331,16 @@ export async function sendToSession(
   const replyTarget = sourceSessionId || 'unknown-session';
   const time = formatLocalTimestamp(Date.now());
   const parts: MessagePart[] = [{
-    system: sourceSessionId
+    system: options?.taskNotification
+      ? formatFoxwarmMessage({
+        type: 'task',
+        taskId: options.taskNotification.taskId.slice(0, 128),
+        event: options.taskNotification.event,
+        sourceSessionId,
+        time,
+        hint: 'task notification from Foxwarm; not direct user input',
+      }, message || '')
+      : sourceSessionId
       ? formatFoxwarmMessage({
         type: 'inter-agent',
         sourceSessionId,
@@ -350,7 +359,7 @@ export async function sendToSession(
   await deps.enqueueSessionItem(targetSession.id, {
     type: 'intersession',
     sourceSessionId: fromSession?.id,
-    ...(fromSession ? {
+    ...(fromSession && !options?.taskNotification ? {
       sourceSessionRelation: fromSession.parentSessionId === targetSession.id
         ? 'direct-child' as const
         : targetSession.parentSessionId === fromSession.id
@@ -358,7 +367,7 @@ export async function sendToSession(
           : 'other' as const,
     } : {}),
     parts,
-  }, options);
+  }, options ? { trigger: options.trigger } : undefined);
 
   return {
     requestedSessionId: requestedTargetSessionId,

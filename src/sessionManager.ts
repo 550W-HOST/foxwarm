@@ -6,7 +6,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { CompactionRequest, isQueueItem, SessionEnqueueOptions, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
+import { CompactionRequest, isQueueItem, SessionDeliveryOptions, SessionEnqueueOptions, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
@@ -2090,7 +2090,7 @@ async function updateChildSessionParentIdsCritical(oldParentSessionId: string, n
   return updated;
 }
 
-export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string, options?: SessionEnqueueOptions): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
+export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string, options?: SessionDeliveryOptions): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   return await sessionRelations.sendToSession({
     getExistingSession,
     getSessionCatalog,
