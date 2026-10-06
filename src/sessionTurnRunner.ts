@@ -1006,8 +1006,9 @@ export class SessionTurnRunner {
         const toolResultMsg = await this.host.executeTools(turnToolCalls, toolContext, session);
 
         const successfulSendTargets = (toolResultMsg as any).__toolPostAction?.successfulSendToSessionTargets;
-        if (session.parentSessionId && Array.isArray(successfulSendTargets)
-          && successfulSendTargets.includes(session.parentSessionId)
+        const completedLinkedTask = (toolResultMsg as any).__toolPostAction?.completedLinkedTask?.attachedSessionId === session.id;
+        if ((completedLinkedTask || (session.parentSessionId && Array.isArray(successfulSendTargets)
+          && successfulSendTargets.includes(session.parentSessionId)))
           && resolveChildHandoffBoundary(session)) {
           await this.host.saveSession(session);
         }
@@ -1325,7 +1326,7 @@ export class SessionTurnRunner {
           && !session.busy
           && !getManagedSessionState(session)?.currentStep
           && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
-          && session.queue.some(isQueueItem)) {
+          && session.queue.some(item => isQueueItem(item) && item.trigger !== false)) {
           void this.processSessionQueue(sessionId).catch(error => {
             logger.error({ err: error, sessionId }, 'Trailing queued work failed');
           });

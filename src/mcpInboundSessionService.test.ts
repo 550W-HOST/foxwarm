@@ -190,7 +190,7 @@ test('SDK Session read/send use actual Worker owner and durable mailbox, with a 
   try {
     await supervisor.reconcileStartupOwnerships();
     sessionManager.setSessionWorkerEnqueueSink(
-      (id, item, guard) => ingress.enqueueEnsuringWorker(id, item, guard).then(() => {}));
+      (id, item, options, guard) => ingress.enqueueEnsuringWorker(id, item, options, guard).then(() => {}));
     await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress, supervisor } });
     fixture = await serverFixture();
     alpha = await connect(fixture.port, 'synthetic-session-alpha-token');

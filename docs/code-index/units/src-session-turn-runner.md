@@ -32,6 +32,8 @@ Retry notices are coalesced only for presentation within one `llm.chat` request:
 
 After each normal-turn `llm.chat` assistant append succeeds (including an eligible commentary prefix), its optional post-commit callback hands only that immutable row’s generated-image references to the placement host for best-effort automatic file delivery. Image-only, text-bearing, and continuing tool turns share this path; unrelated detached chat purposes do not. The canonical cross-module contract is [D-image-generated-output-replay](../threads/image-blob-lifecycle.md#d-image-generated-output-replay).
 
+Attached task completion carries an internal resolved-builtin signal that resolves the child handoff without fabricating a parent notification; the creator still receives the real completion delivery. Passive-only finish-window input stays queued rather than claiming another processor. These contracts are canonical in [Tasks](src-tasks.md) and [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
+
 ## Main collaborators
 
 - `LocalSessionTurnHost` delegates compact, child reminder, provider/tool execution, intermediate/final channel delivery, and other effects to their existing owners. Its bound local `CurrentSessionTurnEffects` carries exact-owner save, canonical one/many append, busy, wait, history/runtime events, provider stream/abort effects, and the process-local default ExecRuntime. The Worker supplies typed Main delivery overrides over the reverse transport; detached tests may provide one alternate exact owner without changing the runner or provider schema. Tool execution validates the passed owner identity before deriving the local persistence/runtime context; owner mismatch fails before any effect is used.

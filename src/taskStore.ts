@@ -24,6 +24,10 @@ export interface TaskRecord {
   cancelledAt: number | null;
   completionNotificationStatus: string | null;
   assignmentNotificationStatus: string | null;
+  previousOwnerSessionId: string | null;
+  previousOwnerNotificationStatus: string | null;
+  assignmentRevision: number;
+  attachedSessionId: string | null;
   legacyGoalSessionId: string | null;
   reminderLastSeq: number | null;
   reminderMessageCount: number;
@@ -77,9 +81,6 @@ export function validateTaskArgs(args: TaskArgs): void {
   if (Object.prototype.hasOwnProperty.call(args, 'notifySession') && typeof args.notifySession !== 'boolean') {
     throw new TaskError('TASK_INVALID_ARGS', 'notifySession must be a boolean.');
   }
-  if (args.action === 'assign' && args.ownerSessionId === null && args.notifySession === true) {
-    throw new TaskError('TASK_INVALID_ARGS', 'notifySession requires a non-null ownerSessionId.');
-  }
   if (args.action === 'update' && !['description', 'note', 'status'].some(key => Object.prototype.hasOwnProperty.call(args, key))) {
     throw new TaskError('TASK_INVALID_ARGS', 'task update requires description, note, or status.');
   }
@@ -113,7 +114,7 @@ export class TaskStore {
         CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId, id);
       `);
       const columns = db.prepare('PRAGMA table_info(tasks)').all() as any[];
-      for (const [name, type] of [['completionNotificationStatus', 'TEXT'], ['assignmentNotificationStatus', 'TEXT'], ['legacyGoalSessionId', 'TEXT'], ['reminderLastSeq', 'INTEGER'], ['reminderMessageCount', 'INTEGER NOT NULL DEFAULT 0']]) {
+      for (const [name, type] of [['completionNotificationStatus', 'TEXT'], ['assignmentNotificationStatus', 'TEXT'], ['previousOwnerSessionId', 'TEXT'], ['previousOwnerNotificationStatus', 'TEXT'], ['assignmentRevision', 'INTEGER NOT NULL DEFAULT 0'], ['attachedSessionId', 'TEXT'], ['legacyGoalSessionId', 'TEXT'], ['reminderLastSeq', 'INTEGER'], ['reminderMessageCount', 'INTEGER NOT NULL DEFAULT 0']]) {
         if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${type}`);
       }
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId)');
@@ -135,9 +136,10 @@ export class TaskStore {
       .run(status, taskId);
   }
 
-  markAssignmentNotification(taskId: string, ownerSessionId: string, status: 'sent' | 'failed' | 'skipped'): void {
-    this.getDb().prepare("UPDATE tasks SET assignmentNotificationStatus=? WHERE id=? AND ownerSessionId=? AND assignmentNotificationStatus='pending'")
-      .run(status, taskId, ownerSessionId);
+  markAssignmentNotification(taskId: string, revision: number, recipient: 'new' | 'previous', status: 'sent' | 'failed' | 'skipped'): void {
+    const field = recipient === 'new' ? 'assignmentNotificationStatus' : 'previousOwnerNotificationStatus';
+    this.getDb().prepare(`UPDATE tasks SET ${field}=? WHERE id=? AND assignmentRevision=? AND ${field}='pending'`)
+      .run(status, taskId, revision);
   }
 
   execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT, anchorSeq?: number): any {
@@ -151,7 +153,7 @@ export class TaskStore {
       const result = this.executeInTransaction(db, args, sessionId, listLimit, anchorSeq);
       db.exec('COMMIT');
       if (result.task) {
-        const { legacyGoalSessionId, reminderLastSeq, reminderMessageCount, ...visibleTask } = result.task;
+        const { legacyGoalSessionId, reminderLastSeq, reminderMessageCount, assignmentRevision, ...visibleTask } = result.task;
         result.task = visibleTask;
         if (result.task.description?.length > 4000) result.task.description = result.task.description.slice(0, 3999) + '…';
       }
@@ -197,6 +199,7 @@ export class TaskStore {
     if (task.status === 'completed' || task.status === 'cancelled') {
       throw new TaskError('TASK_TERMINAL', `Task ${task.id} is terminal (${state}); ${args.action} is not allowed.`, 409);
     }
+    let assignmentNotification: { revision: number; newOwner?: string; previousOwner?: string };
     if (args.action === 'claim') {
       if (task.ownerSessionId && task.ownerSessionId !== sessionId) {
         throw new TaskError('TASK_OWNED', `Task ${task.id} is already claimed by another Session (${state}).`, 409);
@@ -209,11 +212,19 @@ export class TaskStore {
         : sessionId === (task.ownerSessionId ?? task.createdBySessionId);
       if (!permitted) throw new TaskError('TASK_FORBIDDEN', `Session ${sessionId} cannot ${args.action} task ${task.id} (${state}); ${args.action === 'cancel' || args.action === 'assign' ? 'creator or owner' : task.ownerSessionId ? 'owner' : 'creator'} required.`, 403);
       if (args.action === 'assign') {
-        const changedOwner = args.ownerSessionId !== task.ownerSessionId;
-        const shouldNotify = args.notifySession === true && (changedOwner || !task.assignmentNotificationStatus || task.assignmentNotificationStatus === 'failed');
-        db.prepare("UPDATE tasks SET ownerSessionId=?,status=?,updatedAt=?,assignmentNotificationStatus=? WHERE id=?")
-          .run(args.ownerSessionId, args.ownerSessionId === null ? 'open' : 'active', now,
-            shouldNotify ? 'pending' : changedOwner ? null : task.assignmentNotificationStatus, task.id);
+        const changedOwner = task.ownerSessionId !== args.ownerSessionId;
+        const revision = task.assignmentRevision + (changedOwner ? 1 : 0);
+        const previousOwner = changedOwner ? task.ownerSessionId : task.previousOwnerSessionId;
+        const previousStatus = changedOwner ? null : task.previousOwnerNotificationStatus;
+        const newStatus = changedOwner ? null : task.assignmentNotificationStatus;
+        const notifyNew = args.notifySession === true && args.ownerSessionId !== null && (!newStatus || newStatus === 'failed');
+        const notifyPrevious = args.notifySession === true && previousOwner !== null && previousOwner !== args.ownerSessionId
+          && (changedOwner || previousStatus === 'failed');
+        db.prepare(`UPDATE tasks SET ownerSessionId=?,status=?,updatedAt=?,assignmentRevision=?,previousOwnerSessionId=?,
+          assignmentNotificationStatus=?,previousOwnerNotificationStatus=? WHERE id=?`)
+          .run(args.ownerSessionId, args.ownerSessionId ? 'active' : 'open', now, revision, previousOwner,
+            notifyNew ? 'pending' : newStatus, notifyPrevious ? 'pending' : previousStatus, task.id);
+        assignmentNotification = { revision, newOwner: notifyNew ? args.ownerSessionId : undefined, previousOwner: notifyPrevious ? previousOwner : undefined };
         if (changedOwner) db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
           .run(args.ownerSessionId === sessionId ? anchorSeq ?? null : null, task.id);
         if (changedOwner) this.addNote(db, task.id, sessionId, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
@@ -231,7 +242,20 @@ export class TaskStore {
         if (args.reason !== undefined) this.addNote(db, task.id, sessionId, args.reason, now);
       }
     }
-    return { task: this.requireTask(db, task.id) };
+    return { task: this.requireTask(db, task.id), ...(assignmentNotification ? { assignmentNotification } : {}) };
+  }
+
+  bindChild(taskId: string, childSessionId: string): void {
+    const db = this.getDb();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.requireTask(db, taskId);
+      if (task.ownerSessionId) throw new TaskError('TASK_OWNED', `Task ${task.id} is already owned by Session ${task.ownerSessionId}.`, 409);
+      this.executeInTransaction(db, { action: 'claim', taskId }, childSessionId, TASK_LIST_LIMIT);
+      db.prepare('UPDATE tasks SET attachedSessionId=? WHERE id=?').run(childSessionId, taskId);
+      this.addNote(db, taskId, childSessionId, `Attached new Session ${childSessionId}.`, Date.now());
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
   /** Retry-safe legacy migration; a terminal migrated task is never recreated/reactivated. */

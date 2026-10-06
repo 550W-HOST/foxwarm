@@ -1,3 +1,4 @@
+import type { SessionEnqueueOptions } from './types';
 import { TaskStore, TaskError, validateTaskArgs } from './taskStore';
 
 export { TaskError } from './taskStore';
@@ -8,7 +9,7 @@ export class TaskService {
   constructor(readonly store: TaskStore, private readonly deps: {
     resolveSessionId: (id: string) => string | undefined;
     readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
-    sendToSession: (target: string, message: string, source: string) => Promise<unknown>;
+    sendToSession: (target: string, message: string, source: string, options?: SessionEnqueueOptions) => Promise<unknown>;
   }) {}
 
   private async exclusive<T>(operation: () => Promise<T> | T): Promise<T> {
@@ -21,7 +22,6 @@ export class TaskService {
 
   async execute(args: Record<string, any>, sessionId: string, anchorSeq?: number): Promise<any> {
     validateTaskArgs(args);
-    let notifyAssignment = false;
     const result = await this.exclusive(async () => {
       let normalized = args;
       if (args.action === 'assign' && args.ownerSessionId !== null) {
@@ -29,26 +29,30 @@ export class TaskService {
         if (!ownerSessionId) throw new TaskError('TASK_SESSION_NOT_FOUND', 'Target Session was not found.', 404);
         normalized = { ...args, ownerSessionId };
       }
-      if (args.action === 'assign' && args.notifySession === true) {
-        const before = this.store.execute({ action: 'get', taskId: args.taskId }, sessionId).task;
-        notifyAssignment = before.ownerSessionId !== normalized.ownerSessionId
-          || !before.assignmentNotificationStatus || before.assignmentNotificationStatus === 'failed';
-      }
       const progressAnchor = anchorSeq ?? (['claim', 'assign'].includes(args.action) || (args.action === 'update' && args.status === 'active')
         ? await this.deps.readSessionMessageSeq?.(sessionId) : undefined);
       return this.store.execute(normalized, sessionId, undefined, progressAnchor);
     });
-    if (notifyAssignment) {
-      const target = result.task.ownerSessionId;
-      if (target === sessionId) this.store.markAssignmentNotification(result.task.id, target, 'skipped');
-      else try {
-        await this.deps.sendToSession(target,
-          `You have been assigned a task: ${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${result.task.description ? `\n${result.task.description.slice(0, 1000)}` : ''}`, sessionId);
-        this.store.markAssignmentNotification(result.task.id, target, 'sent');
-      } catch {
-        this.store.markAssignmentNotification(result.task.id, target, 'failed');
-        result.warning = 'Task assigned, but the assignment notification could not be delivered.';
+    const plan = result.assignmentNotification;
+    delete result.assignmentNotification;
+    if (plan) {
+      const failedRecipients: string[] = [];
+      for (const [recipient, target] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
+        if (!target) continue;
+        if (target === sessionId) this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
+        else try {
+          const summary = `${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${result.task.description ? `\n${result.task.description.slice(0, 1000)}` : ''}`;
+          const message = recipient === 'previous'
+            ? `Task ownership ${result.task.ownerSessionId ? `transferred to ${result.task.ownerSessionId}` : 'released'}: ${summary}`
+            : `You have been assigned a task: ${summary}`;
+          await this.deps.sendToSession(target, message, sessionId, recipient === 'previous' ? { trigger: false } : undefined);
+          this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'sent');
+        } catch {
+          this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'failed');
+          failedRecipients.push(recipient === 'previous' ? 'previous owner' : 'new owner');
+        }
       }
+      if (failedRecipients.length) result.warning = `Task assigned, but the ${failedRecipients.join(' and ')} notification could not be delivered.`;
       result.task = this.store.execute({ action: 'get', taskId: result.task.id }, sessionId).task;
     }
     if (args.action === 'complete') {
@@ -98,8 +102,7 @@ export class TaskService {
       if (task.status === 'completed' || task.status === 'cancelled') throw new TaskError('TASK_TERMINAL', 'A terminal task cannot be attached to a new Session.', 409);
       if (task.ownerSessionId) throw new TaskError('TASK_OWNED', `Task ${task.id} is already owned by Session ${task.ownerSessionId}.`, 409);
       const childSessionId = await create();
-      this.store.execute({ action: 'claim', taskId }, childSessionId);
-      this.store.execute({ action: 'update', taskId, note: `Attached new Session ${childSessionId}.` }, childSessionId);
+      this.store.bindChild(taskId, childSessionId);
       return childSessionId;
     });
   }

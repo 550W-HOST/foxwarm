@@ -11,7 +11,7 @@ import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
-import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
+import type { Message, MessagePart, Session, ToolScriptSubCall, LinkedTaskCompletion } from './types';
 import { RpcError } from './rpc';
 import { isToolAuthorizationPolicyUnavailable } from './toolAuthorization';
 
@@ -25,6 +25,7 @@ type ToolContext = {
   toolScriptRunId?: string;
   toolUseId?: string;
   onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
+  onLinkedTaskCompletion?: (completion: LinkedTaskCompletion) => void;
   sessionPlacement?: 'local' | 'session-worker';
   programmatic?: true;
 };
@@ -151,7 +152,7 @@ type ToolScriptResult = {
 
 type ToolScriptExecutionResult = { stdout?: string } & Pick<ToolScriptResult,
   'status' | 'runId' | 'result' | 'error' | 'waitingReason' | 'continuationId' | 'question' | 'waitingFor'
-  | 'imageParts' | 'inlineData' | 'inlineDataItems'>;
+  | 'imageParts' | 'inlineData' | 'inlineDataItems'> & { __toolPostAction?: { completedLinkedTask: LinkedTaskCompletion } };
 
 type RuntimeState = {
   stdoutParts: string[];
@@ -713,6 +714,18 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     ...(cleanedResult !== undefined ? { result: cleanedResult } : {}),
     ...(run.error ? { error: run.error } : {}),
     ...inlineDataFields,
+  };
+}
+
+/** Forward only completion receipts emitted by the Task facade in this execution slice. */
+async function executeWithTaskCompletion(ctx: ToolContext, execute: (context: ToolContext) => Promise<ToolScriptResult>): Promise<ToolScriptExecutionResult> {
+  let completion: LinkedTaskCompletion | undefined;
+  const result = await execute({ ...ctx, onLinkedTaskCompletion: signal => {
+    completion = { ...signal };
+    ctx.onLinkedTaskCompletion?.({ ...signal });
+  } });
+  return { ...projectExecutionResult(result, ctx),
+    ...(completion ? { __toolPostAction: { completedLinkedTask: completion } } : {}),
   };
 }
 
@@ -1688,7 +1701,7 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
 
   const runId = newRunId();
   const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', scriptPath, timeoutSecs });
-  return projectExecutionResult(await startRun(record, code, scriptArgs, { ...ctx, sessionId, session, toolScriptRunId: runId }), ctx);
+  return executeWithTaskCompletion(ctx, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
 }
 
 export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
@@ -1723,10 +1736,10 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
   const stdoutBeforeContinue = record.stdout || '';
 
   if (record.waiting.reason === 'agent') {
-    return projectExecutionResult(withStdoutDelta(
-      await resumeRun(record, args?.input, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
+    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      await resumeRun(record, args?.input, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
       stdoutBeforeContinue,
-    ), ctx);
+    ));
   }
 
   if (record.waiting.reason === 'timeout') {
@@ -1735,15 +1748,15 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
       throw new Error(`ToolScript run \`${runId}\` is waiting on timeout but has no pending resume payload.`);
     }
     if (pendingResume.mode === 'return') {
-      return projectExecutionResult(withStdoutDelta(
-        await resumeRun(record, pendingResume.value, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+      return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+        await resumeRun(record, pendingResume.value, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
         stdoutBeforeContinue,
-      ), ctx);
+      ));
     }
-    return projectExecutionResult(withStdoutDelta(
-      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...ctx, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
+    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
       stdoutBeforeContinue,
-    ), ctx);
+    ));
   }
 
   throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);

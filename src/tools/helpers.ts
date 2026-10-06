@@ -15,7 +15,7 @@ import {
     writeFileToolPath,
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
-import type { ToolScriptSubCall } from '../types';
+import type { ToolScriptSubCall, LinkedTaskCompletion } from '../types';
 import type { ExecRuntime } from '../execManager';
 import type { ResolvedToolPath } from '../../packages/shared/dist/resolvedPathMetadata';
 import {
@@ -56,6 +56,8 @@ export interface ToolContext {
     onResolvedPaths?: (paths: ResolvedToolPath[]) => void;
     /** Per-invocation ToolScript activity for persisted UI metadata, never model-visible result data. */
     onToolScriptSubCalls?: (subCalls: ToolScriptSubCall[]) => void;
+    /** In-process receipt of a real builtin Task completion; never a tool argument or RPC callback. */
+    onLinkedTaskCompletion?: (completion: LinkedTaskCompletion) => void;
 }
 
 // Tool function type

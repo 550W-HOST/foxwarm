@@ -98,7 +98,7 @@ test('create_child_session taskId binds the real child before delivery and rejec
     assert.equal(sessionManager.getAllSessions().size, count);
     const completion = await executeTools([{ id: 'child-task-complete', name: 'task', args: { action: 'complete', taskId, result: 'Finished delegated work' } }],
       { sessionId: child.id, session: child }, child);
-    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id] });
+    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: child.id } });
     assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
   } finally {
     await shutdownMainManagementTools();

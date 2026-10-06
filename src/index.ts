@@ -281,7 +281,7 @@ async function start() {
             (sessionId, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([sessionId], operation, admit),
         );
         sessionManager.setSessionWorkerEnqueueSink(
-            (sessionId, item, assertAdmissionActive) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item, assertAdmissionActive).then(() => {}),
+            (sessionId, item, options, assertAdmissionActive) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item, options, assertAdmissionActive).then(() => {}),
         );
         sessionManager.setSessionWorkerDeleteHandler(
             sessionId => teardownSessionWorkerForDelete({ store: sessionWorkerStore!, supervisor: sessionWorkerSupervisor! }, sessionId),

@@ -438,7 +438,7 @@ export class SessionWorkerHost {
       const session = this.session!;
       return {
         busy: !!session.busy,
-        queueLength: session.queue?.length || 0,
+        queueLength: session.queue?.filter(item => item.trigger !== false).length || 0,
         runningExecCount: this.execRuntime?.listRunningExecs().length || 0,
       };
     });

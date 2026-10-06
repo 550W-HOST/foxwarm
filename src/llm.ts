@@ -7,7 +7,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
-import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
+import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, ToolScriptSubCall, LinkedTaskCompletion, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
 import * as sessionManager from './sessionManager';
@@ -1766,6 +1766,7 @@ type ExecutedToolCall = PreparedToolCall & {
     successfulSendToSessionTarget?: string;
     successfulWaitAfterSendTarget?: string;
     successfulFinishAfterSend: boolean;
+    completedLinkedTask?: LinkedTaskCompletion;
     deferredExecCwdSync?: { nextCwd: string };
     fatalCurrentTurn?: { code: string; message: string };
 };
@@ -1937,6 +1938,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let successfulSendToSessionTarget: string | undefined;
     let successfulWaitAfterSendTarget: string | undefined;
     let successfulFinishAfterSend = false;
+    let completedLinkedTask: LinkedTaskCompletion | undefined;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
     let fatalCurrentTurn: { code: string; message: string } | undefined;
 
@@ -1981,11 +1983,15 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 stopCurrentTurn = !!result.__toolLoopControl.stopCurrentTurn;
             }
             if (result.__toolPostAction && typeof result.__toolPostAction === 'object') {
+                const taskCall = prepared.resolved?.source === 'builtin' && prepared.resolved.name === 'task';
+                const taskScriptCall = prepared.resolved?.source === 'builtin' && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
+                const completion = result.__toolPostAction.completedLinkedTask;
+                if ((taskCall || taskScriptCall) && completion?.attachedSessionId === prepared.sessionId) completedLinkedTask = completion;
                 waitForReply = result.__toolPostAction.waitForReply === true;
                 explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
                     ? result.__toolPostAction.explicitWaitId
                     : undefined;
-                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session' || prepared.call.name === 'task')
+                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session' || taskCall)
                     && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
                     ? result.__toolPostAction.successfulSendToSessionTarget
                     : undefined;
@@ -2033,6 +2039,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         successfulSendToSessionTarget,
         successfulWaitAfterSendTarget,
         successfulFinishAfterSend,
+        completedLinkedTask,
         deferredExecCwdSync,
         fatalCurrentTurn,
     };
@@ -2225,6 +2232,7 @@ export async function executeTools(
     let batchHasError = false;
     let waitForReply = false;
     const explicitWaitIds: string[] = [];
+    let completedLinkedTask: LinkedTaskCompletion | undefined;
     const successfulSendToSessionTargets: string[] = [];
     const successfulWaitAfterSendTargets: string[] = [];
     let successfulFinishAfterSend = false;
@@ -2271,6 +2279,7 @@ export async function executeTools(
             successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
         }
         successfulFinishAfterSend = successfulFinishAfterSend || execution.successfulFinishAfterSend;
+        completedLinkedTask = completedLinkedTask || execution.completedLinkedTask;
         fatalError = fatalError || execution.fatalCurrentTurn;
     }
 
@@ -2292,8 +2301,9 @@ export async function executeTools(
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-    if (waitForReply || successfulFinishAfterSend || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
+    if (waitForReply || successfulFinishAfterSend || completedLinkedTask || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
         (toolMessage as any).__toolPostAction = {
+            ...(completedLinkedTask ? { completedLinkedTask } : {}),
             ...(waitForReply ? { waitForReply: true } : {}),
             ...(successfulFinishAfterSend ? { finishAfterSend: true } : {}),
             ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),

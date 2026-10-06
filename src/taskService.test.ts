@@ -6,7 +6,7 @@ import path from 'node:path';
 import { TaskStore } from './taskStore';
 import { TaskService } from './taskService';
 
-function fixture(t: any, send: (target: string, message: string, source: string) => Promise<unknown> = async () => {}): TaskService {
+function fixture(t: any, send: (target: string, message: string, source: string, options?: { trigger?: boolean }) => Promise<unknown> = async () => {}): TaskService {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-task-service-'));
   const store = new TaskStore(path.join(root, 'tasks.sqlite'));
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -86,13 +86,14 @@ test('child attachment rejects missing or owned tasks before creation and serial
   assert.equal(effects, 1);
 });
 
-test('optional assignment notification is bounded, after commit, deduplicated and never rolls assignment back', async t => {
+test('assignment notices commit before previous/new delivery, preserve independent status and skip successful repeats', async t => {
   const sends: any[] = [];
-  let fail = false;
-  const service = fixture(t, async (target, message, source) => {
-    sends.push({ target, message, source });
-    assert.equal(service.get(taskId).task.ownerSessionId, target);
-    if (fail) throw new Error('synthetic assignment delivery failure');
+  let failTarget: string | undefined;
+  const service = fixture(t, async (target, message, source, options) => {
+    sends.push({ target, message, source, trigger: options?.trigger !== false });
+    if (options?.trigger !== false) assert.equal(service.get(taskId).task.ownerSessionId, target);
+    else assert.equal(service.get(taskId).task.previousOwnerSessionId, target);
+    if (target === failTarget) throw new Error('synthetic assignment delivery failure');
   });
   const taskId = (await service.execute({ action: 'create', title: 'Notify', description: 'x'.repeat(4000) }, 'creator')).task.id;
   await service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'creator');
@@ -101,22 +102,32 @@ test('optional assignment notification is bounded, after commit, deduplicated an
   assert.equal(notified.task.assignmentNotificationStatus, 'sent');
   assert.match(sends[0].message, /You have been assigned a task.*task_.*Notify\nStatus: active/);
   assert.ok(sends[0].message.length < 1400);
-  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
-  assert.equal(sends.length, 1);
   service.store.close();
   await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
-  assert.equal(sends.length, 1, 'persisted successful assignment does not resend after restart');
-  await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator'), /non-null ownerSessionId/);
-  await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: 'yes' }, 'creator'), /boolean/);
-  fail = true;
-  const failed = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
-  assert.equal(failed.task.ownerSessionId, 'second');
-  assert.equal(failed.task.assignmentNotificationStatus, 'failed');
-  assert.match(failed.warning, /assigned.*notification could not be delivered/);
+  assert.equal(sends.length, 1, 'successful notification survives restart without resending');
+  failTarget = 'first';
+  const transferred = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.deepEqual(sends.slice(1).map(send => [send.target, send.trigger]), [['first', false], ['second', true]]);
+  assert.equal(transferred.task.ownerSessionId, 'second');
+  assert.equal(transferred.task.previousOwnerNotificationStatus, 'failed');
+  assert.equal(transferred.task.assignmentNotificationStatus, 'sent');
+  assert.match(transferred.warning, /previous owner notification/);
+  failTarget = undefined;
+  const retried = await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.equal(retried.task.previousOwnerNotificationStatus, 'sent');
+  assert.equal(sends.length, 4, 'only the failed previous recipient is retried');
+  const released = await service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator');
+  assert.equal(released.task.ownerSessionId, null);
+  assert.equal(released.task.previousOwnerNotificationStatus, 'sent');
+  assert.equal(released.task.assignmentNotificationStatus, null);
+  assert.deepEqual([sends[4].target, sends[4].trigger], ['second', false]);
+  assert.match(sends[4].message, /ownership released/);
+  await service.execute({ action: 'assign', taskId, ownerSessionId: null, notifySession: true }, 'creator');
+  assert.equal(sends.length, 5);
   const self = await service.execute({ action: 'assign', taskId, ownerSessionId: 'creator', notifySession: true }, 'creator');
   assert.equal(self.task.assignmentNotificationStatus, 'skipped');
-  assert.equal(self.warning, undefined);
-  assert.equal(sends.length, 2);
+  assert.equal(sends.length, 5);
+  await assert.rejects(() => service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: 'yes' }, 'creator'), /boolean/);
 });
 
 test('Session-targeted callers seed self-task progress from authority without counting older history', async t => {
@@ -130,4 +141,55 @@ test('Session-targeted callers seed self-task progress from authority without co
   await withSequence.execute({ action: 'claim', taskId }, 'creator');
   assert.deepEqual(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 12), true), []);
   assert.equal(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 41), true)[0].id, taskId);
+});
+
+test('new-owner failure and previous-owner self skip preserve committed assignment without a duplicate self send', async t => {
+  let sends = 0;
+  const service = fixture(t, async () => { sends++; throw new Error('new recipient unreachable'); });
+  const taskId = (await service.execute({ action: 'create', title: 'Self transfer' }, 'creator')).task.id;
+  await service.execute({ action: 'claim', taskId }, 'creator');
+  const result = await service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  assert.equal(result.task.ownerSessionId, 'first');
+  assert.equal(result.task.previousOwnerNotificationStatus, 'skipped');
+  assert.equal(result.task.assignmentNotificationStatus, 'failed');
+  assert.match(result.warning, /new owner notification/);
+  assert.equal(sends, 1);
+});
+
+test('an older delayed notification cannot mark a newer assignment to the same owner delivered', async t => {
+  const entered: (() => void)[] = [];
+  const release: (() => void)[] = [];
+  const gates = [0, 1].map(i => ({
+    started: new Promise<void>(resolve => { entered[i] = resolve; }),
+    finish: new Promise<void>(resolve => { release[i] = resolve; }),
+  }));
+  let delayed = 0;
+  const service = fixture(t, async (target, message) => {
+    if (target === 'first' && message.startsWith('You have been assigned')) {
+      const gate = gates[delayed++];
+      entered[delayed - 1]();
+      await gate.finish;
+    }
+  });
+  const taskId = (await service.execute({ action: 'create', title: 'Reassignment' }, 'creator')).task.id;
+  const original = service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  await gates[0].started;
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
+  const reassigned = service.execute({ action: 'assign', taskId, ownerSessionId: 'first', notifySession: true }, 'creator');
+  await gates[1].started;
+  release[0](); await original;
+  assert.equal(service.get(taskId).task.assignmentNotificationStatus, 'pending');
+  release[1](); await reassigned;
+  assert.equal(service.get(taskId).task.assignmentNotificationStatus, 'sent');
+});
+
+test('opting in for an unchanged owner does not retroactively notify a previous owner from an opt-out transfer', async t => {
+  const targets: string[] = [];
+  const service = fixture(t, async target => { targets.push(target); });
+  const taskId = (await service.execute({ action: 'create', title: 'No deferred old notice' }, 'creator')).task.id;
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'first' }, 'creator');
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'second' }, 'creator');
+  await service.execute({ action: 'assign', taskId, ownerSessionId: 'second', notifySession: true }, 'creator');
+  assert.deepEqual(targets, ['second']);
+  assert.equal(service.get(taskId).task.previousOwnerNotificationStatus, null);
 });

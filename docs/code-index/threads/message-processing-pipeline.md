@@ -58,6 +58,14 @@ Stop and Run queued are rechecked after awaited ingestion, compact, and append; 
 
 The LLM layer retains the sole retry loop, delay, total physical-attempt budget, captured virtual routing generation, health/failover, requested effort, and prompt-cache key semantics. Preparation is an awaited semantic callback, separate from best-effort retry notification. If input append or compact changes committed context, the existing partial-prefix reconstruction builds a new logical request, journal, and stream identity from exact-owner committed history and the current system snapshot, without resetting the physical budget or duplicating committed output. Unchanged context retains ordinary retry identity. Exhausted/nonretryable failures, detached calls, compact planning, and low-level requests do not consume ordinary retry input.
 
+### D-pipeline-passive-task-notification
+
+[2026-10-06] A task transfer/release notice to the previous owner uses the existing authorized inter-session path with trusted internal `enqueueSessionItem(sessionId, item, { trigger: false })`. Default ingress remains triggering. The option is not a model-facing parameter or a public Worker ingress field; ordinary admission strips any unsolicited persisted trigger flag.
+
+Passive ingress joins the same identity/admission, wait transition, queue or managed inbox, and strict authority-save boundary. It persists an internal false trigger flag but skips the router trigger and managed owner/controller wake. Precommit failure restores the hot queue/meta; a postcommit failure does not undo durable admission. Restart recovery, destructive-claim release, idle-compaction release and successful finish-window handoff do not start processing for passive-only input. Once ordinary work explicitly starts processing, the same runner consumes all eligible queued rows in order.
+
+Worker placement appends the same durable mailbox intent without ensuring, spawning or invoking the Worker. Passive-only mailbox rows do not become startup work; passive hot rows do not prevent idle release. A later ordinary input or explicit retry/dequeue consumes them through the existing exact-owner append/save-before-ack path. Authorization, deletion claims and supported managed-session placement restrictions remain unchanged. No second queue or hidden-input tool is added.
+
 ## Invariants
 
 - Only one queue processor claims a session at a time.

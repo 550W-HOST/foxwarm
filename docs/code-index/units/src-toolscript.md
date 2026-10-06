@@ -26,6 +26,8 @@ ToolScript result/run types are internal, not exported TypeScript API types.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.
 - `open_managed_session`, `session_step`, `release_managed_session`, `wait_for_managed_event` — explicit managed-session controller operations.
 
+The exact-owner Task facade emits a process-local completion receipt containing taskId/attachedSessionId. Each run/continue slice forwards only receipts actually emitted during that slice into its internal outer post-action; nested script contexts forward the same trusted callback. Script return values, stdout and saved run data are never scanned for completion claims. The existing child-handoff consumer handles the receipt; TaskService remains the sole completion/creator-notification owner.
+
 Unknown external function names are returned to Monty as runtime exceptions that list the available host API. Monty OS-function suspensions are rejected rather than exposed or mounted. There is no separate ToolScript file-I/O or MCP client path; scripts compose normal Foxwarm tools through `call_tool`.
 
 ## Stable-symbol index

@@ -1154,12 +1154,13 @@ test('successful compaction removes prior completion notices from the force-kept
 
     const compactCompletions = session.history.filter(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"')));
     assert.equal(compactCompletions.length, 1, 'only the current compact completion remains active');
-    assert(compactCompletions[0].parts.some(part => (part.system || '').includes('goal-reminder')), 'current completion retains the current goal reminder');
+    assert.equal(compactCompletions[0].parts.length, 1, 'new completion emits only the lifecycle marker, not a Goal reminder');
     assert.equal(session.history.some(message => message.__meta?.seq === 3), false, 'old completion is removed even from the force-kept tail');
     assert.equal(session.history.some(message => message.parts.some(part => part.system === inheritedBoundary)), true, 'unrelated session boundary remains active');
     assert.equal(session.history.some(message => message.parts.some(part => part.text === 'recent real user content')), true, 'real content remains active');
     const archived = await archive.readArchiveMessagesBySeqRange(session.id, 3, 3);
     assert.equal(archived[0]?.message.parts[0]?.system, oldCompletion, 'old completion remains in durable archive');
+    assert.equal(archived[0]?.message.parts[1]?.system, '<foxwarm-system kind="goal-reminder" />', 'historical paired Goal marker remains readable');
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {

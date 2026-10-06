@@ -330,7 +330,18 @@ export interface QueueSource {
   senderId?: string;
 }
 
+export interface LinkedTaskCompletion {
+  taskId: string;
+  attachedSessionId: string;
+}
+
+export interface SessionEnqueueOptions {
+  trigger?: boolean;
+}
+
 export interface QueueItem {
+  /** Internal passive ingress: stays durable but does not independently start processing. */
+  trigger?: false;
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;

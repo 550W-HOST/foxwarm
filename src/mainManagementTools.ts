@@ -157,7 +157,12 @@ export async function getMainTaskContext(request: TaskContextRequest): Promise<T
 export const tool_send_to_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_session', args, ctx);
 export const tool_create_child_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_child_session', args, ctx);
 export const tool_send_to_channel = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_channel', args, ctx);
-export const tool_task = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('task', args, ctx);
+export const tool_task = async (args: ToolArgs, ctx?: ToolContext) => {
+  const result = await executeMainManagementTool('task', args, ctx);
+  const completion = result?.__toolPostAction?.completedLinkedTask;
+  if (completion && completion.attachedSessionId === ctx?.sessionId) ctx?.onLinkedTaskCompletion?.({ ...completion });
+  return result;
+};
 export const tool_list_agents = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('list_agents', args, ctx);
 export const tool_create_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_timer', args, ctx);
 export const tool_list_timers = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('list_timers', args, ctx);

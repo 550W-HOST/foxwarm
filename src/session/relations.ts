@@ -1,7 +1,7 @@
 import fs from 'fs-extra';
 import { getSessionHistoryFilePath, getSessionHistoryStore } from './metadataStore';
 import { AgentMetadata } from './agentMetadata';
-import { MessagePart, QueueItem, Session } from '../types';
+import { MessagePart, QueueItem, SessionEnqueueOptions, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 
@@ -11,7 +11,7 @@ type SessionRelationsDeps = {
   getSessionCatalog?: (sessionId: string) => Session | undefined;
   saveSession: (sessionId: string) => Promise<void>;
   saveSessionCatalogEntries: (sessionIds: string[]) => Promise<void>;
-  enqueueSessionItem: (sessionId: string, item: QueueItem) => Promise<void>;
+  enqueueSessionItem: (sessionId: string, item: QueueItem, options?: SessionEnqueueOptions) => Promise<void>;
   getSessionsMap: () => Map<string, Session>;
   getAgentMetadata: (agentName: string) => AgentMetadata;
   notifySessionListUpdated: () => void;
@@ -319,7 +319,8 @@ export async function sendToSession(
   deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getSessionCatalog' | 'getAgentMetadata' | 'enqueueSessionItem'>,
   targetSessionId: string,
   message: string,
-  fromSessionId?: string
+  fromSessionId?: string,
+  options?: SessionEnqueueOptions
 ): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   const { sourceSession: fromSession, targetSession, requestedTargetSessionId } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
   if (fromSession && fromSession.id === targetSession.id) {
@@ -357,7 +358,7 @@ export async function sendToSession(
           : 'other' as const,
     } : {}),
     parts,
-  });
+  }, options);
 
   return {
     requestedSessionId: requestedTargetSessionId,

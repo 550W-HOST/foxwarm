@@ -5,7 +5,7 @@ Secondary files: src/tools.ts, src/tools/definitions.ts, src/tools/placement.ts,
 
 ## Purpose
 
-Implements a small persistent task list shared by Sessions. A coordinator creates a task and passes its ID in an executor's initial message. The executor explicitly claims, updates, and completes the task; the coordinator observes it with list/get. This unit does not create or schedule Sessions, modify Session state, or implement review/workspace integration.
+Implements a small persistent task list shared by Sessions. A coordinator creates a task and passes its ID in an executor's initial message. The executor explicitly claims, updates, and completes the task; the coordinator observes it with list/get. Task actions do not schedule Sessions or implement review/workspace integration. Notifications use ordinary inter-session delivery, and explicit child attachment integrates with the existing creation and completion boundaries.
 
 ## Key exports and function index
 
@@ -16,6 +16,8 @@ Implements a small persistent task list shared by Sessions. A coordinator create
 | `validateTaskArgs` | Strict action-specific keys, required fields, types, lengths and update-status validation |
 | `TaskStore.execute` | Runs a validated operation using the current caller Session identity in a SQLite transaction |
 | `TaskService` | Main-owned shared validation, Session target resolution, serial child attachment and completion delivery |
+| `TaskStore.bindChild` | Atomically claims and records the real newly created attached Session |
+| `TaskStore.markAssignmentNotification` | Records independent new/previous delivery status for the committed assignment revision |
 | `TaskStore.markCompletionNotification` | Records sent/failed notification after durable completion |
 | `registerWebUiTaskRoutes` | Authenticated bounded reads and Session-targeted management writes |
 | `TaskStore.close` | Releases the lazy SQLite connection |
@@ -45,7 +47,7 @@ Exact tool description:
 | `status` | For list, filter by task status. For update, set only open or active. |
 | `note` | Short progress note to append when updating a task. |
 | `result` | Short completion summary for a completed task. |
-| `notifySession` | When true, notify the assigned Session after the task assignment is committed. |
+| `notifySession` | When true, send task notifications after the assignment is committed: notify the new owner, and notify the previous owner when ownership changes or is released. |
 | `ownerSessionId` | Existing Session ID to receive the task, or null to release the current owner. |
 | `reason` | Short reason for cancelling a task. |
 
@@ -55,7 +57,7 @@ Exact tool description:
 - `list`: List bounded task summaries, optionally filtered by status. Supports open, active, completed, cancelled.
 - `get`: Inspect one task and its bounded child/note summary. Requires taskId.
 - `claim`: Claim an unowned task for the current Session. A task owned by another Session is not transferred. Same-owner retries return the current task; a fresh claim sets active.
-- `assign`: Assign or transfer a task to an existing Session, or release its owner. Creator or current owner may assign; targets resolve through the real Session catalog. Null releases ownership and sets open; a target sets active. An authored short note records each transfer. Optional notifySession defaults false; true sends a bounded ordinary notification after commit, with pending/sent/failed/skipped state. Release with notification is rejected; self-target is skipped without warning. Successful/pending same-owner retries do not resend, including after reopen; failed delivery may be retried explicitly. Notification failure returns a warning without undoing assignment.
+- `assign`: Assign or transfer to an existing Session, or release its owner. Creator/current owner may assign; targets resolve through the real catalog. Null releases ownership and sets open; a target sets active. Changes record a short authored note. Optional `notifySession` defaults false. When true, the committed change notifies a new owner normally and a previous owner on transfer/release through queue-only delivery. Self targets are skipped. Each recipient has independent persisted pending/sent/failed/skipped state. Successful/pending retries do not resend; explicitly repeating a failed notification retries only that recipient. An assignment revision prevents an older delayed result from marking a newer assignment delivered. Null ownership may notify the released owner, but there is no new recipient. Notification failure warns without undoing assignment. Queue-only behavior is canonical in [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
 - `update`: Update an owned or otherwise permitted task description, status, or progress note. Requires at least one change; only the owner, or creator when unclaimed, may update. Status accepts only open/active and never releases ownership.
 - `complete`: Mark a task completed with an optional result summary. Only the owner, or creator when unclaimed, may complete. After commit, the shared service sends a normal inter-session notification to the creator. Delivery failure returns a warning without undoing completion. Self completion records skipped without a redundant self-send or warning. Pending/sent/failed/skipped state survives restart; repeated completion never resends. No background notification retry runs.
 - `cancel`: Cancel a task with an optional reason. Creator or owner may cancel; reason is recorded as an authored note.
@@ -77,14 +79,14 @@ Bodies cannot override route action/taskId or supply arbitrary creator identity.
 
 ## Tests
 
-`session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries.
+`session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `sessionQueueOptions.test.ts` and real Worker ingress tests cover passive persistence/restart without wake; the detached runner exercises finish-window passivity and three-Session linked completion. `taskService.test.ts` verifies independent recipient results, retries and assignment-revision races. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries.
 
 ## Legacy Goal and reminders
 
-TaskStore persists a unique legacy Session mapping plus per-task visible-message checkpoint/count. Full migrated Goal text stays in the task description even when bounded get output abbreviates it. The current interface has no `set_goal`, reminder interval parameter or reminder action. Migration, compaction checkpoints and request-only delivery are canonical in [task context](src-session-task-context.md#d-tasks-replace-goal). A successful completion notification exposes its real target to the ordinary tool post-action path so a child reporting to its parent is not reminded to report again.
+TaskStore persists a unique legacy Session mapping plus per-task visible-message checkpoint/count. Full migrated Goal text stays in the task description even when bounded get output abbreviates it. The current interface has no `set_goal`, reminder interval parameter or reminder action. Migration, compaction checkpoints and request-only delivery are canonical in [task context](src-session-task-context.md#d-tasks-replace-goal). A successful completion notification exposes its real creator target to the ordinary tool post-action path. When the completing Session is the recorded attached child, a separate internal completion signal resolves that child’s report-required handoff boundary even if its actual parent differs from the creator. This does not fabricate a successful parent send or suppress actionable error reporting. Direct and unified dispatch recognize the resolved builtin identity. A caller-local Task facade hook forwards the trusted taskId/attachedSessionId receipt through nested ToolScript execution; the outer run/continue tool uses the same handoff consumer. Arbitrary script result data cannot create a receipt.
 
 ## Design decisions
 
 ### D-tasks-small-session-owned-work
 
-[2026-10-06] Use one builtin with create/list/get/claim/assign/update/complete/cancel actions for explicit Session-coordinated work, not a scheduling, review or workspace platform. Creator/owner identities come from ToolContext. ParentTaskId is immutable and may reference only an existing task at creation, so the supported interface cannot construct self-links or cycles. Tasks do not mutate Session semantic ownership, history or lifecycle state. Completion notification uses ordinary inter-session delivery.
+[2026-10-06] Use one builtin with create/list/get/claim/assign/update/complete/cancel actions for explicit Session-coordinated work, not a scheduling, review or workspace platform. Creator/owner identities come from ToolContext. ParentTaskId is immutable and may reference only an existing task at creation, so the supported interface cannot construct self-links or cycles. Task fields and progress stay in the task store, not Session.history/Archive. Completion notification uses ordinary inter-session delivery; attached-child completion resolves the existing handoff boundary. No separate notification transport or scheduler is introduced.
