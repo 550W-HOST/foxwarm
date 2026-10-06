@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
@@ -146,8 +147,68 @@ public sealed class ProcessRestartTests
         }
     }
 
+    [Fact]
+    public async Task Real_owned_busy_producer_recovers_after_abrupt_process_exit()
+    {
+        var ownedRoot = Path.Combine(Path.GetTempPath(), $"foxwarm-dotnet-busy-restart-{Guid.NewGuid():N}");
+        var resultA = Path.Combine(ownedRoot, "a.json"); var resultB = Path.Combine(ownedRoot, "b.json"); var effectRoot = Path.Combine(ownedRoot, "effects");
+        Directory.CreateDirectory(effectRoot);
+        await using var server = new LoopbackResponsesServer(async (stream, _) =>
+        {
+            var buffer = new byte[1];
+            await stream.ReadAtLeastAsync(buffer, 1, throwOnEndOfStream: false);
+        });
+        Process? processA = null;
+        try
+        {
+            processA = StartRestartHarness("busy-a", ownedRoot, resultA, server.BaseUri, effectRoot);
+            var ready = await WaitForResultAsync(resultA, TimeSpan.FromSeconds(15));
+            Assert.True(ready["busy"]!.GetValue<bool>());
+            await server.Request.WaitAsync(TimeSpan.FromSeconds(5));
+            processA.Kill(); await processA.WaitForExitAsync();
+
+            using var processB = StartRestartHarness("busy-b", ownedRoot, resultB, null, null);
+            await processB.WaitForExitAsync(); Assert.Equal(0, processB.ExitCode);
+            var recovered = JsonNode.Parse(await File.ReadAllTextAsync(resultB))!.AsObject();
+            Assert.False(recovered["busy"]!.GetValue<bool>()); Assert.False(recovered["stopping"]!.GetValue<bool>()); Assert.Equal(1, recovered["queueCount"]!.GetValue<int>());
+            Assert.Contains(recovered["queueSystems"]!.AsArray(), value => value?.GetValue<string>().Contains("type=\"session-resumed\"", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            if (processA is { HasExited: false }) processA.Kill(entireProcessTree: true);
+            if (Directory.Exists(ownedRoot)) Directory.Delete(ownedRoot, true);
+        }
+    }
+
     private static string CompletedSse(JsonArray output) =>
         $"data: {{\"type\":\"response.completed\",\"response\":{{\"output\":{output.ToJsonString()}}}}}\n\n";
+
+    private static Process StartRestartHarness(string mode, string root, string resultPath, Uri? baseUri, string? effectRoot)
+    {
+        var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (string.IsNullOrWhiteSpace(dotnetRoot)) throw new InvalidOperationException("DOTNET_ROOT is required for restart harness tests.");
+        var dotnet = Path.Combine(dotnetRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        var harness = Path.Combine(AppContext.BaseDirectory, "Foxwarm.DevTools.dll");
+        var start = new ProcessStartInfo(dotnet) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add(harness); start.ArgumentList.Add("session-restart"); start.ArgumentList.Add(mode); start.ArgumentList.Add(root); start.ArgumentList.Add("s"); start.ArgumentList.Add(resultPath);
+        if (baseUri is not null && effectRoot is not null) { start.ArgumentList.Add(baseUri.AbsoluteUri); start.ArgumentList.Add(effectRoot); }
+        return Process.Start(start) ?? throw new InvalidOperationException("Unable to start restart harness process.");
+    }
+
+    private static async Task<JsonObject> WaitForResultAsync(string path, TimeSpan timeout)
+    {
+        using var cancellation = new CancellationTokenSource(timeout);
+        while (true)
+        {
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (File.Exists(path))
+            {
+                try { return JsonNode.Parse(await File.ReadAllTextAsync(path, cancellation.Token))!.AsObject(); }
+                catch (JsonException) { }
+            }
+            await Task.Delay(20, cancellation.Token);
+        }
+    }
 
     private static async Task<ChildRun> RunHarnessAsync(
         string mode,

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Foxwarm.Sessions;
 
@@ -117,10 +118,14 @@ internal sealed partial class SessionManager
 
     private static bool HasTrailingResumeEvent(QueueItem item)
     {
-        if (item.Type != QueueItemType.Background || item.Parts is null || item.Parts.Count != 1) return false;
+        if (item.Type != QueueItemType.Background || item.Source is not null || item.Message is not null || item.Parts is null || item.Parts.Count != 1) return false;
         var system = SessionWait.Text(item.Parts[0]["system"]);
-        return system is not null && system.Contains("type=\"session-resumed\"", StringComparison.Ordinal)
-            && system.Contains("kind=\"event\"", StringComparison.Ordinal);
+        if (system is null) return false;
+        var match = Regex.Match(system, "^<foxwarm-system\\s+(?<attributes>[^>]*)\\s*/>$", RegexOptions.CultureInvariant);
+        if (!match.Success) return false;
+        var attributes = match.Groups["attributes"].Value;
+        return Regex.IsMatch(attributes, "(?:^|\\s)kind=\"event\"(?:\\s|$)", RegexOptions.CultureInvariant)
+            && Regex.IsMatch(attributes, "(?:^|\\s)type=\"session-resumed\"(?:\\s|$)", RegexOptions.CultureInvariant);
     }
 
     internal static void ValidateExecutionEnvironment(JsonObject envelope, string workspace, string processCwd)

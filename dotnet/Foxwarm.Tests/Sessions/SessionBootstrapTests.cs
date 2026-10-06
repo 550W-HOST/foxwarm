@@ -16,34 +16,21 @@ public sealed class SessionBootstrapTests
         const string content = "  Original\r\n<unescaped event body> & quotes \" remain.\n";
         var wrapper = SessionBoundary.SessionEvent("onboot", "ONBOOT: " + content);
         var time = Regex.Match(wrapper, "time=\"([^\"]+)\"").Groups[1].Value;
-        var sourceModels = JsonNode.Parse("""[{"default":"","models":{}},{"default":"a","models":{"a":{"providerKey":"a","model":"wire"}}},{"default":"route","models":{"route":{"providerType":"session-hash","virtualRouting":{}}}},{"default":"route","models":{"route":{"providerType":"failover","virtualRouting":{}}}}]""")!;
         var app = new JsonObject { ["llm"] = new JsonObject { ["contextLimit"] = 20000, ["compactThresholdPercent"] = .85 } };
         var session = new JsonObject { ["model"] = "old-model", ["effort"] = "low", ["childModelDefault"] = "old-child", ["childEffortDefault"] = "max" };
-        var input = new JsonObject { ["time"] = time, ["content"] = content, ["models"] = sourceModels, ["app"] = app.DeepClone(), ["session"] = session.DeepClone() };
+        var input = new JsonObject { ["time"] = time, ["content"] = content, ["app"] = app.DeepClone(), ["session"] = session.DeepClone() };
         var repo = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT") ?? throw new InvalidOperationException("Owned source fixture root is required.");
         using var process = Process.Start(new ProcessStartInfo("node") { WorkingDirectory = repo, ArgumentList = { Path.Combine(repo, "dotnet", "onboot-fixture-ts.mjs") }, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
         await process.StandardInput.WriteAsync(input.ToJsonString()); process.StandardInput.Close(); var output = await process.StandardOutput.ReadToEndAsync(); var error = await process.StandardError.ReadToEndAsync(); await process.WaitForExitAsync(); Assert.True(process.ExitCode == 0, error); var expected = JsonNode.Parse(output)!;
         Assert.Equal(expected["wrapper"]!.GetValue<string>(), wrapper);
-        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         var empty = HostModels.Parse(new JsonObject { ["providers"] = new JsonObject() }, app);
-        await using var manager = new SessionManager(data, work, Options, empty); await manager.LoadMainHostAsync(); var created = await manager.CreateNamedAsync("main", "main", null, null);
-        var envelope = (JsonObject)created.Entry.Snapshot().AuthorityEnvelope.DeepClone(); foreach (var (key, value) in session) envelope[key] = value?.DeepClone();
-        var snapshot = created.Entry.Snapshot() with { AuthorityEnvelope = envelope };
+        var state = new SessionState("main"); var envelope = (JsonObject)state.AuthorityEnvelope.DeepClone(); foreach (var (key, value) in session) envelope[key] = value?.DeepClone();
+        var snapshot = state.Snapshot() with { AuthorityEnvelope = envelope };
         var dto = WebUiContract.Session(snapshot, empty, false, false); var presentation = expected["emptyPresentation"]!;
         foreach (var field in new[] { "model", "modelKey", "defaultModelKey", "childModelDefault", "childModelPolicySource", "effectiveChildModelKey" }) Assert.True(JsonNode.DeepEquals(presentation[field], dto[field]), field);
         Assert.Equal(presentation["effort"]!["effective"]!.GetValue<string>(), dto["effectiveEffort"]!.GetValue<string>()); Assert.True(JsonNode.DeepEquals(presentation["effort"]!["allowed"], dto["effortAllowed"])); Assert.Equal(presentation["childEffort"]!["effective"]!.GetValue<string>(), dto["effectiveChildEffort"]!.GetValue<string>());
         Assert.Equal(expected["emptyThreshold"]!.GetValue<double>(), dto["effectiveCompactThresholdTokens"]!.GetValue<double>());
         Assert.Throws<InvalidDataException>(() => empty.Resolve(null));
-        var runtimeDto = created.BuildDto(); Assert.Equal("", runtimeDto["modelKey"]!.GetValue<string>()); Assert.Equal("high", runtimeDto["effortDefault"]!.GetValue<string>()); Assert.Equal(17000, runtimeDto["effectiveCompactThresholdTokens"]!.GetValue<double>());
-        var actual = new JsonArray();
-        foreach (var kind in new[] { "empty", "concrete", "session-hash", "failover" })
-        {
-            var providers = new JsonObject(); var key = "";
-            if (kind != "empty") { providers["a"] = new JsonObject { ["providerType"] = "openai-responses", ["baseUrl"] = "http://127.0.0.1:1", ["models"] = new JsonArray("wire") }; key = "a"; }
-            if (kind is "session-hash" or "failover") { var targets = new JsonArray("a"); if (kind == "failover") { providers["b"] = providers["a"]!.DeepClone(); targets.Add("b"); } providers["route"] = new JsonObject { ["providerType"] = kind, ["targets"] = targets }; key = "route"; }
-            var catalog = HostModels.Parse(new JsonObject { ["default"] = key, ["providers"] = providers }, new JsonObject()); actual.Add(catalog.StartupSnapshotModelKey());
-        }
-        Assert.True(JsonNode.DeepEquals(expected["snapshots"], actual));
     }
     [Fact]
     public async Task Packaged_templates_seed_only_fresh_or_empty_memory_and_preserve_legacy_and_custom_files()
@@ -78,9 +65,10 @@ public sealed class SessionBootstrapTests
         using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); catalog.Upsert(Enumerable.Range(0, 1000).Select(index => SessionCatalogTests.Row("cold-" + index, index))); }
         var empty = HostModels.Parse(new JsonObject { ["providers"] = new JsonObject() }, new JsonObject()); await using var manager = new SessionManager(data, work, Options, empty); var reads = new List<string>(); manager.AdmissionReadObserved = reads.Add;
         await manager.LoadMainHostAsync(); Assert.Null(manager.Find("main")); Assert.Empty(manager.Owners()); Assert.Empty(reads); Assert.Null(manager.Catalog.Get("main")); Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.Equal(1000, manager.Catalog.List().Length);
-        var main = await manager.CreateNamedAsync("main", "main", null, null); Assert.Equal("main", main.Agent); Assert.Single(manager.Owners()); Assert.NotNull(manager.Catalog.Get("main")); Assert.True(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.False(main.Metadata().Busy);
-        Assert.Equal("", main.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.GetValue<string>()); Assert.Null(main.Entry.Snapshot().AuthorityEnvelope["model"]); Assert.Null(main.Entry.Snapshot().AuthorityEnvelope["effort"]); Assert.True(Guid.TryParse(main.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"]!.GetValue<string>(), out _));
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.CreateNamedAsync("main", "ordinary-create", null, null)); Assert.Null(manager.Catalog.Get("ordinary-create"));
+        var configured = HostModels.ForTest(Options); await using var configuredManager = new SessionManager(Path.Combine(temp.Path, "configured-data"), Path.Combine(temp.Path, "configured-work"), Options, configured); Directory.CreateDirectory(Path.Combine(temp.Path, "configured-work")); await configuredManager.LoadMainHostAsync();
+        var main = await configuredManager.CreateNamedAsync("main", "main", null, null); Assert.Equal("main", main.Agent); Assert.Single(configuredManager.Owners()); Assert.NotNull(configuredManager.Catalog.Get("main")); Assert.True(File.Exists(Path.Combine(temp.Path, "configured-data", "state", "sessions", "main.json"))); Assert.False(main.Metadata().Busy);
+        Assert.NotNull(main.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]); Assert.Null(main.Entry.Snapshot().AuthorityEnvelope["model"]); Assert.True(Guid.TryParse(main.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"]!.GetValue<string>(), out _));
+        var ordinary = await configuredManager.CreateNamedAsync("main", "ordinary-create", null, null); Assert.Equal("ordinary-create", ordinary.Id); Assert.NotNull(configuredManager.Catalog.Get("ordinary-create"));
     }
     [Fact]
     public async Task Existing_main_alias_uses_the_real_lifetime_without_new_main_or_authority_rewrite()
@@ -89,7 +77,7 @@ public sealed class SessionBootstrapTests
         using (var initial = new SessionCatalog(data)) initial.Initialize();
         await SessionCatalogMigrationTests.Authority(data, "current"); var file = Path.Combine(data, "state", "sessions", "current.json"); var bytes = await File.ReadAllBytesAsync(file);
         using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); catalog.Upsert([SessionCatalogTests.Row("current", 0, aliases: ["main"])]); }
-        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadMainHostAsync(); Assert.Equal("current", manager.Find("main")!.Id); Assert.Null(manager.Catalog.Get("main")); Assert.Equal(bytes, await File.ReadAllBytesAsync(file)); Assert.Single(manager.Owners());
+        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadMainHostAsync(); var owner = await manager.RequiredAsync("main"); Assert.Equal("current", owner.Id); Assert.Null(manager.Catalog.Get("main")); Assert.Equal(bytes, await File.ReadAllBytesAsync(file)); Assert.Single(manager.Owners());
     }
     [Fact]
     public async Task Archived_or_cold_main_does_not_force_replacement_or_eager_admission()

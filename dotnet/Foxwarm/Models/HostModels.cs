@@ -34,11 +34,6 @@ internal sealed partial class HostModels
         return rawKey is not null && entries.TryGetValue(rawKey, out var selected) ? selected
             : entries.TryGetValue(defaultKey, out var fallback) ? fallback : throw new InvalidDataException("No model is configured.");
     }
-    internal string? StartupSnapshotModelKey()
-    {
-        var catalog = Capture();
-        return catalog.entries.TryGetValue(catalog.defaultKey, out var model) && !model.IsVirtual ? model.Key : null;
-    }
     public bool Contains(string key) => owner is null ? entries.ContainsKey(key) : Capture().Contains(key);
     public IReadOnlyList<ConcreteHostModel> Options => owner is null ? displayKeys.Select(key => entries[key] with { Key = key }).ToArray() : Capture().Options;
     internal IReadOnlyCollection<ConcreteHostModel> All => owner is null ? entries.Values : Capture().All;

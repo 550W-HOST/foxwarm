@@ -402,7 +402,7 @@ A private host-only creation mode leaves model/effort unset and generates the no
 
 The former delayed `ONBOOT.md` producer and its startup wiring are removed. The template and old `onboot` queue representation remain only for memory/read compatibility; startup never fabricates a new ONBOOT event, waits an artificial delay, or redirects it to another Session.
 
-Stable entries: `AgentCatalog.BootstrapMainMemoryAsync`, `SessionManager.LoadMainHostAsync/LoadOwnersAsync/StartMainServicesAsync`, `HostModels.StartupSnapshotModelKey`, and `SessionBoundary.SystemEvent`. `SessionBootstrapTests` exercise actual packaged bytes, source wrapper/nonrouting identity functions, explicit creation, retained aliases and no-main startup.
+Stable entries: `AgentCatalog.BootstrapMainMemoryAsync`, `SessionManager.LoadMainHostAsync/LoadOwnersAsync/StartMainServicesAsync`, and `SessionBoundary.SystemEvent`. `SessionBootstrapTests` exercise actual packaged bytes, source wrapper identity, explicit creation, retained aliases and no-main startup.
 
 ### Decision: .NET lazy readiness and derived wait selector
 

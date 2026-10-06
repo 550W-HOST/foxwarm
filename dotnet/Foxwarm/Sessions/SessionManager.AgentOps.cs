@@ -197,7 +197,7 @@ internal sealed partial class SessionManager
     }
 
     private async Task<SessionOwner> CreateNamedLockedAsync(string agentName, string sessionName, string? parentId,
-        string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null, IReadOnlyList<string>? selectedFiles = null, bool startupMain = false, bool timerCreation = false, string? timerNode = null)
+        string? displayName, (string? Model, string? Effort)? inherited, JsonObject? forceModel, string? exactId = null, IReadOnlyList<string>? selectedFiles = null, bool timerCreation = false, string? timerNode = null)
     {
         if (!accepting) throw new InvalidOperationException("Host is shutting down.");
         if (!agents.Exists(agentName)) throw new InvalidDataException($"Agent '{agentName}' does not exist.");
@@ -209,9 +209,9 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("Parent Session does not exist.");
         return await WithCreationIdentityAsync(id, async () =>
         {
-        var (model, effort) = startupMain ? ((string?)null, (string?)null) : ValidateModelSettings(inherited, forceModel);
+        var (model, effort) = ValidateModelSettings(inherited, forceModel);
         if (timerCreation) model = inherited?.Model;
-        var snapshotModel = startupMain ? models.StartupSnapshotModelKey() : models.Resolve(model).Key;
+        var snapshotModel = models.Resolve(model).Key;
         var snapshotText = snapshotModel is null ? "" : await memory.BuildAsync(agentName, id, snapshotModel, selection: selectedFiles);
         var store = MakeStore(id, agentName);
         var hosted = MakeSession(id, agentName, store);

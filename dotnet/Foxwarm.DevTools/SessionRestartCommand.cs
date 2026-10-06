@@ -40,6 +40,61 @@ internal static class SessionRestartCommand
             }
         }
 
+        if (mode == "busy-b")
+        {
+            await using var manager = new SessionManager(root, root + "-workspace",
+                new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "test-model", "openai/test-model", "test-token", "instructions", 321),
+                HostModels.ForTest(new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "test-model", "openai/test-model", "test-token", "instructions", 321)));
+            var owner = await manager.RequiredAsync(sessionId);
+            var snapshot = owner.Entry.Snapshot();
+            await WriteResultAsync(new JsonObject
+            {
+                ["mode"] = mode,
+                ["pid"] = Environment.ProcessId,
+                ["startedAt"] = startedAt,
+                ["finishedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ["busy"] = snapshot.Busy,
+                ["stopping"] = snapshot.Stopping,
+                ["queueCount"] = snapshot.Queue.Count,
+                ["queueSystems"] = new JsonArray(snapshot.Queue.SelectMany(item => item.Parts ?? []).Select(part => SessionWait.Text(part["system"])).Where(text => text is not null).Select(text => JsonValue.Create(text)).ToArray())
+            });
+            return;
+        }
+
+        if (mode == "busy-a")
+        {
+            if (args.Length != 6) throw new ArgumentException("Usage: busy-a ROOT SESSION_ID RESULT_PATH BASE_URI EFFECT_ROOT");
+            var busyBaseUri = new Uri(args[4], UriKind.Absolute);
+            var busyOptions = new ResponsesClientOptions(busyBaseUri, "test-model", "openai/test-model", "test-token", "instructions", 321);
+            var busyWorkspace = root + "-workspace"; Directory.CreateDirectory(busyWorkspace);
+            await using var manager = new SessionManager(root, busyWorkspace, busyOptions, HostModels.ForTest(busyOptions));
+            await manager.LoadMainHostAsync();
+            var owner = await manager.CreateNamedAsync("main", sessionId, null, null);
+            await owner.Registry.Ingress.EnqueueAsync(sessionId, QueueItem.UserText("busy restart"));
+            _ = owner.Registry.TriggerProcessingAsync(sessionId);
+            var busyAuthority = new PersistentSessionAuthorityStore(root, sessionId);
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            SessionSnapshot? busySnapshot = null;
+            while (DateTime.UtcNow < deadline)
+            {
+                busySnapshot = await busyAuthority.LoadAsync(sessionId);
+                if (busySnapshot?.Busy == true) break;
+                await Task.Delay(10);
+            }
+            if (busySnapshot?.Busy != true) throw new TimeoutException("Owned producer did not persist busy state.");
+            await WriteResultAsync(new JsonObject
+            {
+                ["mode"] = mode,
+                ["pid"] = Environment.ProcessId,
+                ["startedAt"] = startedAt,
+                ["readyAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ["busy"] = true,
+                ["stopping"] = busySnapshot.Stopping
+            });
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+            return;
+        }
+
         if (args.Length != 6) throw new ArgumentException("Turn modes require BASE_URI and EFFECT_ROOT.");
         var baseUri = new Uri(args[4], UriKind.Absolute);
         var effectRoot = Path.GetFullPath(args[5]);
