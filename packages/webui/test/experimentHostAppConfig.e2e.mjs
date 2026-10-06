@@ -48,8 +48,12 @@ try {
   const conflictSave = await api('/api/setup/config', 'POST', { yaml: conflictRaw })
   assert.equal(conflictSave.status, 200, JSON.stringify(conflictSave))
   const conflictStatus = await api('/api/setup/status')
-  assert.equal(conflictStatus.body.channels.find(channel => channel.channelId === 'webui').running, false)
-  assert.equal(conflictStatus.body.channels.find(channel => channel.channelId === 'main-webui').running, true)
+  const conflictRows = conflictStatus.body.channels.filter(channel => channel.channelId === 'webui')
+  assert.equal(conflictRows.length, 1)
+  assert.equal(conflictRows[0].type, 'webui')
+  assert.equal(conflictRows[0].running, true)
+  assert.match(conflictRows[0].lastError, /already used by WebUI/)
+  assert.equal(conflictStatus.body.channels.some(channel => channel.channelId === 'main-webui'), false)
   const conflictRestore = await api('/api/setup/config', 'POST', { yaml: raw })
   assert.equal(conflictRestore.status, 200, JSON.stringify(conflictRestore))
 
@@ -81,6 +85,28 @@ try {
   assert.equal((channelRaw.match(/^channels:/gm) || []).length, 1)
   assert.match(channelRaw, /newUnknownField: preserved/)
   assert.match(channelRaw, /unknown: retained/)
+
+  const quotedRaw = channelRaw.replace(/^channels:/m, '"channels":')
+  const quotedSave = await api('/api/setup/config', 'POST', { yaml: quotedRaw })
+  assert.equal(quotedSave.status, 200, JSON.stringify(quotedSave))
+  const quotedChannels = await api('/api/setup/channels', 'POST', {
+    channels: { webui: { type: 'webui', enabled: true } },
+  })
+  assert.equal(quotedChannels.status, 400, JSON.stringify(quotedChannels))
+  assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), quotedRaw)
+  const quotedRestore = await api('/api/setup/config', 'POST', { yaml: channelRaw })
+  assert.equal(quotedRestore.status, 200, JSON.stringify(quotedRestore))
+
+  const spacedRaw = channelRaw.replace(/^channels:/m, 'channels :')
+  const spacedSave = await api('/api/setup/config', 'POST', { yaml: spacedRaw })
+  assert.equal(spacedSave.status, 200, JSON.stringify(spacedSave))
+  const spacedChannels = await api('/api/setup/channels', 'POST', {
+    channels: { webui: { type: 'webui', enabled: true } },
+  })
+  assert.equal(spacedChannels.status, 200, JSON.stringify(spacedChannels))
+  assert.equal((await readFile(`${fixture.data}/state/config.yaml`, 'utf8')).match(/^channels:/gm)?.length, 1)
+  const spacedRestore = await api('/api/setup/config', 'POST', { yaml: channelRaw })
+  assert.equal(spacedRestore.status, 200, JSON.stringify(spacedRestore))
 
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: `${fixture.root}/browser` })
   page = await browser.newPage()

@@ -52,35 +52,31 @@ internal sealed partial class ModelConfiguration
                 config["enabled"] is not JsonValue value
                 || !value.TryGetValue<bool>(out var configuredEnabled)
                 || configuredEnabled;
-            var isWebUi = type == "webui" && channelId == "webui";
+            var webUiIdConflict = channelId == "webui" && type != "webui";
+            var isWebUi = channelId == "webui";
             var configured = isWebUi || IsConfigured(type, config);
             result.Add(
                 new JsonObject
                 {
                     ["channelId"] = channelId,
-                    ["type"] = type,
+                    ["type"] = isWebUi ? "webui" : type,
                     ["managed"] = false,
                     ["running"] = isWebUi && webUiRunning,
                     ["configured"] = configured,
                     ["enabled"] = enabled,
                     ["details"] = new JsonArray(
-                        isWebUi
-                            ? "Main WebUI"
-                            : "External chat channels are unavailable on this server."
+                        webUiIdConflict ? "Main WebUI; This channel ID is already used by WebUI."
+                        : isWebUi ? "Main WebUI"
+                        : "External chat channels are unavailable on this server."
                     ),
                     ["lastError"] =
-                        isWebUi || !enabled
-                            ? null
-                            : "External chat channels are unavailable on this server.",
+                        webUiIdConflict ? "This channel ID is already used by WebUI."
+                        : isWebUi || !enabled ? null
+                        : "External chat channels are unavailable on this server.",
                 }
             );
         }
-        var configuredWebUi = channels["webui"] as JsonObject;
-        var configuredWebUiType = SessionWait.Text(configuredWebUi?["type"])?.Trim();
-        if (
-            webUiRunning
-            && (!channels.ContainsKey("webui") || configuredWebUiType is null or "webui")
-        )
+        if (webUiRunning && !channels.ContainsKey("webui"))
         {
             result.Add(
                 new JsonObject
@@ -92,24 +88,6 @@ internal sealed partial class ModelConfiguration
                     ["configured"] = true,
                     ["enabled"] = true,
                     ["details"] = new JsonArray("Main WebUI"),
-                    ["lastError"] = null,
-                }
-            );
-        }
-        else if (webUiRunning)
-        {
-            result.Add(
-                new JsonObject
-                {
-                    ["channelId"] = "main-webui",
-                    ["type"] = "webui",
-                    ["managed"] = false,
-                    ["running"] = true,
-                    ["configured"] = true,
-                    ["enabled"] = true,
-                    ["details"] = new JsonArray(
-                        "Main WebUI (config id `webui` is occupied by another type)"
-                    ),
                     ["lastError"] = null,
                 }
             );
@@ -294,8 +272,10 @@ internal sealed partial class ModelConfiguration
         {
             var currentRaw = ReadCurrentAppRaw();
             var current = ConfigurationYaml.Parse(currentRaw, "app config");
-            current["channels"] = channels.DeepClone();
             AppConfigurationRules.Validate(current);
+            var next = (JsonObject)current.DeepClone();
+            next["channels"] = channels.DeepClone();
+            AppConfigurationRules.Validate(next);
             var serializer = new SerializerBuilder().Build();
             var serialized = serializer.Serialize(JsonNodeToObject(channels)).TrimEnd();
             var section =
