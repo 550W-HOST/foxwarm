@@ -109,6 +109,16 @@ public sealed partial class SqliteArchiveMessageStore
 
     public string DatabasePath => databasePath;
 
+    internal string CanonicalSessionId
+    {
+        get
+        {
+            if (!File.Exists(databasePath)) return sessionId;
+            using var connection = OpenExistingReadOnly();
+            return ResolveReadOnly(connection, sessionId);
+        }
+    }
+
     public void Initialize()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);

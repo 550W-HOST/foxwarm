@@ -82,10 +82,11 @@ internal static class ArchiveControlTools
 
         var records = archive.ReadEffectiveMessagesNumericRange(first, last);
         var stats = archive.EffectiveMessageStats();
+        var canonicalSessionId = archive.CanonicalSessionId;
         var renderer = new ContextPreviewRenderer(args, 1000);
         var requested = RangeLabel("msg", first, last);
         var output = renderer.RenderItems(
-            records.Select(record => renderer.ArchivedMessage(record, sessionId)).ToArray(),
+            records.Select(record => renderer.ArchivedMessage(record, canonicalSessionId)).ToArray(),
             $"Archived messages for session `{sessionId}`{requested}.",
             matched => $"Showing {matched} of {records.Count} selected messages.",
             records.Count == 0
@@ -106,7 +107,7 @@ internal static class ArchiveControlTools
         var first = Number(args["startId"]);
         var last = Number(args["endId"]);
         var blocks = archive.ReadEffectiveBlocksNumericRange(first, last);
-        var items = blocks.Select(block => ArchiveContextReader.BlockItem(block, sessionId)).ToArray();
+        var items = blocks.Select(block => ArchiveContextReader.BlockItem(block, archive.CanonicalSessionId)).ToArray();
         var renderer = new ContextPreviewRenderer(args, 1000);
         var output = renderer.RenderItems(
             items,

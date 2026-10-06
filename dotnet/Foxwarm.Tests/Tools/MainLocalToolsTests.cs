@@ -92,7 +92,7 @@ public sealed class MainLocalToolsTests
     public async Task Real_main_turn_dispatches_local_tools_and_externalizes_then_saves_crop()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
-        await using var peer = new ScriptedResponsesSequenceServer(3, async (index, stream, _) =>
+        await using var peer = new ScriptedResponsesSequenceServer(4, async (index, stream, _) =>
         {
             JsonArray output;
             if (index == 0)
