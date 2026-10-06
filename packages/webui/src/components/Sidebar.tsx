@@ -13,7 +13,7 @@ interface SidebarProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -21,6 +21,7 @@ interface SidebarProps {
   onSelectSearch: () => void
   onSelectSetup: () => void
   onSelectLogs?: () => void
+  onSelectTasks?: () => void
   codePath: string
   codeNodeId: string
   codeOpenInNewWindow: boolean
@@ -55,6 +56,7 @@ export default function Sidebar({
   onSelectSearch,
   onSelectSetup,
   onSelectLogs,
+  onSelectTasks,
   codePath,
   codeNodeId,
   codeOpenInNewWindow,
@@ -162,7 +164,7 @@ export default function Sidebar({
         <GlobalUiSettingsMenu
           menuAlign="end"
           menuSide="top"
-          onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs}
+          onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} onOpenTasks={onSelectTasks}
           setupActive={currentView === 'setup'}
         />
       </div>

@@ -10,6 +10,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-session-list](../units/webui-session-list.md) — hierarchy, search, order, pinning, and drag behavior.
 - [webui-architecture-view](../units/webui-architecture-view.md) — agent/session architecture.
 - [webui-chat](../units/webui-chat.md) — per-session history, logical realtime events, sending/commands, ASR, and viewport state.
+- [webui-tasks](../units/webui-tasks.md) — read-only bounded task Table/Board, details, manual refresh and singleton/popup navigation.
 - [webui-logs](../units/webui-logs.md) — bounded fixed-file logger history, live tail, and approximate date navigation.
 - [webui-realtime](../units/webui-realtime.md) — one page-scoped multiplexed WebSocket, revisioned logical subscriptions, and server hub.
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
@@ -30,7 +31,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - `makeApiUrl` returns a URL object; `makeWebSocketUrl` changes its protocol to `ws:`/`wss:`.
 - Code routes remove the `/api` suffix and append deployment-relative `/vscode-web/`.
 - Main WebUI and the persistent Code frame validate exact origin plus window source. Nested Foxwarm leaf iframes post to their parent with `'*'`; the outer Code extension validates exact source plus channel/version/random nonce (not `event.origin`), then sends outer-to-inner messages to the exact leaf `frameOrigin`. These bridges are not API URL transport.
-- Top-level tab popups use a separate versioned same-origin URL mode. They mount one Chat, terminal, Agents, Search, Logs, or Setup leaf without the workbench store; Code uses its existing standalone `/vscode-web/` URL. Popup target IDs may be URL parameters, but authentication tokens never are.
+- Top-level tab popups use a separate versioned same-origin URL mode. They mount one Chat, terminal, Agents, Search, Logs, Tasks, or Setup leaf without the workbench store; Code uses its existing standalone `/vscode-web/` URL. Popup target IDs may be URL parameters, but authentication tokens never are.
 - Download and extension routes preserve reverse-proxy prefixes and do not assume site root.
 
 ## State ownership
@@ -97,7 +98,7 @@ All REST, SSE, WebSocket, download, Code, extension, and embedded URLs derive fr
 
 ### D-webui-workbench-shell
 
-Chat, terminal, Agents, Setup, Search, Logs, and Code use one tab/pane workbench. Agents, Setup, Search, and Logs are singleton tabs; forced initial Setup is non-closable.
+Chat, terminal, Agents, Setup, Search, Logs, Tasks, and Code use one tab/pane workbench. Agents, Setup, Search, Logs, and Tasks are singleton tabs; forced initial Setup is non-closable.
 
 ### D-webui-tab-popout
 

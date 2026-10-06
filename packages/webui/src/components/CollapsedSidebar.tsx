@@ -12,6 +12,7 @@ interface CollapsedSidebarProps {
   onSelectSearch: () => void
   onSelectSetup: () => void
   onSelectLogs: () => void
+  onSelectTasks?: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>
 }
@@ -32,6 +33,7 @@ export default function CollapsedSidebar({
   onSelectSearch,
   onSelectSetup,
   onSelectLogs,
+  onSelectTasks,
   onToggleCollapsed,
   unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
@@ -102,7 +104,7 @@ export default function CollapsedSidebar({
         <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text-strong">
           <History className="h-4 w-4" />
         </button>
-        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} />
+        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} onOpenTasks={onSelectTasks} />
       </div>
     </div>
   )

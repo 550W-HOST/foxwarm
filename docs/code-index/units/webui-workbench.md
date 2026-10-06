@@ -16,7 +16,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - `useWorkbenchTabMenu` — existing Keep/copy/popout/close actions shared by strips and header icons
 - `useWorkbenchStore` — Zustand store with all workbench state and actions
 - `getWorkbenchTabById` — standalone accessor for a tab by ID
-- `WorkbenchTab`, `WorkbenchLayoutNode`, `WorkbenchPaneNode`, `WorkbenchSplitNode`, `WorkbenchPersistedState`, `WorkbenchDropTarget` — core types, including `chat`, `terminal`, `vscode`, `agents`, `search`, `logs`, and `setup` tab records
+- `WorkbenchTab`, `WorkbenchLayoutNode`, `WorkbenchPaneNode`, `WorkbenchSplitNode`, `WorkbenchPersistedState`, `WorkbenchDropTarget` — core types, including `chat`, `terminal`, `vscode`, `agents`, `search`, `logs`, `tasks`, and `setup` tab records
 - `createPaneNode`, `createSplitNode`, `createWorkbenchId`, `findPaneNode`, `findPaneContainingTab`, `getPaneIds`, `getPaneNodes`, `getFlattenedTabIds`, `mapLayoutTree`, `removePaneFromLayout`, `replacePaneWithSplit`, `normalizePersistedWorkbenchState`, `findPaneBelow` — layout tree utilities
 
 ## Function Index
@@ -90,14 +90,16 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - Context menus also expose `Move to new window` for every tab type. A terminal draft keeps the item disabled until it has a backend terminal ID. App owns popup/confirmation/route behavior and removes the tab through the ordinary layout-only store action without invoking its separate resource-close lifecycle.
 - Bulk close operations still run each tab's ordinary resource and component close lifecycle. `Close others` preserves its target tab, while `Close all` may leave the pane empty and a forced Setup tab remains protected. Route fencing and final publication are canonical in [D-webui-app-route-close](./webui-app.md#d-webui-app-route-close).
 - Tab-level pinning has been removed. Persisted v4 and migrated v3 records may still contain a legacy `pinned` key; normalization accepts the record, strips that key, and future writes preserve the existing tab order in one row.
-- Persisted state normalization intentionally drops old `workspace` and `file` tab records; preserves current `vscode`, `agents`, `search`, `logs`, and `setup` tabs (normalizing the Code and History titles); and prunes panes that only referenced removed tab types. Search tabs retain their `search` type and `system:search` identity; their History icon matches the footer history-clock icon.
+- Persisted state normalization intentionally drops old `workspace` and `file` tab records; preserves current `vscode`, `agents`, `search`, `logs`, `tasks`, and `setup` tabs (normalizing the Code and History titles); and prunes panes that only referenced removed tab types. Search tabs retain their `search` type and `system:search` identity; their History icon matches the footer history-clock icon.
 - Chat previews use the same `chat:<sessionId>` ID as kept tabs; `preview` is a presentation/reuse flag, not a separate tab identity. Persisted old previews whose ID does not name their Session (including legacy random IDs) are discarded along with their layout references. Current canonical previews and kept tabs survive reload; unrelated tabs remain intact.
+
+Tasks tab identity, read-only bounded display and popout semantics are documented in [WebUI Tasks](./webui-tasks.md).
 
 Logs tab identity, bounded display and popout semantics are documented in [WebUI Logs](./webui-logs.md).
 
 ### Single-tab headers
 
-- Each sole non-Code tab has a content-header Close control and an icon drag handle. Chat and Setup use `ContentHeader`; Terminal, Agents, History, and Logs retain their own header layout. Terminal's compact X and adjacent terminal icon fit inside its existing status row.
+- Each sole non-Code tab has a content-header Close control and an icon drag handle. Chat and Setup use `ContentHeader`; Terminal, Agents, History, Logs, and Tasks retain their own header layout. Terminal's compact X and adjacent terminal icon fit inside its existing status row.
 - A pane-owned context supplies the exact tab and ordinary close/menu callbacks only while the strip is hidden. It is absent from popup and Code-embedded leaf roots. Setup suppresses its duplicate right-side Close in this mode; forced OOBE still refuses closure through App's existing guard.
 - Only the icon registers `useDraggable` with the existing tab ID and `{ type: 'tab', paneId }` data. The strip and icon never register the same ID simultaneously. Header/title/Close are not drag activators; Close isolates pointer-down. App's existing drag-end, Keep, overlay, and center/edge drop semantics remain unchanged.
 - Icon click, context menu, or Shift+F10 opens the shared existing tab menu, retaining Keep, copy, Move to new window, and close operations. A terminal without a backend ID retains the existing disabled popout action. Header X uses App's ordinary resource-close and route-fencing lifecycle, not Back navigation.
@@ -109,7 +111,7 @@ Logs tab identity, bounded display and popout semantics are documented in [WebUI
 ## Integration
 
 - `WorkbenchLayout` is the top-level layout renderer, receiving a `renderPane` callback that connects pane IDs to actual content components elsewhere in the app.
-- `useWorkbenchStore` is consumed by parent orchestration components to open chat, terminal, Agents, Setup, Search, Logs, and Code tabs, manage focus, and handle drag-end events that call `moveTabToPane`, `dockTabToPaneEdge`, or `splitPaneWithTab`.
+- `useWorkbenchStore` is consumed by parent orchestration components to open chat, terminal, Agents, Setup, Search, Logs, Tasks, and Code tabs, manage focus, and handle drag-end events that call `moveTabToPane`, `dockTabToPaneEdge`, or `splitPaneWithTab`.
 - The `reconcileTabs` action allows external systems (e.g., session managers) to bulk-update tabs and layout atomically.
 - `getWorkbenchTabById` provides non-reactive access for imperative code outside React components.
 - Drop target types (`WorkbenchDropTarget`) define the contract between drag-end handlers and store actions.

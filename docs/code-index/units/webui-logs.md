@@ -47,7 +47,7 @@ A lookup reads the latest and first windows, performs at most 20 byte-bisection 
 
 ### D-webui-logs-fixed-file-and-near-time
 
-Logs is one singleton Main WebUI workbench tab reached by the settings menu's `Open logs` action. It supports the same restoration and top-level leaf popout mechanism as other system tabs. Code's embedded sidebar opens that same-origin popup leaf rather than introducing a Code editor or host bridge. The Application menu actions are `Open setup`, `Reload WebUI`, and `Open logs`.
+Logs is one singleton Main WebUI workbench tab reached by the settings menu's `Open logs` action. It supports the same restoration and top-level leaf popout mechanism as other system tabs. Code's embedded sidebar opens that same-origin popup leaf rather than introducing a Code editor or host bridge. The Application menu includes `Open setup`, `Reload WebUI`, and `Open logs`; [Tasks](./webui-tasks.md) uses the same menu and popup flow.
 
 History begins at the file tail and stays bounded by bytes. Live output follows that same file through the existing page-scoped realtime connection. New pretty file records include complete dates and time zones; older HH-only records remain browseable but have no guessed date. Time navigation is a bounded jump **near** a time, not a full-file exact search, earliest-after guarantee, or persistent indexing service. Concurrent processes can write non-monotonic timestamps, and finite probes can miss a dated region or a nearer record. The UI reports the actual approximate result or a lookup failure; it does not disguise the newest window as a successful hit. Reset detection covers observable file replacement/shrinking, not truncate-and-regrow sequences hidden between observations.
 

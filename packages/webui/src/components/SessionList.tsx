@@ -13,7 +13,7 @@ interface SessionListProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession?: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -21,6 +21,7 @@ interface SessionListProps {
   onSelectSearch: () => void
   onSelectSetup: () => void
   onSelectLogs?: () => void
+  onSelectTasks?: () => void
   codePath: string
   codeNodeId: string
   codeOpenInNewWindow: boolean
@@ -53,6 +54,7 @@ export default function SessionList({
   onSelectSearch,
   onSelectSetup,
   onSelectLogs,
+  onSelectTasks,
   codePath,
   codeNodeId,
   codeOpenInNewWindow,
@@ -149,7 +151,7 @@ export default function SessionList({
         <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
           <History className="h-4 w-4" />
         </button>
-        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} setupActive={currentView === 'setup'} />
+        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} onOpenTasks={onSelectTasks} setupActive={currentView === 'setup'} />
       </div>
     </div>
   )

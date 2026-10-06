@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { FileText, RefreshCw, Settings } from 'lucide-react'
+import { ClipboardList, FileText, RefreshCw, Settings } from 'lucide-react'
 import { useTheme } from '../theme/useTheme'
 import ReloadAppButton from './ReloadAppButton'
 import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
@@ -9,10 +9,11 @@ interface GlobalUiSettingsMenuProps {
   menuSide?: 'top' | 'bottom'
   onOpenSetup?: () => void
   onOpenLogs?: () => void
+  onOpenTasks?: () => void
   setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, onOpenLogs, setupActive = false }: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bottom', onOpenSetup, onOpenLogs, onOpenTasks, setupActive = false }: GlobalUiSettingsMenuProps) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
   const [menuOffset, setMenuOffset] = useState(0)
@@ -146,6 +147,7 @@ export default function GlobalUiSettingsMenu({ menuAlign = 'end', menuSide = 'bo
               <ReloadAppButton className={menuButtonClass}>
                 <span className="inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />Reload WebUI</span>
               </ReloadAppButton>
+              {onOpenTasks && <button type="button" className={menuButtonClass} onClick={() => { onOpenTasks(); setOpen(false) }}><span className="inline-flex items-center gap-2"><ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />Tasks</span></button>}
               {onOpenLogs && <button type="button" className={menuButtonClass} onClick={() => { onOpenLogs(); setOpen(false) }}><span className="inline-flex items-center gap-2"><FileText className="h-3.5 w-3.5" aria-hidden="true" />Open logs</span></button>}
             </div>
           </div>

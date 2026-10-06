@@ -70,7 +70,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.__terminalCreates = []
     const terminalTemplate = terminal
     window.fetch = (input, options = {}) => {
-      const url = new URL(typeof input === 'string' ? input : input.url, location.href)
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
       const pathname = url.pathname
       if (pathname.endsWith('/api/setup/status')) return json({ oobe: false, models: { exists: true, hasPlaceholderSecrets: false }, channels: [] })
       if (pathname.endsWith('/api/terminals') && options.method === 'POST' && terminalTemplate) {
@@ -86,6 +86,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       }
       if (pathname.includes('/api/terminals/') && terminal) return json({ terminal })
       if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
+      if (pathname.endsWith('/api/tasks')) return json({ tasks: [], omitted: 0 })
       if (pathname.endsWith('/api/nodes')) return json({ nodes: [] })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
       if (pathname.endsWith('/api/webui/settings')) return json({ settings: {} })
@@ -782,7 +783,7 @@ test('Chat follows each pane through real divider dragging without changing desk
 })
 
 test('every ordinary single tab closes from its header; Code retains the strip', async () => {
-  for (const tab of [chat('e2e-a'), system, { id: 'system:search', type: 'search', title: 'History' }, { id: 'system:logs', type: 'logs', title: 'Logs' }, { id: 'system:setup', type: 'setup', title: 'Setup' }, { id: 'vscode-web', type: 'vscode', title: 'Code' }]) {
+  for (const tab of [chat('e2e-a'), system, { id: 'system:search', type: 'search', title: 'History' }, { id: 'system:logs', type: 'logs', title: 'Logs' }, { id: 'system:tasks', type: 'tasks', title: 'Tasks' }, { id: 'system:setup', type: 'setup', title: 'Setup' }, { id: 'vscode-web', type: 'vscode', title: 'Code' }]) {
     const page = await openFixture({ tabs: [tab], activeTabId: tab.id })
     try {
       const close = tab.type === 'vscode' ? '[data-tab-id="vscode-web"] button[title="Close tab"]' : `[data-workbench-tab-close=${JSON.stringify(tab.id)}]`
@@ -951,4 +952,30 @@ test('Chat composer uses a smaller empty editor below 600px content height in De
       assert.ok((await geometry()).height > 60, themeId + ' multiline editor can grow')
     } finally { await page.close() }
   }
+})
+
+test('Tasks restores from its deployment-relative route, stays singleton, and moves to a popup leaf', async () => {
+  const page = await openFixture({ tabs: [system], activeTabId: system.id, hash: '#tab/system%3Atasks' })
+  try {
+    await page.waitForSelector('[data-tasks-view]')
+    assert.equal((await state(page)).tabsById['system:tasks'].type, 'tasks')
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-tasks-view]')
+    await page.click('[data-sidebar-footer] button[title="UI settings"]')
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === 'Tasks'))
+    await page.evaluate(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Tasks').click())
+    assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'tasks').length, 1)
+    await page.click('[data-tab-id="system:tasks"]', { button: 'right' })
+    await page.waitForSelector('[role="menu"]')
+    await page.evaluate(() => { window.__opened = []; window.open = url => { window.__opened.push(url); return { opener: null } } })
+    await page.evaluate(() => Array.from(document.querySelectorAll('[role="menu"] button')).find(button => button.textContent.trim() === 'Move to new window').click())
+    await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['system:tasks'])
+    const url = new URL(await page.evaluate(() => window.__opened[0]))
+    assert.equal(url.pathname, '/prefix/ui/')
+    assert.equal(url.searchParams.get('foxwarmPopup'), 'tasks')
+    await page.goto(url.href, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-tasks-view]')
+    assert.equal(await page.$('[data-pane-id]'), null, 'popup mounts only the Tasks leaf')
+    assert.equal(await page.$('[data-workbench-tab-close]'), null)
+  } finally { await page.close() }
 })

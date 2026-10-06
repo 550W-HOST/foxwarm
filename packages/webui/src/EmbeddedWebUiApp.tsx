@@ -133,6 +133,11 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
               <GlobalUiSettingsMenu
                 menuAlign="end"
                 onOpenSetup={openSetup}
+                onOpenTasks={() => {
+                  const popup = window.open(makeFoxwarmPopupUrl(window.location.href, { kind: 'tasks' }).toString(), '_blank', 'popup')
+                  if (!popup) window.alert('Allow popups to open tasks in a new window.')
+                  else { try { popup.opener = null } catch {} }
+                }}
                 onOpenLogs={() => {
                   const popup = window.open(makeFoxwarmPopupUrl(window.location.href, { kind: 'logs' }).toString(), '_blank', 'popup')
                   if (!popup) window.alert('Allow popups to open logs in a new window.')
