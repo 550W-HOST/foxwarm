@@ -12,6 +12,54 @@ internal sealed partial class WebUIChannel
 {
     private void RegisterAgentRoutes(WebApplication app)
     {
+        app.MapGet(
+            "/api/agents/tree",
+            () =>
+            {
+                var sessions = runtime.ListSessions();
+                var children = sessions
+                    .Where(row => SessionCatalog.Text(row["parentSessionId"]) is not null)
+                    .GroupBy(
+                        row => SessionCatalog.Text(row["parentSessionId"])!,
+                        StringComparer.Ordinal
+                    )
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Select(row => SessionCatalog.Text(row["id"])!).ToArray(),
+                        StringComparer.Ordinal
+                    );
+                var agents = sessions
+                    .Select(row =>
+                    {
+                        var id = SessionCatalog.Text(row["id"])!;
+                        return new
+                        {
+                            id,
+                            displayName = SessionCatalog.Text(row["displayName"]) ?? id,
+                            busy = SessionCatalog.Flag(row["busy"]),
+                            queueLength = SessionCatalog.Number(row["queueLength"]) ?? 0,
+                            parentSessionId = SessionCatalog.Text(row["parentSessionId"]),
+                            childSessions = children.TryGetValue(id, out var childIds)
+                                ? childIds
+                                : [],
+                            messageCount = SessionCatalog.Number(row["messageCount"]) ?? 0,
+                            lastMessageTime = SessionCatalog.Number(row["lastMessageTime"]),
+                            archived = SessionCatalog.Flag(row["archived"]),
+                        };
+                    })
+                    .ToArray();
+                return Results.Ok(
+                    new
+                    {
+                        agents,
+                        rootAgents = agents
+                            .Where(row => row.parentSessionId is null)
+                            .Select(row => row.id)
+                            .ToArray(),
+                    }
+                );
+            }
+        );
         app.MapGet("/api/agents", () => Results.Ok(new { agents = sessions.AgentRegistry() }));
         app.MapPost(
             "/api/agents",

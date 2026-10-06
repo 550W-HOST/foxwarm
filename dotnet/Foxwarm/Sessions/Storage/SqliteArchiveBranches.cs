@@ -185,6 +185,34 @@ public sealed partial class SqliteArchiveMessageStore
             .ThenBy(row => row.Timestamp)
             .ToArray();
 
+    internal IReadOnlyList<ArchiveMessageRecord> ReadEffectiveMessagesPage(
+        double? first,
+        double? last,
+        int limit,
+        bool descending = false
+    )
+    {
+        if (limit <= 0 || limit > 100)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        var rows = Lineage()
+            .SelectMany(part =>
+                part.Store.ReadMessagesNumericRange(
+                    first,
+                    MinCap(last, part.Messages),
+                    limit,
+                    descending
+                )
+            )
+            .OrderBy(
+                row => row.Seq,
+                descending ? Comparer<long>.Create((a, b) => b.CompareTo(a)) : null
+            )
+            .ThenBy(row => row.Timestamp)
+            .Take(limit)
+            .ToArray();
+        return rows;
+    }
+
     internal IReadOnlyList<ArchiveBlockRecord> ReadEffectiveBlocksRange(long first, long last) =>
         Lineage()
             .Where(part => part.Blocks >= first)

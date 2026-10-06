@@ -439,7 +439,9 @@ public sealed partial class SqliteArchiveMessageStore
 
     internal IReadOnlyList<ArchiveMessageRecord> ReadMessagesNumericRange(
         double? startSeq,
-        double? endSeq
+        double? endSeq,
+        int? limit = null,
+        bool descending = false
     )
     {
         if (!File.Exists(databasePath))
@@ -448,7 +450,12 @@ public sealed partial class SqliteArchiveMessageStore
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last) ORDER BY seq";
+            $"SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last) ORDER BY seq {(descending ? "DESC" : "ASC")}";
+        if (limit is int boundedLimit)
+        {
+            command.CommandText += " LIMIT $limit";
+            command.Parameters.AddWithValue("$limit", boundedLimit);
+        }
         command.Parameters.AddWithValue("$session", canonical);
         command.Parameters.AddWithValue("$first", (object?)startSeq ?? DBNull.Value);
         command.Parameters.AddWithValue("$last", (object?)endSeq ?? DBNull.Value);

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import Chat from './components/Chat'
+import HistorySearchView from './components/HistorySearchView'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
 import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
@@ -61,6 +62,7 @@ const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
 const AGENTS_TAB_ID = 'system:agents'
 const SETUP_TAB_ID = 'system:setup'
+const SEARCH_TAB_ID = 'system:search'
 const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
@@ -419,7 +421,7 @@ function makeSetupTab(): WorkbenchTab {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId.startsWith('terminal:') || tabId.startsWith('terminal-draft:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID
+  return tabId.startsWith('chat:') || tabId.startsWith('terminal:') || tabId.startsWith('terminal-draft:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID
 }
 
 function App() {
@@ -1351,6 +1353,11 @@ function App() {
     navigateToTab(tab.id)
   }
 
+  const openSearchTab = () => {
+    upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'History' }, { activate: true })
+    navigateToTab(SEARCH_TAB_ID)
+  }
+
   const openSetupView = (options?: { focusModels?: boolean }) => {
     if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
     const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
@@ -1374,6 +1381,11 @@ function App() {
 
     if (route.tabId === SETUP_TAB_ID) {
       upsertTab(makeSetupTab(), { activate: true })
+      return
+    }
+
+    if (route.tabId === SEARCH_TAB_ID) {
+      upsertTab({ id: SEARCH_TAB_ID, type: 'search', title: 'History' }, { activate: true })
       return
     }
 
@@ -1491,6 +1503,10 @@ function App() {
 
     if (tab.type === 'vscode') {
       return <div ref={handleVscodeFrameSlot} className="h-full min-h-0 w-full bg-fw-canvas-edge" data-foxwarm-vscode-web-slot="true" />
+    }
+
+    if (tab.type === 'search') {
+      return <HistorySearchView isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} knownSessions={sidebarSessions.map(session => session.id)} onOpenSession={openChatTab} onBack={onBack} />
     }
 
     return (
@@ -1811,6 +1827,7 @@ function App() {
           onSelectSession={openChatTab}
           onKeepSession={openPersistentChatTab}
           onSelectArchitecture={openAgentsView}
+          onSelectSearch={openSearchTab}
           onSelectSetup={openSetupView}
           codePath={codePath}
           codeNodeId={codeNodeId}
@@ -1858,6 +1875,7 @@ function App() {
             onSelectSession={openChatTab}
             onKeepSession={openPersistentChatTab}
             onSelectArchitecture={openAgentsView}
+            onSelectSearch={openSearchTab}
             onSelectSetup={openSetupView}
             codePath={codePath}
             codeNodeId={codeNodeId}

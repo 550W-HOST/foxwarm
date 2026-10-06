@@ -65,6 +65,32 @@ internal sealed partial class WebUIChannel
                     : Results.NotFound(new { error = "Session not found" })
         );
         app.MapGet(
+            "/api/sessions/{id}/debug-file",
+            async (string id, HttpRequest request) =>
+            {
+                var resolved = SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]);
+                if (resolved is null || runtime.Catalog.Get(resolved) is null)
+                    return Results.NotFound(new { error = "Session not found" });
+                var path = Path.Combine(sessions.DataRoot, "state", "sessions", resolved + ".json");
+                if (!File.Exists(path))
+                    return Results.NotFound(new { error = "Session file not found" });
+                var payload =
+                    JsonNode
+                        .Parse(
+                            await File.ReadAllTextAsync(path, request.HttpContext.RequestAborted)
+                        )
+                        ?.AsObject()
+                    ?? throw new InvalidDataException("Session file JSON must be an object.");
+                payload.Remove("contextFrontier");
+                await sessions.Images.ExternalizeTreeAsync(
+                    payload,
+                    strict: false,
+                    request.HttpContext.RequestAborted
+                );
+                return Results.Ok(new { resolvedPath = path, payload });
+            }
+        );
+        app.MapGet(
             "/api/sessions/{id}/history",
             async (string id, HttpRequest request) =>
             {
@@ -226,5 +252,163 @@ internal sealed partial class WebUIChannel
                     : Results.Ok(result);
             }
         );
+        app.MapGet(
+            "/api/history/window",
+            async (HttpRequest request) =>
+            {
+                var sessionId = request.Query["sessionId"].ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(sessionId))
+                    return Results.BadRequest(
+                        new { error = "Choose a session.", code = "HISTORY_SEARCH_INVALID" }
+                    );
+                var target = request.Query["target"].ToString() ?? "";
+                var before = ParseSafe(request.Query["beforeSeq"].ToString(), "beforeSeq");
+                var after = ParseSafe(request.Query["afterSeq"].ToString(), "afterSeq");
+                var targetEnd = ParseSafe(request.Query["targetEndSeq"].ToString(), "targetEndSeq");
+                if (target.Length == 0 && before is null && after is null)
+                    return Results.BadRequest(
+                        new
+                        {
+                            error = "Choose a message reference or page direction.",
+                            code = "HISTORY_SEARCH_INVALID",
+                        }
+                    );
+                if (targetEnd is not null && (after is null || target.Length > 0))
+                    return Results.BadRequest(
+                        new
+                        {
+                            error = "targetEndSeq is only valid with afterSeq.",
+                            code = "HISTORY_SEARCH_INVALID",
+                        }
+                    );
+                if (
+                    before is not null && after is not null
+                    || target.Length > 0 && (before is not null || after is not null)
+                )
+                    return Results.BadRequest(
+                        new
+                        {
+                            error = "Choose one paging direction.",
+                            code = "HISTORY_SEARCH_INVALID",
+                        }
+                    );
+                long? start = null;
+                long? end = null;
+                if (target.Length > 0)
+                {
+                    var match = System.Text.RegularExpressions.Regex.Match(
+                        target,
+                        "^msg#([1-9][0-9]*)(?:-([1-9][0-9]*))?$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    );
+                    if (
+                        !match.Success || !long.TryParse(match.Groups[1].Value, out var parsedStart)
+                    )
+                        return Results.BadRequest(
+                            new
+                            {
+                                error = "Use msg#123 or msg#123-130.",
+                                code = "HISTORY_SEARCH_INVALID",
+                            }
+                        );
+                    start = parsedStart;
+                    end =
+                        match.Groups[2].Success
+                        && long.TryParse(match.Groups[2].Value, out var parsedEnd)
+                            ? parsedEnd
+                            : start;
+                    if (end < start)
+                        return Results.BadRequest(
+                            new
+                            {
+                                error = "Select an ascending message range.",
+                                code = "HISTORY_SEARCH_INVALID",
+                            }
+                        );
+                }
+                var archive = sessions.ArchiveReader(sessionId);
+                var all = archive.EffectiveMessageStats();
+                if (runtime.Catalog.Get(sessionId) is null && all.Count == 0)
+                    return Results.NotFound(
+                        new { error = "Session not found", code = "SESSION_NOT_FOUND" }
+                    );
+                IReadOnlyList<ArchiveMessageRecord> records;
+                if (start is long selectedStart)
+                    records = archive.ReadEffectiveMessagesPage(selectedStart, end!.Value, 21);
+                else if (before is long beforeValue)
+                    records = archive.ReadEffectiveMessagesPage(
+                        null,
+                        beforeValue - 1,
+                        21,
+                        descending: true
+                    );
+                else if (after is long afterValue)
+                    records = archive.ReadEffectiveMessagesPage(afterValue + 1, targetEnd, 21);
+                else
+                    records = archive.ReadEffectiveMessagesPage(null, null, 21);
+                var pageHasMore = records.Count > 20;
+                if (pageHasMore)
+                    records = records.Take(20).ToArray();
+                if (before is not null)
+                    records = records.Reverse().ToArray();
+                var first = records.FirstOrDefault()?.Seq;
+                var last = records.LastOrDefault()?.Seq;
+                var messages = new JsonArray();
+                foreach (var record in records)
+                {
+                    var message = record.Message.DeepClone().AsObject();
+                    var meta = message["__meta"] as JsonObject ?? new JsonObject();
+                    meta["seq"] = record.Seq;
+                    meta["timestamp"] = record.Timestamp;
+                    meta["contextArchiveItem"] = new JsonObject
+                    {
+                        ["kind"] = "message",
+                        ["seq"] = record.Seq,
+                        ["sourceSessionId"] = record.SessionId,
+                        ["inherited"] = record.SessionId != archive.CanonicalSessionId,
+                    };
+                    message["__meta"] = meta;
+                    messages.Add(message);
+                }
+                await sessions.Images.ExternalizeTreeAsync(
+                    messages,
+                    strict: false,
+                    request.HttpContext.RequestAborted
+                );
+                return Results.Ok(
+                    new
+                    {
+                        sessionId,
+                        messages,
+                        firstSeq = first,
+                        lastSeq = last,
+                        hasEarlier = before is not null
+                            ? pageHasMore
+                            : first is long firstValue && all.First < firstValue,
+                        hasLater = after is not null
+                            ? pageHasMore
+                            : last is long lastValue && all.Last > lastValue,
+                        requestedRange = start is null
+                            ? null
+                            : new { startSeq = start, endSeq = end },
+                        shownRange = first is null ? null : new { startSeq = first, endSeq = last },
+                        hasMoreInTarget = start is not null && pageHasMore,
+                    }
+                );
+            }
+        );
+    }
+
+    private static long? ParseSafe(string value, string name)
+    {
+        if (string.IsNullOrEmpty(value))
+            return null;
+        if (
+            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            || number <= 0
+            || number > 9007199254740991L
+        )
+            throw new InvalidDataException($"{name} must be a positive safe integer.");
+        return number;
     }
 }
