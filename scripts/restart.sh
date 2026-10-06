@@ -40,10 +40,13 @@ if ! tmux list-windows -t "$SESSION" 2>/dev/null | grep -q "$WINDOW_NAME"; then
     tmux new-window -t "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR"
 fi
 
+# Keep the same pane even if tmux renames its window after the process exits.
+PANE=$(tmux display-message -p -t "$SESSION:$WINDOW_NAME" '#{pane_id}') || exit 1
+
 # Give the terminal time to handle Ctrl+C before entering the restart command.
-tmux send-keys -t "$SESSION:$WINDOW_NAME" C-c
+tmux send-keys -t "$PANE" C-c || exit 1
 sleep 1
-tmux send-keys -t "$SESSION:$WINDOW_NAME" -l "$START_CMD"
-tmux send-keys -t "$SESSION:$WINDOW_NAME" Enter
+tmux send-keys -t "$PANE" -l "$START_CMD" || exit 1
+tmux send-keys -t "$PANE" Enter || exit 1
 
 echo "Restart command sent to $FOXWARM_DIR"
