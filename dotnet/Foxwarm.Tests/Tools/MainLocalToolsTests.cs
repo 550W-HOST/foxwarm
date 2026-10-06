@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Images;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -34,7 +35,7 @@ public sealed class MainLocalToolsTests
     public async Task Memory_tools_use_agent_namespace_and_actual_mutations()
     {
         await using var f = await Fixture.Create(); var memory = f.Manager.MemoryDirectory(f.Owner.Agent); var created = await f.Call("write_memory", new JsonObject { ["filePath"] = "notes/item.md", ["content"] = "one\n" }); Assert.Null(Error(created));
-        Assert.Equal("one\n", await File.ReadAllTextAsync(Path.Combine(memory, "notes", "item.md"))); Assert.Contains("one", (await f.Call("read_memory", new JsonObject { ["filePath"] = "memory/notes/item.md" }))["output"]!.ToString());
+        Assert.Equal("one\n", await File.ReadAllTextAsync(Path.Combine(memory, "notes", "item.md"))); Assert.Contains("one", (await f.Call("read_memory", new JsonObject { ["filePath"] = "memory//notes/item.md" }))["output"]!.ToString()); Assert.NotNull(Error(await f.Call("read_memory", new JsonObject { ["filePath"] = "memory" })));
         Assert.Null(Error(await f.Call("edit_memory", new JsonObject { ["filePath"] = "notes/item.md", ["oldText"] = "one", ["newText"] = "two" })));
         Assert.Null(Error(await f.Call("apply_patch_memory", new JsonObject { ["input"] = "*** Begin Patch\n*** Add File: notes/added.md\n+added\n*** End Patch" })));
         var emptyCreated = await f.Call("write_memory", new JsonObject { ["filePath"] = "notes/empty.md", ["content"] = "" }); Assert.True(Error(emptyCreated) is null, emptyCreated.ToJsonString());
@@ -44,7 +45,7 @@ public sealed class MainLocalToolsTests
         Assert.Null(Error(await f.Call("write_memory", new JsonObject { ["filePath"] = "notes/partial.md", ["content"] = "old" }))); var partial = await f.Call("apply_patch_memory", new JsonObject { ["input"] = "*** Begin Patch\n*** Update File: notes/partial.md\n-old\n+new\n*** Update File: notes/missing.md\n-old\n+new\n*** End Patch" }); Assert.Equal("tool_error", Error(partial)); Assert.Contains("Applied operations:", partial["error"]!["message"]!.GetValue<string>()); Assert.Equal("new", await File.ReadAllTextAsync(Path.Combine(memory, "notes", "partial.md")));
         Assert.Null(Error(await f.Call("delete_memory", new JsonObject { ["filePath"] = "notes/item.md" }))); Assert.False(File.Exists(Path.Combine(memory, "notes", "item.md"))); Assert.True(File.Exists(Path.Combine(memory, "notes", "added.md")));
         Assert.NotNull(Error(await f.Call("write_memory", new JsonObject { ["filePath"] = "notes/added.md", ["content"] = "again" })));
-        var outside = Path.Combine(f.Temp.Path, "outside"); await File.WriteAllTextAsync(outside, "secret"); File.CreateSymbolicLink(Path.Combine(memory, "link.md"), outside); Assert.NotNull(Error(await f.Call("read_memory", new JsonObject { ["filePath"] = "link.md" }))); var outsideDir = Path.Combine(f.Temp.Path, "outside-dir"); Directory.CreateDirectory(outsideDir); File.CreateSymbolicLink(Path.Combine(memory, "linked"), outsideDir); Assert.NotNull(Error(await f.Call("apply_patch_memory", new JsonObject { ["input"] = "*** Begin Patch\n*** Add File: linked/new.md\n+bad\n*** End Patch" }))); Assert.False(File.Exists(Path.Combine(outsideDir, "new.md")));
+        var outside = Path.Combine(f.Temp.Path, "outside"); await File.WriteAllTextAsync(outside, "secret"); File.CreateSymbolicLink(Path.Combine(memory, "link.md"), outside); Assert.NotNull(Error(await f.Call("read_memory", new JsonObject { ["filePath"] = "link.md" }))); var outsideDir = Path.Combine(f.Temp.Path, "outside-dir"); Directory.CreateDirectory(outsideDir); File.CreateSymbolicLink(Path.Combine(memory, "linked"), outsideDir); Assert.NotNull(Error(await f.Call("apply_patch_memory", new JsonObject { ["input"] = "*** Begin Patch\n*** Add File: linked/new.md\n+bad\n*** End Patch" }))); Assert.False(File.Exists(Path.Combine(outsideDir, "new.md"))); Assert.NotNull(Error(await f.Call("apply_patch_memory", new JsonObject { ["input"] = "*** Begin Patch\n*** Add File: /tmp/absolute-memory.md\n+bad\n*** End Patch" })));
         await f.Manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes("version: 1\ndefaultAction: allow\nrules:\n- id: deny-memory\n  action: deny\n  match: {tool: {source: builtin, name: write_memory}}"), CancellationToken.None);
         var denied = await f.Call("write_memory", new JsonObject { ["filePath"] = "notes/denied.md", ["content"] = "no" }); Assert.Equal("tool_authorization_denied", Error(denied)); Assert.False(File.Exists(Path.Combine(memory, "notes", "denied.md")));
         var unified = await f.Call("call_tool", new JsonObject { ["source"] = "builtin", ["name"] = "read_memory", ["args"] = new JsonObject { ["filePath"] = "notes/added.md" } }); Assert.Null(Error(unified));
@@ -73,10 +74,18 @@ public sealed class MainLocalToolsTests
     }
 
     [Fact]
-    public async Task Image_crop_reports_the_host_gif_encoder_gap_without_claiming_support()
+    public async Task Image_crop_converts_gif_first_frame_to_png()
     {
         await using var f = await Fixture.Create(); var reference = await f.Manager.Images.PutAsync(Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="), "image/gif", "gif-source"); await ForkClearLifecycleTests.AppendAsync(f.Owner, new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["imageMeta"] = new JsonObject { ["imageId"] = "gif-source" }, ["inlineDataRef"] = reference }) });
-        var result = await f.Call("image_crop", new JsonObject { ["id"] = "gif-source", ["x"] = 0, ["y"] = 0, ["width"] = 1, ["height"] = 1 }); Assert.Equal("tool_error", Error(result)); Assert.Contains("cannot encode GIF", result["error"]!["message"]!.GetValue<string>());
+        var result = await f.Call("image_crop", new JsonObject { ["id"] = "gif-source", ["x"] = 0, ["y"] = 0, ["width"] = 1, ["height"] = 1 }); Assert.Null(Error(result)); Assert.Equal("image/png", result["mimeType"]!.GetValue<string>()); Assert.Contains("first frame", result["output"]!.GetValue<string>()); using var decoded = SKBitmap.Decode(Convert.FromBase64String(result["inlineData"]!["data"]!.GetValue<string>())); Assert.Equal(1, decoded.Width); Assert.Equal(1, decoded.Height);
+    }
+
+    [Fact]
+    public async Task Image_crop_decodes_heif_original_to_png_at_original_coordinates()
+    {
+        try { HeifDecoder.RequirePrerequisite(); } catch (ImageInputException) { return; }
+        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT") ?? throw new InvalidOperationException("HEIF crop test requires the assigned Source root."); var bytes = await File.ReadAllBytesAsync(Path.Combine(root, "src", "testFixtures", "synthetic-3x2.heic")); await using var f = await Fixture.Create(); var reference = await f.Manager.Images.PutAsync(bytes, "image/heic", "heif-source"); await ForkClearLifecycleTests.AppendAsync(f.Owner, new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["imageMeta"] = new JsonObject { ["imageId"] = "heif-source" }, ["inlineDataRef"] = reference }) });
+        var result = await f.Call("image_crop", new JsonObject { ["id"] = "heif-source", ["x"] = 1, ["y"] = 0, ["width"] = 1, ["height"] = 1 }); Assert.True(Error(result) is null, result.ToJsonString()); Assert.Equal("image/png", result["mimeType"]!.GetValue<string>()); using var decoded = SKBitmap.Decode(Convert.FromBase64String(result["inlineData"]!["data"]!.GetValue<string>())); Assert.Equal(1, decoded.Width); Assert.Equal(1, decoded.Height);
     }
 
     [Fact]

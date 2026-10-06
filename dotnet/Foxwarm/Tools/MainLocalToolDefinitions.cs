@@ -44,7 +44,7 @@ internal static class MainLocalToolDefinitions
         {
             ["input"] = String("Patch text using the same format as apply_patch.")
         }, "input")),
-        Tool("image_crop", "Crop an image from this session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again.", Parameters(new JsonObject
+        Tool("image_crop", "Crop an image from this session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation.", Parameters(new JsonObject
         {
             ["id"] = String("Image ID shown in this session."), ["x"] = Number("Left edge of the crop, in pixels."), ["y"] = Number("Top edge of the crop, in pixels."), ["width"] = Number("Crop width in pixels."), ["height"] = Number("Crop height in pixels.")
         }, "id", "x", "y", "width", "height")),

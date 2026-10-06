@@ -26,7 +26,7 @@ internal static class MemoryTools
         {
             var input = Text(args, "input"); return WorkspacePatch.Parse(input).Select(operation =>
             {
-                var path = PathOf(manager, owner, new JsonObject { ["filePath"] = operation.Path }, agent);
+                var path = PathOf(manager, owner, new JsonObject { ["filePath"] = operation.Path }, agent, false);
                 return new AuthorizationPath("input", operation.Path, AuthorizationPaths.CanonicalPotential(path));
             }).ToArray();
         }
@@ -34,11 +34,13 @@ internal static class MemoryTools
         return [new AuthorizationPath("filePath", raw, AuthorizationPaths.CanonicalPotential(resolved))];
     }
 
-    private static string PathOf(SessionManager manager, SessionOwner owner, JsonObject args, string? agent = null)
+    private static string PathOf(SessionManager manager, SessionOwner owner, JsonObject args, string? agent = null, bool normalizeLeadingSlash = true)
     {
         var raw = Text(args, "filePath");
-        var relative = raw.Trim().TrimStart('/', '\\');
-        if (relative.StartsWith("memory/", StringComparison.Ordinal) || relative.StartsWith("memory\\", StringComparison.Ordinal)) relative = relative[7..];
+        var trimmed = raw.Trim(); if (!normalizeLeadingSlash && (trimmed.StartsWith("/", StringComparison.Ordinal) || Path.IsPathRooted(trimmed))) throw new InvalidDataException("Patch file paths must be relative to the current agent memory directory.");
+        var relative = normalizeLeadingSlash ? trimmed.TrimStart('/', '\\') : trimmed;
+        if (relative.Equals("memory", StringComparison.Ordinal)) throw new InvalidDataException("filePath must include a path below the current agent memory directory.");
+        if (relative.StartsWith("memory/", StringComparison.Ordinal) || relative.StartsWith("memory\\", StringComparison.Ordinal)) relative = relative[7..].TrimStart('/', '\\');
         if (relative.Length == 0 || relative == "." || relative == "..") throw new InvalidDataException("filePath must point to a file inside the current agent memory directory.");
         var root = AuthorizationPaths.CanonicalPotential(manager.MemoryDirectory(agent ?? owner.Agent));
         var path = Path.GetFullPath(Path.Combine(root, relative));
@@ -74,7 +76,7 @@ internal static class MemoryTools
     }
 
     private static Task<JsonObject> DeleteAsync(SessionOwner owner, SessionManager manager, JsonObject args, CancellationToken token)
-    { var agent = owner.Agent; var path = PathOf(manager, owner, args, agent); token.ThrowIfCancellationRequested(); if (!File.Exists(path)) throw new FileNotFoundException("Memory file not found.", path); if (Directory.Exists(path)) throw new InvalidDataException("Cannot delete directory: " + Display(manager, agent, path)); File.Delete(path); return Task.FromResult(new JsonObject { ["output"] = "Deleted memory file `" + Display(manager, agent, path) + "`" }); }
+    { var agent = owner.Agent; var path = PathOf(manager, owner, args, agent); token.ThrowIfCancellationRequested(); if (!File.Exists(path) && !Directory.Exists(path)) throw new FileNotFoundException("Memory file not found.", path); if (Directory.Exists(path)) throw new InvalidDataException("Cannot delete directory: " + Display(manager, agent, path)); File.Delete(path); return Task.FromResult(new JsonObject { ["output"] = "Deleted memory file `" + Display(manager, agent, path) + "`" }); }
 
     private static async Task<JsonObject> PatchAsync(SessionOwner owner, SessionManager manager, JsonObject args, CancellationToken token)
     {
@@ -83,7 +85,7 @@ internal static class MemoryTools
         {
         foreach (var operation in operations)
         {
-            var patchArgs = new JsonObject { ["filePath"] = operation.Path }; var path = PathOf(manager, owner, patchArgs, agent);
+            var patchArgs = new JsonObject { ["filePath"] = operation.Path }; var path = PathOf(manager, owner, patchArgs, agent, false);
             if (operation.Action == "add") { if (File.Exists(path) || Directory.Exists(path)) throw new InvalidDataException("Cannot add file that already exists: " + operation.Path); var parent = Path.GetDirectoryName(path)!; EnsureParents(parent); Directory.CreateDirectory(parent); EnsureParents(parent); await WriteAtomic(path, string.Join('\n', operation.Lines), token); }
             else if (operation.Action == "delete") { if (!File.Exists(path)) throw new InvalidDataException("Cannot delete missing file: " + operation.Path); File.Delete(path); }
             else { var updated = WorkspacePatch.Update(await ReadText(path, token), operation.Lines, operation.Path); await WriteAtomic(path, updated, token); }

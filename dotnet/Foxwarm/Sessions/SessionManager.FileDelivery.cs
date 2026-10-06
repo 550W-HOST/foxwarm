@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 using Foxwarm.Tools;
 using SkiaSharp;
 
@@ -140,15 +141,23 @@ internal sealed partial class SessionManager
         if (match is null) throw new InvalidDataException($"Image id `{id}` not found in session `{owner.Id}`.");
         var bytes = match["inlineDataRef"] is JsonObject reference ? await Images.ReadAsync(reference, token) : match["inlineData"] is JsonObject inline ? Foxwarm.Images.ImageBlobStore.InlineBytes(inline) : throw new InvalidDataException("Image original bytes are unavailable.");
         var mime = Foxwarm.Images.ImageBlobStore.Mime(match["inlineDataRef"] as JsonObject ?? match["inlineData"] as JsonObject ?? new JsonObject());
-        if (!Foxwarm.Images.RasterCodec.IsSafeRaster(mime)) throw new InvalidDataException("image_crop supports PNG, JPEG, and WebP images on this host.");
-        if (mime == "image/gif") throw new InvalidDataException("image_crop cannot encode GIF output on this host; use PNG, JPEG, or WebP input.");
-        var probe = Foxwarm.Images.RasterCodec.Inspect(bytes, mime); if ((long)x + width > probe.Width || (long)y + height > probe.Height) throw new InvalidDataException($"Crop rectangle ({x}, {y}, {width}, {height}) exceeds source image bounds {probe.Width}x{probe.Height}.");
-        using var data = SKData.CreateCopy(bytes); using var codec = SKCodec.Create(data) ?? throw new InvalidDataException("Image raster is invalid.");
-        using var source = new SKBitmap(new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul)); if (codec.GetPixels(source.Info, source.GetPixels()) != SKCodecResult.Success) throw new InvalidDataException("Image pixel decoding failed.");
+        int sourceWidth; int sourceHeight; SKBitmap source;
+        if (mime is "image/heic" or "image/heif")
+        {
+            var decoded = Foxwarm.Images.HeifDecoder.DecodeImage(bytes); sourceWidth = decoded.Width; sourceHeight = decoded.Height; source = new SKBitmap(new SKImageInfo(sourceWidth, sourceHeight, SKColorType.Rgba8888, SKAlphaType.Unpremul)); if (source.GetPixels() == IntPtr.Zero) throw new InvalidDataException("HEIF pixel allocation failed."); Marshal.Copy(decoded.Rgba, 0, source.GetPixels(), decoded.Rgba.Length);
+        }
+        else
+        {
+            if (!Foxwarm.Images.RasterCodec.IsSafeRaster(mime)) throw new InvalidDataException("image_crop supports PNG, JPEG, WebP, and HEIF images on this host.");
+            var probe = Foxwarm.Images.RasterCodec.Inspect(bytes, mime); sourceWidth = probe.Width; sourceHeight = probe.Height; using var data = SKData.CreateCopy(bytes); using var codec = SKCodec.Create(data) ?? throw new InvalidDataException("Image raster is invalid.");
+            source = new SKBitmap(new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul)); if (codec.GetPixels(source.Info, source.GetPixels()) != SKCodecResult.Success) throw new InvalidDataException("Image pixel decoding failed.");
+        }
+        using (source) { if ((long)x + width > sourceWidth || (long)y + height > sourceHeight) throw new InvalidDataException($"Crop rectangle ({x}, {y}, {width}, {height}) exceeds source image bounds {sourceWidth}x{sourceHeight}.");
         using var cropped = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul)); if (!source.ExtractSubset(cropped, new SKRectI(x, y, x + width, y + height))) throw new InvalidDataException("Image crop failed.");
-        var format = mime switch { "image/jpeg" => SKEncodedImageFormat.Jpeg, "image/webp" => SKEncodedImageFormat.Webp, "image/gif" => SKEncodedImageFormat.Gif, _ => SKEncodedImageFormat.Png };
-        using var image = SKImage.FromBitmap(cropped); using var encoded = image.Encode(format, 90) ?? throw new InvalidDataException("Image crop encoding failed."); var outputBytes = encoded.ToArray(); var outputMime = format == SKEncodedImageFormat.Jpeg ? "image/jpeg" : format == SKEncodedImageFormat.Webp ? "image/webp" : format == SKEncodedImageFormat.Gif ? "image/gif" : "image/png";
-        return new JsonObject { ["output"] = $"[Cropped image from {id}]", ["sourceImageId"] = id, ["crop"] = new JsonObject { ["x"] = x, ["y"] = y, ["width"] = width, ["height"] = height }, ["mimeType"] = outputMime, ["sizeBytes"] = outputBytes.Length, ["inlineData"] = new JsonObject { ["mimeType"] = outputMime, ["data"] = Convert.ToBase64String(outputBytes) } };
+        var format = mime switch { "image/jpeg" => SKEncodedImageFormat.Jpeg, "image/webp" => SKEncodedImageFormat.Webp, _ => SKEncodedImageFormat.Png };
+        using var image = SKImage.FromBitmap(cropped); using var encoded = image.Encode(format, 90) ?? throw new InvalidDataException("Image crop encoding failed."); var outputBytes = encoded.ToArray(); var outputMime = format == SKEncodedImageFormat.Jpeg ? "image/jpeg" : format == SKEncodedImageFormat.Webp ? "image/webp" : "image/png";
+        var output = mime == "image/gif" ? $"[Cropped first frame from {id} as PNG; animation is not preserved]" : $"[Cropped image from {id}]";
+        return new JsonObject { ["output"] = output, ["sourceImageId"] = id, ["crop"] = new JsonObject { ["x"] = x, ["y"] = y, ["width"] = width, ["height"] = height }, ["mimeType"] = outputMime, ["sizeBytes"] = outputBytes.Length, ["inlineData"] = new JsonObject { ["mimeType"] = outputMime, ["data"] = Convert.ToBase64String(outputBytes) } }; }
     }
     private static JsonObject? FindOwnedImage(IEnumerable<JsonObject> messages, string id)
     {
