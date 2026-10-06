@@ -59,12 +59,16 @@ try {
   provider = createServer(async (request, response) => {
     if (request.method === 'GET' && (request.url === '/models' || request.url?.startsWith('/v1/models?'))) {
       const anthropic = request.url.startsWith('/v1/models?')
-      assert.equal(request.headers.authorization, anthropic ? undefined : `Bearer ${listToken}`)
+      const overridden = request.headers['x-fixture-mode'] === 'override'
+      assert.equal(request.headers.authorization, anthropic ? undefined : `Bearer ${overridden ? 'override-list' : listToken}`)
       assert.equal(request.headers['x-api-key'], anthropic ? listToken : undefined)
       if (anthropic) assert.equal(request.headers['anthropic-version'], '2023-06-01')
       listRequests.push({ url: request.url, anthropic })
       return sendJson(response, 200, {
         data: [
+          null,
+          7,
+          'plain-model',
           { id: 'setup-discovered-model' },
           { id: 'setup-discovered-model' },
           { id: '' },
@@ -72,18 +76,24 @@ try {
         ],
       })
     }
-    if (request.method === 'GET' && request.url === '/error-models') {
+    if (request.method === 'GET' && request.url === '/error-models/models') {
       return sendJson(response, 401, { error: `invalid ${listToken}` })
+    }
+    if (request.method === 'GET' && request.url === '/oversized-models/models') {
+      const body = 'x'.repeat(1024 * 1024 + 1)
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': String(body.length) })
+      return response.end(body)
     }
     if (request.method === 'POST' && request.url === '/responses') {
       assert.equal(request.headers.authorization, `Bearer ${testToken}`)
       let raw = ''
       for await (const chunk of request) raw += chunk
       const body = JSON.parse(raw)
+      assert.equal(body.model, 'other-model')
       testRequests.push(body)
       return sendCompletion(response)
     }
-    if (request.method === 'POST' && request.url === '/error-responses') {
+    if (request.method === 'POST' && request.url === '/error-responses/responses') {
       return sendJson(response, 401, { error: `invalid ${testToken}` })
     }
     return sendJson(response, 404, { error: 'not found' })
@@ -113,6 +123,13 @@ try {
   })
   assert.equal(listed.status, 200, JSON.stringify(listed))
   assert.deepEqual(listed.body.models, ['setup-discovered-model', 'setup-second-model'])
+  const overridden = await fixture.api('POST', '/api/setup/models/list', {
+    providerType: 'openai-responses',
+    baseUrl: providerRoot,
+    apiKey: listToken,
+    extraHeaders: { Authorization: 'Bearer override-list', 'x-fixture-mode': 'override' },
+  })
+  assert.equal(overridden.status, 200, JSON.stringify(overridden))
   const anthropic = await fixture.api('POST', '/api/setup/models/list', {
     providerType: 'anthropic',
     baseUrl: providerRoot,
@@ -120,14 +137,20 @@ try {
   })
   assert.equal(anthropic.status, 200, JSON.stringify(anthropic))
   assert.equal(listRequests.some(request => request.anthropic), true)
+  const nullHeaders = await fixture.api('POST', '/api/setup/models/list', {
+    providerType: 'openai-responses',
+    baseUrl: providerRoot,
+    extraHeaders: null,
+  })
+  assert.equal(nullHeaders.status, 400, JSON.stringify(nullHeaders))
 
   const tested = await fixture.api('POST', '/api/setup/models/test', {
     providerKey: 'transient',
     providerType: 'openai-responses',
     baseUrl: providerRoot,
     apiKey: testToken,
-    models: 'fixture-model',
-    testModel: 'fixture-model',
+    models: 'fixture-model, first-model',
+    testModel: 'other-model',
   })
   assert.equal(tested.status, 200, JSON.stringify(tested))
   assert.equal(tested.body.success, true)
@@ -145,6 +168,12 @@ try {
   })
   assert.equal(listError.status, 502, JSON.stringify(listError))
   assert.equal(JSON.stringify(listError.body).includes(listToken), false)
+  const oversized = await fixture.api('POST', '/api/setup/models/list', {
+    providerType: 'openai-responses',
+    baseUrl: `${providerRoot}/oversized-models`,
+    apiKey: listToken,
+  })
+  assert.equal(oversized.status, 502, JSON.stringify(oversized))
   const testError = await fixture.api('POST', '/api/setup/models/test', {
     providerType: 'openai-responses',
     baseUrl: `${providerRoot}/error-responses`,

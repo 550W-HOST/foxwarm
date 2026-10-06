@@ -54,9 +54,7 @@ internal sealed partial class SessionManager
             ["providerType"] = providerType,
             ["baseUrl"] = baseUrl,
             ["apiKey"] = apiKey,
-            ["models"] = new JsonArray(
-                modelIds.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
-            ),
+            ["models"] = new JsonArray((JsonNode?)JsonValue.Create(testModel)),
         };
         if (input["extraHeaders"] is not null)
             provider["extraHeaders"] = input["extraHeaders"]!.DeepClone();
@@ -102,6 +100,14 @@ internal sealed partial class SessionManager
             throw new SetupProviderRequestException(
                 "timeout",
                 "Configured model request timed out.",
+                400
+            );
+        }
+        catch (Exception error)
+        {
+            throw new SetupProviderRequestException(
+                "request",
+                SetupProviderRequests.SafeError(error, model),
                 400
             );
         }

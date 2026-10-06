@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -63,8 +62,8 @@ internal static class SetupProviderRequests
         var result = new JsonObject { ["providerType"] = providerType };
         AddOptionalString(result, input, "baseUrl", MaxBaseUrlLength);
         AddOptionalString(result, input, "apiKey", MaxApiKeyLength);
-        if (input["extraHeaders"] is not null)
-            result["extraHeaders"] = ParseHeaders(input["extraHeaders"]!);
+        if (input.ContainsKey("extraHeaders"))
+            result["extraHeaders"] = ParseHeaders(input["extraHeaders"]);
         return result;
     }
 
@@ -143,13 +142,13 @@ internal static class SetupProviderRequests
         if (OpenAiProviderTypes.Contains(model.ProviderType))
         {
             if (model.Token.Length > 0)
-                request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + model.Token);
+                SetHeader(request, "Authorization", "Bearer " + model.Token);
         }
         else
         {
             if (model.Token.Length > 0)
-                request.Headers.TryAddWithoutValidation("x-api-key", model.Token);
-            request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+                SetHeader(request, "x-api-key", model.Token);
+            SetHeader(request, "anthropic-version", "2023-06-01");
         }
         AddHeaders(request, model.Configuration["extraHeaders"] as JsonObject);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -204,6 +203,18 @@ internal static class SetupProviderRequests
                     504
                 );
             }
+            catch (SetupProviderRequestException)
+            {
+                throw;
+            }
+            catch
+            {
+                throw new SetupProviderRequestException(
+                    "invalid-response",
+                    "Provider returned an invalid model list response.",
+                    502
+                );
+            }
             if (payload is not JsonObject root || root["data"] is not JsonArray data)
                 throw new SetupProviderRequestException(
                     "invalid-response",
@@ -215,7 +226,9 @@ internal static class SetupProviderRequests
             foreach (var item in data)
             {
                 var id =
-                    item?["id"] is JsonValue value && value.TryGetValue<string>(out var raw)
+                    item is JsonObject obj
+                    && obj["id"] is JsonValue value
+                    && value.TryGetValue<string>(out var raw)
                         ? raw.Trim()
                         : "";
                 if (id.Length == 0 || id.Length > MaxModelIdLength || !seen.Add(id))
@@ -311,7 +324,13 @@ internal static class SetupProviderRequests
         if (headers is null)
             return;
         foreach (var (name, value) in headers)
-            request.Headers.TryAddWithoutValidation(name, SessionWait.Text(value) ?? "");
+            SetHeader(request, name, SessionWait.Text(value) ?? "");
+    }
+
+    private static void SetHeader(HttpRequestMessage request, string name, string value)
+    {
+        request.Headers.Remove(name);
+        request.Headers.TryAddWithoutValidation(name, value);
     }
 
     private static void AddOptionalString(
@@ -332,7 +351,7 @@ internal static class SetupProviderRequests
             result[key] = trimmed;
     }
 
-    private static JsonObject ParseHeaders(JsonNode value)
+    private static JsonObject ParseHeaders(JsonNode? value)
     {
         if (value is not JsonObject headers)
             throw Invalid("extraHeaders must be an object.");
