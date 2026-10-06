@@ -23,6 +23,7 @@ try {
   const nodes = await owned.api('GET', '/api/nodes'); assert.equal(nodes.status, 200); assert.equal(nodes.body.nodes[0].services['vscode-pty'], 1)
   const unavailable = await owned.api('POST', '/api/terminals', { nodeId: 'remote-test', cwd: owned.work }); assert.equal(unavailable.status, 501)
   const created = await owned.api('POST', '/api/terminals', { nodeId: 'master', cwd: owned.work, cols: 90, rows: 24 }); assert.equal(created.status, 200, JSON.stringify(created.body) + '\n' + owned.output); const record = created.body.terminal; assert.equal(record.nodeId, 'master'); assert.equal(record.cwd, owned.work)
+  const lookedUp = await owned.api('GET', `/api/terminals/${encodeURIComponent(record.id)}`); assert.equal(lookedUp.status, 200); assert.equal(lookedUp.body.terminal.pid, record.pid)
   const first = await open(record)
   first.socket.send(JSON.stringify({ type: 'input', data: "printf 'PTY-UTF8-✓\\n'; stty size;\n" })); await until(() => output(first.events, 'PTY-UTF8-✓') && output(first.events, '24 90'), 'UTF8 and initial size', 5000).catch(error => { throw new Error(error.message + ' events=' + JSON.stringify(first.events)); })
   first.socket.send(JSON.stringify({ type: 'resize', cols: 77, rows: 31 })); first.socket.send(JSON.stringify({ type: 'input', data: "stty size;\n" })); await until(() => output(first.events, '31 77'), 'SIGWINCH resize')

@@ -44,7 +44,11 @@ internal static class TerminalNative
             using var argv = new NativeStrings([shell, .. arguments]); using var env = new NativeStrings(environment.Select(pair => $"{pair.Key}={pair.Value}"));
             var pointer = fw_spawn(exe, argv.Pointer, env.Pointer, directory, checked((ushort)cols), checked((ushort)rows), out var error); Marshal.FreeCoTaskMem(exe); Marshal.FreeCoTaskMem(directory);
             if (pointer == IntPtr.Zero) throw new IOException($"Unable to start terminal process (errno {error}).");
-            try { return new Handle(pointer); } catch { fw_release(pointer); throw; }
+            try { return new Handle(pointer); }
+            catch
+            {
+                fw_cancel(pointer); fw_signal_shell(pointer, 15); fw_wait(pointer, out _, out _); fw_release(pointer); throw;
+            }
         }
         internal long Read(byte[] buffer) => fw_read(Pointer, buffer, (nuint)buffer.Length);
         internal void Write(byte[] buffer)

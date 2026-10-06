@@ -18,6 +18,7 @@ public sealed class CodeRoutesTests
         private readonly string? oldConfig = Environment.GetEnvironmentVariable("FOXWARM_CONFIG_PATH");
         private readonly string? oldAssets = Environment.GetEnvironmentVariable("FOXWARM_VSCODE_WEB_ASSET_DIR");
         internal SessionManager Manager = null!; internal HttpServer Server = null!; internal HttpClient Client = null!;
+        internal Foxwarm.Terminal.TerminalRegistry Terminals = null!;
         internal string Data => Path.Combine(Temp.Path, "data"); internal string Work => Path.Combine(Temp.Path, "work");
         internal static async Task<Fixture> Create(string? origin = null, bool relativeConfig = false)
         {
@@ -27,14 +28,14 @@ public sealed class CodeRoutesTests
             var config = new ModelConfiguration(f.Data); var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "local", "fixture", "", "", 1000);
             f.Manager = new(f.Data, f.Work, options, config.Models); await f.Manager.LoadAsync();
             var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start(); var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
-            f.Server = new([], port, "fixture-code-token", null, f.Manager); await f.Server.App.StartAsync();
+            f.Terminals = new(f.Data, CancellationToken.None); f.Server = new([], port, "fixture-code-token", null, f.Manager, f.Terminals); await f.Server.App.StartAsync();
             f.Client = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:" + port), Timeout = TimeSpan.FromSeconds(60) };
             f.Client.DefaultRequestHeaders.ExpectContinue = true;
             f.Client.DefaultRequestHeaders.Authorization = new("Bearer", "fixture-code-token"); return f;
         }
         internal string Fs(string operation, string path) => "/api/vscode-web/fs/" + operation + "?path=" + Uri.EscapeDataString(path);
         internal async Task<JsonObject> Json(HttpResponseMessage response) { Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync()); return JsonNode.Parse(await response.Content.ReadAsStringAsync())!.AsObject(); }
-        public async ValueTask DisposeAsync() { Client.Dispose(); await Server.App.StopAsync(); await Server.App.DisposeAsync(); await Manager.DisposeAsync(); Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_ASSET_DIR", oldAssets); Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN", oldOrigin); Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", oldConfig); Temp.Dispose(); }
+        public async ValueTask DisposeAsync() { Client.Dispose(); await Server.App.StopAsync(); await Server.App.DisposeAsync(); await Terminals.DisposeAsync(); await Manager.DisposeAsync(); Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_ASSET_DIR", oldAssets); Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN", oldOrigin); Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", oldConfig); Temp.Dispose(); }
     }
     [Fact]
     public async Task Real_human_filesystem_binary_flags_links_rename_delete_and_precise_root_descriptors()

@@ -20,7 +20,7 @@ public sealed partial class AsrRoutesTests
         internal const string Key = "synthetic-asr-service-secret";
         internal const string Token = "synthetic-human-token";
         internal readonly TempDirectory Temp = new();
-        internal WebApplication Peer = null!; internal HttpServer Server = null!; internal SessionManager Manager = null!; internal HttpClient Client = null!;
+        internal WebApplication Peer = null!; internal HttpServer Server = null!; internal SessionManager Manager = null!; internal HttpClient Client = null!; internal Foxwarm.Terminal.TerminalRegistry Terminals = null!;
         internal JsonObject Health = new() { ["ok"] = true, ["streamingSupported"] = true };
         internal int StreamStatus; internal int Requests; internal int Uploads; internal int AudioLength; internal JsonObject Metadata = new();
         internal readonly List<JsonObject> Controls = [];
@@ -63,8 +63,8 @@ public sealed partial class AsrRoutesTests
             var model = new ModelConfiguration(f.Data);
             f.Manager = new(f.Data, f.Work, new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "local", "fixture", "", "", 1000), model.Models); await f.Manager.LoadAsync();
             var address = prefix ? new PublicWebAddress("https://public.example", new PathString("/prefix"), "/prefix/", true) : new PublicWebAddress("http://127.0.0.1:0", PathString.Empty, "/", false);
-            f.Server = new([], 0, Token, null, f.Manager, address, enabled);
-            if (enabled) { var runtime = new SessionRuntime(f.Manager); new Foxwarm.Channels.WebUi.WebUIChannel(f.Manager, runtime, new MessageRouter(runtime)).Register(f.Server.App); }
+            f.Terminals = new(f.Data, CancellationToken.None); f.Server = new([], 0, Token, null, f.Manager, f.Terminals, address, enabled);
+            if (enabled) { var runtime = new SessionRuntime(f.Manager); new Foxwarm.Channels.WebUi.WebUIChannel(f.Manager, runtime, new MessageRouter(runtime), f.Terminals).Register(f.Server.App); }
             await f.Server.App.StartAsync();
             f.Client = new HttpClient(new HttpClientHandler { UseCookies = false }) { BaseAddress = new Uri(f.Server.App.Urls.Single()), Timeout = TimeSpan.FromSeconds(60) };
             f.Client.DefaultRequestHeaders.ExpectContinue = true; f.Client.DefaultRequestHeaders.Authorization = new("Bearer", Token); return f;
@@ -93,7 +93,7 @@ public sealed partial class AsrRoutesTests
         }
         public async ValueTask DisposeAsync()
         {
-            Client.Dispose(); await Server.App.StopAsync(); await Server.App.DisposeAsync(); await Manager.DisposeAsync();
+            Client.Dispose(); await Server.App.StopAsync(); await Server.App.DisposeAsync(); await Terminals.DisposeAsync(); await Manager.DisposeAsync();
             await Peer.StopAsync(); await Peer.DisposeAsync(); Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", oldConfig); Temp.Dispose();
         }
     }
