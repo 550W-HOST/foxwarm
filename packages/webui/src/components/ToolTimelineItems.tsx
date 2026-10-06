@@ -207,7 +207,8 @@ type ResolvedCodePath = { nodeId: string; resolvedPath: string }
 export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: ResolvedCodePath) => void
 
 type DisplayResolvedPaths = NonNullable<FunctionResponse['__meta']>['resolvedPaths']
-const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: string, index = 0): ResolvedCodePath | undefined => {
+const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown, index = 0): ResolvedCodePath | undefined => {
+  if (typeof raw !== 'string') return undefined
   const match = paths?.[index]
   if (!match || match.raw !== raw || typeof match.resolved !== 'string' || !match.resolved.startsWith('/')
     || typeof match.nodeId !== 'string') return undefined
@@ -215,7 +216,7 @@ const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: string, 
 }
 
 const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, target, prefix, collapsed = false }: {
-  filePath: string
+  filePath?: unknown
   lines?: { startLine?: number; endLine?: number }
   onOpenCodeFile?: OpenCodeFileHandler
   target?: ResolvedCodePath
@@ -223,29 +224,31 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   collapsed?: boolean
 }) {
   const pathFade = useThreadCardOverflowFade<HTMLSpanElement>('right', collapsed)
+  const displayPath = typeof filePath === 'string' ? filePath : 'Path unavailable'
+  const canOpenCode = typeof filePath === 'string' && !!onOpenCodeFile && (!!target || filePath.startsWith('/'))
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
   const pathClass = collapsed
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
     : 'foxwarm-tool-code-path whitespace-normal break-words'
-  if (!onOpenCodeFile || (!target && !filePath.startsWith('/'))) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
+  if (!canOpenCode) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{displayPath}</span>
   return (
     <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-center gap-1' : ''}`}>
       {prefix}
       <button
         type="button"
         className={`foxwarm-tool-code-open inline-flex shrink-0 p-0 ${collapsed ? 'self-center' : 'align-text-top'} leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1`}
-        title={`Open ${filePath} in Code`}
-        aria-label={`Open ${filePath} in Code`}
+        title={`Open ${displayPath} in Code`}
+        aria-label={`Open ${displayPath} in Code`}
         onClick={(event) => {
           event.stopPropagation()
-          onOpenCodeFile(filePath, lines, target)
+          onOpenCodeFile?.(displayPath, lines, target)
         }}
       >
         <Code2 size={13} aria-hidden="true" />
       </button>
-      <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={pathClass}>{filePath}</span>
+      <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={pathClass}>{displayPath}</span>
     </span>
   )
 })
