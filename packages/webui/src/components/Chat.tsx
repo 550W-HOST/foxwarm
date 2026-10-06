@@ -2024,7 +2024,7 @@ const Chat = memo(function Chat({ sessionId, experimentalTextOnly = false, exper
               onShowUsageBadgeChange={onShowUsageBadgeChange}
               showUserMessageMetadata={showUserMessageMetadata}
               onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
-              onOpenDebugInfo={experimentalTextOnly ? undefined : handleOpenDebugInfo}
+              onOpenDebugInfo={handleOpenDebugInfo}
             />
           </>
         )}

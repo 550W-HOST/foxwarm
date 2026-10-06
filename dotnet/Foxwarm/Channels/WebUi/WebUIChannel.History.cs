@@ -253,18 +253,142 @@ internal sealed partial class WebUIChannel
             }
         );
         app.MapGet(
+            "/api/history/search",
+            (HttpRequest request) =>
+            {
+                if (
+                    !TryReadHistoryQuery(
+                        request,
+                        new[] { "query", "limit", "agentName", "sessionId" },
+                        out var query,
+                        out var queryError
+                    )
+                )
+                    return Results.BadRequest(
+                        new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                    );
+                var search = query.GetValueOrDefault("query", "");
+                if (search.Length == 0 || search.Length > 2000)
+                    return Results.BadRequest(
+                        new
+                        {
+                            error = "Enter a search query (up to 2,000 characters).",
+                            code = "HISTORY_SEARCH_INVALID",
+                        }
+                    );
+                if (
+                    !TryParseSafe(
+                        query.GetValueOrDefault("limit"),
+                        "limit",
+                        out var limit,
+                        out queryError
+                    )
+                    || limit is long limitValue && (limitValue < 1 || limitValue > 20)
+                )
+                    return Results.BadRequest(
+                        new
+                        {
+                            error = queryError ?? "limit must be between 1 and 20.",
+                            code = "HISTORY_SEARCH_INVALID",
+                        }
+                    );
+                var agentName = query.GetValueOrDefault("agentName", "");
+                var sessionId = query.GetValueOrDefault("sessionId", "");
+                if (agentName.Length > 200 || sessionId.Length > 300)
+                    return Results.BadRequest(
+                        new
+                        {
+                            error = "Agent or session name is too long.",
+                            code = "HISTORY_SEARCH_INVALID",
+                        }
+                    );
+                if (sessionId.Length > 0)
+                {
+                    var archive = sessions.ArchiveReader(sessionId);
+                    var session = runtime.Catalog.Get(sessionId);
+                    if (session is null && !archive.HasReadOnlyIdentity())
+                        return Results.NotFound(
+                            new { error = "Session not found", code = "SESSION_NOT_FOUND" }
+                        );
+                    if (session is not null && agentName.Length > 0)
+                    {
+                        var sessionAgent = SessionCatalog.Text(session["agent"]) ?? "main";
+                        if (!string.Equals(sessionAgent, agentName, StringComparison.Ordinal))
+                            return Results.BadRequest(
+                                new
+                                {
+                                    error = "The selected session is not in that agent.",
+                                    code = "HISTORY_SEARCH_INVALID",
+                                }
+                            );
+                    }
+                    else if (session is null && agentName.Length > 0)
+                        return Results.BadRequest(
+                            new
+                            {
+                                error = "Search this archived session without an additional agent filter.",
+                                code = "HISTORY_SEARCH_INVALID",
+                            }
+                        );
+                }
+                return Results.Json(
+                    new
+                    {
+                        error = "Semantic history search is unavailable. You can still open an exact message reference.",
+                        code = "VECTOR_DISABLED",
+                    },
+                    statusCode: 503
+                );
+            }
+        );
+        app.MapGet(
             "/api/history/window",
             async (HttpRequest request) =>
             {
-                var sessionId = request.Query["sessionId"].ToString() ?? "";
+                if (
+                    !TryReadHistoryQuery(
+                        request,
+                        new[] { "sessionId", "target", "beforeSeq", "afterSeq", "targetEndSeq" },
+                        out var query,
+                        out var queryError
+                    )
+                )
+                    return Results.BadRequest(
+                        new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                    );
+                var sessionId = query.GetValueOrDefault("sessionId", "");
                 if (string.IsNullOrWhiteSpace(sessionId))
                     return Results.BadRequest(
                         new { error = "Choose a session.", code = "HISTORY_SEARCH_INVALID" }
                     );
-                var target = request.Query["target"].ToString() ?? "";
-                var before = ParseSafe(request.Query["beforeSeq"].ToString(), "beforeSeq");
-                var after = ParseSafe(request.Query["afterSeq"].ToString(), "afterSeq");
-                var targetEnd = ParseSafe(request.Query["targetEndSeq"].ToString(), "targetEndSeq");
+                if (sessionId.Length > 300)
+                    return Results.BadRequest(
+                        new { error = "Choose a session.", code = "HISTORY_SEARCH_INVALID" }
+                    );
+                var target = query.GetValueOrDefault("target", "");
+                if (
+                    !TryParseSafe(
+                        query.GetValueOrDefault("beforeSeq"),
+                        "beforeSeq",
+                        out var before,
+                        out queryError
+                    )
+                    || !TryParseSafe(
+                        query.GetValueOrDefault("afterSeq"),
+                        "afterSeq",
+                        out var after,
+                        out queryError
+                    )
+                    || !TryParseSafe(
+                        query.GetValueOrDefault("targetEndSeq"),
+                        "targetEndSeq",
+                        out var targetEnd,
+                        out queryError
+                    )
+                )
+                    return Results.BadRequest(
+                        new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                    );
                 if (target.Length == 0 && before is null && after is null)
                     return Results.BadRequest(
                         new
@@ -302,21 +426,36 @@ internal sealed partial class WebUIChannel
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase
                     );
                     if (
-                        !match.Success || !long.TryParse(match.Groups[1].Value, out var parsedStart)
+                        !match.Success
+                        || !TryParseSafe(
+                            match.Groups[1].Value,
+                            "start message",
+                            out var parsedStart,
+                            out queryError
+                        )
                     )
                         return Results.BadRequest(
                             new
                             {
-                                error = "Use msg#123 or msg#123-130.",
+                                error = queryError ?? "Use msg#123 or msg#123-130.",
                                 code = "HISTORY_SEARCH_INVALID",
                             }
                         );
                     start = parsedStart;
-                    end =
+                    long? parsedEnd = null;
+                    if (
                         match.Groups[2].Success
-                        && long.TryParse(match.Groups[2].Value, out var parsedEnd)
-                            ? parsedEnd
-                            : start;
+                        && !TryParseSafe(
+                            match.Groups[2].Value,
+                            "end message",
+                            out parsedEnd,
+                            out queryError
+                        )
+                    )
+                        return Results.BadRequest(
+                            new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                        );
+                    end = match.Groups[2].Success ? parsedEnd : start;
                     if (end < start)
                         return Results.BadRequest(
                             new
@@ -327,11 +466,11 @@ internal sealed partial class WebUIChannel
                         );
                 }
                 var archive = sessions.ArchiveReader(sessionId);
-                var all = archive.EffectiveMessageStats();
-                if (runtime.Catalog.Get(sessionId) is null && all.Count == 0)
+                if (runtime.Catalog.Get(sessionId) is null && !archive.HasReadOnlyIdentity())
                     return Results.NotFound(
                         new { error = "Session not found", code = "SESSION_NOT_FOUND" }
                     );
+                var all = archive.EffectiveMessageStats();
                 IReadOnlyList<ArchiveMessageRecord> records;
                 if (start is long selectedStart)
                     records = archive.ReadEffectiveMessagesPage(selectedStart, end!.Value, 21);
@@ -382,33 +521,79 @@ internal sealed partial class WebUIChannel
                         messages,
                         firstSeq = first,
                         lastSeq = last,
-                        hasEarlier = before is not null
-                            ? pageHasMore
-                            : first is long firstValue && all.First < firstValue,
-                        hasLater = after is not null
-                            ? pageHasMore
-                            : last is long lastValue && all.Last > lastValue,
+                        hasEarlier = first is long firstValue
+                            && all.First is long archiveFirst
+                            && archiveFirst < firstValue,
+                        hasLater = last is long lastValue
+                            && all.Last is long archiveLast
+                            && archiveLast > lastValue,
                         requestedRange = start is null
                             ? null
                             : new { startSeq = start, endSeq = end },
                         shownRange = first is null ? null : new { startSeq = first, endSeq = last },
-                        hasMoreInTarget = start is not null && pageHasMore,
+                        hasMoreInTarget = (start is not null || targetEnd is not null)
+                            && pageHasMore,
                     }
                 );
             }
         );
     }
 
-    private static long? ParseSafe(string value, string name)
+    private static bool TryReadHistoryQuery(
+        HttpRequest request,
+        IEnumerable<string> allowedValues,
+        out Dictionary<string, string> values,
+        out string? error
+    )
     {
-        if (string.IsNullOrEmpty(value))
-            return null;
+        var allowed = allowedValues.ToHashSet(StringComparer.Ordinal);
+        values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in request.Query)
+        {
+            if (!allowed.Contains(pair.Key) || pair.Value.Count != 1)
+            {
+                error = $"Invalid history search parameter: {pair.Key}.";
+                return false;
+            }
+            values[pair.Key] = pair.Value[0]!.Trim();
+        }
+        error = null;
+        return true;
+    }
+
+    private static bool TryParseSafe(
+        string? value,
+        string name,
+        out long? number,
+        out string? error
+    )
+    {
+        number = null;
+        if (value is null)
+        {
+            error = null;
+            return true;
+        }
         if (
-            !long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
-            || number <= 0
-            || number > 9007199254740991L
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                value,
+                "^[1-9][0-9]*$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant
+            )
+            || !long.TryParse(
+                value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var parsed
+            )
+            || parsed > 9007199254740991L
         )
-            throw new InvalidDataException($"{name} must be a positive safe integer.");
-        return number;
+        {
+            error = $"{name} must be a positive integer.";
+            return false;
+        }
+        number = parsed;
+        error = null;
+        return true;
     }
 }

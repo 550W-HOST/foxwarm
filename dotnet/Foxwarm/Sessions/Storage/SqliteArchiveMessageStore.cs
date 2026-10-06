@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
@@ -473,6 +474,43 @@ public sealed partial class SqliteArchiveMessageStore
                 )
             );
         return records;
+    }
+
+    internal bool HasReadOnlyIdentity()
+    {
+        if (!File.Exists(databasePath))
+            return false;
+        using var connection = OpenExistingReadOnly();
+        var canonical = ResolveReadOnly(connection, sessionId);
+        if (HasReservationTable(connection))
+        {
+            using var reservation = connection.CreateCommand();
+            reservation.CommandText =
+                "SELECT EXISTS(SELECT 1 FROM archive_session_id_reservations WHERE session_id=$id OR canonical_session_id=$id)";
+            reservation.Parameters.AddWithValue("$id", sessionId);
+            if (Convert.ToInt64(reservation.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                return true;
+        }
+        if (TableExists(connection, "archive_branches"))
+        {
+            using var branch = connection.CreateCommand();
+            branch.CommandText =
+                "SELECT EXISTS(SELECT 1 FROM archive_branches WHERE session_id=$id)";
+            branch.Parameters.AddWithValue("$id", canonical);
+            if (Convert.ToInt64(branch.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                return true;
+        }
+        foreach (var table in new[] { "archive_messages", "archive_blocks" })
+        {
+            if (!TableExists(connection, table))
+                continue;
+            using var rows = connection.CreateCommand();
+            rows.CommandText = $"SELECT EXISTS(SELECT 1 FROM {table} WHERE session_id=$id)";
+            rows.Parameters.AddWithValue("$id", canonical);
+            if (Convert.ToInt64(rows.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                return true;
+        }
+        return false;
     }
 
     public ArchiveMessageRecord? ReadMessageBySeq(long seq)
