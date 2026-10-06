@@ -55,6 +55,27 @@ const FORCE_MODEL_SCHEMA = {
 
 const baseDefinitions = [
         {
+            name: 'task',
+            defaultInject: true,
+            description: "Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically; do not provide another Session identity.",
+            parameters: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    action: { type: 'string', enum: ['create', 'list', 'get', 'claim', 'update', 'complete', 'cancel'], description: "Task operation to perform." },
+                    title: { type: 'string', maxLength: 200, description: "Task title. Required when action is create." },
+                    description: { type: 'string', maxLength: 4000, description: "Short problem or scope description for a new task, or replacement description when updating." },
+                    parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
+                    taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
+                    status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
+                    note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },
+                    result: { type: 'string', maxLength: 4000, description: "Short completion summary for a completed task." },
+                    reason: { type: 'string', maxLength: 1000, description: "Short reason for cancelling a task." },
+                },
+                required: ['action'],
+            },
+        },
+        {
             name: 'read',
             defaultInject: true,
             description: "Read a file, view an image, or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",

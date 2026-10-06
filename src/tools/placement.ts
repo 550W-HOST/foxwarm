@@ -48,6 +48,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
       'update-display-name': 'main-management',
     },
   },
+  task: { owner: 'main-management' },
   list_agents: { owner: 'main-management' },
   skill: { owner: 'session-owner' },
   get_session_messages: { owner: 'dispatcher/container' },

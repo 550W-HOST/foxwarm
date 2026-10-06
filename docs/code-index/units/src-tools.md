@@ -13,9 +13,10 @@ Implements the core tool registry and execution layer for the agent system. Defi
 
 - `definitions` — Array of all tool definition objects (from `tools/definitions.ts`)
 - `modelFacingDefinitions` — Shared default-injection subset with cancellation schemas; `llm.resolveSessionToolDefinitions` creates the per-Session authorization projection without mutating this array
+- `task` — single default-injected resource tool for explicit Session-shared work; storage/permissions/actions are canonical in [src-tasks](./src-tasks.md).
 - `callTool(toolName, args, context)` — Main dispatcher that routes tool calls to implementations
 - `assertToolAvailableForPlacement(toolName, args, context)` — trusted-placement pre-handler fence; Worker-unsupported operations fail retryably before raw singleton/lifecycle code.
-- The closed Main Management wrappers cover messaging/timers/catalog operations plus Worker cross-session recall/archive reads, Main-owned agent/session creation, other-target session deletion, node bootstrap/pairing, and atomic generic policy replacement.
+- The closed Main Management wrappers cover messaging/timers/catalog operations plus Worker cross-session recall/archive reads, Main-owned agent/session creation, other-target session deletion, node bootstrap/pairing, atomic generic policy replacement, and shared task operations.
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.

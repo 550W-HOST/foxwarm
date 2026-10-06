@@ -11,6 +11,7 @@ import * as agentTools from './toolsSessionAgent/agents';
 import * as timerTools from './toolsSessionAgent/timers';
 import * as sessionCrudTools from './toolsSessionAgent/sessionCrud';
 import * as nodeTools from './tools/nodeTools';
+import { tool_task } from './tools/taskTools';
 import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 import { normalizeCreateChildSessionArgs, normalizeCreateSessionArgs } from './toolsSessionAgent/helpers';
@@ -30,6 +31,7 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'send_to_session',
   'send_to_channel',
   'list_agents',
+  'task',
   'create_timer',
   'list_timers',
   'update_timer',
@@ -68,7 +70,7 @@ export type ValidateWaitExecIdsResponse = { activeExecIds: string[] };
 export type ResolveAuthorizationSessionTargetRequest = { sourceSessionId: string; toolName: string; args: ToolArgs };
 export type ResolveAuthorizationSessionTargetResponse = { sourceParentSessionId?: string; target?: ToolAuthorizationSessionTarget };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 11, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 12, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
   validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),
@@ -112,6 +114,7 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
   switch (operation) {
     case 'send_to_session': return interSessionTools.tool_send_to_session(args, ctx);
     case 'send_to_channel': return interSessionTools.tool_send_to_channel(args, ctx);
+    case 'task': return tool_task(args, ctx);
     case 'list_agents': return agentTools.tool_list_agents(args, ctx);
     case 'create_timer': return timerTools.tool_create_timer(args, ctx);
     case 'list_timers': return timerTools.tool_list_timers(args, ctx);

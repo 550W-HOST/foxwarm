@@ -6,6 +6,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 
 ## Key units
 
+- [src-tasks](../units/src-tasks.md) — small Session-shared task tool, atomic claim ownership and bounded persistent output.
 - [src-tools](../units/src-tools.md) — registry, schemas, builtin implementations, and unified discovery/dispatch.
 - [src-mcp-inbound-catalog](../units/src-mcp-inbound-catalog.md) — authenticated external MCP discovery/call wrappers over Main's existing outbound MCP client and exact generic policy.
 - [src-mcp-inbound-node-service](../units/src-mcp-inbound-node-service.md) — verified Main-local external Node file/exec dispatch, selection and scoped results, registered by inbound MCP wrappers.
@@ -45,6 +46,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - Pending write references are scoped, bounded, expire, and may reuse their cached payload at any independently authorized write target in the same session and agent.
 - Oversized tool results are saved and replaced with a bounded line-aware excerpt before entering model context.
 - Image results receive stable IDs before model serialization.
+- The single `task` builtin uses Main-owned persistent storage and context-derived Session ownership; see [task contracts](../units/src-tasks.md).
 - Timer builtins remain discoverable but are not injected into the default model schema.
 - MCP server configuration/listing builtins remain discoverable but are not injected into the default model schema.
 - Patch application preserves the source line-ending convention.

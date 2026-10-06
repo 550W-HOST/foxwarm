@@ -9,14 +9,16 @@ Provides the versioned RPC boundary for a closed first set of tools whose mutabl
 
 ## Key exports
 
-- `mainManagementToolServiceDescriptor` — version 11 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, remote-exec-validation, and bounded tool-authorization Session-target resolution methods.
-- `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact 21-operation allowlist: messaging, agent listing, timer CRUD, child creation, session catalog/display/message reads, archive/recall reads, agent/session creation/deletion, node bootstrap/pairing, and master-only tool-policy replacement.
+- `mainManagementToolServiceDescriptor` — version 12 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, remote-exec-validation, and bounded tool-authorization Session-target resolution methods.
+- `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact 22-operation allowlist: messaging, agent listing, timer CRUD, child creation, session catalog/display/message reads, archive/recall reads, agent/session creation/deletion, node bootstrap/pairing, master-only tool-policy replacement, and the single shared task operation.
 - `createMainManagementToolServiceHandler()` — validates source identity and operation, optionally fences a reverse handler to one expected worker source before any lookup/mutation, then invokes the existing authoritative raw handler. When bound with an expected generation/incarnation and the worker store, it also rejects stale worker generations retryably before any operation runs.
 - `initializeMainManagementTools()` / `shutdownMainManagementTools()` — placement-injectable local or child-reverse client lifecycle and one-way terminal graceful drain.
 - `resetMainManagementToolsForTests()` — explicit test-only reset after a completed terminal shutdown.
 - `executeMainManagementTool()` — placement-neutral local/reverse caller used by the closed Main-owned tool operations.
 - `scheduleMainWaitTimeout()` — placement-neutral caller for the exact internal wait-timeout DTO; it does not expand the model-operation allowlist.
 - Placement-neutral wrappers cover every allowlisted model operation; recall/agent/node raw handlers select them only for Worker placement.
+
+Task calls use the same context-derived source identity through this service, without reading or mutating Session semantic state. Storage and action contracts are canonical in [src-tasks](./src-tasks.md).
 
 ## Boundary
 

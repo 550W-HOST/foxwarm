@@ -146,6 +146,7 @@ export async function validateMainWaitExecIds(request: ValidateWaitExecIdsReques
 export const tool_send_to_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_session', args, ctx);
 export const tool_create_child_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_child_session', args, ctx);
 export const tool_send_to_channel = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_channel', args, ctx);
+export const tool_task = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('task', args, ctx);
 export const tool_list_agents = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('list_agents', args, ctx);
 export const tool_create_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_timer', args, ctx);
 export const tool_list_timers = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('list_timers', args, ctx);
