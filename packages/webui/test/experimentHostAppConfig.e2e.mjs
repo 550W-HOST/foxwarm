@@ -4,7 +4,7 @@ import puppeteer from 'puppeteer-core'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('app-config')
-const initialRaw = (origin, prefix = '/preview') => `# preserve this comment\nurl: ${origin}${prefix}\nbot:\n  enableWebUI: true\n  customBotField: retained\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n  compactThresholdPercent: 0.85\nnodeProviders:\n  retained:\n    type: executable\n    command: /bin/echo\nvector: false\nmcpInbound:\n  enabled: false\nchannels:\n  webui:\n    type: webui\n    enabled: true\n  weixin:\n    type: weixin\n    enabled: true\n    token: saved-token\n    customChannelField: keep-me\n  mystery:\n    type: future-chat\n    enabled: true\n`
+const initialRaw = (origin, prefix = '/preview') => `# preserve this comment\nurl: ${origin}${prefix}\nbot:\n  enableWebUI: true\n  customBotField: retained\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n  compactThresholdPercent: 0.85\nnodeProviders:\n  retained:\n    type: executable\n    command: /bin/echo\n  docker:\n    type: docker-worktree\n    command: /bin/echo\n    image: alpine:3\n    allowedWorktreeRoots:\n      - /tmp\n    networkModes:\n      - none\n    stateDir: /tmp/foxwarm-state\n    memory: 2g\n    cpus: 2\n    pidsLimit: 256\n    tmpfsSize: 256m\nvector: false\nmcpInbound:\n  enabled: false\nchannels:\n  webui:\n    type: webui\n    enabled: true\n  weixin:\n    type: weixin\n    enabled: true\n    token: saved-token\n    customChannelField: keep-me\n  mystery:\n    type: future-chat\n    enabled: true\n`
 
 let page
 let browser
@@ -30,9 +30,26 @@ try {
     assert.match(channel.lastError, /External chat channels are unavailable/)
   }
 
-  const invalid = await api('/api/setup/config', 'POST', { yaml: raw.replace('compactKeepPercent: 0.3', 'compactKeepPercent: 2') })
-  assert.equal(invalid.status, 400, JSON.stringify(invalid))
-  assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), raw)
+  const invalids = [
+    raw.replace('compactKeepPercent: 0.3', 'compactKeepPercent: 2'),
+    raw.replace('command: /bin/echo', 'command: null'),
+    raw.replace('command: /bin/echo', 'timeoutSeconds: null\n    command: /bin/echo'),
+    raw.replace('mcpInbound:\n  enabled: false', 'mcpInbound:\n  enabled: true'),
+    raw.replace('mcpInbound:\n  enabled: false', 'mcpInbound:\n  enabled: false\n  identities:\n    first:\n      token: duplicate\n    second:\n      token: duplicate'),
+    raw.replace('vector: false', 'vector: null'),
+    raw.replace(`${fixture.origin}/preview`, 'http://bad\\host/preview'),
+  ]
+  for (const candidate of invalids) {
+    const invalid = await api('/api/setup/config', 'POST', { yaml: candidate })
+    assert.equal(invalid.status, 400, JSON.stringify(invalid))
+    assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), raw)
+  }
+  const legacyIgnored = raw.replace('vector: false\n', '').replace('compactThresholdPercent: 0.85', 'compactThresholdPercent: 0.85\n  ollamaBaseUrl: 42')
+  const legacySave = await api('/api/setup/config', 'POST', { yaml: legacyIgnored })
+  assert.equal(legacySave.status, 200, JSON.stringify(legacySave))
+  assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), legacyIgnored)
+  const restore = await api('/api/setup/config', 'POST', { yaml: raw })
+  assert.equal(restore.status, 200, JSON.stringify(restore))
 
   const savedRaw = raw.replace('customBotField: retained', 'customBotField: retained\n  newUnknownField: preserved')
   const saved = await api('/api/setup/config', 'POST', { yaml: savedRaw })
@@ -70,6 +87,7 @@ try {
   assert.equal(await page.$eval('body', body => body.innerText.includes('Start Weixin login')), false)
   const editor = '[aria-label="Application config YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor)
+  const uiRaw = channelRaw.replace('unknown: retained', 'unknown: ui-edited')
   await page.evaluate(({ value }) => {
     const moduleUrl = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /(?:\/|^)monaco-editor(?:-[^/]+)?\.js(?:\?|$)/.test(new URL(name).pathname))
     return import(moduleUrl).then(imported => {
@@ -78,7 +96,7 @@ try {
       if (!model) throw new Error('Monaco app-config model not found')
       model.setValue(value)
     })
-  }, { value: channelRaw })
+  }, { value: uiRaw })
   await new Promise(resolve => setTimeout(resolve, 500))
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Save config')?.click())
   await until(async () => Boolean(await page.$eval('[data-save-feedback="config"]', node => node.textContent?.includes('Configuration saved')).catch(() => false)), 'UI config save', 10000).catch(async error => {
@@ -91,18 +109,26 @@ try {
   })
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#setup-tab-config')
+  const afterUiRaw = await readFile(`${fixture.data}/state/config.yaml`, 'utf8')
+  assert.equal(afterUiRaw, uiRaw)
+  const afterUiStatus = await api('/api/setup/status')
+  assert.equal(afterUiStatus.body.config.rawYaml, uiRaw)
 
-  const restartRaw = channelRaw.replace(`${fixture.origin}/preview`, `${fixture.origin}/next`)
-  const restartSave = await api('/api/setup/config', 'POST', { yaml: restartRaw })
-  assert.equal(restartSave.status, 200, JSON.stringify(restartSave))
-  await fixture.stop()
-  const restarted = await fixture.start().then(() => true)
-  assert.equal(restarted, true)
+  const restartRaw = uiRaw.replace(`${fixture.origin}/preview`, `${fixture.origin}/next`)
   const nextApi = (path, method = 'GET', body) => fetch(`${fixture.origin}/next${path}`, {
     method,
     headers: { authorization: `Bearer ${fixture.token}`, 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }).then(async response => ({ status: response.status, body: await response.json().catch(() => ({})) }))
+  const restartSave = await api('/api/setup/config', 'POST', { yaml: restartRaw })
+  assert.equal(restartSave.status, 200, JSON.stringify(restartSave))
+  const oldBeforeRestart = await api('/api/setup/status')
+  assert.equal(oldBeforeRestart.status, 200, JSON.stringify(oldBeforeRestart))
+  const nextBeforeRestart = await nextApi('/api/setup/status')
+  assert.notEqual(nextBeforeRestart.status, 200, JSON.stringify(nextBeforeRestart))
+  await fixture.stop()
+  const restarted = await fixture.start().then(() => true)
+  assert.equal(restarted, true)
   const oldPrefix = await api('/api/setup/status')
   assert.notEqual(oldPrefix.status, 200, JSON.stringify(oldPrefix))
   const newPrefix = await nextApi('/api/setup/status')

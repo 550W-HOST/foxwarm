@@ -10,6 +10,8 @@ internal static class AppConfigurationRules
         RegexOptions.CultureInvariant
     );
     private const int MaxNodeProviderTimeoutSeconds = 300;
+    private const int MaxNodeProviderArgs = 64;
+    private const int MaxNodeProviderValueLength = 4096;
 
     internal static void Validate(JsonObject app)
     {
@@ -145,20 +147,34 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}` has unsupported field `{unknown}`."
                 );
-            ExactText(provider["command"], $"app config `nodeProviders.{id}.command`");
+            ExactText(
+                provider["command"],
+                $"app config `nodeProviders.{id}.command`",
+                MaxNodeProviderValueLength
+            );
             if (provider.ContainsKey("args") && provider["args"] is not JsonArray)
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}.args` must be an array of strings."
                 );
-            if (provider["args"] is JsonArray list && list.Any(item => Text(item) is null))
+            if (
+                provider["args"] is JsonArray list
+                && (
+                    list.Count > MaxNodeProviderArgs
+                    || list.Any(item =>
+                        Text(item) is null
+                        || Text(item)!.Length > MaxNodeProviderValueLength
+                        || Text(item)!.Contains('\0')
+                    )
+                )
+            )
                 throw new InvalidDataException(
-                    $"app config `nodeProviders.{id}.args` must be an array of strings."
+                    $"app config `nodeProviders.{id}.args` must contain at most {MaxNodeProviderArgs} bounded strings."
                 );
             if (type == "executable")
             {
-                var timeout = provider["timeoutSeconds"] is null
-                    ? 90
-                    : Number(provider["timeoutSeconds"]);
+                var timeout = provider.ContainsKey("timeoutSeconds")
+                    ? Number(provider["timeoutSeconds"])
+                    : 90;
                 if (
                     timeout is null
                     || timeout < 1
@@ -171,14 +187,62 @@ internal static class AppConfigurationRules
             }
             else
             {
-                ExactText(provider["image"], $"app config `nodeProviders.{id}.image`");
+                ExactText(
+                    provider["image"],
+                    $"app config `nodeProviders.{id}.image`",
+                    MaxNodeProviderValueLength
+                );
                 if (
                     provider["allowedWorktreeRoots"] is not JsonArray roots
                     || roots.Count == 0
-                    || roots.Any(item => Text(item) is null)
+                    || roots.Count > MaxNodeProviderArgs
+                    || roots.Any(item =>
+                        Text(item) is null
+                        || Text(item)!.Length > MaxNodeProviderValueLength
+                        || Text(item) != Text(item)!.Trim()
+                    )
                 )
                     throw new InvalidDataException(
                         $"app config `nodeProviders.{id}.allowedWorktreeRoots` must be a non-empty array of paths."
+                    );
+                if (
+                    provider.ContainsKey("networkModes")
+                    && (
+                        provider["networkModes"] is not JsonArray networkModes
+                        || networkModes.Count == 0
+                        || networkModes.Any(item => Text(item) is not ("none" or "bridge"))
+                    )
+                )
+                    throw new InvalidDataException(
+                        $"app config `nodeProviders.{id}.networkModes` must contain only `none` or `bridge`."
+                    );
+                if (provider.ContainsKey("stateDir"))
+                    ExactText(
+                        provider["stateDir"],
+                        $"app config `nodeProviders.{id}.stateDir`",
+                        MaxNodeProviderValueLength
+                    );
+                var memory = provider.ContainsKey("memory") ? Text(provider["memory"]) : "2g";
+                var tmpfs = provider.ContainsKey("tmpfsSize")
+                    ? Text(provider["tmpfsSize"])
+                    : "256m";
+                if (memory is null || !Regex.IsMatch(memory, "^[1-9]\\d*[kKmMgG]$"))
+                    throw new InvalidDataException(
+                        $"app config `nodeProviders.{id}.memory` is invalid."
+                    );
+                if (tmpfs is null || !Regex.IsMatch(tmpfs, "^[1-9]\\d*[kKmMgG]$"))
+                    throw new InvalidDataException(
+                        $"app config `nodeProviders.{id}.tmpfsSize` is invalid."
+                    );
+                var cpus = provider.ContainsKey("cpus") ? Number(provider["cpus"]) : 2;
+                var pids = provider.ContainsKey("pidsLimit") ? Number(provider["pidsLimit"]) : 256;
+                if (cpus is null || !double.IsFinite(cpus.Value) || cpus <= 0 || cpus > 64)
+                    throw new InvalidDataException(
+                        $"app config `nodeProviders.{id}.cpus` must be between 0 and 64."
+                    );
+                if (pids is null || Math.Truncate(pids.Value) != pids || pids < 16 || pids > 65_536)
+                    throw new InvalidDataException(
+                        $"app config `nodeProviders.{id}.pidsLimit` must be an integer between 16 and 65536."
                     );
             }
         }
@@ -197,7 +261,7 @@ internal static class AppConfigurationRules
             "app config `sessionWorkers.enabled`",
             workers.ContainsKey("enabled")
         );
-        var idle = workers["idleSeconds"] is null ? 60 : Number(workers["idleSeconds"]);
+        var idle = workers.ContainsKey("idleSeconds") ? Number(workers["idleSeconds"]) : 60;
         if (idle is null || idle < 1 || idle > 86_400 || Math.Truncate(idle.Value) != idle)
             throw new InvalidDataException(
                 "app config `sessionWorkers.idleSeconds` must be an integer between 1 and 86400."
@@ -208,7 +272,11 @@ internal static class AppConfigurationRules
     {
         if (!present)
         {
-            if (legacy is not null)
+            if (
+                legacy is JsonValue legacyValue
+                && legacyValue.TryGetValue<string>(out var legacyText)
+                && legacyText.Trim().Length > 0
+            )
                 HttpUrl(legacy, "app config `llm.ollamaBaseUrl`");
             return;
         }
@@ -250,9 +318,9 @@ internal static class AppConfigurationRules
             "app config `vectorMaintenance.enabled`",
             maintenance.ContainsKey("enabled")
         );
-        var hours = maintenance["retentionHours"] is null
-            ? 24
-            : Number(maintenance["retentionHours"]);
+        var hours = maintenance.ContainsKey("retentionHours")
+            ? Number(maintenance["retentionHours"])
+            : 24;
         if (hours is null || hours < 1 || Math.Truncate(hours.Value) != hours)
             throw new InvalidDataException(
                 "app config `vectorMaintenance.retentionHours` must be a positive integer."
@@ -269,13 +337,33 @@ internal static class AppConfigurationRules
             throw new InvalidDataException("mcpInbound contains an unsupported field.");
         Boolean(mcp["enabled"], "mcpInbound.enabled", mcp.ContainsKey("enabled"));
         if (!mcp.ContainsKey("identities"))
+        {
+            if (
+                mcp["enabled"] is JsonValue enabled
+                && enabled.TryGetValue<bool>(out var active)
+                && active
+            )
+                throw new InvalidDataException(
+                    "Enabled mcpInbound requires at least one identity."
+                );
             return;
+        }
         if (mcp["identities"] is not JsonObject identities)
             throw new InvalidDataException("mcpInbound.identities must be a YAML object.");
+        if (identities.Count > 64)
+            throw new InvalidDataException("mcpInbound.identities exceeds 64 entries.");
+        if (
+            mcp["enabled"] is JsonValue enabledValue
+            && enabledValue.TryGetValue<bool>(out var enabledInbound)
+            && enabledInbound
+            && identities.Count == 0
+        )
+            throw new InvalidDataException("Enabled mcpInbound requires at least one identity.");
+        var tokens = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (id, raw) in identities)
         {
             if (
-                !ProviderId.IsMatch(id)
+                !Regex.IsMatch(id, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
                 || raw is not JsonObject identity
                 || identity.Any(pair => pair.Key != "token")
             )
@@ -288,6 +376,8 @@ internal static class AppConfigurationRules
                 || !Regex.IsMatch(token, "^[A-Za-z0-9._~+/-]+={0,2}$")
             )
                 throw new InvalidDataException("mcpInbound identity token is invalid.");
+            if (!tokens.Add(token))
+                throw new InvalidDataException("mcpInbound identities must use distinct tokens.");
         }
     }
 
@@ -299,19 +389,28 @@ internal static class AppConfigurationRules
             throw new InvalidDataException(label + " must be a boolean.");
     }
 
-    private static void ExactText(JsonNode? value, string label)
+    private static void ExactText(JsonNode? value, string label, int maxLength)
     {
         var text = Text(value);
-        if (text is null || text.Length == 0 || text != text.Trim() || text.Any(char.IsControl))
+        if (
+            text is null
+            || text.Length == 0
+            || text != text.Trim()
+            || text.Length > maxLength
+            || text.Any(char.IsControl)
+        )
             throw new InvalidDataException(label + " must be an exact non-empty string.");
     }
 
     private static void HttpUrl(JsonNode? value, string label)
     {
-        var text = Text(value);
+        var text = Text(value)?.Trim();
         if (
             text is null
-            || !Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri)
+            || text.Length == 0
+            || text.Any(char.IsControl)
+            || text.Contains('\\')
+            || !Uri.TryCreate(text, UriKind.Absolute, out var uri)
             || uri.Scheme is not ("http" or "https")
             || uri.Host.Length == 0
             || uri.UserInfo.Length > 0

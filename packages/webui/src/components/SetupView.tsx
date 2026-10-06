@@ -320,7 +320,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
         const startedChannels = (data.reload?.started || []).join(', ')
         const message = startedChannels
           ? `Config saved. Active channels refreshed: ${startedChannels}.`
-          : data.reload?.available !== true
+          : data.reload?.available === false
             ? 'Configuration saved. Some settings take effect after a server restart.'
             : 'Config saved.'
         setConfigSaveResult({ kind: 'success', message })

@@ -104,8 +104,21 @@ internal sealed partial class ModelConfiguration
             "qqbot" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["appId"]))
                 && !string.IsNullOrWhiteSpace(SessionWait.Text(config["clientSecret"])),
             "wework" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["webhookUrl"]))
-                || config["listenPort"] is not null
-                || config["aibot"] is JsonObject,
+                || (
+                    config["listenPort"] is not null
+                    && !string.IsNullOrWhiteSpace(SessionWait.Text(config["listenPath"]))
+                    && !string.IsNullOrWhiteSpace(SessionWait.Text(config["token"]))
+                    && !string.IsNullOrWhiteSpace(SessionWait.Text(config["encodingAESKey"]))
+                )
+                || (
+                    config["aibot"] is JsonObject aibot
+                    && aibot["websocket"] is JsonObject websocket
+                    && websocket["enabled"] is JsonValue enabled
+                    && enabled.TryGetValue<bool>(out var active)
+                    && active
+                    && !string.IsNullOrWhiteSpace(SessionWait.Text(websocket["botId"]))
+                    && !string.IsNullOrWhiteSpace(SessionWait.Text(websocket["secret"]))
+                ),
             _ => false,
         };
 
@@ -242,24 +255,7 @@ internal sealed partial class ModelConfiguration
         await mutation.WaitAsync();
         try
         {
-            var directory = Path.GetDirectoryName(AppPath)!;
-            Directory.CreateDirectory(directory);
-            var temporary = AppPath + ".tmp-" + Guid.NewGuid().ToString("N");
-            try
-            {
-                await File.WriteAllTextAsync(temporary, raw, new UTF8Encoding(false));
-                File.Move(temporary, AppPath, true);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
-            }
-            catch
-            {
-                try
-                {
-                    File.Delete(temporary);
-                }
-                catch { }
-                throw;
-            }
+            await WriteAppRawAsync(raw);
         }
         finally
         {
@@ -269,22 +265,53 @@ internal sealed partial class ModelConfiguration
 
     internal async Task SaveChannelsAsync(JsonObject channels)
     {
-        var currentRaw = ReadCurrentAppRaw();
-        var current = ConfigurationYaml.Parse(currentRaw, "app config");
-        current["channels"] = channels.DeepClone();
-        AppConfigurationRules.Validate(current);
-        var serializer = new SerializerBuilder().Build();
-        var serialized = serializer.Serialize(JsonNodeToObject(channels)).TrimEnd();
-        var section =
-            serialized.Length == 0 || serialized == "{}"
-                ? "channels: {}"
-                : "channels:\n"
-                    + string.Join(
-                        "\n",
-                        serialized.Split('\n').Select(line => line.Length == 0 ? line : "  " + line)
-                    );
-        var nextRaw = ReplaceTopLevelSection(currentRaw, "channels", section);
-        await SaveAppAsync(nextRaw);
+        await mutation.WaitAsync();
+        try
+        {
+            var currentRaw = ReadCurrentAppRaw();
+            var current = ConfigurationYaml.Parse(currentRaw, "app config");
+            current["channels"] = channels.DeepClone();
+            AppConfigurationRules.Validate(current);
+            var serializer = new SerializerBuilder().Build();
+            var serialized = serializer.Serialize(JsonNodeToObject(channels)).TrimEnd();
+            var section =
+                serialized.Length == 0 || serialized == "{}"
+                    ? "channels: {}"
+                    : "channels:\n"
+                        + string.Join(
+                            "\n",
+                            serialized
+                                .Split('\n')
+                                .Select(line => line.Length == 0 ? line : "  " + line)
+                        );
+            await WriteAppRawAsync(ReplaceTopLevelSection(currentRaw, "channels", section));
+        }
+        finally
+        {
+            mutation.Release();
+        }
+    }
+
+    private async Task WriteAppRawAsync(string raw)
+    {
+        var directory = Path.GetDirectoryName(AppPath)!;
+        Directory.CreateDirectory(directory);
+        var temporary = AppPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllTextAsync(temporary, raw, new UTF8Encoding(false));
+            File.Move(temporary, AppPath, true);
+            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+        }
+        catch
+        {
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch { }
+            throw;
+        }
     }
 
     private static object? JsonNodeToObject(JsonNode? node)
@@ -313,7 +340,13 @@ internal sealed partial class ModelConfiguration
         var lines = raw.Split('\n').ToList();
         if (hasNewline)
             lines.RemoveAt(lines.Count - 1);
-        var start = lines.FindIndex(line => line.StartsWith(key + ":", StringComparison.Ordinal));
+        var start = lines.FindIndex(line =>
+        {
+            if (line.Length != line.TrimStart().Length)
+                return false;
+            var colon = line.IndexOf(':');
+            return colon >= 0 && line[..colon].Trim() == key;
+        });
         if (start < 0)
         {
             var prefix = raw.TrimEnd();
