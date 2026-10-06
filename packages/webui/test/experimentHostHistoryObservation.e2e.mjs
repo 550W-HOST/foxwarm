@@ -112,7 +112,7 @@ try {
 
   const selected = await fixture.api('GET', `/api/history/window?sessionId=${parentId}&target=msg%231-45`)
   assert.equal(selected.status, 200, JSON.stringify(selected))
-  assert(selected.body.messages.length > 0)
+  assert.equal(selected.body.messages.length, 20)
   assert.equal(selected.body.hasMoreInTarget, true)
   assert.equal(selected.body.hasLater, true)
   const continued = await fixture.api(
@@ -120,16 +120,22 @@ try {
     `/api/history/window?sessionId=${parentId}&afterSeq=${selected.body.lastSeq}&targetEndSeq=45`,
   )
   assert.equal(continued.status, 200, JSON.stringify(continued))
-  assert(continued.body.messages.length > 0)
+  assert.equal(continued.body.messages.length, 20)
   assert.equal(continued.body.hasMoreInTarget, true)
   const finished = await fixture.api(
     'GET',
     `/api/history/window?sessionId=${parentId}&afterSeq=${continued.body.lastSeq}&targetEndSeq=45`,
   )
   assert.equal(finished.status, 200, JSON.stringify(finished))
-  assert(finished.body.messages.length > 0)
+  assert.equal(finished.body.messages.length, 5)
   assert.equal(finished.body.hasMoreInTarget, false)
   assert.equal(finished.body.hasLater, true)
+  assert.deepEqual(
+    [...selected.body.messages, ...continued.body.messages, ...finished.body.messages].map(
+      row => row.__meta.seq,
+    ),
+    Array.from({ length: 45 }, (_, index) => index + 1),
+  )
 
   const moved = await fixture.api('POST', `/api/sessions/${parentId}/message`, { text: `/session move ${movedId}` })
   assert.equal(moved.status, 200, JSON.stringify(moved))
@@ -141,6 +147,23 @@ try {
   const tree = await fixture.api('GET', '/api/agents/tree')
   assert.equal(tree.status, 200, JSON.stringify(tree))
   assert(tree.body.agents.some(row => row.id === childId))
+
+  const treeBeforeUnknown = await fixture.api('GET', '/api/agents/tree')
+  const unknown = await fixture.api(
+    'GET',
+    '/api/history/window?sessionId=history-observation-unknown&target=msg%231',
+  )
+  assert.equal(unknown.status, 404, JSON.stringify(unknown))
+  const unknownSearch = await fixture.api(
+    'GET',
+    '/api/history/search?query=history&sessionId=history-observation-unknown',
+  )
+  assert.equal(unknownSearch.status, 404, JSON.stringify(unknownSearch))
+  const treeAfterUnknown = await fixture.api('GET', '/api/agents/tree')
+  assert.deepEqual(
+    treeAfterUnknown.body,
+    treeBeforeUnknown.body,
+  )
 
   const invalid = await fixture.api('GET', `/api/history/window?sessionId=${movedId}&beforeSeq=not-a-number`)
   assert.equal(invalid.status, 400, JSON.stringify(invalid))
@@ -164,11 +187,28 @@ try {
   await page.click('button[type="submit"]')
   await page.waitForSelector('[data-history-search-results] [data-history-result]')
   assert((await page.$eval('[data-history-search-results]', node => node.textContent || '')).includes('Selected msg#1–45'))
+  await page.click('[data-history-search-results] [data-history-page="later"]')
+  await page.waitForFunction(() => (document.querySelector('[data-history-search-results]')?.textContent || '').includes('shown 1–40'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#history-search-query')
+  await page.type('#history-search-query', `sessionId=${parentId} msg#1-45`)
+  await page.click('button[type="submit"]')
+  await page.waitForSelector('[data-history-search-results] [data-history-result]')
   await page.evaluate(() => { location.hash = 'tab/chat:history-observation-moved' })
   await page.waitForSelector('.foxwarm-chat-root')
+  let debugResponse
+  page.on('response', response => {
+    if (response.url().includes('/debug-file')) debugResponse = response
+  })
   await page.click('button[title="Session options"]')
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'refresh'))
+  assert(debugResponse)
+  assert.equal(debugResponse.status(), 200)
+  const debugBody = await debugResponse.json()
+  assert.equal(typeof debugBody.resolvedPath, 'string')
+  assert.equal(debugBody.payload.contextFrontier, undefined)
+  assert(Array.isArray(debugBody.payload.history))
   assert((await page.evaluate(() => document.body.textContent || '')).includes('session file:'))
 
   console.log(JSON.stringify({ result: 'ok', childId, populatedWindow: true, selectedRangeContinuation: true, aliasWindow: true, tree: true, exactSearch: true, debugModal: true, semanticStatus: semantic.status }))
