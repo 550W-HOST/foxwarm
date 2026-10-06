@@ -63,10 +63,17 @@ internal sealed partial class WebUIChannel
                             ["success"] = true,
                             ["configPath"] = configuration.AppPath,
                             ["rawYaml"] = raw,
+                            ["channelCount"] = ConfigurationYaml.Parse(raw, "app config")[
+                                "channels"
+                            ]
+                                is JsonObject channels
+                                ? channels.Count
+                                : 0,
                             ["reload"] = new JsonObject
                             {
                                 ["started"] = new JsonArray(),
                                 ["stopped"] = new JsonArray(),
+                                ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
                                 ["available"] = false,
                                 ["message"] =
                                     "External chat channels are unavailable on this server.",
@@ -119,10 +126,12 @@ internal sealed partial class WebUIChannel
                             ["success"] = true,
                             ["configPath"] = configuration.AppPath,
                             ["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(channels),
+                            ["channelCount"] = channels.Count,
                             ["reload"] = new JsonObject
                             {
                                 ["started"] = new JsonArray(),
                                 ["stopped"] = new JsonArray(),
+                                ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
                                 ["available"] = false,
                                 ["message"] =
                                     "External chat channels are unavailable on this server.",

@@ -21,6 +21,7 @@ internal sealed partial class ModelConfiguration
     {
         var raw = ReadCurrentAppRaw();
         var current = ConfigurationYaml.Parse(raw, "app config");
+        AppConfigurationRules.Validate(current);
         var configured = current["channels"] as JsonObject ?? new JsonObject();
         return new JsonObject
         {
@@ -74,7 +75,12 @@ internal sealed partial class ModelConfiguration
                 }
             );
         }
-        if (webUiRunning && !channels.ContainsKey("webui"))
+        var configuredWebUi = channels["webui"] as JsonObject;
+        var configuredWebUiType = SessionWait.Text(configuredWebUi?["type"])?.Trim();
+        if (
+            webUiRunning
+            && (!channels.ContainsKey("webui") || configuredWebUiType is null or "webui")
+        )
         {
             result.Add(
                 new JsonObject
@@ -86,6 +92,24 @@ internal sealed partial class ModelConfiguration
                     ["configured"] = true,
                     ["enabled"] = true,
                     ["details"] = new JsonArray("Main WebUI"),
+                    ["lastError"] = null,
+                }
+            );
+        }
+        else if (webUiRunning)
+        {
+            result.Add(
+                new JsonObject
+                {
+                    ["channelId"] = "main-webui",
+                    ["type"] = "webui",
+                    ["managed"] = false,
+                    ["running"] = true,
+                    ["configured"] = true,
+                    ["enabled"] = true,
+                    ["details"] = new JsonArray(
+                        "Main WebUI (config id `webui` is occupied by another type)"
+                    ),
                     ["lastError"] = null,
                 }
             );
@@ -284,7 +308,10 @@ internal sealed partial class ModelConfiguration
                                 .Split('\n')
                                 .Select(line => line.Length == 0 ? line : "  " + line)
                         );
-            await WriteAppRawAsync(ReplaceTopLevelSection(currentRaw, "channels", section));
+            var nextRaw = ReplaceTopLevelSection(currentRaw, "channels", section);
+            var final = ConfigurationYaml.Parse(nextRaw, "app config");
+            AppConfigurationRules.Validate(final);
+            await WriteAppRawAsync(nextRaw);
         }
         finally
         {

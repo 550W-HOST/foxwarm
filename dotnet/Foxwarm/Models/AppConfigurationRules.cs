@@ -198,6 +198,7 @@ internal static class AppConfigurationRules
                     || roots.Count > MaxNodeProviderArgs
                     || roots.Any(item =>
                         Text(item) is null
+                        || Text(item)!.Length == 0
                         || Text(item)!.Length > MaxNodeProviderValueLength
                         || Text(item) != Text(item)!.Trim()
                     )
@@ -397,7 +398,7 @@ internal static class AppConfigurationRules
             || text.Length == 0
             || text != text.Trim()
             || text.Length > maxLength
-            || text.Any(char.IsControl)
+            || text.Any(character => character <= '\u001f' || character == '\u007f')
         )
             throw new InvalidDataException(label + " must be an exact non-empty string.");
     }

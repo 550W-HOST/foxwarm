@@ -44,6 +44,15 @@ try {
     assert.equal(invalid.status, 400, JSON.stringify(invalid))
     assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), raw)
   }
+  const conflictRaw = raw.replace('  webui:\n    type: webui', '  webui:\n    type: telegram')
+  const conflictSave = await api('/api/setup/config', 'POST', { yaml: conflictRaw })
+  assert.equal(conflictSave.status, 200, JSON.stringify(conflictSave))
+  const conflictStatus = await api('/api/setup/status')
+  assert.equal(conflictStatus.body.channels.find(channel => channel.channelId === 'webui').running, false)
+  assert.equal(conflictStatus.body.channels.find(channel => channel.channelId === 'main-webui').running, true)
+  const conflictRestore = await api('/api/setup/config', 'POST', { yaml: raw })
+  assert.equal(conflictRestore.status, 200, JSON.stringify(conflictRestore))
+
   const legacyIgnored = raw.replace('vector: false\n', '').replace('compactThresholdPercent: 0.85', 'compactThresholdPercent: 0.85\n  ollamaBaseUrl: 42')
   const legacySave = await api('/api/setup/config', 'POST', { yaml: legacyIgnored })
   assert.equal(legacySave.status, 200, JSON.stringify(legacySave))
