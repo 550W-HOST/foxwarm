@@ -1985,7 +1985,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
                     ? result.__toolPostAction.explicitWaitId
                     : undefined;
-                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
+                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session' || prepared.call.name === 'task')
                     && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
                     ? result.__toolPostAction.successfulSendToSessionTarget
                     : undefined;
@@ -2342,6 +2342,7 @@ export async function chat(
         abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         prepareRetry?: (signal: AbortSignal) => Promise<boolean>;
+        requestContext?: () => Promise<Message[]>;
         maxRetries?: number;
         purpose?: LlmRequestPurpose;
         compactPlanBackground?: boolean;
@@ -2403,18 +2404,27 @@ export async function chat(
     }
     
     // Convert to appropriate format based on provider
-    const getCommittedHistoryForRetry = () => session.history
+    const normalOwnedRequest = (options?.purpose || 'normal-turn') === 'normal-turn' && options?.snapshotAuthority !== 'detached';
+    let requestContext = normalOwnedRequest && options?.requestContext ? await options.requestContext() : [];
+    const getCommittedHistoryForRetry = () => [...session.history
         .filter(isModelVisibleMessage)
         .map((message: Message): Message => {
             const { __meta, ...msg } = message;
             const modelId = getHistoricalConcreteModelId(message);
             return modelId ? { ...msg, __meta: { modelId } } : msg;
-        });
+        }), ...requestContext];
     const contentsForLlm = getCommittedHistoryForRetry();
     const partialCommitEnabled = (options?.purpose || 'normal-turn') === 'normal-turn'
         && options?.snapshotAuthority !== 'detached' && !!options?.onIntermediateAssistantText;
-    const prepareRetry = (options?.purpose || 'normal-turn') === 'normal-turn'
-        && options?.snapshotAuthority !== 'detached' ? options?.prepareRetry : undefined;
+    const prepareRetry = normalOwnedRequest && (options?.prepareRetry || options?.requestContext)
+        ? async (signal: AbortSignal): Promise<boolean> => {
+            const changed = options.prepareRetry ? await options.prepareRetry(signal) : false;
+            if (!options.requestContext) return changed;
+            const nextContext = await options.requestContext();
+            const contextChanged = JSON.stringify(nextContext) !== JSON.stringify(requestContext);
+            requestContext = nextContext;
+            return changed || contextChanged;
+        } : undefined;
     const availableToolDefinitions = await resolveSessionToolDefinitions(session, options?.toolDefinitions);
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);

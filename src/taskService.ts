@@ -7,6 +7,7 @@ export class TaskService {
   private lane: Promise<void> = Promise.resolve();
   constructor(readonly store: TaskStore, private readonly deps: {
     resolveSessionId: (id: string) => string | undefined;
+    readSessionMessageSeq?: (id: string) => Promise<number | undefined>;
     sendToSession: (target: string, message: string, source: string) => Promise<unknown>;
   }) {}
 
@@ -18,10 +19,10 @@ export class TaskService {
     try { return await operation(); } finally { release!(); }
   }
 
-  async execute(args: Record<string, any>, sessionId: string): Promise<any> {
+  async execute(args: Record<string, any>, sessionId: string, anchorSeq?: number): Promise<any> {
     validateTaskArgs(args);
     let notifyAssignment = false;
-    const result = await this.exclusive(() => {
+    const result = await this.exclusive(async () => {
       let normalized = args;
       if (args.action === 'assign' && args.ownerSessionId !== null) {
         const ownerSessionId = this.deps.resolveSessionId(args.ownerSessionId);
@@ -33,7 +34,9 @@ export class TaskService {
         notifyAssignment = before.ownerSessionId !== normalized.ownerSessionId
           || !before.assignmentNotificationStatus || before.assignmentNotificationStatus === 'failed';
       }
-      return this.store.execute(normalized, sessionId);
+      const progressAnchor = anchorSeq ?? (['claim', 'assign'].includes(args.action) || (args.action === 'update' && args.status === 'active')
+        ? await this.deps.readSessionMessageSeq?.(sessionId) : undefined);
+      return this.store.execute(normalized, sessionId, undefined, progressAnchor);
     });
     if (notifyAssignment) {
       const target = result.task.ownerSessionId;

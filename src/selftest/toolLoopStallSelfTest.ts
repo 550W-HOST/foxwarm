@@ -10,7 +10,7 @@ import * as vector from '../vector';
 import { COMPACT_FLOW_MAX_ROUNDS } from '../session/compactPlan';
 import { getCompactOperationPhase, hasCompletedCompactJob } from '../session/history';
 import { MessagePart, Session } from '../types';
-import { tool_get_archived_messages, tool_set_goal } from '../toolsSessionAgent';
+import { tool_get_archived_messages } from '../toolsSessionAgent';
 import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
 
 const SELFTEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nI checked that this self-test handoff is necessary, targets the correct parent, contains the complete fixture message, and follows the parent-child communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
@@ -347,7 +347,8 @@ async function main(): Promise<void> {
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
-      await tool_set_goal({ goal: 'Keep the session goal alive across compaction.', remindEvery: 99 }, { sessionId, session });
+      session.goalState = { goal: 'Keep the session goal alive across compaction.', remindEvery: 99, anchorSeq: 0, updatedAt: Date.now() };
+      await sessionManager.saveSession(sessionId);
 
       await sessionManager.appendSessionMessage(session, {
         role: 'user',
@@ -461,15 +462,13 @@ async function main(): Promise<void> {
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 5);
       assert.strictEqual(finalSession.busy, false);
-      assert.strictEqual(finalSession.goalState?.goal, 'Keep the session goal alive across compaction.');
+      assert.strictEqual(finalSession.goalState, undefined);
       const compactCompletion = finalSession.history.find(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"')));
       const compactCompletionSystem = compactCompletion?.parts.find(part => typeof part.system === 'string')?.system || '';
       assert.match(compactCompletionSystem, /event="compact-completed"/);
-      assert(compactCompletion?.parts.some(part => (part.system || '').includes('kind="goal-reminder"')));
-      assert(compactCompletion?.parts.some(part => (part.system || '').includes('Keep the session goal alive across compaction')));
-      assert.strictEqual(compactCompletion?.__meta?.goalReminder, true);
-      assert.strictEqual(finalSession.goalState?.anchorSeq, compactCompletion?.__meta?.seq);
-      assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 1);
+      assert.strictEqual(compactCompletion?.parts.length, 1);
+      assert.strictEqual(compactCompletion?.__meta?.goalReminder, undefined);
+      assert.strictEqual(finalSession.history.filter(msg => msg.__meta?.goalReminder === true).length, 0);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('layered compact summary'))));
       assert(finalSession.history.some(msg => msg.role === 'user' && msg.parts.some(part => (part.system || '').includes('event="compact-completed"'))));

@@ -1,3 +1,4 @@
+import { taskService } from './tools/taskTools';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fork } from 'node:child_process';
@@ -1391,7 +1392,7 @@ test('malformed primitive tool arguments do not poison Worker publication or lat
     if (parts) await options.appendMessage({ role: 'user', parts });
     chatCalls += 1;
     if (chatCalls === 1) {
-      const toolCall = { id: 'bad-goal', name: 'set_goal', args: { goal: true } } as any;
+      const toolCall = { id: 'bad-goal', name: 'set_session_child_model', args: { effort: true } } as any;
       await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     }
@@ -1401,11 +1402,11 @@ test('malformed primitive tool arguments do not poison Worker publication or lat
   };
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
-      store.enqueueIntent(initial.id, 'malformed-tool', 'enqueue', { type: 'user', parts: [{ text: 'call malformed set_goal' }] });
+      store.enqueueIntent(initial.id, 'malformed-tool', 'enqueue', { type: 'user', parts: [{ text: 'call malformed task' }] });
       await host.runPending(8);
       const afterMalformed = readDurable();
       const toolResponse = afterMalformed.history.find((message: any) => message.role === 'tool')?.parts?.[0]?.functionResponse?.response;
-      assert.deepEqual(toolResponse, { error: 'goal must be a string.' });
+      assert.match(String(toolResponse.error), /effort must be a canonical effort string or null/);
       assert.equal(afterMalformed.history.at(-1).parts[0].text, 'first turn recovered');
       assert.equal(afterMalformed.busy, false);
 
@@ -1427,7 +1428,9 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const sessionId = 'worker-host-real-child';
   const dbPath = path.join(root, 'session-runtime.sqlite');
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
-  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  const legacyOwner = baseSession(sessionId);
+  legacyOwner.goalState = { goal: 'Resume legacy work', remindEvery: 2, anchorSeq: 0, updatedAt: 1 };
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(legacyOwner));
   await fs.outputFile(path.join(getAgentDir('main'), 'worker-send.txt'), 'worker-master-file');
   const store = new SessionWorkerStore(dbPath); store.open();
   const incarnationId = 'runtime-test-incarnation';
@@ -1463,7 +1466,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
       FOXWARM_SESSION_WORKER_STORE_PATH: dbPath,
       FOXWARM_TEST_FAIL_WRITE_AT: '2',
-      FOXWARM_TEST_FAIL_GOAL: '1',
+      FOXWARM_TEST_FAIL_SETTING: '1',
       FOXWARM_TEST_WAIT_TOOL: '1',
       FOXWARM_TEST_EXTERNAL_REVERSE: '1',
       FOXWARM_TEST_PUBLICATION_TOOL: '1',
@@ -1546,6 +1549,11 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(durable.history.length, 2);
     assert.equal(durable.queue.length, 0);
     assert.equal(durable.busy, false);
+    assert.equal(durable.goalState, undefined);
+    const migratedTasks = taskService.list().tasks.filter((task: any) => task.createdBySessionId === sessionId);
+    assert.equal(migratedTasks.length, 1);
+    assert.equal(migratedTasks[0].ownerSessionId, sessionId);
+    assert.equal(migratedTasks[0].title, 'Resume legacy work');
     const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     try {
       const rows = archive.prepare('SELECT role FROM archive_messages WHERE session_id=? ORDER BY seq').all(sessionId) as Array<{ role: string }>;
@@ -1562,8 +1570,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     store.enqueueIntent(sessionId, 'goal-fault', 'enqueue', { type: 'user', parts: [{ text: 'set-goal-fault' }] });
     await runtime.call('runPending', { limit: 8 });
     const afterGoalFault = await fs.readJson(statePath);
-    assert.equal(afterGoalFault.goalState, undefined);
-    assert.match(afterGoalFault.history.at(-1).parts[0].text, /reported tool failure: test goal persistence failure/);
+    assert.equal(afterGoalFault.compactThresholdTokens, undefined);
+    assert.match(afterGoalFault.history.at(-1).parts[0].text, /reported tool failure: test setting persistence failure/);
 
     await sessionManager.getSession(sessionId);
     store.enqueueIntent(sessionId, 'reverse-wait', 'enqueue', { type: 'user', parts: [{ text: 'wait through reverse RPC' }] });
@@ -1601,7 +1609,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
     const committedBeforeDisconnect = await fs.readJson(statePath);
     assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
-    assert.equal(committedBeforeDisconnect.goalState.goal, 'committed-before-publication-loss');
+    assert.equal(committedBeforeDisconnect.compactThresholdTokens, 4243);
     assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1);
     const archiveAfterFailure = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
     const archiveCount = Number((archiveAfterFailure.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);

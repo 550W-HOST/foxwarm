@@ -11,7 +11,7 @@ import * as agentTools from './toolsSessionAgent/agents';
 import * as timerTools from './toolsSessionAgent/timers';
 import * as sessionCrudTools from './toolsSessionAgent/sessionCrud';
 import * as nodeTools from './tools/nodeTools';
-import { tool_task } from './tools/taskTools';
+import { tool_task, taskService } from './tools/taskTools';
 import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 import { normalizeCreateChildSessionArgs, normalizeCreateSessionArgs } from './toolsSessionAgent/helpers';
@@ -70,7 +70,13 @@ export type ValidateWaitExecIdsResponse = { activeExecIds: string[] };
 export type ResolveAuthorizationSessionTargetRequest = { sourceSessionId: string; toolName: string; args: ToolArgs };
 export type ResolveAuthorizationSessionTargetResponse = { sourceParentSessionId?: string; target?: ToolAuthorizationSessionTarget };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 12, {
+export type MigrateLegacyGoalRequest = { sourceSessionId: string; goal: string; anchorSeq: number };
+export type TaskContextRequest = { sourceSessionId: string; sequences: number[]; consume: boolean; retainedTaskIds?: string[] };
+export type TaskContextResponse = { tasks: { id: string; title: string; status: string }[]; omitted: number };
+
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 13, {
+  migrateLegacyGoal: rpcMethod<MigrateLegacyGoalRequest, { taskId: string }>(),
+  taskContext: rpcMethod<TaskContextRequest, TaskContextResponse>(),
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
   validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),
@@ -214,6 +220,28 @@ export function createMainManagementToolServiceHandler(options: {
     return { sessionId: sourceSessionId, session: exactSource, detachedReadOnlySession: true } as ToolContext;
   };
   return {
+    async migrateLegacyGoal(input) {
+      const sourceSessionId = normalizeSourceSessionId(input?.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      if (typeof input?.goal !== 'string' || !input.goal.trim() || !Number.isSafeInteger(input?.anchorSeq) || input.anchorSeq < 0) {
+        throw new RpcError('TASK_INVALID_LEGACY_GOAL', 'Legacy goal requires text and a valid message sequence.');
+      }
+      const task = taskService.store.migrateLegacyGoal(sourceSessionId, input.goal, input.anchorSeq);
+      return { taskId: task.id };
+    },
+    async taskContext(input) {
+      const sourceSessionId = normalizeSourceSessionId(input?.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      const sequences = input?.sequences;
+      const retained = input?.retainedTaskIds ?? [];
+      if (!Array.isArray(sequences) || sequences.length > 30 || sequences.some((seq, index) => !Number.isSafeInteger(seq) || seq < 0 || (index > 0 && seq <= sequences[index - 1]))
+        || typeof input.consume !== 'boolean' || !Array.isArray(retained) || retained.length > 50
+        || retained.some(id => typeof id !== 'string' || id.length > 128)) {
+        throw new RpcError('TASK_INVALID_CONTEXT', 'Task context requires bounded message sequences and task IDs.');
+      }
+      const tasks = taskService.store.taskContext(sourceSessionId, sequences, input.consume, retained);
+      return { tasks: tasks.slice(0, 50), omitted: Math.max(0, tasks.length - 50) };
+    },
     async execute(input) {
       const sourceSessionId = normalizeSourceSessionId(input?.sourceSessionId);
       assertExpectedSource(sourceSessionId);
@@ -253,6 +281,9 @@ export function createMainManagementToolServiceHandler(options: {
       if (operation === 'create_agent' && typeof args.sourceSessionId === 'string'
         && args.sourceSessionId !== sourceSessionId && !source.aliases?.includes(args.sourceSessionId)) {
         throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_agent from another source session is unavailable from a Session worker.');
+      }
+      if (operation === 'task') {
+        return { result: await invokeAllowedOperation(operation, args, await exactSourceContext(sourceSessionId, source)) };
       }
       if (operation === 'session_update_display_name') {
         const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : '';

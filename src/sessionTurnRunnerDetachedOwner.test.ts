@@ -1086,8 +1086,8 @@ test('detached exact owner completes one real local-tool iteration', async () =>
     turnIds.push(options.turnId);
     if (parts) await options.appendMessage({ role: 'user', parts });
     if (iteration++ === 0) {
-      await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } } }] });
-      return { text: '', toolCalls: [{ id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } }] };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_session_compact_threshold', args: { thresholdTokens: 12345 } } }] });
+      return { text: '', toolCalls: [{ id: 'goal-call', name: 'set_session_compact_threshold', args: { thresholdTokens: 12345 } }] };
     }
     await options.appendMessage({ role: 'model', parts: [{ text: 'tool complete' }] });
     return { text: 'tool complete' };
@@ -1095,7 +1095,7 @@ test('detached exact owner completes one real local-tool iteration', async () =>
 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
-    assert.equal(session.goalState?.goal, 'detached goal');
+    assert.equal(session.compactThresholdTokens, 12345);
     assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'tool', 'model']);
     assert.equal(session.history.length, 4);
     assert.equal(session.busy, false);

@@ -492,7 +492,7 @@ test('policy unavailability preserves paired tool responses and requests a fatal
   let starts = 0;
   const message: any = await executeTools([
     { id: 'fatal-call', name: 'wait', args: { waitForInput: true } },
-    { id: 'skipped-call', name: 'set_goal', args: { goal: 'must not run' } },
+    { id: 'skipped-call', name: 'task', args: { action: 'create', title: 'must not run' } },
   ], { sessionId: session.id, session, onToolStart: () => { starts += 1; } }, session, {
     currentSessionEffects: {
       placement: 'local',

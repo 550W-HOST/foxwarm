@@ -24,6 +24,9 @@ export interface TaskRecord {
   cancelledAt: number | null;
   completionNotificationStatus: string | null;
   assignmentNotificationStatus: string | null;
+  legacyGoalSessionId: string | null;
+  reminderLastSeq: number | null;
+  reminderMessageCount: number;
 }
 
 export class TaskError extends Error {
@@ -110,9 +113,10 @@ export class TaskStore {
         CREATE INDEX IF NOT EXISTS task_notes_task ON task_notes(taskId, id);
       `);
       const columns = db.prepare('PRAGMA table_info(tasks)').all() as any[];
-      for (const name of ['completionNotificationStatus', 'assignmentNotificationStatus']) {
-        if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE tasks ADD COLUMN ${name} TEXT`);
+      for (const [name, type] of [['completionNotificationStatus', 'TEXT'], ['assignmentNotificationStatus', 'TEXT'], ['legacyGoalSessionId', 'TEXT'], ['reminderLastSeq', 'INTEGER'], ['reminderMessageCount', 'INTEGER NOT NULL DEFAULT 0']]) {
+        if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${type}`);
       }
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tasks_legacy_goal ON tasks(legacyGoalSessionId)');
       this.db = db;
       return db;
     } catch (error) {
@@ -136,7 +140,7 @@ export class TaskStore {
       .run(status, taskId, ownerSessionId);
   }
 
-  execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT): any {
+  execute(args: TaskArgs, sessionId?: string, listLimit = TASK_LIST_LIMIT, anchorSeq?: number): any {
     validateTaskArgs(args);
     if (args.action !== 'list' && args.action !== 'get' && (typeof sessionId !== 'string' || !sessionId.trim())) throw new TaskError('TASK_INVALID_ARGS', 'task requires a current Session.');
     const db = this.getDb();
@@ -144,8 +148,13 @@ export class TaskStore {
     // across independent SQLite connections/processes racing to claim.
     db.exec(args.action === 'list' || args.action === 'get' ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try {
-      const result = this.executeInTransaction(db, args, sessionId, listLimit);
+      const result = this.executeInTransaction(db, args, sessionId, listLimit, anchorSeq);
       db.exec('COMMIT');
+      if (result.task) {
+        const { legacyGoalSessionId, reminderLastSeq, reminderMessageCount, ...visibleTask } = result.task;
+        result.task = visibleTask;
+        if (result.task.description?.length > 4000) result.task.description = result.task.description.slice(0, 3999) + '…';
+      }
       return result;
     } catch (error) {
       db.exec('ROLLBACK');
@@ -153,7 +162,7 @@ export class TaskStore {
     }
   }
 
-  private executeInTransaction(db: DatabaseSync, args: TaskArgs, sessionId: string, listLimit: number): any {
+  private executeInTransaction(db: DatabaseSync, args: TaskArgs, sessionId: string, listLimit: number, anchorSeq?: number): any {
     if (args.action === 'list') {
       const where = args.status === undefined ? "status IN ('open','active')" : 'status=?';
       const params = args.status === undefined ? [] : [args.status];
@@ -192,7 +201,8 @@ export class TaskStore {
       if (task.ownerSessionId && task.ownerSessionId !== sessionId) {
         throw new TaskError('TASK_OWNED', `Task ${task.id} is already claimed by another Session (${state}).`, 409);
       }
-      if (!task.ownerSessionId) db.prepare("UPDATE tasks SET ownerSessionId=?,status='active',updatedAt=? WHERE id=?").run(sessionId, now, task.id);
+      if (!task.ownerSessionId) db.prepare("UPDATE tasks SET ownerSessionId=?,status='active',updatedAt=?,reminderLastSeq=?,reminderMessageCount=0 WHERE id=?")
+        .run(sessionId, now, anchorSeq ?? null, task.id);
     } else {
       const permitted = args.action === 'cancel' || args.action === 'assign'
         ? sessionId === task.createdBySessionId || sessionId === task.ownerSessionId
@@ -204,10 +214,14 @@ export class TaskStore {
         db.prepare("UPDATE tasks SET ownerSessionId=?,status=?,updatedAt=?,assignmentNotificationStatus=? WHERE id=?")
           .run(args.ownerSessionId, args.ownerSessionId === null ? 'open' : 'active', now,
             shouldNotify ? 'pending' : changedOwner ? null : task.assignmentNotificationStatus, task.id);
+        if (changedOwner) db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
+          .run(args.ownerSessionId === sessionId ? anchorSeq ?? null : null, task.id);
         if (changedOwner) this.addNote(db, task.id, sessionId, `Owner changed from ${task.ownerSessionId ?? 'unclaimed'} to ${args.ownerSessionId ?? 'unclaimed'}.`, now);
       } else if (args.action === 'update') {
         db.prepare('UPDATE tasks SET description=?,status=?,updatedAt=? WHERE id=?')
           .run(args.description ?? task.description, args.status ?? task.status, now, task.id);
+        if (args.status === 'active' && task.status !== 'active') db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=0 WHERE id=?')
+          .run(anchorSeq ?? null, task.id);
         if (args.note !== undefined) this.addNote(db, task.id, sessionId, args.note, now);
       } else if (args.action === 'complete') {
         db.prepare("UPDATE tasks SET status='completed',result=?,completedAt=?,updatedAt=?,completionNotificationStatus='pending' WHERE id=?")
@@ -218,6 +232,52 @@ export class TaskStore {
       }
     }
     return { task: this.requireTask(db, task.id) };
+  }
+
+  /** Retry-safe legacy migration; a terminal migrated task is never recreated/reactivated. */
+  migrateLegacyGoal(sessionId: string, goal: string, anchorSeq: number): TaskRecord {
+    const db = this.getDb();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      let task = db.prepare('SELECT * FROM tasks WHERE legacyGoalSessionId=?').get(sessionId) as unknown as TaskRecord;
+      if (!task) {
+        const now = Date.now();
+        const id = `task_${randomUUID()}`;
+        const title = goal.trim().split('\n')[0].slice(0, 200) || 'Migrated task';
+        db.prepare(`INSERT INTO tasks (id,title,description,status,createdBySessionId,ownerSessionId,createdAt,updatedAt,
+          legacyGoalSessionId,reminderLastSeq) VALUES (?,?,?,'active',?,?,?,?,?,?)`)
+          .run(id, title, goal, sessionId, sessionId, now, now, sessionId, anchorSeq);
+        task = this.requireTask(db, id);
+      }
+      db.exec('COMMIT');
+      return task;
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+
+  /** Counts only supplied ordinary visible seqs; callers checkpoint before compact removal. */
+  taskContext(sessionId: string, sequences: number[], consume: boolean, retainedTaskIds: string[] = []): any[] {
+    const db = this.getDb();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const eligible = db.prepare("SELECT * FROM tasks WHERE createdBySessionId=? AND ownerSessionId=? AND status='active' ORDER BY createdAt,id")
+        .all(sessionId, sessionId) as unknown as TaskRecord[];
+      const tasks: any[] = [];
+      const latest = sequences.length ? sequences[sequences.length - 1] : 0;
+      for (const task of eligible) {
+        let count = task.reminderMessageCount;
+        if (task.reminderLastSeq === null) count = 0;
+        else count = Math.min(30, count + sequences.filter(seq => seq > task.reminderLastSeq).length);
+        const due = count >= 30;
+        if (consume && (due || retainedTaskIds.includes(task.id))) {
+          tasks.push({ id: task.id, title: task.title, status: task.status });
+          if (due) count = 0;
+        }
+        db.prepare('UPDATE tasks SET reminderLastSeq=?,reminderMessageCount=? WHERE id=?')
+          .run(Math.max(latest, task.reminderLastSeq ?? 0), count, task.id);
+      }
+      db.exec('COMMIT');
+      return tasks;
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
   private requireTask(db: DatabaseSync, taskId: string): TaskRecord {

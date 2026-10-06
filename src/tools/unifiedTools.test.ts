@@ -1100,7 +1100,7 @@ test('default model-facing tool definitions exclude hidden browser and advanced 
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_crop'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'image_write_to_file'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
-  assert.equal(modelFacingDefinitions.some(def => def.name === 'set_goal'), true);
+  assert.equal(definitions.some(def => def.name === 'set_goal'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'session'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'skill'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'node'), true);
@@ -1201,13 +1201,6 @@ test('wait is the model-facing pause tool and end_turn is removed', () => {
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
 });
 
-test('set_goal schema keeps goal optional so clear can omit it', () => {
-  const definition = definitions.find(def => def.name === 'set_goal');
-  assert.ok(definition);
-  assert.equal((definition.parameters?.properties as any)?.goal?.type, 'string');
-  assert.equal(Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'remindOnTurnEnd'), false);
-  assert.deepEqual(definition.parameters?.required, undefined);
-});
 
 test('defaultInject metadata is the single source of truth for default model injection', () => {
   for (const definition of modelFacingDefinitions) {
@@ -1246,7 +1239,6 @@ test('default model-facing tool names and serialized schema size stay consolidat
     'skill',
     'get_session_messages',
     'recall',
-    'set_goal',
     'submit_compact_plan',
     'search_tools',
     'call_tool',

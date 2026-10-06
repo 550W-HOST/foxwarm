@@ -31,7 +31,7 @@ import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { SessionWorkerStore } from './sessionWorkerStore';
-import { tool_set_goal } from './toolsSessionAgent/settings';
+import { tool_set_session_compact_threshold } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
 import * as vector from './vector';
 import { tool_call_tool } from './tools/unifiedSearch';
@@ -82,7 +82,7 @@ async function start(): Promise<void> {
   }
   const failWrites = new Set(String(process.env.FOXWARM_TEST_FAIL_WRITE_AT || '').split(',').map(Number).filter(Boolean));
   const failReads = new Set(String(process.env.FOXWARM_TEST_FAIL_READ_AT || '').split(',').map(Number).filter(Boolean));
-  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false; let backgroundExecStarted = false;
+  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedSetting = false; let backgroundExecStarted = false;
   if (process.env.FOXWARM_TEST_MOCK_AXIOS !== '1') (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
     chatCount += 1;
     if (options?.purpose === 'btw') {
@@ -267,10 +267,10 @@ async function start(): Promise<void> {
       await options.appendMessage({ role: 'model', parts: [{ text }] });
       return { text };
     }
-    if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && chatCount === 2) {
+    if (process.env.FOXWARM_TEST_FAIL_SETTING === '1' && chatCount === 2) {
       try {
-        await tool_set_goal(
-          { goal: 'must-not-commit', remindEvery: 2 },
+        await tool_set_session_compact_threshold(
+          { thresholdTokens: 4242 },
           { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
         );
       } catch (error: any) {
@@ -317,7 +317,7 @@ async function start(): Promise<void> {
     }
     if (process.env.FOXWARM_TEST_PUBLICATION_TOOL === '1' && chatCount === 4) {
       try {
-        await tool_set_goal({ goal: 'committed-before-publication-loss', remindEvery: 2 },
+        await tool_set_session_compact_threshold({ thresholdTokens: 4243 },
           { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any);
       } catch (error: any) {
         await options.appendMessage({ role: 'model', parts: [{ text: `folded publication failure: ${error.message}` }] });
@@ -373,9 +373,9 @@ async function start(): Promise<void> {
       },
       writeState: async session => {
         writeCount += 1;
-        if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && !failedGoal && session.goalState?.goal === 'must-not-commit') {
-          failedGoal = true;
-          throw new Error('test goal persistence failure');
+        if (process.env.FOXWARM_TEST_FAIL_SETTING === '1' && !failedSetting && session.compactThresholdTokens === 4242) {
+          failedSetting = true;
+          throw new Error('test setting persistence failure');
         }
         if (failWrites.delete(writeCount)) throw new Error(`test write failure ${writeCount}`);
         await writeAuthoritativeSessionState(session);

@@ -8,6 +8,9 @@ import {
 import {
   createMainManagementToolServiceHandler,
   MainManagementToolOperation,
+  MigrateLegacyGoalRequest,
+  TaskContextRequest,
+  TaskContextResponse,
   ScheduleWaitTimeoutRequest,
   ScheduleWaitTimeoutResponse,
   ValidateWaitSessionsRequest,
@@ -141,6 +144,14 @@ export async function armMainWaitLiveness(request: ArmWaitLivenessRequest): Prom
 
 export async function validateMainWaitExecIds(request: ValidateWaitExecIdsRequest): Promise<ValidateWaitExecIdsResponse> {
   return await (await getClient()).call('validateWaitExecIds', request);
+}
+
+export async function migrateMainLegacyGoal(request: MigrateLegacyGoalRequest): Promise<{ taskId: string }> {
+  return await (await getClient()).call('migrateLegacyGoal', request);
+}
+
+export async function getMainTaskContext(request: TaskContextRequest): Promise<TaskContextResponse> {
+  return await (await getClient()).call('taskContext', request);
 }
 
 export const tool_send_to_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_session', args, ctx);

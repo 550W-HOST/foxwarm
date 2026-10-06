@@ -105,18 +105,18 @@ test('executeTools emits bounded string previews for primitive and structured ar
     const session = await sessionManager.getSession(sessionId);
     for (const [index, item] of cases.entries()) {
       await executeTools(
-        [{ id: `preview-${index}`, name: 'set_goal', args: { goal: item.value } } as any],
+        [{ id: `preview-${index}`, name: 'set_session_child_model', args: { goal: item.value } } as any],
         { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
         session,
       );
     }
     await executeTools(
-      [{ id: 'preview-malformed', name: 'set_goal', args: {}, rawArgsText: '{"goal":', argsParseError: 'bad args' }],
+      [{ id: 'preview-malformed', name: 'set_session_child_model', args: {}, rawArgsText: '{"goal":', argsParseError: 'bad args' }],
       { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
       session,
     );
     await executeTools(
-      [{ id: 'preview-bounded', name: 'set_goal', args: { goal: 'x'.repeat(400) } }],
+      [{ id: 'preview-bounded', name: 'set_session_child_model', args: { goal: 'x'.repeat(400) } }],
       { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
       session,
     );

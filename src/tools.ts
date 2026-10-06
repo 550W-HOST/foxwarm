@@ -20,7 +20,6 @@ import {
     tool_get_archived_blocks,
     tool_recall,
     tool_delete_session,
-    tool_set_goal,
     tool_set_session_child_model,
     tool_set_session_compact_threshold,
     tool_refresh_session_snapshot,
@@ -159,7 +158,6 @@ export const get_archived_messages = tool_get_archived_messages;
 export const get_archived_blocks = tool_get_archived_blocks;
 export const recall = tool_recall;
 export const delete_session = tool_delete_session;
-export const set_goal = tool_set_goal;
 export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const refresh_session_snapshot = tool_refresh_session_snapshot;

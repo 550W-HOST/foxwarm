@@ -149,3 +149,46 @@ test('runtime validates action-specific fields, types, required fields, sizes an
   assert.throws(() => store.execute({ action: 'get', taskId: 'missing' }, 'coordinator'), /Task missing not found/);
   assert.equal(store.execute({ action: 'list' }, 'coordinator').total, 0);
 });
+
+test('legacy Goal migration is idempotent, preserves full text and never revives a terminal task', t => {
+  const store = fixture(t);
+  const goal = 'Preserve the work\n' + 'x'.repeat(8000);
+  const first = store.migrateLegacyGoal('legacy-owner', goal, 0);
+  assert.equal(first.ownerSessionId, 'legacy-owner');
+  assert.equal(first.createdBySessionId, 'legacy-owner');
+  assert.equal(first.status, 'active');
+  assert.equal(first.description, goal);
+  assert.equal(store.execute({ action: 'get', taskId: first.id }).task.description.length, 4000);
+  store.execute({ action: 'update', taskId: first.id, note: 'Progress' }, 'legacy-owner');
+  assert.equal(store.migrateLegacyGoal('legacy-owner', goal, 0).description, goal, 'note updates do not overwrite full legacy text');
+  store.close();
+  assert.equal(store.migrateLegacyGoal('legacy-owner', goal, 0).id, first.id);
+  assert.equal(store.execute({ action: 'list' }).total, 1);
+  store.execute({ action: 'cancel', taskId: first.id }, 'legacy-owner');
+  const retried = store.migrateLegacyGoal('legacy-owner', goal, 0);
+  assert.equal(retried.id, first.id);
+  assert.equal(retried.status, 'cancelled');
+  assert.deepEqual(store.taskContext('legacy-owner', Array.from({ length: 30 }, (_, i) => i + 1), true), []);
+});
+
+test('fixed 30-message reminders are persisted, deduplicated and preserve progress before compact removal', t => {
+  const store = fixture(t);
+  const self = store.execute({ action: 'create', title: 'Self work' }, 'owner').task;
+  store.execute({ action: 'claim', taskId: self.id }, 'owner', undefined, 0);
+  const delegated = store.execute({ action: 'create', title: 'Delegated' }, 'coordinator').task;
+  store.execute({ action: 'claim', taskId: delegated.id }, 'owner', undefined, 0);
+  const seqs = (count: number, start = 1) => Array.from({ length: count }, (_, i) => start + i);
+  assert.deepEqual(store.taskContext('owner', seqs(29), true), []);
+  store.close();
+  const due = store.taskContext('owner', seqs(30), true);
+  assert.deepEqual(due, [{ id: self.id, title: 'Self work', status: 'active' }]);
+  assert.deepEqual(store.taskContext('owner', seqs(30), true), []);
+  assert.deepEqual(store.taskContext('owner', seqs(30), true, [self.id]), due, 'a request retry refreshes only its active retained reminder');
+  store.taskContext('owner', seqs(20, 31), false);
+  store.close();
+  assert.deepEqual(store.taskContext('owner', seqs(9, 51), true), []);
+  assert.deepEqual(store.taskContext('owner', seqs(10, 51), true), due, 'compacted-away messages were counted before removal');
+  store.execute({ action: 'complete', taskId: self.id }, 'owner');
+  assert.deepEqual(store.taskContext('owner', seqs(30, 61), true, [self.id]), []);
+  assert.throws(() => store.execute({ action: 'update', taskId: delegated.id, reminderEvery: 30 }, 'owner'), /not allowed/);
+});

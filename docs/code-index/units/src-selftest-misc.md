@@ -51,7 +51,7 @@ These files have no exports — they are standalone self-test scripts executed v
 | `../vector` | `scheduleSessionArchiveIndex` — stubbed out to prevent indexing side effects |
 | `../session/history` | `getCompactOperationPhase`, `hasCompletedCompactJob` — distinguish held planning from completed work without using signal position |
 | `../session/compactPlan` | `COMPACT_FLOW_MAX_ROUNDS` — used to verify compaction round limits |
-| `../toolsSessionAgent` | `tool_get_archived_messages`, `tool_set_goal` — referenced for tool definitions in stall tests |
+| `../toolsSessionAgent` | `tool_get_archived_messages` — referenced for tool definitions in stall tests |
 
 ## Behavior
 

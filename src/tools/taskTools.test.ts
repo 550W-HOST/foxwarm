@@ -1,3 +1,4 @@
+import { executeTools } from '../llm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TASK_ACTIONS, TASK_STATUSES } from '../taskStore';
@@ -95,6 +96,10 @@ test('create_child_session taskId binds the real child before delivery and rejec
     await assert.rejects(() => create_child_session({ suffix: 'duplicate', taskId }, ctx), /already owned/);
     await assert.rejects(() => create_child_session({ suffix: 'missing', taskId: 'missing' }, ctx), /not found/);
     assert.equal(sessionManager.getAllSessions().size, count);
+    const completion = await executeTools([{ id: 'child-task-complete', name: 'task', args: { action: 'complete', taskId, result: 'Finished delegated work' } }],
+      { sessionId: child.id, session: child }, child);
+    assert.deepEqual((completion as any).__toolPostAction, { successfulSendToSessionTargets: [parent.id] });
+    assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
   } finally {
     await shutdownMainManagementTools();
     resetMainManagementToolsForTests();

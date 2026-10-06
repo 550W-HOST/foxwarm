@@ -56,7 +56,6 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   get_archived_blocks: { owner: 'external-service' },
   recall: { owner: 'dispatcher/container' },
   delete_session: { owner: 'main-management' },
-  set_goal: { owner: 'session-owner' },
   set_session_child_model: { owner: 'session-owner' },
   set_session_compact_threshold: { owner: 'session-owner' },
   refresh_session_snapshot: { owner: 'session-owner' },

@@ -1,7 +1,6 @@
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { MODEL_EFFORTS, type ModelEffort } from '../config';
-import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, setSessionGoal } from '../session/goal';
 import { refreshSessionSnapshotForSession } from '../session/agentMetadata';
 import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from '../session/modelEffortSettings';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
@@ -12,38 +11,6 @@ function getTrustedCurrentSession(targetId: string, ctx: ToolContext): Session |
   if (!ctx.persistCurrentSession || !ctx.session || typeof ctx.session.id !== 'string') return undefined;
   if (!ctx.sessionId || ctx.sessionId !== ctx.session.id || (ctx.session.id !== targetId && !ctx.session.aliases?.includes(targetId))) return undefined;
   return ctx.session;
-}
-
-export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
-  const targetId = ctx?.sessionId;
-  if (!targetId) {
-    throw new Error('Current session context is required.');
-  }
-
-  const session = ctx.session ?? await sessionManager.getSession(targetId);
-  const clear = args.clear === true;
-
-  if (clear) {
-    clearSessionGoal(session);
-    if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
-    else await sessionManager.saveSession(session.id);
-    return 'ok';
-  }
-
-  const goal = normalizeGoalText(args.goal);
-  if (!goal) {
-    clearSessionGoal(session);
-    if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
-    else await sessionManager.saveSession(session.id);
-    return 'ok';
-  }
-
-  const remindEvery = resolveSessionGoalRemindEvery(session, args.remindEvery);
-  setSessionGoal(session, goal, remindEvery);
-  if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
-  else await sessionManager.saveSession(session.id);
-
-  return 'ok';
 }
 
 export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: ToolContext) {

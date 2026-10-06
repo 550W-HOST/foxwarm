@@ -2820,7 +2820,7 @@ test('LocalSessionTurnHost clears explicit wait through injected effects when a 
   }
 });
 
-test('LocalSessionTurnHost executes detached read and set_goal without global source-session lookup', async () => {
+test('LocalSessionTurnHost executes detached read and compact setting without global source-session lookup', async () => {
   const session = createOpenAITestSession(makeId('detached_tool_owner'));
   session.agent = 'main';
   const dirPath = await fs.mkdtemp('/tmp/foxwarm-detached-tools-');
@@ -2848,16 +2848,12 @@ test('LocalSessionTurnHost executes detached read and set_goal without global so
 
   try {
     const message = await new LocalSessionTurnHost(effects).executeTools([
-      { id: 'detached-goal', name: 'set_goal', args: { goal: 'Keep detached ownership', remindEvery: 7 } },
+      { id: 'detached-setting', name: 'set_session_compact_threshold', args: { thresholdTokens: 12345 } },
       { id: 'detached-read', name: 'read', args: { filePath } },
     ], { sessionId: session.id, session }, session);
-    assert.deepEqual(session.goalState && {
-      goal: session.goalState.goal,
-      remindEvery: session.goalState.remindEvery,
-      anchorSeq: session.goalState.anchorSeq,
-    }, { goal: 'Keep detached ownership', remindEvery: 7, anchorSeq: 0 });
+    assert.equal(session.compactThresholdTokens, 12345);
     assert.equal(persisted, 1);
-    assert.deepEqual(message.parts[0].functionResponse?.response, { output: 'ok' });
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /12345/);
     assert.match(String((message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
     assert.equal(sessionManager.getAllSessions().has(session.id), false);
   } finally {
@@ -4300,5 +4296,33 @@ test('compact-plan provider schemas export direct/file fields and returned calls
         assert.deepEqual(call.args, {});
       }
     }
+  } finally { (axios as any).post = originalPost; }
+});
+
+
+test('normal task request context reaches provider/retry but never canonical history, and disappears when no longer active', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('request_only_task_context'));
+  const bodies: any[] = [];
+  let active = true;
+  let contexts = 0;
+  (axios as any).post = async (_url: string, body: any) => {
+    bodies.push(body);
+    if (bodies.length === 1) { active = false; throw new Error('retry after task completion'); }
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('Task-aware answer') };
+  };
+  try {
+    await chat([{ text: 'Continue real input' }], session, 0, {
+      toolDefinitions: [], registerAbortController: false, maxRetries: 2,
+      currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {} },
+      appendMessage: async message => { session.history.push(message); },
+      requestContext: async () => { contexts++; return active ? [{ role: 'user', parts: [{ system: '<foxwarm-system kind="task-reminder">task_fixture — Active task (active)</foxwarm-system>' }] }] : []; },
+    });
+    assert.equal(contexts, 2);
+    assert.equal(bodies.length, 2);
+    assert.match(JSON.stringify(bodies[0]), /task_fixture/);
+    assert.doesNotMatch(JSON.stringify(bodies[1]), /task_fixture/);
+    assert.doesNotMatch(JSON.stringify(session.history), /task_fixture|task-reminder/);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
   } finally { (axios as any).post = originalPost; }
 });

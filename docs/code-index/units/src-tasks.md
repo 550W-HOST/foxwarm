@@ -77,10 +77,14 @@ Bodies cannot override route action/taskId or supply arbitrary creator identity.
 
 ## Tests
 
-`taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries.
+`session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries.
+
+## Legacy Goal and reminders
+
+TaskStore persists a unique legacy Session mapping plus per-task visible-message checkpoint/count. Full migrated Goal text stays in the task description even when bounded get output abbreviates it. The current interface has no `set_goal`, reminder interval parameter or reminder action. Migration, compaction checkpoints and request-only delivery are canonical in [task context](src-session-task-context.md#d-tasks-replace-goal). A successful completion notification exposes its real target to the ordinary tool post-action path so a child reporting to its parent is not reminded to report again.
 
 ## Design decisions
 
 ### D-tasks-small-session-owned-work
 
-[2026-10-07] Use one builtin with create/list/get/claim/assign/update/complete/cancel actions for explicit Session-coordinated work, not a scheduling, review or workspace platform. Creator/owner identities come from ToolContext. ParentTaskId is immutable and may reference only an existing task at creation, so the supported interface cannot construct self-links or cycles. Tasks do not mutate Session semantic ownership, history or lifecycle state. Completion notification uses ordinary inter-session delivery.
+[2026-10-06] Use one builtin with create/list/get/claim/assign/update/complete/cancel actions for explicit Session-coordinated work, not a scheduling, review or workspace platform. Creator/owner identities come from ToolContext. ParentTaskId is immutable and may reference only an existing task at creation, so the supported interface cannot construct self-links or cycles. Tasks do not mutate Session semantic ownership, history or lifecycle state. Completion notification uses ordinary inter-session delivery.

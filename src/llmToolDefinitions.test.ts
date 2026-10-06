@@ -53,7 +53,7 @@ test.afterEach(async () => {
 test('default definitions honor non-isolated Session and Agent identity without changing the shared registry', async () => {
   const original = [...tools.modelFacingDefinitions];
   policy(`- id: deny-one-session
-  match: { session: model-worker/main, tool: { source: builtin, name: set_goal } }
+  match: { session: model-worker/main, tool: { source: builtin, name: task } }
   action: deny
 - id: deny-one-agent
   match: { agent: model-worker, tool: { source: builtin, name: run_script } }
@@ -62,15 +62,15 @@ test('default definitions honor non-isolated Session and Agent identity without 
   match: { session: model-worker/main, tool: { source: builtin, name: submit_compact_plan } }
   action: deny`);
   const first = await resolveSessionToolDefinitions(session());
-  assert.deepEqual(first, original.filter(tool => !['set_goal', 'run_script', 'submit_compact_plan'].includes(tool.name)));
+  assert.deepEqual(first, original.filter(tool => !['task', 'run_script', 'submit_compact_plan'].includes(tool.name)));
   const sibling = await resolveSessionToolDefinitions(session('model-worker/sibling'));
-  assert.ok(names(sibling).includes('set_goal'));
+  assert.ok(names(sibling).includes('task'));
   assert.ok(!names(sibling).includes('run_script'));
   const other = await resolveSessionToolDefinitions(session('other-worker/main'));
   assert.deepEqual(other, original);
   assert.deepEqual(tools.modelFacingDefinitions, original);
   for (const definition of first) assert.strictEqual(definition, original.find(tool => tool.name === definition.name));
-  await assert.rejects(checkToolPermissionForSession(session(), { source: 'builtin', tool: 'set_goal' }), /denies/i);
+  await assert.rejects(checkToolPermissionForSession(session(), { source: 'builtin', tool: 'task' }), /denies/i);
 });
 
 test('default-deny preserves permission-neutral call_tool but does not exempt script containers', async () => {
@@ -123,15 +123,15 @@ test('Node primitives use the current concrete Node; ordinary builtins use resol
   match: { tool: { source: node, name: [read, write, edit, apply_patch, exec] }, targetNode: node-a }
   action: deny
 - id: deny-master-builtin
-  match: { tool: { source: builtin, name: set_goal }, targetNode: master }
+  match: { tool: { source: builtin, name: task }, targetNode: master }
   action: deny`);
   const owner = session('model-worker/main', 'node-a');
   const before = names(await resolveSessionToolDefinitions(owner));
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec', 'set_goal']) assert.ok(!before.includes(name), name);
+  for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec', 'task']) assert.ok(!before.includes(name), name);
   owner.currentNode = 'node-b';
   const after = names(await resolveSessionToolDefinitions(owner));
   for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec']) assert.ok(after.includes(name), name);
-  assert.ok(!after.includes('set_goal'));
+  assert.ok(!after.includes('task'));
 });
 
 test('unsupplied file Node selectors retain potential targets without changing concrete discovery', async () => {

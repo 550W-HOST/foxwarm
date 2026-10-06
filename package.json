@@ -37,7 +37,6 @@
     "node": "npm run build && node packages/cli-node/dist/client.js",
     "dev": "tsc --watch",
     "selftest:apply-patch": "npm run build && node lib/selftest/applyPatchSelfTest.js",
-    "selftest:goal-reminder": "npm run build && node lib/selftest/goalReminderSelfTest.js",
     "selftest:tool-loop-stall": "npm run build && node lib/selftest/toolLoopStallSelfTest.js",
     "test": "npm run test:unit",
     "cli-node": "npm run build && node packages/cli-node/dist/tui.js"

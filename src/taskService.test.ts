@@ -118,3 +118,16 @@ test('optional assignment notification is bounded, after commit, deduplicated an
   assert.equal(self.warning, undefined);
   assert.equal(sends.length, 2);
 });
+
+test('Session-targeted callers seed self-task progress from authority without counting older history', async t => {
+  const service = fixture(t);
+  const withSequence = new TaskService(service.store, {
+    resolveSessionId: id => id,
+    sendToSession: async () => {},
+    readSessionMessageSeq: async () => 40,
+  });
+  const taskId = (await withSequence.execute({ action: 'create', title: 'New self task' }, 'creator')).task.id;
+  await withSequence.execute({ action: 'claim', taskId }, 'creator');
+  assert.deepEqual(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 12), true), []);
+  assert.equal(service.store.taskContext('creator', Array.from({ length: 30 }, (_, i) => i + 41), true)[0].id, taskId);
+});

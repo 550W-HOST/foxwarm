@@ -44,7 +44,7 @@ import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
-import { formatSessionGoalReminderText } from './goal';
+import { checkpointTaskProgress } from './taskContext';
 import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, resolveNextSessionBlockId, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
@@ -1030,32 +1030,18 @@ async function finalizeCompaction(
   const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshotForSession(session);
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
   if (persistentMemorySnapshot !== undefined) session.persistentMemorySnapshot = persistentMemorySnapshot;
+  await checkpointTaskProgress(session);
   session.history = newHistory;
 
   const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames, Date.now());
-  const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
-  const completionParts: MessagePart[] = buildSystemMessageParts(completionText);
-  if (hasCompletionGoalReminder) {
-    completionParts.push(...buildSystemMessageParts(formatSessionGoalReminderText(session.goalState.goal)));
-  }
-
   const completionMessage: Message = {
     role: 'user',
-    parts: completionParts,
-    __meta: {
-      timestamp: Date.now(),
-      ...(hasCompletionGoalReminder ? { goalReminder: true, goalReminderKind: 'compact-completion' } : {}),
-    },
+    parts: buildSystemMessageParts(completionText),
+    __meta: { timestamp: Date.now() },
   };
   insertedCompletionMessages.push(...await appendMessagesToArchive(session, [completionMessage]));
   if (isCompactCancelled(operation)) throw new CompactCancelledError();
   session.history.push(completionMessage);
-  const completionSeq = completionMessage.__meta!.seq!;
-  if (hasCompletionGoalReminder && session.goalState) {
-    session.goalState.anchorSeq = completionSeq;
-    completionMessage.__meta!.goalAnchorSeq = completionSeq;
-  }
-
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;

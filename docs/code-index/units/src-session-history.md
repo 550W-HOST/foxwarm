@@ -53,7 +53,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - `src/session/archive.ts` and `archiveStore.ts` own durable source history.
 - `src/vector.ts` owns archive and compact-fact indexing.
 - `src/llm.ts` owns provider requests and `LlmRequestError`.
-- `src/session/goal.ts` owns independent goal-reminder formatting.
+- `src/session/taskContext.ts` checkpoints task progress before committed compaction removes visible messages.
 
 ## Behavior
 
@@ -70,7 +70,7 @@ Transient compact-job Session clones preserve raw `effort`, `childModelDefault`,
 - Historical response pruning alone proves exact Archive identity for its recall footer. A committed pruned response then becomes ordinary active-history input to layered compaction; layered planning does not repeat that Archive proof.
 - Protected lifecycle/history items are segment barriers; display-only messages are transparent and not summarized. Prior pure compact-completion notices are the narrow exception: they are transparent to candidate ranges and removed from the entire compatible active history only on successful commit, before one current notice is appended. Canonical contract: [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
 - Each created block carries its normalized facts through archive append; its facts are indexed only after success with that block identity/level/raw range, and indexing is best-effort.
-- Goal reminders remain separate system parts from compact-completion metadata.
+- New compact completion emits one lifecycle marker only. Historical two-part completion plus Goal reminder remains read-compatible with Continue classification.
 - Compaction scans consumed history for current `skill({ action: "load" })` calls and persisted legacy `load_skill` calls, then emits only current `skill` reload guidance when loaded instructions were compacted away.
 - Temporary compact progress may be broadcast without becoming authoritative final history.
 
@@ -93,4 +93,4 @@ A failed planning request cannot submit or partially apply a compact plan. Provi
 
 ### D-history-independent-goal-reminder
 
-A compact completion and a goal reminder remain separate structured system parts so each keeps its own lifecycle meaning.
+Historical compact completions and Goal reminders remain separately identifiable structured system parts for read compatibility. New compaction emits only its one lifecycle marker; task reminders are request-only under [D-tasks-replace-goal](src-session-task-context.md#d-tasks-replace-goal).
