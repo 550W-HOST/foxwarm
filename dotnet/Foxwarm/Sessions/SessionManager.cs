@@ -104,8 +104,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitLiveness = new WaitLiveness(this);
     }
 
-    public Task LoadAsync() => LoadOwnersAsync(ensureMain: false);
-    private async Task LoadOwnersAsync(bool ensureMain)
+    public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
+    private async Task LoadOwnersAsync(bool startMainServices)
     {
         await EnsureIdentityStartupAsync();
         await timers.LoadAsync();
@@ -117,14 +117,19 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.RegisterRecordsAsync(id => Catalog.Get(id) is not null);
         var ids = Catalog.RestartIds().Concat(executor.OwnerIds).Distinct(StringComparer.Ordinal).ToArray();
         var mandatory = ids.Select(id => RequiredAsync(id)).ToList();
-        if (ensureMain) mandatory.Add(EnsureStartupMainAsync());
         await Task.WhenAll(mandatory);
         servicesReady = true;
         foreach (var owner in sessions.Values) WaitTransition(owner.Id);
-        if (ensureMain) { foreach (var owner in sessions.Values) await ReconcileTimerWaitsAsync(owner); timers.Start(); }
+        if (startMainServices) await StartMainServicesAsync();
         executor.StartReconciliation();
         foreach (var owner in sessions.Values)
             if (owner.Entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary))) _ = owner.StartProcessing();
+    }
+
+    private async Task StartMainServicesAsync()
+    {
+        foreach (var owner in sessions.Values) await ReconcileTimerWaitsAsync(owner);
+        timers.Start();
     }
 
     public IEnumerable<SessionOwner> Owners() => sessions.Values;
@@ -219,8 +224,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         SessionOwner[] current;
         timers.StopFuture(); await timers.DisposeAsync();
         ToolScript.BeginShutdown();
-        onboot?.Close();
-        if (onboot is not null) await onboot.DrainAsync();
         await DrainPublicationsAsync();
         lock (lifecycle) current = sessions.Values.ToArray();
         waitTimeouts.Stop(); waitLiveness.Stop();
@@ -242,7 +245,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         timers.StopFuture();
         lock (lifecycle) accepting = false;
-        onboot?.Close();
         admissionStop.Cancel();
         ToolScript.BeginShutdown();
         executor.BeginShutdown();
@@ -256,7 +258,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         BeginShutdown();
         await timers.DisposeAsync();
-        if (onboot is not null) await onboot.DisposeAsync();
         await DrainPublicationsAsync();
         await waitTimeouts.DisposeAsync();
         await waitLiveness.DisposeAsync();

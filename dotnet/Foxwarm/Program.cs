@@ -33,7 +33,6 @@ if (server.WebUiEnabled) webui.Register(server.App);
 server.App.Lifetime.ApplicationStarted.Register(() =>
 {
     Console.WriteLine("Main HTTP listening: " + string.Join(", ", server.App.Urls));
-    sessions.StartOnboot();
 });
 try { await server.App.RunAsync(); }
 finally

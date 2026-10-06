@@ -88,15 +88,39 @@ internal sealed partial class SessionManager
             var snapshot = await store.LoadAsync(id) ?? throw new InvalidDataException("Cataloged Session authority is missing.");
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
             ValidateExecutionEnvironment(snapshot.AuthorityEnvelope, agents.AgentDirectory(agent), Directory.GetCurrentDirectory());
-            if (snapshot.Busy || snapshot.Stopping) throw new InvalidDataException("Non-idle Session cannot be resumed automatically by the experiment host.");
+            var recoveringBusy = snapshot.Busy;
+            snapshot = recoveringBusy ? RecoverBusySnapshot(snapshot) : snapshot;
+            if (snapshot.Stopping) throw new InvalidDataException("Stopping-only Session cannot be resumed automatically by the experiment host.");
             token.ThrowIfCancellationRequested();
             var owner = MakeSession(id, agent, store); owner.Registry.Add(id, snapshot);
             BindMutations(owner);
+            if (recoveringBusy) await owner.Entry.SaveLane.SaveStrictAsync(token);
             PublishOwner(owner, slot);
             if (servicesReady && !IsDeletionClaimed(owner.Id)) WaitTransition(owner.Id);
         }
         catch (Exception error) { FailIdentity(id, slot, error); }
         finally { slot.Finished.TrySetResult(); }
+    }
+
+    private static SessionSnapshot RecoverBusySnapshot(SessionSnapshot snapshot)
+    {
+        var queue = snapshot.Queue.Select(item => item.CloneItem()).ToList();
+        if (queue.LastOrDefault() is not { } last || !HasTrailingResumeEvent(last))
+        {
+            queue.Add(new QueueItem(QueueItemType.Background,
+                [new JsonObject { ["system"] = SessionBoundary.SystemEvent(
+                    "session-resumed",
+                    "The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing.") }]));
+        }
+        return snapshot with { Queue = queue, Busy = false, BusyStartedAt = null, Stopping = false };
+    }
+
+    private static bool HasTrailingResumeEvent(QueueItem item)
+    {
+        if (item.Type != QueueItemType.Background || item.Parts is null || item.Parts.Count != 1) return false;
+        var system = SessionWait.Text(item.Parts[0]["system"]);
+        return system is not null && system.Contains("type=\"session-resumed\"", StringComparison.Ordinal)
+            && system.Contains("kind=\"event\"", StringComparison.Ordinal);
     }
 
     internal static void ValidateExecutionEnvironment(JsonObject envelope, string workspace, string processCwd)

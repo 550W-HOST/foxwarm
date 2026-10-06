@@ -53,7 +53,7 @@ internal sealed class ModelRequestOwner(HttpClient http, ResponsesClientOptions 
             var providerCache = ProviderPromptCache.Resolve(leaf.ProviderType, sessionId, cacheKey, scope);
             var requestDefaults = definitions is null ? defaults : defaults with { Tools = definitions() };
             var options = ConfiguredModelRequests.Plan(leaf, requestDefaults, effort, instructions, providerCache, turnId);
-            var prepared = ConcreteRequestHistory.Prepare(history, leaf.Key);
+            var prepared = ConcreteRequestHistory.PrepareRequest(history, leaf.Key);
             if (images is not null)
             {
                 try { prepared = await images.HydrateAsync(prepared, leaf.ProviderType == "openai-completions" ? "completions" : leaf.ProviderType is "openai" or "openai-responses" or "openai-ws" ? "responses" : "anthropic", outputFormat: imageOutputFormat, token: cancellationToken); }

@@ -65,15 +65,17 @@ public sealed class SessionAdmissionTests
     }
 
     [Fact]
-    public async Task Dormant_missing_and_nonidle_are_real_retryable_admission_errors_not_deleted_membership()
+    public async Task Dormant_missing_stopping_and_busy_recovery_preserve_retryable_membership()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work); await Seed(data, "missing", "busy");
         var missing = Path.Combine(data, "state", "sessions", "missing.json"); var original = await File.ReadAllTextAsync(missing); File.Delete(missing);
-        var busy = Path.Combine(data, "state", "sessions", "busy.json"); var raw = JsonNode.Parse(await File.ReadAllTextAsync(busy))!.AsObject(); raw["busy"] = true; raw["busyStartedAt"] = 1; await File.WriteAllTextAsync(busy, raw.ToJsonString());
-        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadAsync(); Assert.Empty(manager.Owners());
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.RequiredAsync("missing")); await Assert.ThrowsAsync<InvalidDataException>(() => manager.RequiredAsync("busy"));
-        Assert.Equal("exact", manager.Catalog.Resolve("missing")["kind"]!.GetValue<string>()); Assert.Null(await manager.GetExistingAsync("unknown")); Assert.Empty(manager.Owners());
-        await File.WriteAllTextAsync(missing, original); Assert.Equal("missing", (await manager.RequiredAsync("missing")).Id); Assert.Single(manager.Owners());
+        var busy = Path.Combine(data, "state", "sessions", "busy.json"); var raw = JsonNode.Parse(await File.ReadAllTextAsync(busy))!.AsObject(); raw["busy"] = true; raw["busyStartedAt"] = 1; raw["stopping"] = true; await File.WriteAllTextAsync(busy, raw.ToJsonString());
+        await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options));
+        await Assert.ThrowsAsync<InvalidDataException>(() => manager.RequiredAsync("missing"));
+        var recovered = await manager.RequiredAsync("busy"); Assert.False(recovered.Metadata().Busy); Assert.False(recovered.Entry.Snapshot().Stopping); Assert.Contains(recovered.Entry.Snapshot().Queue, item => item.Type == QueueItemType.Background);
+        var recoveredJson = JsonNode.Parse(await File.ReadAllTextAsync(busy))!.AsObject(); Assert.False(recoveredJson["busy"]!.GetValue<bool>()); Assert.False(recoveredJson["stopping"]!.GetValue<bool>());
+        Assert.Equal("exact", manager.Catalog.Resolve("missing")["kind"]!.GetValue<string>()); Assert.Null(await manager.GetExistingAsync("unknown")); Assert.Equal(1, manager.Owners().Count());
+        await File.WriteAllTextAsync(missing, original); Assert.Equal("missing", (await manager.RequiredAsync("missing")).Id); Assert.Equal(2, manager.Owners().Count());
     }
 
     [Fact]

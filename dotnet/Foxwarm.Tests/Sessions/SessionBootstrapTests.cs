@@ -26,15 +26,15 @@ public sealed class SessionBootstrapTests
         Assert.Equal(expected["wrapper"]!.GetValue<string>(), wrapper);
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         var empty = HostModels.Parse(new JsonObject { ["providers"] = new JsonObject() }, app);
-        await using var manager = new SessionManager(data, work, Options, empty); await manager.LoadMainHostAsync();
-        var envelope = (JsonObject)manager.Find("main")!.Entry.Snapshot().AuthorityEnvelope.DeepClone(); foreach (var (key, value) in session) envelope[key] = value?.DeepClone();
-        var snapshot = manager.Find("main")!.Entry.Snapshot() with { AuthorityEnvelope = envelope };
+        await using var manager = new SessionManager(data, work, Options, empty); await manager.LoadMainHostAsync(); var created = await manager.CreateNamedAsync("main", "main", null, null);
+        var envelope = (JsonObject)created.Entry.Snapshot().AuthorityEnvelope.DeepClone(); foreach (var (key, value) in session) envelope[key] = value?.DeepClone();
+        var snapshot = created.Entry.Snapshot() with { AuthorityEnvelope = envelope };
         var dto = WebUiContract.Session(snapshot, empty, false, false); var presentation = expected["emptyPresentation"]!;
         foreach (var field in new[] { "model", "modelKey", "defaultModelKey", "childModelDefault", "childModelPolicySource", "effectiveChildModelKey" }) Assert.True(JsonNode.DeepEquals(presentation[field], dto[field]), field);
         Assert.Equal(presentation["effort"]!["effective"]!.GetValue<string>(), dto["effectiveEffort"]!.GetValue<string>()); Assert.True(JsonNode.DeepEquals(presentation["effort"]!["allowed"], dto["effortAllowed"])); Assert.Equal(presentation["childEffort"]!["effective"]!.GetValue<string>(), dto["effectiveChildEffort"]!.GetValue<string>());
         Assert.Equal(expected["emptyThreshold"]!.GetValue<double>(), dto["effectiveCompactThresholdTokens"]!.GetValue<double>());
         Assert.Throws<InvalidDataException>(() => empty.Resolve(null));
-        var runtimeDto = manager.Find("main")!.BuildDto(); Assert.Equal("", runtimeDto["modelKey"]!.GetValue<string>()); Assert.Equal("high", runtimeDto["effortDefault"]!.GetValue<string>()); Assert.Equal(17000, runtimeDto["effectiveCompactThresholdTokens"]!.GetValue<double>());
+        var runtimeDto = created.BuildDto(); Assert.Equal("", runtimeDto["modelKey"]!.GetValue<string>()); Assert.Equal("high", runtimeDto["effortDefault"]!.GetValue<string>()); Assert.Equal(17000, runtimeDto["effectiveCompactThresholdTokens"]!.GetValue<double>());
         var actual = new JsonArray();
         foreach (var kind in new[] { "empty", "concrete", "session-hash", "failover" })
         {
@@ -72,12 +72,13 @@ public sealed class SessionBootstrapTests
         }
     }
     [Fact]
-    public async Task Main_host_ensures_real_main_with_empty_setup_and_admits_only_main_among_unrelated_cold_members()
+    public async Task Main_host_does_not_create_main_and_explicit_creation_remains_available()
     {
         using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
         using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); catalog.Upsert(Enumerable.Range(0, 1000).Select(index => SessionCatalogTests.Row("cold-" + index, index))); }
         var empty = HostModels.Parse(new JsonObject { ["providers"] = new JsonObject() }, new JsonObject()); await using var manager = new SessionManager(data, work, Options, empty); var reads = new List<string>(); manager.AdmissionReadObserved = reads.Add;
-        await manager.LoadMainHostAsync(); var main = manager.Find("main")!; Assert.NotNull(main); Assert.Equal("main", main.Agent); Assert.Single(manager.Owners()); Assert.Empty(reads); Assert.NotNull(manager.Catalog.Get("main")); Assert.True(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.Equal(1001, manager.Catalog.List().Length); Assert.False(main.Metadata().Busy);
+        await manager.LoadMainHostAsync(); Assert.Null(manager.Find("main")); Assert.Empty(manager.Owners()); Assert.Empty(reads); Assert.Null(manager.Catalog.Get("main")); Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.Equal(1000, manager.Catalog.List().Length);
+        var main = await manager.CreateNamedAsync("main", "main", null, null); Assert.Equal("main", main.Agent); Assert.Single(manager.Owners()); Assert.NotNull(manager.Catalog.Get("main")); Assert.True(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.False(main.Metadata().Busy);
         Assert.Equal("", main.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.GetValue<string>()); Assert.Null(main.Entry.Snapshot().AuthorityEnvelope["model"]); Assert.Null(main.Entry.Snapshot().AuthorityEnvelope["effort"]); Assert.True(Guid.TryParse(main.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"]!.GetValue<string>(), out _));
         await Assert.ThrowsAsync<InvalidDataException>(() => manager.CreateNamedAsync("main", "ordinary-create", null, null)); Assert.Null(manager.Catalog.Get("ordinary-create"));
     }
@@ -91,7 +92,7 @@ public sealed class SessionBootstrapTests
         await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await manager.LoadMainHostAsync(); Assert.Equal("current", manager.Find("main")!.Id); Assert.Null(manager.Catalog.Get("main")); Assert.Equal(bytes, await File.ReadAllBytesAsync(file)); Assert.Single(manager.Owners());
     }
     [Fact]
-    public async Task Archived_main_or_unavailable_main_fails_before_any_mandatory_sibling_is_started()
+    public async Task Archived_or_cold_main_does_not_force_replacement_or_eager_admission()
     {
         foreach (var retained in new[] { true, false })
         {
@@ -100,25 +101,9 @@ public sealed class SessionBootstrapTests
             await SessionCatalogMigrationTests.Authority(data, "queued"); var queuedFile = Path.Combine(data, "state", "sessions", "queued.json"); var raw = JsonNode.Parse(await File.ReadAllTextAsync(queuedFile))!.AsObject(); raw["queue"] = new JsonArray(new JsonObject { ["type"] = "onboot", ["parts"] = new JsonArray(new JsonObject { ["system"] = "Old startup event." }) }); await File.WriteAllTextAsync(queuedFile, raw.ToJsonString());
             using (var catalog = new SessionCatalog(data)) { catalog.Initialize(); var row = SessionCatalogTests.Row("queued", 0); row["queueLength"] = 1; catalog.Upsert(retained ? [row] : [row, SessionCatalogTests.Row("main", 0)]); }
             if (retained) { var archive = new SqliteArchiveMessageStore(Path.Combine(data, "state", "archive-store.sqlite"), "main"); archive.EnsureBranch(); }
-            await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options)); await Assert.ThrowsAnyAsync<Exception>(manager.LoadMainHostAsync); Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.False(manager.Find("queued")?.Metadata().Busy ?? false); Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(queuedFile));
+            await using var manager = new SessionManager(data, work, Options, HostModels.ForTest(Options));
+            await manager.LoadMainHostAsync(); Assert.Null(manager.Find("main")); Assert.NotNull(manager.Find("queued")); Assert.False(manager.Find("queued")!.Metadata().Busy);
+            Assert.False(File.Exists(Path.Combine(data, "state", "sessions", "main.json"))); Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(queuedFile));
         }
-    }
-    [Fact]
-    public async Task Onboot_reads_once_waits_real_three_seconds_and_close_drains_without_repeating_or_late_enqueue()
-    {
-        using var temp = new TempDirectory(); var file = Path.Combine(temp.Path, "ONBOOT.md"); const string original = "  Original ONBOOT body.\n"; await File.WriteAllTextAsync(file, original);
-        var queued = new List<string>(); var errors = new List<string>(); var clock = Stopwatch.StartNew();
-        await using (var producer = new SessionOnbootProducer(file, (message, token) => { queued.Add(message); return Task.CompletedTask; }, (stage, error) => errors.Add(stage)))
-        {
-            producer.Start(); producer.Start(); await Task.Delay(300); await File.WriteAllTextAsync(file, "Changed after the startup read."); await producer.DrainAsync(); Assert.True(clock.Elapsed.TotalMilliseconds >= 2990); Assert.Equal("ONBOOT: " + original, Assert.Single(queued)); Assert.Empty(errors);
-        }
-        queued.Clear(); await using (var stopped = new SessionOnbootProducer(file, (message, token) => { queued.Add(message); return Task.CompletedTask; }, (stage, error) => errors.Add(stage))) { stopped.Start(); await Task.Delay(100); stopped.Close(); await stopped.DrainAsync(); Assert.Empty(queued); }
-        foreach (var content in new string?[] { null, " \n\ufeff" })
-        {
-            if (content is null) File.Delete(file); else await File.WriteAllTextAsync(file, content);
-            await using var producer = new SessionOnbootProducer(file, (message, token) => { queued.Add(message); return Task.CompletedTask; }, (stage, error) => errors.Add(stage)); producer.Start(); await producer.DrainAsync(); Assert.Empty(queued); Assert.Empty(errors);
-        }
-        File.Delete(file); Directory.CreateDirectory(file);
-        await using (var failing = new SessionOnbootProducer(file, (message, token) => Task.CompletedTask, (stage, error) => errors.Add(stage))) { failing.Start(); await failing.DrainAsync(); Assert.Equal("Error processing ONBOOT.md", Assert.Single(errors)); }
     }
 }

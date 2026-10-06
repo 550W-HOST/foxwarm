@@ -66,6 +66,21 @@ public sealed class RetryPreparationTests
     }
 
     [Fact]
+    public async Task Normal_model_request_entry_repairs_unpaired_tool_batch_before_provider_projection()
+    {
+        await using var peer = new ScriptedResponsesSequenceServer(1, async (_, stream, _) => await Reply(stream, 200, Done, events: true));
+        var call = new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(new JsonObject
+        {
+            ["functionCall"] = new JsonObject { ["id"] = "lost", ["name"] = "read", ["args"] = new JsonObject() }
+        }) };
+        var interruption = User("<foxwarm-system kind=\"event\" />");
+        using var http = new HttpClient(); var requests = new ModelRequestOwner(http, Defaults(peer.BaseUri), new ModelRouting());
+        await requests.RequestAsync("owner", HostModels.ForTest(Defaults(peer.BaseUri)), "a", null, "cache", "turn", [call, interruption],
+            (_, _) => Task.FromResult("prompt"), null, null, null, null, default, ModelRequestScope.Canonical);
+        Assert.Contains("Tool output is lost due to agent restart or error", (await peer.RequestAt(0)).Body);
+    }
+
+    [Fact]
     public async Task Nonretryable_failure_and_preparation_failure_never_start_another_provider_attempt()
     {
         foreach (var status in new[] { 400, 503 })
