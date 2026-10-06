@@ -6,7 +6,10 @@ import { readSessionHistorySnapshot } from '../session/metadataStore';
 import { TaskStore } from '../taskStore';
 import type { ToolArgs, ToolContext } from './helpers';
 
-export const taskService = new TaskService(new TaskStore(path.join(STATE_DIR, 'tasks.sqlite')), {
+export const taskService = new TaskService(new TaskStore(path.join(STATE_DIR, 'tasks.sqlite'), {
+  resolveSessionId: id => sessionManager.getSessionCatalog(id)?.id,
+  sessionAliases: id => sessionManager.getSessionCatalog(id)?.aliases || [],
+}), {
   resolveSessionId: id => sessionManager.getSessionCatalog(id)?.id,
   readSessionMessageSeq: async id => {
     const state = await readSessionHistorySnapshot(id);

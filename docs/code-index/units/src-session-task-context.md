@@ -26,7 +26,7 @@ The serializer keeps legacy field support for read snapshots and exact failure r
 
 ## Request-only reminder boundary
 
-- Eligible tasks are active with both creator and owner equal to the current Session. Delegated tasks are excluded.
+- Eligible tasks are active with both creator and owner equal to the current canonical Session. Indexed queries include its real catalog aliases, preserving progress across supported local identity moves. Delegated tasks are excluded. Canonical matching and read-old/write-new references are owned by [tasks](src-tasks.md#session-identity-aliases).
 - The interval is fixed at 30 ordinary visible messages, counted using `isModelVisibleMessage` plus the exclusions above. No reminder action or interval setting exists.
 - Model mutations seed progress from the exact ToolContext sequence; Session-targeted WebUI mutations use a detached authority sequence without Main hydration. TaskStore persists each task's last counted sequence and bounded progress count. Compaction checkpoints progress before removal; repeated checkpoints/retries cannot count the same sequence again. Restart retains progress.
 - Only a normal exact-owner provider call consumes a due reminder. It supplies a bounded system-part summary containing task ID, title and status; excess tasks use an omitted count.

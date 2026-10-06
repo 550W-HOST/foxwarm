@@ -1,3 +1,5 @@
+import { DatabaseSync } from 'node:sqlite';
+import { taskService } from './taskTools';
 import { executeTools } from '../llm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -105,5 +107,75 @@ test('create_child_session taskId binds the real child before delivery and rejec
     resetMainManagementToolsForTests();
     for (const id of children) await sessionManager.deleteSession(id);
     await sessionManager.deleteSession(parent.id);
+  }
+});
+
+test('real Session moves preserve task owner/creator/attached identities, notification and self-owned reminder progress', async () => {
+  const prefix = `task_move_${Date.now()}`;
+  const creator = await sessionManager.getSession(`${prefix}_creator`);
+  const parent = await sessionManager.getSession(`${prefix}_parent`);
+  let child: Awaited<ReturnType<typeof sessionManager.getExistingSession>>;
+  let raw: DatabaseSync;
+  try {
+    const taskId = readResult(await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).task.id;
+    const created = await create_child_session({ suffix: 'executor', taskId }, { sessionId: parent.id, session: parent });
+    child = await sessionManager.getExistingSession(String(created).match(/`([^`]+)`/)![1]);
+    const ctx = { sessionId: child.id, session: child };
+    const selfId = readResult(await task({ action: 'create', title: 'Self-owned work across rename' }, ctx)).task.id;
+    await task({ action: 'claim', taskId: selfId }, ctx);
+    const legacy = taskService.store.migrateLegacyGoal(child.id, 'Full legacy Goal across rename', 1);
+    raw = new DatabaseSync(taskService.store.filePath, { readOnly: true });
+    const refs = (id: string): any => raw.prepare('SELECT createdBySessionId,ownerSessionId,attachedSessionId,reminderLastSeq FROM tasks WHERE id=?').get(id);
+    const anchor = refs(selfId).reminderLastSeq;
+    taskService.store.taskContext(child.id, Array.from({ length: 29 }, (_, i) => anchor + i + 1), false);
+    const transferId = readResult(await task({ action: 'create', title: 'Transfer across aliases' }, { sessionId: creator.id })).task.id;
+    await task({ action: 'assign', taskId: transferId, ownerSessionId: child.id }, { sessionId: creator.id });
+    const oldCreator = creator.id;
+    const oldChild = child.id;
+    await sessionManager.moveSessionToTarget({ sourceSessionId: oldCreator, newSessionId: `${prefix}_creator_moved` });
+    await sessionManager.moveSessionToTarget({ sourceSessionId: oldChild, newSessionId: `${prefix}_owner_moved` });
+    child = await sessionManager.getExistingSession(`${prefix}_owner_moved`);
+    const currentCreator = await sessionManager.getExistingSession(`${prefix}_creator_moved`);
+    assert.equal(sessionManager.getSessionCatalog(oldChild)?.id, child.id, 'real old ID remains an alias');
+    const currentCtx = { sessionId: child.id, session: child };
+    const projected = readResult(await task({ action: 'get', taskId }, currentCtx));
+    assert.equal(projected.task.createdBySessionId, currentCreator.id);
+    assert.equal(projected.task.ownerSessionId, child.id);
+    assert.equal(projected.task.attachedSessionId, child.id);
+    assert.equal(projected.notes[0].sessionId, child.id);
+    assert.equal(taskService.list().tasks.find((entry: any) => entry.id === taskId).ownerSessionId, child.id);
+    assert.equal(refs(taskId).ownerSessionId, oldChild, 'ordinary bounded reads do not rewrite persisted references');
+    await task({ action: 'assign', taskId: selfId, ownerSessionId: oldChild, notifySession: true }, currentCtx);
+    assert.equal(child.queue.length, 0, 'same canonical owner notification is skipped without a self-send');
+    const reminders = taskService.store.taskContext(child.id, [anchor + 30], true);
+    assert(reminders.some(entry => entry.id === selfId), 'canonical owner query finds old IDs and retained progress');
+    assert.equal(refs(selfId).createdBySessionId, child.id);
+    assert.equal(refs(selfId).ownerSessionId, child.id);
+    assert.equal(taskService.store.migrateLegacyGoal(child.id, 'Full legacy Goal across rename', 1).id, legacy.id, 'legacy map is retry-safe across aliases');
+    const transfer = readResult(await task({ action: 'assign', taskId: transferId, ownerSessionId: oldCreator, notifySession: true }, { sessionId: currentCreator.id })).task;
+    assert.equal(transfer.ownerSessionId, currentCreator.id, 'creator actor and new owner aliases resolve before permission checks');
+    assert.equal(transfer.previousOwnerSessionId, child.id);
+    assert.equal(transfer.assignmentNotificationStatus, 'skipped');
+    assert.equal(transfer.previousOwnerNotificationStatus, 'sent');
+    assert.equal(child.queue.length, 1);
+    assert.equal((child.queue[0] as any).trigger, false, 'previous moved owner receives only passive ingress');
+    const completed = await executeTools([{ id: 'complete-renamed-child', name: 'call_tool', args: {
+      toolId: 'builtin:task', args: { action: 'complete', taskId, result: 'Done after rename' },
+    } }], currentCtx, child);
+    assert.deepEqual((completed as any).__toolPostAction.completedLinkedTask, { taskId, attachedSessionId: child.id });
+    assert.deepEqual((completed as any).__toolPostAction.successfulSendToSessionTargets, [currentCreator.id]);
+    assert.equal(currentCreator.queue.length, 1, 'notification reaches the real moved creator');
+    assert.equal(currentCreator.queue[0].sourceSessionId, child.id);
+    assert.equal(parent.queue.length, 0, 'no fabricated routine report to actual parent');
+    assert.equal(refs(taskId).createdBySessionId, currentCreator.id);
+    assert.equal(refs(taskId).ownerSessionId, child.id);
+    assert.equal(refs(taskId).attachedSessionId, child.id);
+  } finally {
+    raw?.close();
+    if (child) await sessionManager.deleteSession(child.id);
+    await sessionManager.deleteSession(sessionManager.getSessionCatalog(creator.id)?.id || creator.id);
+    await sessionManager.deleteSession(parent.id);
+    await shutdownMainManagementTools();
+    resetMainManagementToolsForTests();
   }
 });

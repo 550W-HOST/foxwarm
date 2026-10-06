@@ -22,6 +22,7 @@ export class TaskService {
 
   async execute(args: Record<string, any>, sessionId: string, anchorSeq?: number): Promise<any> {
     validateTaskArgs(args);
+    sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
     const result = await this.exclusive(async () => {
       let normalized = args;
       if (args.action === 'assign' && args.ownerSessionId !== null) {
@@ -31,14 +32,17 @@ export class TaskService {
       }
       const progressAnchor = anchorSeq ?? (['claim', 'assign'].includes(args.action) || (args.action === 'update' && args.status === 'active')
         ? await this.deps.readSessionMessageSeq?.(sessionId) : undefined);
+      sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
       return this.store.execute(normalized, sessionId, undefined, progressAnchor);
     });
     const plan = result.assignmentNotification;
     delete result.assignmentNotification;
     if (plan) {
       const failedRecipients: string[] = [];
-      for (const [recipient, target] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
-        if (!target) continue;
+      for (const [recipient, plannedTarget] of [['previous', plan.previousOwner], ['new', plan.newOwner]] as const) {
+        if (!plannedTarget) continue;
+        const target = this.deps.resolveSessionId(plannedTarget) || plannedTarget;
+        sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
         if (target === sessionId) this.store.markAssignmentNotification(result.task.id, plan.revision, recipient, 'skipped');
         else try {
           const summary = `${result.task.id} — ${result.task.title}\nStatus: ${result.task.status}${result.task.description ? `\n${result.task.description.slice(0, 1000)}` : ''}`;
@@ -58,10 +62,12 @@ export class TaskService {
     if (args.action === 'complete') {
       // Completion is already durable. Delivery failure must not undo it;
       // retries of complete are terminal-state errors, not repeated sends.
-      if (result.task.createdBySessionId === sessionId) {
+      sessionId = this.deps.resolveSessionId(sessionId) || sessionId;
+      const creator = this.deps.resolveSessionId(result.task.createdBySessionId) || result.task.createdBySessionId;
+      if (creator === sessionId) {
         this.store.markCompletionNotification(result.task.id, 'skipped');
       } else try {
-        await this.deps.sendToSession(result.task.createdBySessionId,
+        await this.deps.sendToSession(creator,
           `Task completed: ${result.task.id} — ${result.task.title}${result.task.result ? `\n${result.task.result}` : ''}`, sessionId);
         this.store.markCompletionNotification(result.task.id, 'sent');
       } catch {
@@ -81,7 +87,7 @@ export class TaskService {
     if (!target || typeof target !== 'string') throw new TaskError('TASK_SESSION_REQUIRED', 'Select an existing Session for this operation.');
     const sessionId = this.deps.resolveSessionId(target);
     if (!sessionId) throw new TaskError('TASK_SESSION_NOT_FOUND', 'Target Session was not found.', 404);
-    return { ...await this.execute(args, sessionId), sessionId };
+    return { ...await this.execute(args, sessionId), sessionId: this.deps.resolveSessionId(sessionId) || sessionId };
   }
 
   /** Read-only callers do not need a Session actor. */

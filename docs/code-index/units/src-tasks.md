@@ -29,6 +29,12 @@ The Main-owned store opens `state/tasks.sqlite` lazily under the configured data
 
 IDs use `task_` plus a generated UUID. Titles allow 200 characters; descriptions/results 4,000; notes/reasons 1,000; task-ID inputs 128. `list` returns at most 50 summaries, total and omitted counts, defaulting to open/active tasks. Claimed tasks normally become active, but ownership is independent of open/active status. `get` returns the task, up to 20 immediate child summaries and the latest 10 notes in chronological order, with omitted counts. Full descriptions/results are not duplicated in list/child summaries. Notes remain persisted even when omitted from output.
 
+## Session identity aliases
+
+Main supplies the existing real Session catalog resolver and current alias list to TaskStore. Permission checks, ownership comparisons, child attachment, delivery targets and reminder eligibility compare canonical Session IDs. Bounded list/get rows and historical note actors are projected canonically without rewriting the database. Unknown historical targets retain their stored IDs for readability.
+
+Successful mutations, assignment/notification updates and reminder checkpoints persist canonical creator/owner/attached/previous-owner references inside the existing SQLite transaction. Alias-only changes do not count as ownership transfers, reset reminder progress or generate ownership notes. Indexed reminder queries use only the current Session and its known aliases; there is no full-store reconciliation or Session-move transaction. The unique legacy Goal key remains a historical mapping key, and migration retries search the current Session’s known aliases to reuse the original task.
+
 ## Model-facing contract
 
 One builtin `task` is default-injected through the existing per-Session authorization projection and has one schema requiring `action`. It uses Main Management ownership for direct, unified and trusted Worker calls; the Main boundary derives identity from the source context and repeats generic authorization. The actor/creator always comes from ToolContext; assign accepts an explicit existing owner target or null.
@@ -79,7 +85,7 @@ Bodies cannot override route action/taskId or supply arbitrary creator identity.
 
 ## Tests
 
-`session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `sessionQueueOptions.test.ts` and real Worker ingress tests cover passive persistence/restart without wake; the detached runner exercises finish-window passivity and three-Session linked completion. `taskService.test.ts` verifies independent recipient results, retries and assignment-revision races. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries.
+`session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `sessionQueueOptions.test.ts` and real Worker ingress tests cover passive persistence/restart without wake; the detached runner exercises finish-window passivity and three-Session linked completion. `taskService.test.ts` verifies independent recipient results, retries and assignment-revision races. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries. Real local Session moves verify old task references remain readable, writes become canonical, ownership/creator notifications and attached completion still work, and fixed-30 progress/migration mappings survive aliases.
 
 ## Legacy Goal and reminders
 

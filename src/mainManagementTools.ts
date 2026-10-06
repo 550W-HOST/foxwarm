@@ -160,7 +160,7 @@ export const tool_send_to_channel = (args: ToolArgs, ctx?: ToolContext) => execu
 export const tool_task = async (args: ToolArgs, ctx?: ToolContext) => {
   const result = await executeMainManagementTool('task', args, ctx);
   const completion = result?.__toolPostAction?.completedLinkedTask;
-  if (completion && completion.attachedSessionId === ctx?.sessionId) ctx?.onLinkedTaskCompletion?.({ ...completion });
+  if (completion && completion.attachedSessionId === (ctx?.session?.id || ctx?.sessionId)) ctx?.onLinkedTaskCompletion?.({ ...completion });
   return result;
 };
 export const tool_list_agents = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('list_agents', args, ctx);
