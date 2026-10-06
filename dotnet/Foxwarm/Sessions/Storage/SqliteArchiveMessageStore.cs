@@ -268,6 +268,23 @@ public sealed partial class SqliteArchiveMessageStore
         return records;
     }
 
+    internal IReadOnlyList<ArchiveMessageRecord> ReadMessagesNumericRange(double? startSeq, double? endSeq)
+    {
+        if (!File.Exists(databasePath)) return [];
+        using var connection = OpenExistingReadOnly();
+        var canonical = ResolveReadOnly(connection, sessionId);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last) ORDER BY seq";
+        command.Parameters.AddWithValue("$session", canonical);
+        command.Parameters.AddWithValue("$first", (object?)startSeq ?? DBNull.Value);
+        command.Parameters.AddWithValue("$last", (object?)endSeq ?? DBNull.Value);
+        using var reader = command.ExecuteReader();
+        var records = new List<ArchiveMessageRecord>();
+        while (reader.Read())
+            records.Add(ArchiveMessageRecord.FromStored(canonical, reader.GetString(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetString(4)));
+        return records;
+    }
+
     public ArchiveMessageRecord? ReadMessageBySeq(long seq)
     {
         if (seq is <= 0 or > 9007199254740991L)

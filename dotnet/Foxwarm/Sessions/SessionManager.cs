@@ -84,6 +84,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in LocalExecManager.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
+        foreach (var definition in ArchiveControlTools.Definitions()) definitions.Add(definition?.DeepClone());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
         foreach (var definition in FileDeliveryDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
         foreach (var definition in MainLocalToolDefinitions.Definitions()) definitions.Add(definition?.DeepClone());
@@ -157,6 +158,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     public string DataRoot => root;
     public bool Accepting => accepting;
     public HostModels Models => models;
+    internal SqliteArchiveMessageStore ArchiveReader(string sessionId) => new(ArchiveDatabase, sessionId);
 
     public SessionOwner? Find(string id)
     {

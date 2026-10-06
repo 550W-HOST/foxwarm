@@ -13,7 +13,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     {
         ["send_to_session"] = "send", ["send_file"] = "file", ["recall"] = "recall", ["get_session_messages"] = "required",
         ["create_timer"] = "timer", ["list_timers"] = "timer", ["update_timer"] = "timer", ["delete_timer"] = "timer",
-        ["get_archived_messages"] = "archive", ["get_archived_blocks"] = "archive"
+        ["get_archived_messages"] = "archive", ["get_archived_blocks"] = "archive", ["stop_session"] = "required"
     };
     internal static void Fields(JsonObject obj, params string[] allowed)
     { if (obj.Any(pair => !allowed.Contains(pair.Key, StringComparer.Ordinal))) throw new InvalidDataException("Unsupported policy field."); }

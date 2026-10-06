@@ -11,6 +11,15 @@ public sealed class SessionControl
     private readonly SessionRegistry registry;
     public SessionControl(SessionRegistry registry) => this.registry = registry;
 
+    internal async Task<StopResult> StopFromToolAsync(string sessionId, bool self)
+    {
+        if (!self)
+            return await StopAsync(sessionId).ConfigureAwait(false);
+
+        registry.GetRequired(sessionId).MarkStoppingAfterCurrentTool();
+        return new StopResult(false, true);
+    }
+
     public async Task<StopResult> StopAsync(string sessionId)
     {
         var entry = registry.GetRequired(sessionId);

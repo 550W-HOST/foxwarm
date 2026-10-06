@@ -21,6 +21,7 @@ public sealed class MainLocalToolsTests
             f.mcp = new(Path.Combine(f.Temp.Path, "data"));
             var defs = MainLocalToolDefinitions.Definitions();
             foreach (var definition in FileDeliveryDefinitions.Definitions().OfType<JsonObject>()) defs.Add(definition.DeepClone());
+            foreach (var definition in ArchiveControlTools.Definitions().OfType<JsonObject>()) defs.Add(definition.DeepClone());
             foreach (var definition in UnifiedToolDefinitions.All().OfType<JsonObject>()) defs.Add(definition.DeepClone());
             var workspace = f.Manager.IdentityWorkspace(f.Owner)!;
             var toolRoot = workspace.ToolDirectory;
@@ -114,6 +115,129 @@ public sealed class MainLocalToolsTests
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("run local tools")); await owner.DrainForegroundAsync();
         var memory = manager.MemoryDirectory(owner.Agent); Assert.Equal("patched", await File.ReadAllTextAsync(Path.Combine(memory, "notes", "main.txt"))); Assert.Contains(owner.History(), row => row.ToJsonString().Contains("local tools complete", StringComparison.Ordinal)); Assert.Contains(owner.History(), row => row.ToJsonString().Contains("call-crop#1", StringComparison.Ordinal));
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("save the crop")); await owner.DrainForegroundAsync(); Assert.True(File.Exists(Path.Combine(manager.IdentityWorkspace(owner)!.ToolDirectory, "auto-crop.png"))); using var decoded = SKBitmap.Decode(await File.ReadAllBytesAsync(Path.Combine(manager.IdentityWorkspace(owner)!.ToolDirectory, "auto-crop.png"))); Assert.Equal(1, decoded.Width); Assert.Equal(SKColors.Blue, decoded.GetPixel(0, 0));
+    }
+
+    [Fact]
+    public async Task Hidden_archive_tools_read_effective_messages_and_blocks_without_default_injection()
+    {
+        await using var f = await Fixture.Create();
+        await ForkClearLifecycleTests.AppendAsync(
+            f.Owner,
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "archived first" })
+            });
+        await ForkClearLifecycleTests.AppendAsync(
+            f.Owner,
+            new JsonObject
+            {
+                ["role"] = "model",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "archived second" })
+            });
+        f.Owner.Archive.WriteBlocks(
+            [new ArchiveBlockRecord(f.Owner.Id, f.Owner.Agent, 7, 1, "message", 1, 2, null, 1, 2, 1000, 2000, "summary seven", null, 3000)]);
+
+        var messages = await f.Call(
+            "get_archived_messages",
+            new JsonObject { ["startSeq"] = 1, ["endSeq"] = 2, ["previewLength"] = 1000 });
+        Assert.Null(Error(messages));
+        Assert.Contains("#1 time", messages["output"]!.GetValue<string>());
+        Assert.Contains("archived first", messages["output"]!.GetValue<string>());
+
+        var blocks = await f.Call(
+            "get_archived_blocks",
+            new JsonObject { ["startId"] = 7, ["endId"] = 7 });
+        Assert.Null(Error(blocks));
+        Assert.Contains("B#7", blocks["output"]!.GetValue<string>());
+        Assert.Contains("summary seven", blocks["output"]!.GetValue<string>());
+
+        var injected = f.Manager.ModelDefinitions(f.Owner)
+            .Select(item => item!["name"]!.GetValue<string>())
+            .ToArray();
+        Assert.DoesNotContain("get_archived_messages", injected);
+        Assert.DoesNotContain("get_archived_blocks", injected);
+        Assert.DoesNotContain("stop_session", injected);
+
+        var missing = await f.Call("get_archived_messages", new JsonObject { ["sessionId"] = "missing" });
+        Assert.Null(Error(missing));
+        Assert.Contains("No archived messages", missing["output"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Stop_session_idle_missing_and_self_stop_preserve_normal_effects()
+    {
+        await using var f = await Fixture.Create();
+        var idle = await f.Call("stop_session", new JsonObject { ["sessionId"] = f.Owner.Id });
+        Assert.Null(Error(idle));
+        Assert.Contains("idle", idle["output"]!.GetValue<string>());
+        Assert.False(f.Owner.Entry.Snapshot().Stopping);
+
+        var missing = await f.Call("stop_session", new JsonObject { ["sessionId"] = "missing" });
+        Assert.Equal("tool_error", Error(missing));
+        Assert.Contains("not found", missing["error"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Cross_target_stop_requires_permission_and_stops_a_busy_target()
+    {
+        await using var f = await Fixture.Create();
+        var target = await f.Manager.CreateNamedAsync("main", "target", null, null);
+        target.Entry.MarkBusy();
+        var stopped = await f.Call("stop_session", new JsonObject { ["sessionId"] = target.Id });
+        Assert.Null(Error(stopped));
+        Assert.Contains("Stop signal sent", stopped["output"]!.GetValue<string>());
+        Assert.True(target.Entry.Snapshot().Stopping);
+
+        await f.Manager.Authorization.InstallAsync(
+            Encoding.UTF8.GetBytes("version: 1\ndefaultAction: allow\nrules:\n- id: deny-stop\n  action: deny\n  match: {tool: {source: builtin, name: stop_session}}"),
+            CancellationToken.None);
+        var denied = await f.Call("stop_session", new JsonObject { ["sessionId"] = target.Id });
+        Assert.Equal("tool_authorization_denied", Error(denied));
+    }
+
+    [Fact]
+    public async Task Real_main_self_stop_commits_the_tool_pair_and_skips_the_followup_request()
+    {
+        using var temp = new TempDirectory(); var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work");
+        await using var peer = new ScriptedResponsesSequenceServer(1, async (_, stream, _) =>
+        {
+            var output = new JsonArray(
+                FunctionCall(
+                    "call-stop",
+                    "stop_session",
+                    new JsonObject { ["sessionId"] = "self-stop" }),
+                FunctionCall(
+                    "call-archive",
+                    "get_archived_messages",
+                    new JsonObject { ["startSeq"] = 1, ["endSeq"] = 1 }));
+            var payload = new JsonObject
+            {
+                ["type"] = "response.completed",
+                ["response"] = new JsonObject
+                {
+                    ["id"] = "self-stop",
+                    ["output"] = output
+                }
+            };
+            await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
+        });
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 20000);
+        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        await manager.LoadMainHostAsync();
+        var owner = await manager.CreateNamedAsync("main", "self-stop", null, null);
+        await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("stop this turn"));
+        await owner.DrainForegroundAsync();
+
+        Assert.Equal(1, peer.RequestCount);
+        var toolRows = owner.History()
+            .Where(row => row["role"]?.GetValue<string>() == "tool")
+            .ToArray();
+        Assert.Single(toolRows);
+        Assert.Contains(toolRows, row => row.ToJsonString().Contains("stop_session", StringComparison.Ordinal));
+        Assert.Contains(toolRows, row => row.ToJsonString().Contains("get_archived_messages", StringComparison.Ordinal));
+        Assert.False(owner.Entry.Snapshot().Stopping);
+        Assert.Empty(owner.Entry.Snapshot().Queue);
     }
 
     private static JsonObject FunctionCall(string id, string name, JsonObject args) => new() { ["type"] = "function_call", ["id"] = id, ["call_id"] = id, ["name"] = name, ["arguments"] = args.ToJsonString() };

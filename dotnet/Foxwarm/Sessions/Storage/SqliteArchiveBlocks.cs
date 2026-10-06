@@ -199,6 +199,32 @@ public sealed partial class SqliteArchiveMessageStore
         return blocks;
     }
 
+    internal IReadOnlyList<ArchiveBlockRecord> ReadBlocksNumericRange(double? first, double? last)
+    {
+        if (!File.Exists(databasePath)) return [];
+        using var connection = OpenExistingReadOnly();
+        var canonical = ResolveReadOnly(connection, sessionId);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last) ORDER BY id";
+        command.Parameters.AddWithValue("$session", canonical);
+        command.Parameters.AddWithValue("$first", (object?)first ?? DBNull.Value);
+        command.Parameters.AddWithValue("$last", (object?)last ?? DBNull.Value);
+        using var reader = command.ExecuteReader();
+        var blocks = new List<ArchiveBlockRecord>();
+        while (reader.Read())
+        {
+            var block = new ArchiveBlockRecord(canonical, reader.GetString(0), reader.GetInt64(1), reader.GetInt32(2),
+                reader.GetString(3), reader.GetInt64(4), reader.GetInt64(5),
+                NullableText(reader, 6) is string ids ? JsonNode.Parse(ids) as JsonArray : null,
+                reader.GetInt64(7), reader.GetInt64(8), NullableNumber(reader, 9), NullableNumber(reader, 10),
+                reader.GetString(11), NullableText(reader, 12) is string facts ? JsonNode.Parse(facts) as JsonArray : null,
+                reader.GetInt64(13));
+            ValidateBlock(block, canonical);
+            blocks.Add(block);
+        }
+        return blocks;
+    }
+
     public void RollbackInsertedBlocks(IReadOnlyList<ArchiveBlockRecord> blocks)
     {
         if (blocks.Count == 0) return;

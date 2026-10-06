@@ -280,7 +280,7 @@ internal sealed partial class SessionManager
         return (model, effort);
     }
 
-    private string ResolveSessionReference(SessionOwner source, string requested)
+    internal string ResolveSessionReference(SessionOwner source, string requested)
     {
         var metadata = Catalog.Get(source.Id) ?? throw new InvalidDataException($"Session `{source.Id}` not found.");
         return requested switch

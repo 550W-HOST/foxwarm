@@ -98,9 +98,16 @@ public sealed partial class SqliteArchiveMessageStore
     internal IReadOnlyList<ArchiveMessageRecord> ReadEffectiveMessagesRange(long first, long last) =>
         Lineage().Where(part => part.Messages >= first).SelectMany(part => part.Store.ReadMessagesRange(first, Math.Min(last, part.Messages)))
             .OrderBy(row => row.Seq).ThenBy(row => row.Timestamp).ToArray();
+    internal IReadOnlyList<ArchiveMessageRecord> ReadEffectiveMessagesNumericRange(double? first, double? last) =>
+        Lineage().SelectMany(part => part.Store.ReadMessagesNumericRange(first, MinCap(last, part.Messages)))
+            .OrderBy(row => row.Seq).ThenBy(row => row.Timestamp).ToArray();
     internal IReadOnlyList<ArchiveBlockRecord> ReadEffectiveBlocksRange(long first, long last) =>
         Lineage().Where(part => part.Blocks >= first).SelectMany(part => part.Store.ReadBlocksRange(first, Math.Min(last, part.Blocks)))
             .OrderBy(row => row.Id).ThenBy(row => row.CreatedAt).ToArray();
+    internal IReadOnlyList<ArchiveBlockRecord> ReadEffectiveBlocksNumericRange(double? first, double? last) =>
+        Lineage().SelectMany(part => part.Store.ReadBlocksNumericRange(first, MinCap(last, part.Blocks)))
+            .OrderBy(row => row.Id).ThenBy(row => row.CreatedAt).ToArray();
+    private static double? MinCap(double? requested, long cap) => requested is null ? cap : Math.Min(requested.Value, cap);
     internal ArchiveStats EffectiveMessageStats(long first = 1, long last = 9007199254740991)
     {
         var parts = Lineage().Where(part => part.Messages >= first).Select(part => part.Store.MessageStats(first, Math.Min(last, part.Messages))).ToArray();

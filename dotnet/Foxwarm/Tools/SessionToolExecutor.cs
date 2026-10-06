@@ -178,6 +178,9 @@ internal sealed partial class SessionToolExecutor(ITurnToolExecutor workspace, S
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["read_exec"] = (owner, args, _) => owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args);
         handlers["recall"] = (owner, args, token) => ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
+        handlers["get_archived_messages"] = (owner, args, token) => ArchiveControlTools.ReadMessagesAsync(owner.Manager, owner.Hosted, args, token);
+        handlers["get_archived_blocks"] = (owner, args, token) => ArchiveControlTools.ReadBlocksAsync(owner.Manager, owner.Hosted, args, token);
+        handlers["stop_session"] = (owner, args, token) => ArchiveControlTools.StopAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
         handlers["submit_compact_plan"] = (_, _, _) => Task.FromResult(UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor."));
         foreach (var name in new[] { "move_session", "delete_session", "create_agent", "create_session", "create_child_session", "send_to_session", "refresh_session_snapshot", "skill", "set_agent_inherit", "session", "get_session_messages", "set_goal", "set_session_child_model", "set_session_compact_threshold", "compact_session" })
@@ -198,7 +201,7 @@ internal sealed partial class SessionToolExecutor(ITurnToolExecutor workspace, S
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "apply_patch" or "exec" ? "node" : "builtin";
-            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules" or "move_session" or "create_timer" or "list_timers" or "update_timer" or "delete_timer" or "start_toolscript_run" or "list_toolscript_runs" or "get_toolscript_run" or "cancel_toolscript_run"), handlers[name]);
+            registry.Register(definition, source, name is not ("mcp_config" or "list_mcp_servers" or "delete_session" or "set_tool_rules" or "move_session" or "create_timer" or "list_timers" or "update_timer" or "delete_timer" or "start_toolscript_run" or "list_toolscript_runs" or "get_toolscript_run" or "cancel_toolscript_run" or "get_archived_messages" or "get_archived_blocks" or "stop_session"), handlers[name]);
         }
         return registry;
     }
