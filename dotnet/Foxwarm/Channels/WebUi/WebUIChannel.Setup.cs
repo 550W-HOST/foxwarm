@@ -24,6 +24,13 @@ internal sealed partial class WebUIChannel
                             ["oobe"] = models["oobe"]!.DeepClone(),
                             ["models"] = models,
                             ["config"] = configuration.ConfigDiagnostics(),
+                            ["channels"] = configuration.ChannelDiagnostics(webUiRunning: true),
+                            ["capabilities"] = new JsonObject
+                            {
+                                ["managedChannels"] = false,
+                                ["externalChannelMessage"] =
+                                    "External chat channels are unavailable on this server.",
+                            },
                         }
                     );
                 }
@@ -35,6 +42,121 @@ internal sealed partial class WebUIChannel
                     );
                 }
             }
+        );
+        app.MapPost(
+            "/api/setup/config",
+            async (HttpRequest request) =>
+            {
+                try
+                {
+                    var input =
+                        await JsonNode.ParseAsync(request.Body) as JsonObject
+                        ?? throw new InvalidDataException("Setup config input must be an object.");
+                    var raw =
+                        input["yaml"] is JsonValue yaml && yaml.TryGetValue<string>(out var text)
+                            ? text
+                            : throw new InvalidDataException("Setup config yaml must be a string.");
+                    await configuration.SaveAppAsync(raw);
+                    return Results.Ok(
+                        new JsonObject
+                        {
+                            ["success"] = true,
+                            ["configPath"] = configuration.AppPath,
+                            ["rawYaml"] = raw,
+                            ["reload"] = new JsonObject
+                            {
+                                ["started"] = new JsonArray(),
+                                ["stopped"] = new JsonArray(),
+                                ["available"] = false,
+                                ["message"] =
+                                    "External chat channels are unavailable on this server.",
+                            },
+                        }
+                    );
+                }
+                catch (Exception error)
+                    when (error
+                            is JsonException
+                                or InvalidDataException
+                                or InvalidOperationException
+                                or IOException
+                    )
+                {
+                    return Results.BadRequest(new { error = configuration.SafeAppError(error) });
+                }
+            }
+        );
+        app.MapPost(
+            "/api/setup/channels",
+            async (HttpRequest request) =>
+            {
+                try
+                {
+                    var input =
+                        await JsonNode.ParseAsync(request.Body) as JsonObject
+                        ?? throw new InvalidDataException(
+                            "Setup channels input must be an object."
+                        );
+                    JsonObject channels;
+                    if (input["channels"] is JsonObject objectValue)
+                        channels = objectValue;
+                    else if (
+                        input["yaml"] is JsonValue yaml
+                        && yaml.TryGetValue<string>(out var raw)
+                    )
+                    {
+                        var parsed = ConfigurationYaml.Parse(raw, "channels config");
+                        channels = parsed["channels"] as JsonObject ?? parsed;
+                    }
+                    else
+                        throw new InvalidDataException(
+                            "Setup channels must contain a channels object or YAML."
+                        );
+                    await configuration.SaveChannelsAsync(channels);
+                    return Results.Ok(
+                        new JsonObject
+                        {
+                            ["success"] = true,
+                            ["configPath"] = configuration.AppPath,
+                            ["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(channels),
+                            ["reload"] = new JsonObject
+                            {
+                                ["started"] = new JsonArray(),
+                                ["stopped"] = new JsonArray(),
+                                ["available"] = false,
+                                ["message"] =
+                                    "External chat channels are unavailable on this server.",
+                            },
+                        }
+                    );
+                }
+                catch (Exception error)
+                    when (error
+                            is JsonException
+                                or InvalidDataException
+                                or InvalidOperationException
+                                or IOException
+                    )
+                {
+                    return Results.BadRequest(new { error = configuration.SafeAppError(error) });
+                }
+            }
+        );
+        app.MapPost(
+            "/api/setup/weixin/login/start",
+            () =>
+                Results.Json(
+                    new { error = "Weixin login is unavailable on this server." },
+                    statusCode: StatusCodes.Status501NotImplemented
+                )
+        );
+        app.MapPost(
+            "/api/setup/weixin/login/wait",
+            () =>
+                Results.Json(
+                    new { error = "Weixin login is unavailable on this server." },
+                    statusCode: StatusCodes.Status501NotImplemented
+                )
         );
         app.MapPost(
             "/api/setup/models",

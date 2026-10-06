@@ -37,6 +37,10 @@ type SetupStatus = {
     details: string[]
     lastError?: string
   }>
+  capabilities?: {
+    managedChannels?: boolean
+    externalChannelMessage?: string
+  }
 }
 
 interface SetupViewProps {
@@ -314,7 +318,12 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       const submissionIsCurrent = configRevisionRef.current === submittedRevision && configYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
         const startedChannels = (data.reload?.started || []).join(', ')
-        setConfigSaveResult({ kind: 'success', message: startedChannels ? `Config saved. Active channels refreshed: ${startedChannels}.` : 'Config saved.' })
+        const message = startedChannels
+          ? `Config saved. Active channels refreshed: ${startedChannels}.`
+          : data.reload?.available !== true
+            ? 'Configuration saved. Some settings take effect after a server restart.'
+            : 'Config saved.'
+        setConfigSaveResult({ kind: 'success', message })
         if (typeof data.rawYaml === 'string') updateConfigYaml(data.rawYaml)
       }
       await loadStatus({ clearSaveResults: false, hydrateModels: false, expectedConfigRevision: submittedRevision })
@@ -557,7 +566,12 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 </div>
               )}
 
-              <div data-setup-config-last="weixin" className="mt-6 border-t border-fw-border pt-5 dark:border-fw-border-muted">
+              {status?.capabilities?.managedChannels === false && (
+                <p className="mt-6 border-t border-fw-border pt-5 text-sm text-fw-text dark:border-fw-border-muted">
+                  {status.capabilities.externalChannelMessage || 'External chat channels are unavailable on this server.'}
+                </p>
+              )}
+              {status?.capabilities?.managedChannels !== false && <div data-setup-config-last="weixin" className="mt-6 border-t border-fw-border pt-5 dark:border-fw-border-muted">
                 <h3 className="font-medium text-fw-text-strong">Weixin login</h3>
                 <p className="mt-1 text-sm text-fw-text">Connect Weixin by scanning a QR code.</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -566,7 +580,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                 </div>
                 {weixinMessage && <div className="mt-3 text-sm text-fw-text">{weixinMessage}</div>}
                 {weixinQrSrc && <img src={weixinQrSrc} alt="Weixin login QR code" className="mt-4 h-56 w-56 rounded-lg border border-fw-border bg-fw-surface object-contain p-2 dark:border-fw-border" />}
-              </div>
+              </div>}
             </section>
 
           </div>

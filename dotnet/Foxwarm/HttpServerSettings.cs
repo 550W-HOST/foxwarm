@@ -49,7 +49,8 @@ internal sealed record HttpServerSettings(
         }
         if (port is <= 0 or > 65535)
             throw new InvalidDataException("HTTP port must be between 1 and 65535.");
-        var address = PublicWebAddress.Capture(port);
+        var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
+        var address = PublicWebAddress.Capture(port, configuredUrl);
         var enabled = Enabled(configuration);
         var token = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_API_TOKEN");
         if (token is null)
@@ -92,9 +93,9 @@ internal sealed record PublicWebAddress(
 {
     internal string BaseUrl => Origin + CookiePath;
 
-    internal static PublicWebAddress Capture(int port)
+    internal static PublicWebAddress Capture(int port, string? configured = null)
     {
-        var input = Environment.GetEnvironmentVariable("FOXWARM_PUBLIC_BASE_URL");
+        var input = Environment.GetEnvironmentVariable("FOXWARM_PUBLIC_BASE_URL") ?? configured;
         if (string.IsNullOrEmpty(input))
             return new($"http://127.0.0.1:{port}", PathString.Empty, "/", false);
         if (

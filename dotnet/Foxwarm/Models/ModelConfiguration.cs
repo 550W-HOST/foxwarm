@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using YamlDotNet.Serialization;
 
 namespace Foxwarm.Models;
 
@@ -18,18 +19,95 @@ internal sealed partial class ModelConfiguration
 
     internal JsonObject ConfigDiagnostics()
     {
-        var configured = app["channels"] as JsonObject ?? new JsonObject();
+        var raw = ReadCurrentAppRaw();
+        var current = ConfigurationYaml.Parse(raw, "app config");
+        var configured = current["channels"] as JsonObject ?? new JsonObject();
         return new JsonObject
         {
             ["appConfigPath"] = AppPath,
-            ["rawYaml"] = AppRaw,
-            ["channelsYaml"] =
-                configured.ToJsonString(
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
-                ) + "\n",
+            ["rawYaml"] = raw,
+            ["channelsYaml"] = ChannelsYamlForResponse(current),
             ["channelCount"] = configured.Count,
         };
     }
+
+    internal static string ChannelsYamlForResponse(JsonObject current) =>
+        ChannelsYamlForObject(current["channels"] as JsonObject ?? new JsonObject());
+
+    internal static string ChannelsYamlForObject(JsonObject channels) =>
+        new SerializerBuilder().Build().Serialize(JsonNodeToObject(channels));
+
+    internal JsonArray ChannelDiagnostics(bool webUiRunning)
+    {
+        var current = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
+        var channels = current["channels"] as JsonObject ?? new JsonObject();
+        var result = new JsonArray();
+        foreach (var (channelId, raw) in channels)
+        {
+            var config = raw as JsonObject ?? new JsonObject();
+            var type = SessionWait.Text(config["type"])?.Trim();
+            type = string.IsNullOrEmpty(type) ? channelId : type;
+            var enabled =
+                config["enabled"] is not JsonValue value
+                || !value.TryGetValue<bool>(out var configuredEnabled)
+                || configuredEnabled;
+            var isWebUi = type == "webui" && channelId == "webui";
+            var configured = isWebUi || IsConfigured(type, config);
+            result.Add(
+                new JsonObject
+                {
+                    ["channelId"] = channelId,
+                    ["type"] = type,
+                    ["managed"] = false,
+                    ["running"] = isWebUi && webUiRunning,
+                    ["configured"] = configured,
+                    ["enabled"] = enabled,
+                    ["details"] = new JsonArray(
+                        isWebUi
+                            ? "Main WebUI"
+                            : "External chat channels are unavailable on this server."
+                    ),
+                    ["lastError"] =
+                        isWebUi || !enabled
+                            ? null
+                            : "External chat channels are unavailable on this server.",
+                }
+            );
+        }
+        if (webUiRunning && !channels.ContainsKey("webui"))
+        {
+            result.Add(
+                new JsonObject
+                {
+                    ["channelId"] = "webui",
+                    ["type"] = "webui",
+                    ["managed"] = false,
+                    ["running"] = true,
+                    ["configured"] = true,
+                    ["enabled"] = true,
+                    ["details"] = new JsonArray("Main WebUI"),
+                    ["lastError"] = null,
+                }
+            );
+        }
+        return result;
+    }
+
+    private static bool IsConfigured(string type, JsonObject config) =>
+        type switch
+        {
+            "telegram" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["botToken"])),
+            "matrix" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["homeserver"]))
+                && !string.IsNullOrWhiteSpace(SessionWait.Text(config["accessToken"]))
+                && !string.IsNullOrWhiteSpace(SessionWait.Text(config["botUserId"])),
+            "weixin" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["token"])),
+            "qqbot" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["appId"]))
+                && !string.IsNullOrWhiteSpace(SessionWait.Text(config["clientSecret"])),
+            "wework" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["webhookUrl"]))
+                || config["listenPort"] is not null
+                || config["aibot"] is JsonObject,
+            _ => false,
+        };
 
     public HostModels Models { get; }
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
@@ -49,6 +127,7 @@ internal sealed partial class ModelConfiguration
             ?? Path.Combine(dataRoot, "state", "config.yaml");
         AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
         app = ConfigurationYaml.Parse(AppRaw, "app config");
+        AppConfigurationRules.Validate(app);
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         var llm = app["llm"] as JsonObject;
         MaxOutput = HostModels.Positive(llm?["maxOutput"], 32768, "llm.maxOutput");
@@ -156,6 +235,106 @@ internal sealed partial class ModelConfiguration
         }
     }
 
+    internal async Task SaveAppAsync(string raw)
+    {
+        var next = ConfigurationYaml.Parse(raw, "app config");
+        AppConfigurationRules.Validate(next);
+        await mutation.WaitAsync();
+        try
+        {
+            var directory = Path.GetDirectoryName(AppPath)!;
+            Directory.CreateDirectory(directory);
+            var temporary = AppPath + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                await File.WriteAllTextAsync(temporary, raw, new UTF8Encoding(false));
+                File.Move(temporary, AppPath, true);
+                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+            }
+            catch
+            {
+                try
+                {
+                    File.Delete(temporary);
+                }
+                catch { }
+                throw;
+            }
+        }
+        finally
+        {
+            mutation.Release();
+        }
+    }
+
+    internal async Task SaveChannelsAsync(JsonObject channels)
+    {
+        var currentRaw = ReadCurrentAppRaw();
+        var current = ConfigurationYaml.Parse(currentRaw, "app config");
+        current["channels"] = channels.DeepClone();
+        AppConfigurationRules.Validate(current);
+        var serializer = new SerializerBuilder().Build();
+        var serialized = serializer.Serialize(JsonNodeToObject(channels)).TrimEnd();
+        var section =
+            serialized.Length == 0 || serialized == "{}"
+                ? "channels: {}"
+                : "channels:\n"
+                    + string.Join(
+                        "\n",
+                        serialized.Split('\n').Select(line => line.Length == 0 ? line : "  " + line)
+                    );
+        var nextRaw = ReplaceTopLevelSection(currentRaw, "channels", section);
+        await SaveAppAsync(nextRaw);
+    }
+
+    private static object? JsonNodeToObject(JsonNode? node)
+    {
+        if (node is null)
+            return null;
+        if (node is JsonObject obj)
+            return obj.ToDictionary(pair => pair.Key, pair => JsonNodeToObject(pair.Value));
+        if (node is JsonArray array)
+            return array.Select(JsonNodeToObject).ToList();
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var text))
+                return text;
+            if (value.TryGetValue<bool>(out var boolean))
+                return boolean;
+            if (value.TryGetValue<double>(out var number))
+                return number;
+        }
+        return null;
+    }
+
+    private static string ReplaceTopLevelSection(string raw, string key, string replacement)
+    {
+        var hasNewline = raw.EndsWith('\n');
+        var lines = raw.Split('\n').ToList();
+        if (hasNewline)
+            lines.RemoveAt(lines.Count - 1);
+        var start = lines.FindIndex(line => line.StartsWith(key + ":", StringComparison.Ordinal));
+        if (start < 0)
+        {
+            var prefix = raw.TrimEnd();
+            return prefix.Length == 0 ? replacement + "\n" : prefix + "\n\n" + replacement + "\n";
+        }
+        var end = lines.Count;
+        for (var index = start + 1; index < lines.Count; index++)
+        {
+            if (lines[index].Length > 0 && !char.IsWhiteSpace(lines[index][0]))
+            {
+                end = index;
+                break;
+            }
+        }
+        var next = lines.Take(start).Concat(replacement.Split('\n')).Concat(lines.Skip(end));
+        return string.Join('\n', next) + (hasNewline ? "\n" : "");
+    }
+
+    internal string ReadCurrentAppRaw() =>
+        File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
+
     internal JsonObject Diagnostics()
     {
         lock (gate)
@@ -246,6 +425,11 @@ internal sealed partial class ModelConfiguration
             };
         }
     }
+
+    internal string SafeAppError(Exception error) =>
+        error is InvalidDataException or AuthorityCommittedException
+            ? error.Message
+            : "Configuration operation failed.";
 
     internal string SafeError(Exception error, JsonObject? incoming = null)
     {
