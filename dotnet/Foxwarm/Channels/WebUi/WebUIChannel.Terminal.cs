@@ -20,13 +20,13 @@ internal sealed partial class WebUIChannel
                 var nodeId = body["nodeId"]?.GetValue<string>()?.Trim() ?? "master";
                 if (!string.Equals(nodeId, "master", StringComparison.Ordinal)) return Results.Json(new { error = "Requested terminal node is unavailable on this Main host." }, statusCode: 501);
                 var cwd = body["cwd"]?.GetValue<string>() ?? Environment.CurrentDirectory; var cols = body["cols"]?.GetValue<int>() ?? 100; var rows = body["rows"]?.GetValue<int>() ?? 30;
-                var record = await terminals.CreateAsync(cwd, cols, rows, request.HttpContext.RequestAborted); return Results.Ok(new { terminal = record.Describe() });
+                var record = await terminals.CreateAsync(cwd, cols, rows, request.HttpContext.RequestAborted); return Results.Ok(new { success = true, terminal = record.Describe(), streamPath = $"/api/terminals/stream?terminalId={Uri.EscapeDataString(record.Id)}" });
             }
             catch (Exception error) when (error is IOException or InvalidOperationException or PlatformNotSupportedException or DirectoryNotFoundException or ArgumentOutOfRangeException)
             { return Results.Json(new { error = error.Message }, statusCode: 400); }
         });
         app.MapGet("/api/terminals/{id}", (string id) => terminals.TryGet(id, out var record) && record is not null ? Results.Ok(new { terminal = record.Describe() }) : Results.NotFound(new { error = "Terminal not found." }));
-        app.MapDelete("/api/terminals/{id}", async (string id) => { await terminals.CloseAsync(id, "client"); return Results.Ok(new { closed = true }); });
+        app.MapDelete("/api/terminals/{id}", async (string id) => { await terminals.CloseAsync(id, "client"); return Results.Ok(new { success = true, closed = true }); });
         app.MapGet("/api/terminals/stream", async (HttpContext context) =>
         {
             if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
