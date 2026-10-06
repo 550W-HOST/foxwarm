@@ -11,6 +11,74 @@ namespace Foxwarm.Tests;
 public sealed class CompactLifecycleTests
 {
     [Fact]
+    public void Compact_plan_schema_allows_direct_or_repaired_file_submission()
+    {
+        var definition = CompactPrompt.ToolDefinition(); var parameters = definition["parameters"]!.AsObject(); var properties = parameters["properties"]!.AsObject();
+        Assert.Equal("string", properties["argsFilePath"]!["type"]!.GetValue<string>()); Assert.Null(parameters["required"]); Assert.NotNull(properties["replaceAsBlocks"]);
+    }
+
+    [Fact]
+    public async Task Real_main_compaction_repairs_raw_arguments_in_one_owned_operation_and_commits_the_plan()
+    {
+        var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work"); Directory.CreateDirectory(work);
+        await using var peer = new ScriptedResponsesSequenceServer(5, async (index, stream, captured) =>
+        {
+            var texts = JsonNode.Parse(captured.Body)!["input"]!.AsArray().OfType<JsonObject>()
+                .SelectMany(row => (row["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
+                .Select(row => SessionWait.Text(row["text"]) ?? "").ToArray();
+            var all = string.Join("\n", texts);
+            var match = Regex.Matches(all, "^- M#(\\d+)(?:-#(\\d+))?\\s", RegexOptions.Multiline);
+            var start = long.Parse(match[0].Groups[1].Value); var last = match[^1]; var end = long.Parse(last.Groups[2].Success ? last.Groups[2].Value : last.Groups[1].Value);
+            var validBlocks = new JsonArray(new JsonObject { ["level"] = 1, ["sourceKind"] = "message", ["sourceStart"] = start, ["sourceEnd"] = end, ["summary"] = "Repaired compact plan." });
+            var path = index == 0 ? null : Directory.EnumerateFiles(Path.Combine(work, ".temp"), "plan.json", SearchOption.AllDirectories).Single();
+            JsonObject call;
+            if (index == 0)
+                call = FunctionCall("invalid", "submit_compact_plan", new JsonObject { ["replaceAsBlocks"] = new JsonArray() }, raw: "{\"replaceAsBlocks\":[]}");
+            else if (index == 1)
+                call = FunctionCall("wrong-path", "edit", new JsonObject { ["filePath"] = path! + ".wrong", ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString() });
+            else if (index == 2)
+                call = FunctionCall("cancel", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString(), ["__cancelTool"] = true });
+            else if (index == 3)
+                call = FunctionCall("repair", "edit", new JsonObject { ["filePath"] = path!, ["oldText"] = "[]", ["newText"] = validBlocks.ToJsonString() });
+            else
+                call = FunctionCall("submit", "submit_compact_plan", new JsonObject { ["argsFilePath"] = path! });
+            var output = new JsonArray(call);
+            var payload = new JsonObject { ["type"] = "response.completed", ["response"] = new JsonObject { ["id"] = "compact-repair", ["output"] = output } };
+            await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream", Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
+        });
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 20000);
+        var models = HostModels.ForTest(options);
+        await using var manager = new SessionManager(data, work, options, models, Path.Combine(AppContext.BaseDirectory, "skills"));
+        await manager.LoadMainHostAsync();
+        var owner = await manager.CreateNamedAsync("main", "compact-repair", null, null);
+        owner.Entry.WithState(state =>
+        {
+            for (var seq = 1; seq <= 8; seq++) state.History.Add(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "context " + seq + " " + new string('x', 5000) }), ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq } });
+            state.NextMessageSeq = 9; state.Meta["messageCount"] = 8;
+        });
+        await owner.Entry.SaveLane.SaveStrictAsync();
+        var before = owner.Entry.Snapshot().History.Count;
+        var admission = await owner.Compactor.StartManualAsync(); Assert.True(admission.Started);
+        try { await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30)); } catch (TimeoutException error) { throw new TimeoutException($"compact drain timeout; provider requests={peer.RequestCount}", error); }
+        await owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(5, peer.RequestCount);
+        Assert.Contains("This file was saved from the original provider arguments.", (await peer.RequestAt(1)).Body);
+        Assert.Contains("Compact repair failed", (await peer.RequestAt(2)).Body);
+        Assert.Contains("Compact repair canceled", (await peer.RequestAt(3)).Body);
+        Assert.Single(manager.Catalog.List());
+        Assert.Single(owner.Archive.ReadBlocks()); Assert.True(owner.Entry.Snapshot().History.Count < before);
+        Assert.DoesNotContain(owner.Entry.Snapshot().History, row => row.ToJsonString().Contains("Compact arguments file updated", StringComparison.Ordinal));
+        Assert.Empty(Directory.EnumerateDirectories(Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, ".temp"), "compact-plan-*"));
+        await manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(30)); temp.Dispose();
+    }
+
+    private static JsonObject FunctionCall(string id, string name, JsonObject args, string? raw = null) => new()
+    {
+        ["type"] = "function_call", ["id"] = id, ["call_id"] = id, ["name"] = name, ["arguments"] = raw ?? args.ToJsonString()
+    };
+
+    [Fact]
     public async Task Actual_image_history_compacts_without_payloads_and_keeps_original_Archive_and_blob_references()
     {
         await using var fixture = await CompactFixture.CreateAsync(); var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png); await fixture.SeedAsync(bytes);

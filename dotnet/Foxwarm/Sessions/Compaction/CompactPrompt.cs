@@ -10,10 +10,11 @@ internal static partial class CompactPrompt
         {
           "type":"function",
           "name":"submit_compact_plan",
-          "description":"Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. Use only the candidate ranges supplied in the compaction prompt. Items not covered by the plan remain unchanged.",
+          "description":"Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. Use only the candidate ranges supplied in the compaction prompt. Supply direct plan fields or argsFilePath, not both. Items not covered by the plan remain unchanged.",
           "parameters":{
             "type":"object",
             "properties":{
+              "argsFilePath":{"type":"string","description":"Submit the repaired JSON arguments file identified in this compaction operation's feedback. Supply this path alone, without direct plan fields."},
               "replaceAsBlocks":{
                 "description":"Blocks to create from continuous candidate ranges. Supply an array, or a JSON string encoding the same array. Use an empty array when only removing previously preserved messages.",
                 "oneOf":[
@@ -40,8 +41,7 @@ internal static partial class CompactPrompt
               },
               "preserveMessages":{"type":"array","items":{"type":"number"},"description":"Message sequence numbers to keep verbatim within ranges being summarized. These messages remain after their summary block in active context."},
               "removePreservedMessages":{"type":"array","items":{"type":"number"},"description":"Previously preserved message sequence numbers to remove from active context. Only messages identified as preserved in the compaction prompt are eligible; their archive records and summary blocks are not deleted."}
-            },
-            "required":["replaceAsBlocks"]
+            }
           },
           "strict":false
         }
@@ -53,13 +53,13 @@ internal static partial class CompactPrompt
         "Use preserveMessages only for raw messages covered by a newly created message-source block; use removePreservedMessages only for messages listed as previously preserved in the prompt.",
         "Fix only the layered-context plan and call submit_compact_plan again. Do not read or write agent memory during compaction; attach durable facts to the matching replaceAsBlocks entry's memoryFacts instead.");
 
-    public static string InvalidTool(string? wrongName, int count)
+    public static string InvalidTool(string? wrongName, int count, bool repairPending = false)
     {
         var notice = count == 0
             ? "Compact planning must be submitted by calling submit_compact_plan; plain text/no tool call cannot complete compaction."
             : wrongName is null or "submit_compact_plan"
             ? "Call submit_compact_plan exactly once, by itself."
-            : $"Do not call `{wrongName}`; the only accepted tool call during compaction is submit_compact_plan.";
+            : $"Do not call `{wrongName}`; {(repairPending ? "only an exact-file edit or apply_patch repair, or a single plan submission, is accepted" : "the only accepted tool call during compaction is submit_compact_plan")}.";
         return string.Join(' ', "COMPACT TOOL CALL INVALID.", notice,
             "Do not read or write agent memory during compaction.",
             "When ready, call exactly one submit_compact_plan tool call by itself. Do not combine submit_compact_plan with any other tool call.");

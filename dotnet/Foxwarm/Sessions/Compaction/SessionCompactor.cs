@@ -9,6 +9,7 @@ internal sealed record CompactAdmission(bool AlreadyPending, bool Started, bool 
 internal sealed partial class SessionCompactor
 {
     private readonly SessionOwner hosted;
+    private readonly SessionManager? sessions;
     private readonly PersistentSessionAuthorityStore store;
     private readonly HostModels models;
     private readonly ResponsesClientOptions baseOptions;
@@ -37,12 +38,15 @@ internal sealed partial class SessionCompactor
         internal object? PhaseLease;
     }
 
-    public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
+    public SessionCompactor(SessionOwner hosted, SessionManager sessions, PersistentSessionAuthorityStore store,
         HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory, Func<JsonArray>? definitions = null)
     {
-        this.hosted = hosted; this.store = store; this.models = models; this.baseOptions = baseOptions;
+        this.hosted = hosted; this.sessions = sessions; this.store = store; this.models = models; this.baseOptions = baseOptions;
         this.requests = requests; this.memory = memory; this.definitions = definitions;
     }
+    public SessionCompactor(SessionOwner hosted, PersistentSessionAuthorityStore store,
+        HostModels models, ResponsesClientOptions baseOptions, ModelRequestOwner requests, AgentMemory memory, Func<JsonArray>? definitions = null)
+        : this(hosted, null!, store, models, baseOptions, requests, memory, definitions) { }
     public bool Active { get { lock (gate) return active is not null; } }
     public bool Standalone { get { lock (gate) return active is { Standalone: true, OwnsProcessor: true }; } }
     public bool HasCompletedJob { get { lock (gate) return active is { Background: true, Ready: true, Applying: false } run && !run.Cancellation.IsCancellationRequested; } }

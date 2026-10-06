@@ -209,7 +209,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var registry = new SessionRegistry(store, new RequestChatService(chat, hosted),
             new SessionToolExecutor(new WorkspaceTools(agents.AgentDirectory(agent), pendingWrites, hosted.Id, agent), hosted, this, tools));
         hosted.Registry = registry;
-        hosted.Compactor = new SessionCompactor(hosted, store, models, clientOptions, requests, memory, () => ModelDefinitions(hosted));
+        hosted.Compactor = new SessionCompactor(hosted, this, store, models, clientOptions, requests, memory, () => ModelDefinitions(hosted));
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
